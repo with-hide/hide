@@ -40,7 +40,7 @@ use super::{
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
-use crate::session_sync::{ProjectedAgent, ProjectionState};
+use crate::session_sync::{NotResumed, ProjectedAgent, ProjectionState};
 use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
@@ -392,6 +392,24 @@ impl OwnEngine<'_> {
         )
     }
 
+    /// Records that `left`'s agent was not resumed, and withdraws the owed
+    /// letter a cut resume was typed with: nothing runs there to be owed it.
+    fn say_not_resumed(&self, left: &NotResumed) {
+        self.shared
+            .cut
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&left.pane_id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "own_engine",
+            "kind": "agent.not_resumed",
+            "pane_id": left.pane_id,
+            "agent": left.agent,
+            "by_session": left.session.is_some(),
+            "message": left.why,
+        }));
+    }
+
     /// Whether a call may run: the engine runs and every gate lets it.
     fn check(&self) -> Result<(), EngineError> {
         if self.shared.stopped.load(Ordering::Acquire) {
@@ -487,6 +505,9 @@ impl OwnEngine<'_> {
         match applied {
             Ok(applied) => {
                 settled_unread(pane, &applied);
+                if let Some(missed) = &applied.resume_missed {
+                    self.say_not_resumed(&missed.not_resumed(pane));
+                }
                 if applied.rules_for.is_some() {
                     self.give_rules(pane);
                 }
@@ -539,6 +560,9 @@ impl OwnEngine<'_> {
             let applied = self.topology().apply_facts(&pane, &facts, &catalog);
             if let Ok(applied) = applied {
                 settled_unread(&pane, &applied);
+                if let Some(missed) = &applied.resume_missed {
+                    self.say_not_resumed(&missed.not_resumed(&pane));
+                }
                 if applied.rules_for.is_some() {
                     self.give_rules(&pane);
                 }
@@ -1422,6 +1446,12 @@ impl<'g> Engine for OwnEngine<'g> {
             .unwrap_or_else(PoisonError::into_inner) = Some(wake);
     }
 
+    fn start_program_name(&self, kind: &str) -> Option<String> {
+        let catalog = self.shared.definitions.get();
+        agents::definition(&catalog, kind)
+            .and_then(|definition| definition.executables.first().cloned())
+    }
+
     fn set_agent_definitions(&self, catalog: Arc<hide_agent_adapter::definition::Catalog>) {
         let before = self.shared.definitions.get();
         self.shared.definitions.set(Arc::clone(&catalog));
@@ -1468,7 +1498,24 @@ impl<'g> Engine for OwnEngine<'g> {
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
         self.check()?;
         let catalog = self.shared.definitions.get();
-        self.topology().state_at(&catalog, Instant::now())
+        let now = Instant::now();
+        // A resume whose start's deadline passed with no program shown is
+        // named here: the read the coordinator makes at that moment
+        // (`settles_at`) is the one that finds it.
+        let (missed, state) = {
+            let mut topology = self.topology();
+            (
+                topology.miss_expired_resumes(now),
+                topology.state_at(&catalog, now),
+            )
+        };
+        for left in &missed {
+            self.say_not_resumed(left);
+        }
+        if !missed.is_empty() {
+            self.changed();
+        }
+        state
     }
 
     fn session_payload(&self, wait: Wait) -> Answer<SessionSnapshotPayload> {
@@ -2446,6 +2493,9 @@ mod tests {
         /// does. The time each ask was given, in order.
         processes_held: (Mutex<bool>, Condvar),
         processes_within: Mutex<Vec<Duration>>,
+        /// How many of the next process asks about each pane are lost, as a
+        /// node's ask is that never comes back.
+        processes_lost: Mutex<BTreeMap<String, usize>>,
     }
 
     impl Holders {
@@ -2686,6 +2736,14 @@ mod tests {
         }
         fn processes(&self, pane: &str, within: Duration) -> Result<HolderProcesses, HolderError> {
             self.processes_within.lock().unwrap().push(within);
+            if let Some(left) = self.processes_lost.lock().unwrap().get_mut(pane)
+                && *left > 0
+            {
+                *left -= 1;
+                return Err(HolderError::Unreachable {
+                    message: "the ask was lost".to_owned(),
+                });
+            }
             let (held, released) = &self.processes_held;
             let (held, _) = released
                 .wait_timeout_while(held.lock().unwrap(), within, |held| *held)
@@ -4030,6 +4088,29 @@ mod tests {
             Change::None,
             Reporter {
                 agent: Some("claude"),
+                session: Some(session),
+            },
+            Said::Turn(turn),
+            None,
+        )
+        .unwrap();
+    }
+
+    /// Writes what `pane`'s agent of `kind` said last: its turn in `session`.
+    fn hook_said_by(
+        place: &Place,
+        pane: &str,
+        kind: &str,
+        session: &str,
+        turn: hide_agent_hooks::report::HookTurn,
+    ) {
+        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
+        apply(
+            &home(place),
+            pane,
+            Change::None,
+            Reporter {
+                agent: Some(kind),
                 session: Some(session),
             },
             Said::Turn(turn),
@@ -5519,6 +5600,399 @@ mod tests {
             !next.hook_session(&working, "claude", "s-1").unwrap(),
             "owed once"
         );
+    }
+
+    /// Two agents, each with the conversation its hook named and a turn that
+    /// was running when the machine went down, in two panes whose holders all
+    /// ended; the folder holds them for a restart's `Holders`.
+    struct Rebooted {
+        _root: tempfile::TempDir,
+        place: Place,
+        panes: [String; 2],
+    }
+
+    impl Rebooted {
+        /// A Claude Code on `s-claude` and a Codex on `s-codex`.
+        fn claude_and_codex() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let place = place(root.path());
+            let folder = root.path().join("repo");
+            for dir in [&home(&place), &folder] {
+                std::fs::create_dir_all(dir).unwrap();
+            }
+            let holders = Holders::found(HolderRecovery::default());
+            holders.idle_shell(41, "zsh");
+            let first =
+                OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone())
+                    .unwrap();
+            let (_, _, claude) = first
+                .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+                .unwrap();
+            let codex = first
+                .split_pane_at(
+                    WAIT,
+                    &claude,
+                    ClosedSplitDirection::Right,
+                    &wire(&folder),
+                    0.5,
+                    Env::new(),
+                )
+                .unwrap();
+            for (pane, kind, session) in [
+                (&claude, "claude", "s-claude"),
+                (&codex, "codex", "s-codex"),
+            ] {
+                first
+                    .report_agent_session(WAIT, pane, kind, session, 1)
+                    .unwrap();
+                hook_said_by(
+                    &place,
+                    pane,
+                    kind,
+                    session,
+                    hide_agent_hooks::report::HookTurn::Working,
+                );
+            }
+            drop(first);
+            Self {
+                _root: root,
+                place,
+                panes: [claude, codex],
+            }
+        }
+
+        /// The daemon after the machine came back: every holder gone, so each
+        /// pane starts again, its restore handed `holders`' recovery.
+        fn restart(&self) -> (Arc<Holders>, OwnEngine<'static>) {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(52, "zsh");
+            let engine = OwnEngine::open(
+                Arc::clone(&holders) as Arc<dyn PaneHolders>,
+                self.place.clone(),
+            )
+            .unwrap();
+            holders.hand(HolderRecovery {
+                owner: 1,
+                ended: self.panes.to_vec(),
+                ..HolderRecovery::default()
+            });
+            (holders, engine)
+        }
+    }
+
+    /// Issue 653: after a reboot, every holder gone, a Claude Code and a Codex
+    /// whose turns were running each come back in their own conversation.
+    #[test]
+    fn a_reboot_resumes_claude_and_codex_each_in_its_own_conversation() {
+        let rebooted = Rebooted::claude_and_codex();
+        let (holders, next) = rebooted.restart();
+        next.restored().unwrap();
+        let [claude, codex] = &rebooted.panes;
+        assert!(
+            holders
+                .wait_typed(claude)
+                .starts_with("claude --resume s-claude || printf"),
+            "{:?}",
+            holders.typed(claude)
+        );
+        assert!(
+            holders
+                .wait_typed(codex)
+                .starts_with("codex resume s-codex || printf"),
+            "{:?}",
+            holders.typed(codex)
+        );
+        assert!(
+            next.session(WAIT).unwrap().not_resumed.is_empty(),
+            "both were resumed"
+        );
+    }
+
+    /// Issue 653: a resume the restore could not type under load, a shell
+    /// that did not answer in time, is tried again once the other resumes have
+    /// had their turn, and goes through.
+    #[test]
+    fn a_resume_that_could_not_be_typed_is_tried_again_after_the_others() {
+        let rebooted = Rebooted::claude_and_codex();
+        let (holders, next) = rebooted.restart();
+        // The first ask about the Claude's pane is lost, the next ones answer.
+        let [claude, codex] = &rebooted.panes;
+        holders
+            .processes_lost
+            .lock()
+            .unwrap()
+            .insert(claude.clone(), 1);
+        next.restored().unwrap();
+        for (pane, resume) in [
+            (claude, "claude --resume s-claude"),
+            (codex, "codex resume s-codex"),
+        ] {
+            assert!(
+                holders.wait_typed(pane).starts_with(resume),
+                "{pane}: {:?}",
+                holders.typed(pane)
+            );
+        }
+        assert!(next.session(WAIT).unwrap().not_resumed.is_empty());
+    }
+
+    /// Issue 653: a resume that cannot be typed on either try leaves its pane a
+    /// shell, and the session says that agent was not resumed (so the core ends
+    /// its registration) instead of leaving a pane that looks like it runs it.
+    #[test]
+    fn a_resume_that_cannot_be_typed_twice_is_named_as_not_resumed() {
+        let rebooted = Rebooted::claude_and_codex();
+        let (holders, next) = rebooted.restart();
+        // The Claude's resume loses both of its tries; the Codex's goes through.
+        let [claude, codex] = &rebooted.panes;
+        holders
+            .processes_lost
+            .lock()
+            .unwrap()
+            .insert(claude.clone(), 2);
+        next.restored().unwrap();
+        assert!(
+            holders
+                .wait_typed(codex)
+                .starts_with("codex resume s-codex"),
+            "{:?}",
+            holders.typed(codex)
+        );
+        settles("the lost resume is named", || {
+            !next.session(WAIT).unwrap().not_resumed.is_empty()
+        });
+        let left = next.session(WAIT).unwrap().not_resumed;
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].pane_id, *claude);
+        assert_eq!(left[0].agent, "claude-code", "the definition's id");
+        assert_eq!(left[0].session.as_deref(), Some("s-claude"));
+        assert!(
+            left[0].why.contains("could not be typed"),
+            "{}",
+            left[0].why
+        );
+        assert_eq!(holders.typed(claude), "", "nothing was typed into it");
+        // It is not the pane's agent any more: a later restore resumes
+        // nothing there, and the session no longer lists it as running.
+        assert!(saved_agent(&next, claude).is_none());
+        assert!(
+            saved_agent(&next, codex).is_some(),
+            "the resumed one is still saved"
+        );
+    }
+
+    /// The agent the saved form keeps for `pane`, the definition's id.
+    fn saved_agent(engine: &OwnEngine, pane: &str) -> Option<String> {
+        engine
+            .topology()
+            .to_saved()
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| &tab.panes)
+            .find(|saved| saved.id == pane)
+            .and_then(|saved| saved.agent.as_ref().map(|agent| agent.kind.clone()))
+    }
+
+    /// A `Rebooted` restart whose resumes were typed into both panes.
+    fn resumed_after_reboot() -> (Rebooted, Arc<Holders>, OwnEngine<'static>) {
+        let rebooted = Rebooted::claude_and_codex();
+        let (holders, next) = rebooted.restart();
+        next.restored().unwrap();
+        for (pane, resume) in rebooted
+            .panes
+            .iter()
+            .zip(["claude --resume", "codex resume"])
+        {
+            assert!(
+                holders.wait_typed(pane).starts_with(resume),
+                "{pane}: {:?}",
+                holders.typed(pane)
+            );
+        }
+        assert!(
+            next.session(WAIT).unwrap().not_resumed.is_empty(),
+            "both resumes are starting"
+        );
+        (rebooted, holders, next)
+    }
+
+    /// Issue 653: a resume that was typed and whose program fails (its
+    /// session is gone, it exits 42) shows in the foreground and leaves it
+    /// before its start settled; the pane is a shell again, and the session
+    /// names the agent as not resumed so the core ends its registration. The
+    /// other pane's resume is untouched.
+    #[test]
+    fn a_resume_whose_program_ends_before_its_start_settles_is_named_as_not_resumed() {
+        use hide_node_link::holders::ScreenState;
+        let (rebooted, holders, next) = resumed_after_reboot();
+        let [claude, codex] = &rebooted.panes;
+        holders.say(claude, &running("claude", ScreenState::Working));
+        assert!(
+            next.session(WAIT).unwrap().not_resumed.is_empty(),
+            "its program shows"
+        );
+        holders.say(claude, &PaneFacts::default());
+        let left = next.session(WAIT).unwrap().not_resumed;
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].pane_id, *claude);
+        assert_eq!(left[0].agent, "claude-code", "the definition's id");
+        assert_eq!(left[0].session.as_deref(), Some("s-claude"));
+        assert!(left[0].why.contains("ended before"), "{}", left[0].why);
+        assert!(
+            saved_agent(&next, claude).is_none(),
+            "a later restore resumes nothing there"
+        );
+        assert!(
+            saved_agent(&next, codex).is_some(),
+            "the other still starts"
+        );
+    }
+
+    /// Issue 653: a resume whose program the holder never saw in the
+    /// foreground (it failed at once) is a shell the whole time a start waits
+    /// for its program, so it is named as not resumed when the start's own
+    /// deadline passes, not before and not by a deadline of its own.
+    #[test]
+    fn a_resume_no_program_showed_for_is_named_as_not_resumed_at_its_start_deadline() {
+        let (rebooted, holders, next) = resumed_after_reboot();
+        let [claude, codex] = &rebooted.panes;
+        holders.say(claude, &PaneFacts::default());
+        let moment = std::time::Duration::from_secs(1);
+        age_start(&next, claude, agents::START_DEADLINE - moment);
+        assert!(
+            next.session(WAIT).unwrap().not_resumed.is_empty(),
+            "a shell is what a start's pane shows before its program does"
+        );
+        age_start(&next, claude, moment * 2);
+        let left = next.session(WAIT).unwrap().not_resumed;
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].pane_id, *claude);
+        assert_eq!(left[0].session.as_deref(), Some("s-claude"));
+        assert!(left[0].why.contains("deadline"), "{}", left[0].why);
+        // The next read and the shell's next report name it again, once.
+        holders.say(claude, &PaneFacts::default());
+        assert_eq!(next.session(WAIT).unwrap().not_resumed, left);
+        assert!(next.topology().pane(claude).unwrap().agent.is_none());
+        assert!(saved_agent(&next, claude).is_none());
+        assert!(
+            saved_agent(&next, codex).is_some(),
+            "the other still starts"
+        );
+    }
+
+    /// An agent a resume brought back, past its settle, that then ends in its
+    /// pane is an ordinary agent ending, whose hooks end its registration:
+    /// the restore does not name it.
+    #[test]
+    fn a_resumed_agent_that_ends_after_its_start_settled_is_not_named() {
+        use hide_node_link::holders::ScreenState;
+        let (rebooted, holders, next) = resumed_after_reboot();
+        let [claude, _] = &rebooted.panes;
+        holders.say(claude, &running("claude", ScreenState::Idle));
+        settle_start(&next, claude);
+        holders.say(claude, &running("claude", ScreenState::Idle));
+        holders.say(claude, &PaneFacts::default());
+        assert!(next.session(WAIT).unwrap().not_resumed.is_empty());
+        assert!(next.topology().pane(claude).unwrap().agent.is_none());
+    }
+
+    /// Issue 653: the resumes of a restore are typed one pane after another,
+    /// so an agent whose turn has not come yet is still the pane's saved agent:
+    /// a daemon that ends first leaves it to the next restore, as one that
+    /// ended after its turn does.
+    #[test]
+    fn an_agent_waiting_for_its_resume_to_be_typed_is_still_saved_with_its_pane() {
+        let rebooted = Rebooted::claude_and_codex();
+        let (holders, next) = rebooted.restart();
+        // The first resume's line stops at the holder; the second waits behind.
+        let (admitted, outcome) = holders.hold_input();
+        next.restored().unwrap();
+        admitted
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first resume reaches its holder");
+        let saved = next.topology().to_saved();
+        let kinds: Vec<_> = saved
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| &tab.panes)
+            .map(|pane| pane.agent.as_ref().map(|agent| agent.kind.clone()))
+            .collect();
+        assert_eq!(kinds.len(), 2, "both panes are saved: {saved:?}");
+        assert!(
+            kinds.iter().all(Option::is_some),
+            "each pane is saved with its agent until its resume is typed: {kinds:?}"
+        );
+        outcome.send(Ok(())).unwrap();
+    }
+
+    /// Issue 628: a restart's resume asks its node about the program its
+    /// definition starts the agent by, the first executable: Kiro's kind is
+    /// `kiro` and its program `kiro-cli`, and the node looks a name up on its
+    /// `PATH`. The same answer says why the resume went by its name.
+    #[test]
+    fn a_restart_asks_its_node_about_the_definitions_first_executable() {
+        use hide_node_link::{LinkAnswer, LinkError, NodeLink, protocol::Call};
+        struct Asked {
+            node: hide_node::Local,
+            programs: Mutex<Vec<String>>,
+        }
+        impl NodeLink for Asked {
+            fn call(&self, call: Call, timeout: Duration) -> Result<LinkAnswer, LinkError> {
+                if let Call::AgentInstalled { name } = &call {
+                    self.programs.lock().unwrap().push(name.clone());
+                }
+                self.node.call(call, timeout)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let asked = Arc::new(Asked {
+            node: hide_node::Local::new(Some(root.path().join("home"))),
+            programs: Mutex::default(),
+        });
+        let place = Place {
+            node: Arc::clone(&asked) as Arc<dyn NodeLink>,
+            ..place(root.path())
+        };
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, kiro) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let start = first
+            .prepare_start(launch(&kiro, "reader", "kiro", &[]))
+            .unwrap();
+        first.start_agent(WAIT, &start).unwrap();
+        drop(first);
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(52, "zsh");
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            ended: vec![kiro.clone()],
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+        assert!(
+            holders
+                .wait_typed(&kiro)
+                .starts_with("kiro-cli chat --resume || printf"),
+            "{:?}",
+            holders.typed(&kiro)
+        );
+        assert_eq!(*asked.programs.lock().unwrap(), ["kiro-cli"]);
     }
 
     /// D-8, B15: a conversation an import gave back once its Herdr stopped,

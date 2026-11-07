@@ -2138,6 +2138,10 @@ pub(crate) enum PaneGone {
     /// The registration was made before this read's snapshot was asked for,
     /// and the snapshot lacks its pane.
     Absent,
+    /// The pane is there, a shell: its engine restored it after a restart
+    /// and did not resume the agent that ran in it, and no resume will be
+    /// typed (`ProjectionState::not_resumed`).
+    NotResumed,
 }
 
 impl PaneGone {
@@ -2145,6 +2149,7 @@ impl PaneGone {
         match self {
             Self::Left => "pane_left",
             Self::Absent => "pane_absent",
+            Self::NotResumed => "agent_not_resumed",
         }
     }
 }
@@ -2203,6 +2208,46 @@ pub(crate) fn gone_registrations(
                 .is_some_and(|floor| sequence < floor)
                 .then(|| (record.id.clone(), PaneGone::Absent))
         })
+        .collect()
+}
+
+/// The live registrations on `device` whose agent a restore did not resume
+/// (`left`, the panes' engine says are shells now), none of which runs: the
+/// registration on each such pane, unless an agent shows in that pane now
+/// (`shown`, the panes of the same read that list one) or the registration
+/// belongs to another conversation than the one that was not resumed, which
+/// both name. A registration on another engine of the same machine is not
+/// judged by this one's read (`host_scope`, as [`gone_registrations`]).
+pub(crate) fn not_resumed_registrations(
+    ledger: &Ledger,
+    device: &str,
+    host_scope: Option<&str>,
+    left: &[crate::session_sync::NotResumed],
+    shown: &std::collections::HashSet<&str>,
+) -> Vec<(String, PaneGone)> {
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            !record.ended
+                && !record.actor.code_owned()
+                && record.actor.device_id == device
+                && host_scope.is_none_or(|scope| scope == record.host_scope)
+                && !shown.contains(record.pane.as_str())
+        })
+        .filter(|record| {
+            left.iter().any(|left| {
+                left.pane_id == record.pane
+                    && match (&left.session, &record.actor.session) {
+                        (Some(session), Some(registered)) => {
+                            crate::engine::tokens::session_digest(session).as_ref()
+                                == Some(registered)
+                        }
+                        _ => true,
+                    }
+            })
+        })
+        .map(|record| (record.id.clone(), PaneGone::NotResumed))
         .collect()
 }
 
