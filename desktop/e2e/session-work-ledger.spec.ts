@@ -9,6 +9,7 @@ import { chord } from "../../web/e2e/chords";
 import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, launchShell, REPO, startStack, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
+import { finishNative } from "./native-teardown";
 
 /** This session's PRs and the child's, each in its own group; the settled ones open from their fold (PRD session-record-goal-flow B18, B19). */
 async function expectRecordPrs(record: Locator, child: string, total: number) {
@@ -130,9 +131,5 @@ test("@platform session records by goal flow, ended work and search render in bo
       await captureElectronWindow(app, `record-ended-${theme}`, { ...fixtureIdentity, theme, tools: await page.locator("[data-lane-frame]").boundingBox() });
     }
   } catch (error) { failures.push(error); }
-  finally {
-    try { await app?.close(); } catch (error) { failures.push(error); }
-    try { stack.stop(); } catch (error) { failures.push(error); }
-  }
-  if (failures.length) throw new AggregateError(failures, "native session record or teardown failed");
+  await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
 });

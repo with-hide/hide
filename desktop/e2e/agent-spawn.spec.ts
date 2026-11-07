@@ -8,6 +8,7 @@ import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e
 import { enterWorkspace } from "../../web/e2e/wire";
 import { launchShell, nodeOf, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
+import { finishNative } from "./native-teardown";
 import { expectCoreFocus, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
 
 test("a spawned child appears in the native delegation tree", async () => {
@@ -71,9 +72,6 @@ test("a spawned child appears in the native delegation tree", async () => {
     await captureNativeWindow(app, "agent-spawn-delegation-native", { parent, children, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" });
   } catch (error) {
     failures.push(error);
-  } finally {
-    try { await app?.close(); } catch (error) { failures.push(error); }
-    try { stack.stop(); } catch (error) { failures.push(error); }
   }
-  if (failures.length) throw new AggregateError(failures, "native spawn fixture or teardown failed");
+  await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
 });

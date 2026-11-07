@@ -53,6 +53,7 @@ import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowS
 import { openRoute, probe, probeRequest } from "./localPath";
 import { ExternalFiles, agentOpen, clickedRoute } from "./externalFiles";
 import { WAKE_TIMEOUT_MS, wakeRequest, type WakeCause } from "./hideAiWake";
+import { inBackground } from "./inBackground";
 import { revealTarget } from "./reveal";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
@@ -1012,12 +1013,14 @@ export class DesktopHost {
     if (current.kind !== "attached" || this.quitting) return;
     const request = wakeRequest(current, cause);
     if (!request) { this.log.event("hide_ai.wake_failed", { cause, reason: "credential" }); return; }
-    void fetch(request.url, { ...request.init, signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) })
-      .then(async (response) => {
+    inBackground(
+      () => fetch(request.url, { ...request.init, signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) }),
+      async (response) => {
         await response.arrayBuffer();
         if (!response.ok) this.log.event("hide_ai.wake_failed", { cause, status: response.status });
-      })
-      .catch(() => this.log.event("hide_ai.wake_failed", { cause, reason: "transport" }));
+      },
+      () => this.log.event("hide_ai.wake_failed", { cause, reason: "transport" }),
+    );
   }
 
   // --- following the daemon (B4) ---------------------------------------------
@@ -1586,12 +1589,16 @@ export class DesktopHost {
     try { request = this.browserRouteRequest(workspace, id, load); }
     catch { return; }
     const { current, token, body } = request;
-    void fetch(`${current.origin}/browser-route`, {
-      method: "DELETE", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body, signal: AbortSignal.timeout(3_000),
-    }).then((answer) => {
-      if (!answer.ok) this.log.event("browser.route_release_failed", { status: answer.status });
-    }).catch((error: unknown) => this.log.event("browser.route_release_failed", { detail: String(error) }));
+    inBackground(
+      () => fetch(`${current.origin}/browser-route`, {
+        method: "DELETE", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body, signal: AbortSignal.timeout(3_000),
+      }),
+      (answer) => {
+        if (!answer.ok) this.log.event("browser.route_release_failed", { status: answer.status });
+      },
+      (error) => this.log.event("browser.route_release_failed", { detail: String(error) }),
+    );
   }
 
   /** An IPC message from the shell the daemon serves in this window's own frame; the status page and every browser page are refused. */

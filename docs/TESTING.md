@@ -68,6 +68,9 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   Wait for the state the next step needs: a diagnostic `kind` with its subject ID, a snapshot field, an engine answer, the bytes in a pane's input log.
 - Wait for the readiness the next step actually depends on.
   A healthy HTTP answer is not a subscribed socket, a delivered first snapshot, or a terminal that accepts input.
+- A row the snapshot shows is not a state the core has acted on.
+  A pane is drawn before the engine confirms its split, so `splitPane` returns once the tab's geometry line is empty (`tabGeometrySettled`), or a close sent next starts beside the split and is never answered (with-hide/hide-private#537).
+  An agent's row names its session before a session pass has laid the delivery observation that lets the pane call `hide agent spawn`, so the family fixture polls the read-only `hide agent show here`, which resolves its caller the same way, before the parent spawns its child (#130).
 - A poll only observes (`hide-e2e/no-action-in-poll` in the e2e lint).
   A click, focus, creation or resend is one explicit action outside the poll; an action repeated inside `toPass` or `expect.poll` turns one intent into several and can satisfy the assertion with the wrong one.
 - Prefer subject IDs, request identity and generation or revision numbers over wall-clock comparisons and the last diagnostic string.
@@ -254,6 +257,10 @@ The Windows fixture boundaries also preserve these requirements:
   A signal is not a confirmed exit: a stopped process holds a SIGTERM pending, and one fixture `hided` outlived its worker that way for a day.
   `stopDaemon` ends a fixture `hided` through `hide stop`, which waits for the graceful stop and then ends the daemon's tree, and continues a stopped daemon first.
   `desktop/e2e/fixture.ts`'s `AggregateError` is the reference for reporting several cleanup failures at once.
+- A native desktop spec ends with `finishNative` (`desktop/e2e/native-teardown.ts`), never with an `AggregateError` over its body and its teardown.
+  It runs each named step (close the app, stop the stack) after the one before whether or not that one failed, throws the first failure itself and appends every later one with its step's name.
+  Six specs once threw `AggregateError: native task list fixture or teardown failed`: the flaky report and the history classifier read the error's first line and its located `expect` diagnostic, both of which sat in a nested error, so four issues (with-hide/hide-private#515, #291, #130, #537) named no cause until someone opened the job log.
+  A failure a spec records and goes on from is named by its step with `inStep`.
 
 ## Writing a Playwright e2e test
 
