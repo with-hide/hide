@@ -1063,17 +1063,17 @@ mod tests {
             .unwrap()
     }
 
-    /// Every JSON store, Memory's cards and the link record's devices, meta
-    /// and retention, as a start reads them.
-    #[allow(clippy::type_complexity)]
-    fn contents(
-        state: &Path,
-    ) -> (
+    /// Every JSON store, Memory's cards and the link record's devices, and
+    /// its listing stamps and retention.
+    type Contents = (
         BTreeMap<String, Value>,
         Vec<(i64, String, String)>,
         Vec<(String, String)>,
         Vec<(String, String)>,
-    ) {
+    );
+
+    /// What a start reads of the folder at `state`.
+    fn contents(state: &Path) -> Contents {
         let json = STORES
             .iter()
             .chain([&CORE_STATE])
