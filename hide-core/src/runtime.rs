@@ -23,6 +23,7 @@ mod branch_card;
 mod branch_decision;
 mod checkout_git;
 mod checks_wait;
+mod add_project;
 mod clone;
 mod control_lane;
 pub(crate) mod core_move;

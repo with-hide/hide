@@ -218,6 +218,19 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::OwnPath("expanded_paths"),
     ),
+    // Add a project's last folder by machine, beside this machine's own.
+    (
+        CORE_STATE,
+        "/device_add_project_folders/{key}",
+        Mechanism::Owned,
+        Moves::OwnPath("add_project_folder"),
+    ),
+    (
+        CORE_STATE,
+        "/add_project_folder",
+        Mechanism::Owned,
+        Moves::OwnPath("device_add_project_folders"),
+    ),
     // Each agent's 권한 by machine, beside this machine's own.
     (
         CORE_STATE,
@@ -1753,6 +1766,11 @@ mod tests {
             .tap_insert(
                 "stray_dismissals",
                 json!({"workspace:a:checkout:1": {"head": "aaa", "at_unix_ms": 1}}),
+            )
+            .tap_insert("add_project_folder", json!("/Users/me/work"))
+            .tap_insert(
+                "device_add_project_folders",
+                json!({"mini": "/home/me/projects"}),
             )
             .tap_insert("agent_permissions", json!({"codex": {"mode": "ask"}}))
             .tap_insert(

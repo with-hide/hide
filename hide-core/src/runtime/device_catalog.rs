@@ -1153,6 +1153,105 @@ impl Runtime {
         true
     }
 
+    /// Create new project on a device (PRD device-add-project D-07, B19):
+    /// a worker asks the device's node to judge and make the folder and its
+    /// repository (`checkout_owner::open::make_device_project`), and the
+    /// folder it made is registered as any folder on that device is
+    /// (`create_device_registration`), so its first terminal opens there.
+    pub(super) fn create_device_project(
+        &mut self,
+        device: &str,
+        path: String,
+        label: String,
+    ) -> bool {
+        let channel = match self.node_link(device) {
+            Ok(channel) => channel,
+            Err(message) => {
+                self.set_error(
+                    "workspace.create_unavailable",
+                    format!("Creating a project on this device needs its connection: {message}"),
+                    true,
+                );
+                return true;
+            }
+        };
+        let Some(context) = self.worker_context.clone() else {
+            let made = crate::checkout_owner::open::make_device_project(channel.as_ref(), &path);
+            return self.settle_device_project(device, &path, label, made);
+        };
+        let (target, requested) = (device.to_owned(), path.clone());
+        let spawned = thread::Builder::new()
+            .name("hide-core-device-project".to_owned())
+            .spawn(move || {
+                let made = crate::checkout_owner::open::make_device_project(channel.as_ref(), &path);
+                let Some(runtime) = context.runtime.upgrade() else {
+                    return;
+                };
+                let changed = match runtime.lock() {
+                    Ok(mut guard) => guard.settle_device_project(&target, &path, label, made),
+                    Err(_) => return,
+                };
+                drop(runtime);
+                if changed {
+                    context.notifier.notify();
+                }
+            });
+        if let Err(error) = spawned {
+            self.set_error(
+                "workspace.create_worker_failed",
+                format!("The project creation worker could not be started: {error}"),
+                true,
+            );
+            crate::diagnostic!(serde_json::json!({
+                "component": "registration", "kind": "create.device_project_worker_failed",
+                "target": device, "path_len": requested.len(),
+            }));
+        }
+        true
+    }
+
+    /// The device's answer to a new project: the folder it made is
+    /// registered there, and a refusal is shown by its kind, as one on this
+    /// machine is.
+    fn settle_device_project(
+        &mut self,
+        device: &str,
+        requested: &str,
+        label: String,
+        made: Result<
+            hide_node_link::project::ProjectCreated,
+            crate::checkout_owner::open::WorkspaceCreationFailure,
+        >,
+    ) -> bool {
+        if !self.device_hosts.contains_key(device) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "registration", "kind": "create.device_gone",
+                "target": device,
+            }));
+            return false;
+        }
+        match made {
+            Ok(created) => {
+                if let Some(git_error) = created.git_error {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "registration", "kind": "create.device_git_init_failed",
+                        "target": device, "message": git_error,
+                    }));
+                }
+                self.create_device_registration(device, created.path, label, None)
+            }
+            Err(failure) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "registration", "kind": "create.device_project_refused",
+                    "target": device, "reason": failure.kind, "message": failure.message,
+                }));
+                self.set_error(failure.kind, failure.message, false);
+                self.settle_project_open(device, requested, Err(failure.kind), Forward::No);
+                true
+            }
+        }
+    }
+
     /// `requested` is the folder as the request named it, which a
     /// `hide <path>` waiting on it is found by (`settle_project_open`).
     pub(super) fn ingest_device_registration(

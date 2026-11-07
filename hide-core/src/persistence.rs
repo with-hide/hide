@@ -44,6 +44,10 @@ struct StoredUiState {
     expanded_paths: Vec<String>,
     #[serde(default)]
     device_expanded_paths: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    add_project_folder: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    device_add_project_folders: BTreeMap<String, String>,
     #[serde(default)]
     collapsed_workspace_ids: Vec<String>,
     #[serde(default)]
@@ -632,6 +636,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             right_panel_section: stored.right_panel_section,
             expanded_paths: stored.expanded_paths,
             device_expanded_paths: stored.device_expanded_paths,
+            add_project_folder: stored.add_project_folder,
+            device_add_project_folders: stored.device_add_project_folders,
             collapsed_workspace_ids: stored.collapsed_workspace_ids,
             collapsed_checkout_ids: stored.collapsed_checkout_ids,
             expanded_checkout_ids: stored.expanded_checkout_ids,
@@ -811,6 +817,8 @@ pub fn save(
         right_panel_section: state.right_panel_section,
         expanded_paths: state.expanded_paths.clone(),
         device_expanded_paths: state.device_expanded_paths.clone(),
+        add_project_folder: state.add_project_folder.clone(),
+        device_add_project_folders: state.device_add_project_folders.clone(),
         collapsed_workspace_ids: state.collapsed_workspace_ids.clone(),
         collapsed_checkout_ids: state.collapsed_checkout_ids.clone(),
         expanded_checkout_ids: state.expanded_checkout_ids.clone(),

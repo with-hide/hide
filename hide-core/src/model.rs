@@ -4337,6 +4337,15 @@ pub struct UiStateSnapshot {
     /// own device, so two devices' same path never share a row (S5.5 B2).
     #[serde(default)]
     pub device_expanded_paths: BTreeMap<String, Vec<String>>,
+    /// The folder Add a project's folder list last showed on this machine,
+    /// as its node answered it; the next list here starts in it (PRD
+    /// device-add-project D-04).
+    #[serde(default)]
+    pub add_project_folder: Option<String>,
+    /// The same for each device, by device id; a device's folder means
+    /// something only on that device.
+    #[serde(default)]
+    pub device_add_project_folders: BTreeMap<String, String>,
     #[serde(default)]
     pub collapsed_workspace_ids: Vec<String>,
     /// Sidebar workspaces (checkout paths) whose agent rows the removed
@@ -5348,6 +5357,8 @@ impl Default for UiStateSnapshot {
             right_panel_section: RightPanelSection::default(),
             expanded_paths: Vec::new(),
             device_expanded_paths: BTreeMap::new(),
+            add_project_folder: None,
+            device_add_project_folders: BTreeMap::new(),
             collapsed_workspace_ids: Vec::new(),
             collapsed_checkout_ids: Vec::new(),
             expanded_checkout_ids: Vec::new(),
@@ -6641,6 +6652,8 @@ pub struct TaskOperationSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RepositoryCloneSnapshot {
     pub id: u64,
+    /// The machine the clone runs on and its project is registered on.
+    pub device_id: String,
     pub host: String,
     /// The new folder's full path, `parent` and the name the URL gives.
     pub path: String,

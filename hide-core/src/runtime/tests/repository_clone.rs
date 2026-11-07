@@ -279,3 +279,58 @@ fn a_name_the_url_does_not_give_is_refused_before_anything_runs() {
     assert_eq!(guard.snapshot.repository_clone, None);
     assert!(children(&parent).is_empty());
 }
+
+fn device_clone_event(url: &str, device: &str, parent: &str, name: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "clone_repository",
+        "payload": {"url": url, "device_id": device, "parent": parent, "name": name}
+    }))
+    .unwrap()
+}
+
+/// PRD device-add-project B16, B17: a clone on a device lands under that
+/// device's own home, judged by its node, and is registered on that device;
+/// a name already taken there ends the clone before Git runs.
+#[test]
+fn a_clone_on_a_device_lands_under_its_home_and_is_registered_there() {
+    let (_outer, url, _parent) = fixture();
+    let (_home_dir, home) = super::add_project::device_home();
+    let shared = shared_runtime();
+    super::add_project::with_device(&mut shared.lock().unwrap(), &home);
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&device_clone_event(&url, "window", "~/projects", "origin"))
+    );
+    let clone = settled(&shared);
+    assert_eq!((clone.phase.as_str(), clone.device_id.as_str()), ("finished", "window"));
+    assert!(home.join("projects/origin/f0.txt").is_file());
+    let registered: Vec<(String, String)> = shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .iter()
+        .map(|row| (row.device_id.clone(), row.path.clone()))
+        .collect();
+    assert_eq!(
+        registered,
+        [(
+            "window".to_owned(),
+            hide_platform::path::to_wire_lossy(&home.join("projects/origin"))
+        )]
+    );
+
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&device_clone_event(&url, "window", "~/projects", "origin"))
+    );
+    let clone = settled(&shared);
+    assert_eq!(clone.phase, "failed");
+    assert_eq!(clone.failure.as_deref(), Some("target_exists"));
+}
