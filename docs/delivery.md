@@ -484,6 +484,7 @@ A plan-mode turn that proposed a plan and finished, with no later turn or messag
 Records the parser does not recognise are not known rather than "nothing waits": a `task_started` whose mode is missing or not one it knows, a plan proposed in a turn whose mode says it runs none, and a person's messages with no turn record at all.
 The rule and its basis (codex-cli 0.160.1) are written beside the Codex parser, and nothing outside it names Codex.
 The answer is kept with the engine's `state_change_seq` the read was asked under, and it holds for that state only.
+A label worker that starts, with a daemon that starts or a device link that opens, runs on a new engine that counts its states from the start again, so it shows no answer it kept, and owes or settles no notice, until it has read each session once, continuing from where the last read stopped with the turns it had folded (`PaneRecord::forget_engine_state`).
 The engine can read the agent at rest before Codex writes how the turn ended; that state's read then does not settle a plan-mode turn, so the bell holds and the row shows no wait until the engine's next state is read, because this rule adds no session reads of its own (PRD codex-plan-approval-hold B10).
 The same turn tracker reads Claude Code's native `AskUserQuestion` calls and matching tool-result records.
 When a supported session reader says a native question or plan approval waits, the bell holds with `awaiting_operator`.

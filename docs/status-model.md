@@ -124,7 +124,7 @@ This is enforced by `INV-herdr-unseen-token`.
 `state_change_seq` is the engine's own count for one daemon process: it starts again when the daemon starts, and the engine's save keeps a pane's tokens except the server mark (below).
 A restored pane reports in steps: first at sequence 0, then `unknown` until its holder has read the agent's screen again, then settled at a sequence of its own, which may land below, at or above the one before.
 So a sequence is compared only with one read on the same engine, and no sequence value is taken as a restart signal.
-A device's engine goes with its link, so the same holds for every link to a device; the hook's turns ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)) and a watch's activity ([delivery.md](delivery.md#watch-activity-and-completion)) follow this rule too.
+A device's engine goes with its link, so the same holds for every link to a device; the hook's turns ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), a watch's activity ([delivery.md](delivery.md#watch-activity-and-completion)) and the label worker's reads, with the stop and the notice each owed for a state, follow this rule too: a worker that starts lays nothing it read for an earlier engine's state, and takes its first sequence without reading the difference as a state that moved (`PaneRecord::forget_engine_state`).
 
 Each record names the engine it was read on (`PaneReadRecord::server`).
 Every connection Hide makes to an engine, this machine's or a device's, starts with a fresh mark, and once a saved record or completion names that mark the lineage writer writes it on the pane as the `hide_server` token (`engine::tokens::SERVER_MARK_TOKEN`).
