@@ -1296,6 +1296,9 @@ impl Runtime {
                 );
             }
         }
+        // A rebuilt entry starts without its agent; name it before the strip
+        // is published, as this machine's strips are.
+        sync_strip_agent_identity(&mut session.workspaces, &session.agents);
     }
 
     pub(super) fn report_dropped_tab_moves(&mut self, dropped_moves: Vec<String>) {

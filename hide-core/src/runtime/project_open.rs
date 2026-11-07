@@ -163,10 +163,13 @@ impl Runtime {
         path: &str,
         outcome: Result<(), &str>,
         forward: Forward,
-    ) {
+    ) -> bool {
+        // Answers whether what it brought forward was read, for a caller
+        // that announces only what changed (`ingest_device_registration`).
         self.change_look(|runtime| {
             runtime.settle_project_open_steps(device, path, outcome, forward)
-        });
+        })
+        .1
     }
 
     /// The steps of `settle_project_open`, which runs them as one selection (`look.rs`).

@@ -1528,10 +1528,10 @@ impl Runtime {
         // Read before the rows are taken out below: which of a device's tabs
         // its window shows is asked of its published session.
         let look = self.reading_look();
-        let mut changed = self.refresh_pane_read_state();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut remotes = std::mem::take(&mut self.snapshot.status.remote);
         let mut changes = Vec::new();
+        let mut changed = false;
         for remote in &mut remotes {
             let Some(session) = remote.session.as_mut() else {
                 continue;
@@ -1549,15 +1549,79 @@ impl Runtime {
                 self.read_connection(Some(&remote.target_id)),
                 &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
             ));
-            changed |= before != session.agents;
+            if before != session.agents {
+                self.project_published_remote_rows(&remote.target_id, session);
+                self.reread_device_raw_session(&remote.target_id, looked_at, &mut records);
+                changed = true;
+            }
         }
         self.snapshot.status.remote = remotes;
         self.snapshot.ui_state.pane_read_records = records;
-        self.read_look = look;
         if !changes.is_empty() {
             self.record_read_record_changes(&changes);
         }
-        changed | self.sync_request_rows()
+        // This machine's rows last, with every device's back in place: they
+        // read what a device's agents send up their lineage now, and the
+        // groups, presence and request rows follow every machine's rows.
+        let local = self.refresh_pane_read_state();
+        self.read_look = look;
+        changed | local
+    }
+
+    /// Reads the device's kept session (`device_raw_sessions`) with the look
+    /// its published rows were just read with. The kept session holds the
+    /// rows as its arrival read them; a catalog refresh derives the published
+    /// session from it again, and the same session arriving again is matched
+    /// against it, so left behind it would bring a read row back to 읽을 것
+    /// and make that session a change.
+    fn reread_device_raw_session(
+        &mut self,
+        target_id: &str,
+        looked_at: &[String],
+        records: &mut BTreeMap<String, crate::model::PaneReadRecord>,
+    ) {
+        let Some(mut raw) = self.device_raw_sessions.remove(target_id) else {
+            return;
+        };
+        crate::agent_state::apply_read_state(
+            &mut raw.agents,
+            Default::default(),
+            records,
+            self.read_connection(Some(target_id)),
+            &looked_at.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        self.project_remote_rows(target_id, &mut raw);
+        self.device_raw_sessions.insert(target_id.to_owned(), raw);
+    }
+
+    /// What a device's tree shows of its agent rows, as a device's own read
+    /// leaves the session it sent: each pane's status and close checks, each
+    /// tab's agent and label, each strip entry's identity, the checkout
+    /// summaries, and the pane relations projected from the rows. The session
+    /// kept as it arrived (`device_raw_sessions`) carries this.
+    fn project_remote_rows(&self, target_id: &str, session: &mut RemoteSessionSnapshot) -> bool {
+        let status = sync_pane_status(
+            &mut session.workspaces,
+            &session.agents,
+            session.focused_pane_id.as_deref(),
+            self.sleep_machine(target_id),
+        );
+        status | sync_remote_pane_relations(session)
+    }
+
+    /// The same for the device's published session after a moved look read
+    /// its rows: the pane, tab and strip as above, and each pane's delegated
+    /// work judged again against the device's kit, as the session's
+    /// derivation judges it (`judge_device_pane_children`), whose chips carry
+    /// each child's read.
+    fn project_published_remote_rows(&self, target_id: &str, session: &mut RemoteSessionSnapshot) {
+        sync_pane_status(
+            &mut session.workspaces,
+            &session.agents,
+            session.focused_pane_id.as_deref(),
+            self.sleep_machine(target_id),
+        );
+        self.judge_device_pane_children(target_id, session);
     }
 
     /// A phone opened or closed an agent's detail, or went away: `pane_ids`
@@ -1673,13 +1737,7 @@ impl Runtime {
         if lineage_pruned {
             self.persist_ui_state();
         }
-        sync_pane_status(
-            &mut session.workspaces,
-            &session.agents,
-            session.focused_pane_id.as_deref(),
-            self.sleep_machine(target_id),
-        );
-        sync_remote_pane_relations(session);
+        self.project_remote_rows(target_id, session);
         let pruned = prune_pane_text_scales(
             &mut self.snapshot.ui_state.pane_text_scales,
             &session.workspaces,

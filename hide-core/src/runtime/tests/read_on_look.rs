@@ -553,17 +553,7 @@ fn a_device_pane_a_selection_passes_through_is_not_read() {
             "{origin:?}: it ended behind this Mac"
         );
 
-        let show = |runtime: &mut Runtime, shown: &str| {
-            let layout = runtime
-                .workspace_views
-                .as_mut()
-                .unwrap()
-                .views
-                .entry(DEVICE, &t.main)
-                .selected_agent_layout_mut();
-            let stamp = layout.tree.next_stamp(unix_milliseconds());
-            layout.select(&tab(shown), false, stamp).unwrap();
-        };
+        let show = |runtime: &mut Runtime, shown: &str| show_device_tab(runtime, &t.main, shown);
         runtime.change_look(|runtime| {
             runtime.bring_device_forward(DEVICE.into());
             show(runtime, "t2");
@@ -581,6 +571,161 @@ fn a_device_pane_a_selection_passes_through_is_not_read() {
 
         runtime.change_look(|runtime| show(runtime, "t1"));
         assert!(!unread(&runtime, "t1"), "{origin:?}: shown now, so read");
+    }
+}
+
+/// The operator picks `shown` in the device's Agent area, as the area's
+/// tab choice does, without the device being asked anything.
+fn show_device_tab(runtime: &mut Runtime, path: &str, shown: &str) {
+    let layout = runtime
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(DEVICE, path)
+        .selected_agent_layout_mut();
+    let stamp = layout.tree.next_stamp(unix_milliseconds());
+    layout.select(&tab(shown), false, stamp).unwrap();
+}
+
+/// The device's published session.
+fn device_published(runtime: &Runtime) -> RemoteSessionSnapshot {
+    runtime
+        .snapshot
+        .status
+        .remote
+        .iter()
+        .find(|remote| remote.target_id == DEVICE)
+        .and_then(|remote| remote.session.clone())
+        .expect("the device's session")
+}
+
+/// Asserts that `id`'s pane was read and that everything the device's tree
+/// shows of it says so: the pane's status, its tab's agent and its strip
+/// entry carry the row's status and mark.
+fn assert_tree_says_read(runtime: &Runtime, id: &str, case: &str) {
+    let session = device_published(runtime);
+    let pane = pane_id(id);
+    let tab_id = tab(id);
+    let row = session
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == pane)
+        .expect("the row");
+    assert!(!row.unread, "{case}: the row is read");
+    assert_eq!(
+        row.status_code,
+        AgentStatusCode::Idle,
+        "{case}: a read stopped agent is idle"
+    );
+    let checkout = session
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.checkouts)
+        .find(|checkout| {
+            checkout
+                .tabs
+                .iter()
+                .any(|entry| entry.id.as_ref() == Some(&tab_id))
+        })
+        .expect("the checkout");
+    let shown = checkout
+        .tabs
+        .iter()
+        .find(|entry| entry.id.as_ref() == Some(&tab_id))
+        .unwrap();
+    let pane_status = shown
+        .panes
+        .iter()
+        .find(|entry| entry.id == pane)
+        .map(|entry| entry.status_code);
+    assert_eq!(pane_status, Some(row.status_code), "{case}: the pane");
+    let agent = shown.agent.as_ref().expect("the tab's agent");
+    assert_eq!(
+        (agent.status_code, agent.mark),
+        (row.status_code, row.mark),
+        "{case}: the tab"
+    );
+    let entry = checkout
+        .strip
+        .iter()
+        .find(|entry| entry.source_id == tab_id)
+        .and_then(|entry| entry.agent_identity.as_ref())
+        .expect("the strip entry's agent");
+    assert_eq!(
+        (entry.status_code, entry.mark),
+        (row.status_code, row.mark),
+        "{case}: the strip"
+    );
+}
+
+/// Asserts that the same session arriving again corrects nothing: the
+/// snapshot the read published is the one the session leaves. (Whether the
+/// call announces is not asked: this fixture has no terminal node, so every
+/// session retries the attach of the device pane in front.)
+fn assert_same_session_changes_nothing(
+    runtime: &mut Runtime,
+    session: RemoteSessionSnapshot,
+    case: &str,
+) {
+    let published = serde_json::to_value(&runtime.snapshot).unwrap();
+    runtime.ingest_remote_session(DEVICE, Ok(session));
+    assert!(
+        serde_json::to_value(&runtime.snapshot).unwrap() == published,
+        "{case}: the same session again leaves every row, tree and presence as the read left them"
+    );
+}
+
+/// Rule: a device read by a moved look, with no new session from the device,
+/// publishes its tree as the device's next session would: the pane, the
+/// tab and the strip agree with the read row in the same change, and that
+/// session arriving changes nothing. The look moves by bringing the device
+/// forward, by showing the tab the device's keyboard is on, and inside a
+/// selection that a session arrives in. A catalog refresh, which derives
+/// the device's session again from the one it kept, keeps the read too.
+#[test]
+fn a_device_read_by_a_moved_look_publishes_the_tree_its_next_session_would() {
+    for origin in origins() {
+        let t = tree();
+        let case = format!("{origin:?} brought forward");
+        let (mut runtime, _views) = device(origin.clone(), false);
+        let finished = device_session(&t.main, &[("t1", "done", 1)], "t1");
+        runtime.ingest_remote_session(DEVICE, Ok(finished.clone()));
+        publish(&mut runtime);
+        assert!(unread(&runtime, "t1"), "{case}");
+        runtime.bring_device_forward(DEVICE.into());
+        assert_tree_says_read(&runtime, "t1", &case);
+        runtime.refresh_device_catalog(DEVICE);
+        assert_tree_says_read(&runtime, "t1", &format!("{case}, catalog derived again"));
+        assert_same_session_changes_nothing(&mut runtime, finished, &case);
+
+        let case = format!("{origin:?} tab shown");
+        let (mut runtime, _views) = device(origin.clone(), true);
+        let turns = |focused: &str| {
+            device_session(&t.main, &[("t1", "working", 1), ("t2", "done", 1)], focused)
+        };
+        runtime.ingest_remote_session(DEVICE, Ok(turns("t1")));
+        publish(&mut runtime);
+        runtime.ingest_remote_session(DEVICE, Ok(turns("t2")));
+        assert!(unread(&runtime, "t2"), "{case}: the window still shows t1");
+        runtime.change_look(|runtime| show_device_tab(runtime, &t.main, "t2"));
+        assert_tree_says_read(&runtime, "t2", &case);
+        assert_same_session_changes_nothing(&mut runtime, turns("t2"), &case);
+
+        let case = format!("{origin:?} session inside a selection");
+        let (mut runtime, _views) = device(origin.clone(), false);
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(&t.main, &[("t1", "working", 1)], "t1")),
+        );
+        publish(&mut runtime);
+        let finished = device_session(&t.main, &[("t1", "done", 2)], "t1");
+        runtime.change_look(|runtime| {
+            runtime.ingest_remote_session(DEVICE, Ok(finished.clone()));
+            runtime.bring_device_forward(DEVICE.into());
+        });
+        assert_tree_says_read(&runtime, "t1", &case);
+        assert_same_session_changes_nothing(&mut runtime, finished, &case);
     }
 }
 
