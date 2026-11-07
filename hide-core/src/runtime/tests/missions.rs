@@ -6,6 +6,7 @@
 use super::*;
 use crate::delivery::{Actor, worker::Worker};
 use crate::handle::ChangeNotifier;
+use crate::mission_criteria::CriterionState;
 use crate::missions::{AnswerFailure, MissionCommand, MissionStatus, NodeStatus, Strength};
 use crate::model::{
     DetailItem, GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
@@ -3137,10 +3138,23 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
             "mission_summary_invalid"
         );
     }
+    // The node has a pull request, so the review names the commit it read.
+    assert_eq!(
+        command(
+            &mut runtime,
+            "reviewer",
+            record("review", json!({"summary": "문제 없음"}))
+        )
+        .unwrap_err(),
+        "mission_commit_required"
+    );
     let (shown, _) = command(
         &mut runtime,
         "reviewer",
-        record("review", json!({"summary": "  문제 없음  "})),
+        record(
+            "review",
+            json!({"summary": "  문제 없음  ", "commit": HEAD}),
+        ),
     )
     .unwrap();
     let review = shown["mission"]["nodes"][0]["criteria"]
@@ -3651,7 +3665,12 @@ fn met_fix(runtime: &mut Runtime) {
         record_of("fix", "check", json!({"commit": HEAD})),
     )
     .unwrap();
-    command(runtime, "reviewer", record_of("fix", "review", json!({}))).unwrap();
+    command(
+        runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD})),
+    )
+    .unwrap();
     let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
     runtime.github = read.clone();
     runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
@@ -7319,6 +7338,247 @@ fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
     );
     review(&mut runtime, true, 4);
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
+}
+
+/// A second `codex` reviewer, `reviewer2` (`agent-4`), beside the pair
+/// `with_worker_and_reviewer` registers.
+fn with_second_reviewer(runtime: &mut Runtime) {
+    let panes = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes;
+    let mut pane = panes
+        .iter()
+        .find(|pane| pane.id == "reviewer")
+        .unwrap()
+        .clone();
+    pane.id = "reviewer2".into();
+    panes.push(pane);
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"sender-session"},
+        {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"recipient-session"},
+        {"id":"reviewer","pane_id":"reviewer","agent":"codex","agent_status":"working","state_change_seq":2,"lineage_session":"reviewer-session"},
+        {"id":"reviewer2","pane_id":"reviewer2","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"reviewer2-session"},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+    let mut second = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == "agent-3")
+        .unwrap()
+        .clone();
+    second.id = "agent-4".into();
+    second.name = Some("reviewer2".into());
+    second.session = "reviewer2-session".into();
+    second.instance = "reviewer2".into();
+    second.pane = "reviewer2".into();
+    second.actor.pane_id = "reviewer2".into();
+    second.actor.name = "reviewer2".into();
+    second.actor.session = Some("reviewer2-session".into());
+    ledger.agents.push(second);
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+}
+
+/// A mission whose node `fix` is worked by `agent-2` and whose review line
+/// asks three `codex` checkers by rule `all`, with `reviewer` (`agent-3`)
+/// bound to the first slot and, when `second`, `reviewer2` (`agent-4`) to
+/// the next; the third slot is never taken, as in mission-35.
+fn three_slot_review(second: bool) -> Fixture {
+    let fixture = conducting();
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        let slot = json!({"agent": "codex", "model": "gpt-6-astra"});
+        let by = json!([slot, slot, slot]);
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [
+                {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+                 "criteria": ["the parser keeps v1 files"],
+                 "checks": [{"as": "review", "rule": "all", "by": by}]},
+            ]}}),
+        )
+        .unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        with_worker_and_reviewer(&mut runtime);
+        with_second_reviewer(&mut runtime);
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "reviewer": "agent-3"}}),
+        )
+        .unwrap();
+        if second {
+            command(
+                &mut runtime,
+                "sender",
+                json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-4"}}),
+            )
+            .unwrap();
+        }
+    }
+    fixture
+}
+
+/// The state of node `fix`'s review line.
+fn review_state(runtime: &Runtime) -> CriterionState {
+    runtime.missions.book.missions[0].nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap()
+        .state
+}
+
+/// with-hide/hide-private#655 c1: a review line asking three checkers by
+/// rule `all`, with one bound, is decided by that one; the slots nobody took
+/// do not hold the line open, and the line opens no sooner than a checker is
+/// bound.
+#[test]
+fn a_review_line_is_decided_by_the_checkers_bound_not_the_empty_slots() {
+    let fixture = three_slot_review(false);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Open);
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Pass);
+    // The same slot failing is a failure of the line, not an open one.
+    let mut fail = record_of(
+        "fix",
+        "review",
+        json!({"commit": HEAD, "evidence": "broken"}),
+    );
+    fail["pass"] = json!(false);
+    command(&mut runtime, "reviewer", fail).unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Fail);
+}
+
+/// with-hide/hide-private#655 c2: a first review failing a head and a second
+/// reviewer passing the next head leaves the line passed, whichever slot
+/// each took; a second answer on the same head leaves the failure standing.
+#[test]
+fn a_pass_on_a_new_head_replaces_the_failure_of_an_older_head() {
+    let fixture = three_slot_review(true);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let newer = "b2c3d4e5f60718293a4b5c6d7e8f9012345678a1";
+    let mut fail = record_of(
+        "fix",
+        "review",
+        json!({"commit": HEAD, "evidence": "broken"}),
+    );
+    fail["pass"] = json!(false);
+    command(&mut runtime, "reviewer", fail).unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Fail);
+    // Another reviewer passing the same head cannot clear the failure.
+    command(
+        &mut runtime,
+        "reviewer2",
+        record_of("fix", "review", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Fail);
+    // The worker pushes; the second reviewer reads the new head and passes
+    // it. The first reviewer's failure is of the head before.
+    command(
+        &mut runtime,
+        "reviewer2",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": newer, "evidence": "fixed"}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Pass);
+    assert_eq!(
+        runtime.missions.book.missions[0].nodes[0]
+            .criteria
+            .iter()
+            .find(|line| line.key == "review")
+            .unwrap()
+            .fails_in_a_row,
+        0
+    );
+}
+
+/// with-hide/hide-private#655 review: a checker's answer is for the head it
+/// names, never one guessed from the pull request when it is recorded, so a
+/// review of a node with a pull request is refused without `--commit`, and one
+/// of a node without a pull request needs none.
+#[test]
+fn a_review_of_a_node_with_a_pull_request_names_its_commit() {
+    let fixture = three_slot_review(false);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let plain = record_of("fix", "review", json!({}));
+    command(&mut runtime, "reviewer", plain.clone()).unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Pass);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let mut fail = record_of("fix", "review", json!({"evidence": "broken"}));
+    fail["pass"] = json!(false);
+    assert_eq!(
+        command(&mut runtime, "reviewer", fail).unwrap_err(),
+        "mission_commit_required"
+    );
+    assert_eq!(
+        review_state(&runtime),
+        CriterionState::Pass,
+        "a refused answer changes nothing"
+    );
+    let mut fail = record_of(
+        "fix",
+        "review",
+        json!({"commit": HEAD, "evidence": "broken"}),
+    );
+    fail["pass"] = json!(false);
+    command(&mut runtime, "reviewer", fail).unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Fail);
+}
+
+/// with-hide/hide-private#655 review: a checker the Conductor binds after the
+/// line passed opens it again, and the node is not done until that checker
+/// answers.
+#[test]
+fn a_checker_bound_after_the_review_passed_keeps_the_node_from_done() {
+    let fixture = three_slot_review(false);
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({})),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Pass);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-4"}}),
+    )
+    .unwrap();
+    assert_eq!(review_state(&runtime), CriterionState::Open);
+    let shown = runtime.mission_view_of("mission-1").unwrap();
+    let line = shown.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap();
+    assert_eq!(
+        line.tally.map(|tally| (tally.passed, tally.total)),
+        Some((1, 2))
+    );
 }
 
 /// with-hide/hide-private#552 review: a warning raised while the

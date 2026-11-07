@@ -491,13 +491,6 @@ export function criterionShort(line: MissionCriterion, t: TFunction<"translation
   return t(`mission.line.short.${line.kind}`);
 }
 
-/** Of several checkers, how many passed (`2/3 통과`, B6); none for one checker or a line without them. */
-export function checkerTally(line: MissionCriterion): { passed: number; total: number } | null {
-  const checkers = line.checkers ?? [];
-  if (checkers.length < 2) return null;
-  return { passed: checkers.filter((checker) => checker.state === "pass").length, total: checkers.length };
-}
-
 /** One checker on its strip (B29): its answer, else at work once the Conductor bound an agent to it, else still to start. */
 export function checkerState(checker: MissionChecker): "pass" | "fail" | "running" | "waiting" {
   if (checker.state === "pass" || checker.state === "fail") return checker.state;
@@ -514,8 +507,7 @@ export function criterionNote(line: MissionCriterion, mission: Mission, t: TFunc
   if (line.state === "skipped" && line.skip) return line.skip.decision != null ? t("mission.line.operator", { reason: line.skip.reason }) : line.skip.reason;
   if (line.rerunning) return t("mission.line.rerunning");
   if (line.state === "pass" && line.reruns) return t("mission.line.reruns", { count: line.reruns });
-  const tally = checkerTally(line);
-  if (tally && line.state === "open") return t("mission.line.passedOf", { passed: String(tally.passed), total: String(tally.total) });
+  if (line.tally && line.state === "open") return t("mission.line.passedOf", { passed: String(line.tally.passed), total: String(line.tally.total) });
   if (line.kind === "defect" && line.found_by) {
     const finder = mission.nodes.find((node) => node.key === line.found_by);
     return t("mission.line.foundBy", { node: finder?.title ?? line.found_by });

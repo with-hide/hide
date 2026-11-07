@@ -1128,6 +1128,7 @@ mod tests {
             evidence: None,
             summary: None,
             at_unix_ms: Some(5),
+            commit: None,
             pane_id: None,
             machine: None,
         });
