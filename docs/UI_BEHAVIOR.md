@@ -1770,7 +1770,7 @@ Hover, filter and checkbox changes are local: they dispatch no core event and st
 
 ### Adding a project
 
-Web owner: `web/src/AddProjectDialog.tsx`, `web/src/FolderBrowser.tsx`, `web/src/addProject.ts`; node owner: `hide-host/src/browse.rs`; desktop owner: the `hide:pick-folder` channel in `desktop/src/main/host.ts`.
+Web owner: `web/src/AddProjectDialog.tsx`, `web/src/FolderBrowser.tsx`, `web/src/ImportableProjects.tsx`, `web/src/addProject.ts`, `web/src/importProjects.ts`; node owner: `hide-host/src/browse.rs`, `hide-host/src/importable.rs`; desktop owner: the `hide:pick-folder` channel in `desktop/src/main/host.ts`.
 Add project opens one centered `Add a project` dialog from each of its entry points: the Add project row under Overview, the empty Home's center button (B27), ⌘⇧N and the File menu; Escape and × close it.
 With projects registered the Add project row under Overview is the only one on screen; with none it and the empty Home's button are the two (PRD first-run-onboarding B51, B52).
 A browser tab offers the same entry points without the chord (Chrome keeps ⇧⌘N); having no folder picker, its Browse folder opens the dialog's own folder list of this machine, as on a device below (`hostWays` in `web/src/addProject.ts`).
@@ -1807,6 +1807,14 @@ The host's node answers a `project_target` probe for every name and folder on th
 `Create project` (or Enter) sends one `create_workspace` with `new_folder`; the core has that machine's node make the folder and run `git init` in it, and registers it, and the dialog closes when the project appears or keeps the failure with its reason.
 A folder holding nothing, or only `.git` and a Finder `.DS_Store`, is what a create that failed after making its folder leaves, so it is not `already_exists`: the view says the project is made in it, and a retry continues there rather than being refused or making a second folder; a failed create never deletes the folder it made.
 
+Under the other ways the first view shows `가져올 수 있는 프로젝트` (`Projects to import`) once the chosen machine's node has answered, and nothing while it looks, when it found nothing, or when it could not be asked (PRD device-add-project D-09 to D-14, B20 to B29).
+The node gathers the folders every agent with a session reader worked in on that machine (Claude Code, Codex, OpenCode, Cursor, Grok, Pi, omp, Antigravity; an agent that gains one joins with no change), the projects Paseo keeps (`projects/projects.json` in `$PASEO_HOME` or `~/.paseo`, archived ones left out) and the workspaces Herdr saved (`session.json` in Herdr's config folder), and only reads them, so Paseo and Herdr keep working beside Hide.
+Each folder counts as the project a registration of it would add, so a repository worked in from linked worktrees and subfolders is one row, and home, a folder outside home, the home dotfiles repository, a folder that is gone and a project already added on that machine are not rows; the rows are those active in the last thirty days, newest first, at most twenty.
+A row is the project's name with a chip per source (the agent's product name, `Paseo`, `Herdr`) and its `~/…` path in mono, cut with an ellipsis, and an `추가` (`Add`) button; a line under the heading says where they come from and that those apps stay as they are, and `모두 추가 (N)` (`Add all (N)`) beside the heading adds every row.
+Each add is the `create_workspace` a picked folder sends, one at a time, so the dialog stays open: a row whose project appears leaves the list, a refused row stays with its reason under it and can be pressed again, and a row already sent is not sent twice.
+A Herdr row adds the folder alone, as a project with one terminal tab; the Herdr import below brings its tabs, layout and conversations, and a workspace imported later in the same folder joins that project rather than making a second one.
+A source the node cannot read (a file it cannot open, past 4 MiB, or in a form it does not know) leaves out only its rows and is logged as `add_project.import_source_dropped` with the source and the reason; nothing shows on the screen.
+The first-run wizard's project step shows the same list, since it draws the same views.
 ### Opening a folder from a terminal
 
 CLI owner: `open_path` in `hided/src/cli.rs`; daemon owner: `hided/src/project_open.rs`; core owner: `hide-core/src/runtime/project_open.rs`; page owner: `showProjectOpened` in `web/src/opening.ts`; desktop owner: the `hide:come-forward` channel in `desktop/src/main/host.ts`.
