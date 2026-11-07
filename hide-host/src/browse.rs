@@ -13,6 +13,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use cap_std::fs::Dir;
+use hide_platform::fs::held::HeldFolder;
 use hide_platform::fs::identity;
 
 use crate::error::{ErrorCode, HostError, HostResult};
@@ -43,13 +44,11 @@ pub fn home_list(written: &str, home: &Path) -> HostResult<HomeListing> {
                 repositories: None,
             };
             if row.is_directory {
-                // The listing kept only a link that stays under home, so the
-                // child's own path reads nothing outside it.
-                let child = opened.real.join(&row.name);
-                match hide_project::git::repository_at(&child) {
-                    Some(repository) => {
+                let child = opened.relative.join(&row.name);
+                match badge(&opened.home, &opened.home_real, &child) {
+                    Some(branch) => {
                         row.repository = true;
-                        row.branch = repository.branch();
+                        row.branch = branch;
                     }
                     None => {
                         row.repositories = repositories_in(&opened.folder, &row.name, &mut budget)
@@ -66,6 +65,87 @@ pub fn home_list(written: &str, home: &Path) -> HostResult<HomeListing> {
         entries,
         truncated: listing.truncated,
     })
+}
+
+/// The most a `.git` pointer, `commondir` or `HEAD` read for a badge may
+/// hold; each is one line.
+const GIT_FILE_CAP: u64 = 4096;
+
+/// Whether the child folder `child` (relative to home) is a repository, and
+/// its branch, read from its `.git` through the handle on home alone. A
+/// `.git` file points at its Git folder (a linked worktree's, `gitdir:`),
+/// whose `commondir` names the repository it belongs to; when either lies
+/// outside home the folder gets no badge, decided from the pointer's text
+/// before anything there is read. `None` is no repository; `Some(None)` one
+/// with a detached HEAD.
+fn badge(home: &Dir, home_real: &Path, child: &Path) -> Option<Option<String>> {
+    let dotgit = child.join(".git");
+    let metadata = home.metadata(&dotgit).ok()?;
+    let git_dir = if metadata.is_dir() {
+        dotgit
+    } else if metadata.is_file() {
+        let pointer = read_git_file(home, &dotgit)?;
+        let named = pointer.trim().strip_prefix("gitdir:")?.trim();
+        let git_dir = under_home(home_real, child, Path::new(named))?;
+        // A linked worktree's Git folder is an entry of its repository's
+        // `worktrees`, and that repository has to be under home too.
+        let common = read_git_file(home, &git_dir.join("commondir"))?;
+        let common = under_home(home_real, &git_dir, Path::new(common.trim()))?;
+        if git_dir.parent()? != common.join("worktrees") || !home.metadata(&common).ok()?.is_dir() {
+            return None;
+        }
+        git_dir
+    } else {
+        return None;
+    };
+    let head = read_git_file(home, &git_dir.join("HEAD"))?;
+    let head = head.trim();
+    match head.strip_prefix("ref:") {
+        Some(reference) => {
+            let reference = reference.trim();
+            let name = reference.strip_prefix("refs/heads/").unwrap_or(reference);
+            Some((!name.is_empty()).then(|| name.to_owned()))
+        }
+        None if head.len() >= 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit()) => Some(None),
+        None => None,
+    }
+}
+
+/// `named`, absolute or relative to `from` (a path relative to home), as a
+/// path relative to home, worked out from its text alone: `None` when it
+/// leaves home, so nothing outside is ever opened to find out.
+fn under_home(home_real: &Path, from: &Path, named: &Path) -> Option<PathBuf> {
+    let joined = if named.is_absolute() {
+        named.strip_prefix(home_real).ok()?.to_path_buf()
+    } else {
+        from.join(named)
+    };
+    let mut inside = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::Normal(name) => inside.push(name),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !inside.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(inside)
+}
+
+/// A small Git file under home, read through the handle on home.
+fn read_git_file(home: &Dir, path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    home.open(path)
+        .ok()?
+        .take(GIT_FILE_CAP)
+        .read_to_string(&mut text)
+        .ok()?;
+    Some(text)
 }
 
 /// `Call::NewFolderTarget`: where `name` would be made in the folder
@@ -108,7 +188,7 @@ pub fn new_folder_target(
                 ));
             }
         },
-        NewFolderKind::Project => match crate::project::folder(&path) {
+        NewFolderKind::Project => match crate::project::folder_in(&opened.folder, name) {
             crate::project::ProjectFolder::Free => {}
             crate::project::ProjectFolder::Leftover => target.leftover = true,
             crate::project::ProjectFolder::Taken => return Err(taken()),
@@ -119,17 +199,20 @@ pub fn new_folder_target(
 }
 
 /// A folder opened under home: the handle on home, the part of the path
-/// below it, the folder's own handle, and both real paths.
-struct HomeFolder {
-    home: Dir,
-    home_real: PathBuf,
-    relative: PathBuf,
-    folder: Dir,
-    real: PathBuf,
+/// below it, the folder's own handle, and both real paths. Whatever a caller
+/// makes or runs in it goes through `folder` (or [`HomeFolder::held`] for a
+/// program), never through `real`, so a path swapped after the open changes
+/// nothing.
+pub(crate) struct HomeFolder {
+    pub(crate) home: Dir,
+    pub(crate) home_real: PathBuf,
+    pub(crate) relative: PathBuf,
+    pub(crate) folder: Dir,
+    pub(crate) real: PathBuf,
 }
 
 impl HomeFolder {
-    fn open(written: &str, home: &Path) -> HostResult<Self> {
+    pub(crate) fn open(written: &str, home: &Path) -> HostResult<Self> {
         let outside = || {
             HostError::new(
                 ErrorCode::OutsideRoot,
@@ -201,6 +284,31 @@ impl HomeFolder {
             folder,
             real,
         })
+    }
+
+    /// The child folder `name` of this one and its path. A link at the name
+    /// is refused, and the open goes through this folder's handle, so even a
+    /// link planted between the look and the open cannot lead out of home.
+    pub(crate) fn child(&self, name: &str) -> HostResult<(Dir, PathBuf)> {
+        let path = self.real.join(name);
+        let cannot = |error: std::io::Error| {
+            HostError::io(&error, format!("{} cannot be opened", path.display()))
+        };
+        if !self.folder.symlink_metadata(name).map_err(cannot)?.is_dir() {
+            return Err(HostError::new(
+                ErrorCode::NotADirectory,
+                format!("{} is not a folder", path.display()),
+            ));
+        }
+        let child = self.folder.open_dir(name).map_err(cannot)?;
+        Ok((child, path))
+    }
+
+    /// `folder` held at `path` (this folder or one below it), so a program
+    /// started in it runs there whatever the path names by then.
+    pub(crate) fn hold(&self, folder: &Dir, path: PathBuf) -> HostResult<HeldFolder> {
+        HeldFolder::new(folder, path.clone(), &self.home_real)
+            .map_err(|error| HostError::io(&error, format!("{} cannot be held", path.display())))
     }
 
     /// The folder as `~` spells it, names between `/`.
@@ -306,6 +414,81 @@ mod tests {
         assert_eq!(listing.home, crate::root::wire(&home));
         assert!(!listing.truncated);
         assert_eq!(home_list("~", &home).unwrap().label, "~");
+    }
+
+    /// A linked worktree under home gets its branch only when the repository
+    /// it belongs to is under home too: the badge is read through the handle
+    /// on home, so a worktree of a repository outside home shows none, and
+    /// nothing there is read.
+    #[test]
+    fn a_linked_worktree_of_a_repository_outside_home_gets_no_badge() {
+        let (outer, home) = home();
+        let git = |cwd: &Path, args: &[&str]| {
+            crate::worktrees::git(cwd, args).unwrap_or_else(|error| panic!("{args:?}: {error}"))
+        };
+        let commit = |repository: &Path| {
+            git(
+                repository,
+                &[
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.com",
+                    "commit",
+                    "--allow-empty",
+                    "-q",
+                    "-m",
+                    "first",
+                ],
+            );
+        };
+        let outside = identity::canonical(outer.path())
+            .unwrap()
+            .join("outside-repo");
+        fs::create_dir(&outside).unwrap();
+        git(&outside, &["init", "-q", "-b", "main"]);
+        commit(&outside);
+        git(
+            &outside,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "side",
+                &crate::root::wire(&home.join("linked")),
+            ],
+        );
+        let inside = home.join("inside-repo");
+        fs::create_dir(&inside).unwrap();
+        git(&inside, &["init", "-q", "-b", "main"]);
+        commit(&inside);
+        git(
+            &inside,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "inner",
+                &crate::root::wire(&home.join("inner")),
+            ],
+        );
+
+        let listing = home_list("~", &home).unwrap();
+        let row = |name: &str| {
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+                .clone()
+        };
+        assert!(!row("linked").repository, "{:?}", row("linked"));
+        assert_eq!(row("linked").branch, None);
+        assert!(row("inner").repository);
+        assert_eq!(row("inner").branch.as_deref(), Some("inner"));
+        assert_eq!(row("inside-repo").branch.as_deref(), Some("main"));
     }
 
     #[test]

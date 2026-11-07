@@ -1176,11 +1176,15 @@ pub fn handle_with_progress(
             path,
             new_folder,
             initialize_git,
-        } => to_value(crate::project::create(
-            &absolute(&path)?,
-            new_folder,
-            initialize_git,
-        )?),
+        } => {
+            let home = env.home("HOME is not set, so no new project can be made under it")?;
+            to_value(crate::project::create(
+                &absolute(&path)?,
+                new_folder,
+                initialize_git,
+                &home,
+            )?)
+        }
         Call::PathFacts { paths } => to_value(crate::catalog::path_facts(&paths)?),
         Call::RealPaths { paths } => to_value(crate::cleanup::real_paths(&paths)),
         Call::Repository { path } => to_value(crate::cleanup::repository(&absolute(&path)?)),
@@ -1223,9 +1227,11 @@ pub fn handle_with_progress(
         )),
         Call::RepositoryClone { source, parent } => {
             let parent = absolute(&parent)?;
+            let home = env.home("HOME is not set, so no clone can be made under it")?;
             to_value(crate::clone::clone_reporting(
                 &source,
                 &parent,
+                &home,
                 &mut |report| serde_json::to_value(report).map_or(true, &mut *progress),
             ))
         }

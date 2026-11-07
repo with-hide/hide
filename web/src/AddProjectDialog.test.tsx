@@ -228,10 +228,10 @@ it("waits for an answer newer than its ask, and moves nothing for a folder the f
   expect(rows()).toEqual(["old"]);
   await type("~/");
   await answerList("ubuntu", "~", { listing: home });
-  // Asked again, the folder's earlier answer is not this ask's: the list stays until a new one arrives.
+  // Asked again, the folder's earlier answer is not this ask's: the list loads until a new one arrives.
   await type("~/projects/");
   expect(lists(events).filter((asked) => asked.path === "~/projects")).toHaveLength(2);
-  expect(rows()).toEqual(["app", "old", "projects", "notes.txt"]);
+  expect(find("[data-folder-list-state]")?.getAttribute("data-folder-list-state")).toBe("loading");
   expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
   await answerList("ubuntu", "~/projects", { listing: projects(["new"]) });
   expect(rows()).toEqual(["new"]);
@@ -245,6 +245,72 @@ it("waits for an answer newer than its ask, and moves nothing for a folder the f
   await type("");
   await answerList("ubuntu", "~/elsewhere", { listing: { ...projects(["moved"]), path: "/home/me/elsewhere", label: "~/elsewhere" } });
   expect(rows()).toEqual(["new"]);
+  await unmount();
+});
+
+it("follows a typed or completed link to the folder it names, keeping what was typed after it (review F3)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  const field = () => find("[data-folder-browser-field]") as HTMLInputElement;
+  const submit = () => find("[data-folder-browser-submit]") as HTMLButtonElement;
+  const rows = () => [...document.querySelectorAll("[data-folder-row]")].map((row) => row.getAttribute("data-folder-row"));
+  const work: HomeListing = { path: "/home/me/work", label: "~/work", home: "/home/me", truncated: false, entries: [{ name: "api", is_directory: true }, { name: "web", is_directory: true }] };
+  await answerList("ubuntu", "~", { listing: { ...home, entries: [{ name: "inward", is_directory: true }] } });
+  // `~/inward` is a link to `~/work`: the machine answers with the folder's real label.
+  await type("~/inward/we");
+  expect(lists(events).at(-1)).toEqual({ device_id: "ubuntu", path: "~/inward" });
+  await answerList("ubuntu", "~/inward", { listing: work });
+  expect(field().value).toBe("~/work/we");
+  expect(rows()).toEqual(["web"]);
+  expect(submit().disabled).toBe(false);
+  expect(find("[data-folder-browser-target]")?.getAttribute("data-folder-browser-target")).toBe("/home/me/work");
+  await unmount();
+
+  // Tab into the link from home does the same.
+  const again = await mount(state(null, "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: { ...home, entries: [{ name: "inward", is_directory: true }] } });
+  await type("~/");
+  await act(async () => field().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true })));
+  expect(lists(again.events).at(-1)).toEqual({ device_id: "ubuntu", path: "~/inward" });
+  await answerList("ubuntu", "~/inward", { listing: work });
+  expect(field().value).toBe("~/work/");
+  expect(rows()).toEqual(["api", "web"]);
+  expect(submit().disabled).toBe(false);
+  await again.unmount();
+});
+
+it("shows a typed folder it could not read with a retry, recovers on the retry, and ignores a late answer (review F4)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  const state_ = () => find("[data-folder-list-state]")?.getAttribute("data-folder-list-state");
+  const submit = () => find("[data-folder-browser-submit]") as HTMLButtonElement;
+  await answerList("ubuntu", "~", { listing: home });
+  await type("~/private/");
+  expect(state_()).toBe("loading");
+  await answerList("ubuntu", "~/private", { reason: "unreadable" });
+  expect(state_()).toBe("failed");
+  expect(submit().disabled).toBe(true);
+  // Typed again after a change, the same folder is asked again; so is a retry.
+  await type("~/privat");
+  await type("~/private/");
+  expect(lists(events).filter((asked) => asked.path === "~/private")).toHaveLength(2);
+  await answerList("ubuntu", "~/private", { reason: "unreadable" });
+  await act(async () => find("[data-folder-list-retry]")!.click());
+  expect(lists(events).filter((asked) => asked.path === "~/private")).toHaveLength(3);
+  expect(state_()).toBe("loading");
+  const opened: HomeListing = { path: "/home/me/private", label: "~/private", home: "/home/me", truncated: false, entries: [{ name: "keys", is_directory: true }] };
+  await answerList("ubuntu", "~/private", { listing: opened });
+  expect(state_()).toBeUndefined();
+  expect(submit().disabled).toBe(false);
+  // An answer for a folder the field moved away from changes nothing.
+  await type("~/elsewhere/");
+  await type("~/private/");
+  await answerList("ubuntu", "~/elsewhere", { reason: "unreadable" });
+  expect(state_()).toBeUndefined();
+  expect([...document.querySelectorAll("[data-folder-row]")].map((row) => row.getAttribute("data-folder-row"))).toEqual(["keys"]);
   await unmount();
 });
 
