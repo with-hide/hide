@@ -1326,8 +1326,10 @@ impl Runtime {
                 .settled
                 .retain(|pane_id| live_pane_ids.contains(pane_id));
         }
+        let beyond = self.device_signals();
         changes.extend(crate::agent_state::apply_read_state(
             agents,
+            beyond,
             &mut records,
             &mut self.local_read_connection,
             focused.as_deref(),
@@ -1345,6 +1347,19 @@ impl Runtime {
         }
         self.record_read_record_changes(&changes);
         true
+    }
+
+    /// What every device's agents send up their lineage now, for the read
+    /// axis of this machine's agents, whose children may run on a device.
+    pub(super) fn device_signals(&self) -> crate::agent_state::SentSignals {
+        crate::agent_state::sent_signals(
+            self.snapshot
+                .status
+                .remote
+                .iter()
+                .filter_map(|remote| remote.session.as_ref())
+                .flat_map(|session| &session.agents),
+        )
     }
 
     /// Re-runs the read axis over the agents already in the snapshot, for the
@@ -1444,8 +1459,11 @@ impl Runtime {
         connection
             .settled
             .retain(|pane_id| live_pane_ids.contains(pane_id));
+        // A device's agents have no descendants on another machine: an
+        // agent there cannot start one elsewhere (`machine_not_permitted`).
         changes.extend(crate::agent_state::apply_read_state(
             &mut session.agents,
+            Default::default(),
             &mut records,
             connection,
             focused.as_deref(),
@@ -3610,23 +3628,19 @@ impl Runtime {
             .collect()
     }
 
-    pub(super) fn refresh_agent_lineage(&mut self) -> bool {
-        let before_local = self.snapshot.navigator.agents.clone();
-        let before_remote = self
-            .snapshot
-            .status
-            .remote
-            .iter()
-            .map(|remote| {
-                (
-                    remote.target_id.clone(),
-                    remote
-                        .session
-                        .as_ref()
-                        .map(|session| session.agents.clone()),
-                )
-            })
-            .collect::<Vec<_>>();
+    /// This machine's rows followed by every device's last session rows, each
+    /// parent resolved across machines and the lineage applied over all of
+    /// them.
+    ///
+    /// It is the one lineage the read axis compares: a row's fingerprint
+    /// carries what its descendants send, and a child on a device is one of
+    /// them. A pass that built the tree from this machine's rows alone and
+    /// another that built it with the devices' read the same parent two
+    /// ways, so the parent turned unread and read again on every focus move.
+    pub(super) fn lineage_across_machines(
+        &mut self,
+        local: Vec<SidebarAgentSnapshot>,
+    ) -> Vec<SidebarAgentSnapshot> {
         let machine_targets = self
             .device_machine_ids
             .iter()
@@ -3658,7 +3672,7 @@ impl Runtime {
             }
         };
 
-        for mut agent in self.snapshot.navigator.agents.clone() {
+        for mut agent in local {
             resolve(&mut agent, None, &mut unresolved);
             agents.push(agent);
         }
@@ -3709,6 +3723,27 @@ impl Runtime {
                     .retain(|pane| !unreachable.contains(pane));
             }
         }
+        agents
+    }
+
+    pub(super) fn refresh_agent_lineage(&mut self) -> bool {
+        let before_local = self.snapshot.navigator.agents.clone();
+        let before_remote = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .map(|remote| {
+                (
+                    remote.target_id.clone(),
+                    remote
+                        .session
+                        .as_ref()
+                        .map(|session| session.agents.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let agents = self.lineage_across_machines(before_local.clone());
         let resolved = agents
             .into_iter()
             .map(|agent| (agent.pane_id.clone(), agent))

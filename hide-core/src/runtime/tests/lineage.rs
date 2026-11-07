@@ -279,6 +279,7 @@ fn lineage_cross_checkout_tree_and_orphan_keep_the_canonical_rows_and_axes() {
     let mut records = std::collections::BTreeMap::new();
     crate::agent_state::apply_read_state(
         &mut rows,
+        Default::default(),
         &mut records,
         &mut crate::agent_state::ReadConnection::new("server".to_owned()),
         Some("child"),
@@ -434,6 +435,7 @@ fn lineage_expansion_persists_without_attention_opening_it_and_prunes_on_disappe
     crate::agent_state::apply_lineage(&mut attention, &lineage_workspaces(), &[]);
     crate::agent_state::apply_read_state(
         &mut attention,
+        Default::default(),
         &mut runtime.snapshot.ui_state.pane_read_records,
         &mut crate::agent_state::ReadConnection::new("server".to_owned()),
         None,
@@ -3138,4 +3140,83 @@ fn a_child_spawned_beside_its_caller_stays_in_the_callers_tab() {
     };
     assert!(moved(false), "an ordinary delegated child is moved");
     assert!(!moved(true), "a child spawned beside its caller stays");
+}
+
+/// A child the local agent `w1:p1` started on the device `mini`, as that
+/// device's last session reports it.
+fn device_child(runtime: &mut Runtime, status: &str, seq: u64) {
+    let mut child = project_agents(crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [
+        {"id":"agent-device-child","pane_id":"remote:mini:pane:p2","agent":"claude","agent_status":status,
+         "state_change_seq":seq,"cwd":"/fixture","workspace_label":"hide","tokens":{"task":"Device child"}}
+    ]})).unwrap())
+    .agents
+    .remove(0);
+    child.declared_parent_pane_id = Some("w1:p1".to_owned());
+    child.declared_parent_session = agent_row(runtime, "w1:p1").lineage_session.clone();
+    child.spawned_from_machine_id = Some("machine-local".to_owned());
+    match runtime.snapshot.status.remote.first_mut() {
+        Some(remote) => remote.session.as_mut().unwrap().agents = vec![child],
+        None => runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
+            target_id: "mini".to_owned(),
+            state: "connected".to_owned(),
+            message: None,
+            session: Some(remote_lineage_session(vec![child])),
+            files: RemoteFileListSnapshot::idle(),
+            catalog: Default::default(),
+            unreachable_since_unix_ms: None,
+        }),
+    }
+}
+
+// A parent whose child runs on a device is read by one lineage on every
+// pass: once the operator has looked at it, an engine update and a focus
+// move elsewhere agree that it is read, so it never flashes into 읽을 것, and
+// the child's next completion is news again.
+#[test]
+fn a_parent_read_with_its_device_child_stays_read_on_every_pass_until_the_child_finishes_again() {
+    let mut runtime = runtime();
+    runtime.node = crate::node::NodeId::parse("machine-local").unwrap();
+    runtime
+        .device_machine_ids
+        .insert("mini".to_owned(), "machine-mini".to_owned());
+    let local = [("w1:p1", None, "idle", ""), ("w1:p3", None, "idle", "")];
+    ingest_lineage(&mut runtime, &local);
+    device_child(&mut runtime, "done", 1);
+    ingest_lineage(&mut runtime, &local);
+    assert_eq!(
+        agent_row(&runtime, "w1:p1").descendant_counts.done,
+        1,
+        "the device child is under its local parent"
+    );
+    assert!(
+        agent_row(&runtime, "w1:p1").unread,
+        "the device child's completion is news"
+    );
+
+    // The operator looks at the parent while the engine updates, then
+    // moves to another pane.
+    runtime.operator_focused_pane_id = Some("w1:p1".to_owned());
+    ingest_lineage(&mut runtime, &local);
+    runtime.operator_focused_pane_id = Some("w1:p3".to_owned());
+    runtime.refresh_pane_read_state();
+    assert!(!agent_row(&runtime, "w1:p1").unread, "read after the move");
+    ingest_lineage(&mut runtime, &local);
+    assert!(!agent_row(&runtime, "w1:p1").unread, "read after an update");
+    runtime.refresh_pane_read_state();
+    assert!(!agent_row(&runtime, "w1:p1").unread, "read after a refresh");
+
+    // The child works again, then finishes a second turn.
+    device_child(&mut runtime, "working", 2);
+    ingest_lineage(&mut runtime, &local);
+    assert!(
+        !agent_row(&runtime, "w1:p1").unread,
+        "starting work is not news"
+    );
+    device_child(&mut runtime, "done", 3);
+    ingest_lineage(&mut runtime, &local);
+    assert!(
+        agent_row(&runtime, "w1:p1").unread,
+        "a second completion on the device is news again"
+    );
+    let _ = std::fs::remove_file(&runtime.state_path);
 }

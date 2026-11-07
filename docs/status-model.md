@@ -164,12 +164,15 @@ A descendant entering a question, approval or error, moving between those three,
 A signal that goes away does not turn anything on: a question being answered, a finished child starting new work, or a child pane closing is trimmed from the record on the next projection, so the same descendant is news again the next time it asks or finishes.
 A signal is trimmed only when the descendant is settled and no longer sends it: while a restored engine has not settled the descendant, or has not got its lineage tokens back, the record keeps it.
 Reading the ancestor records the signals it shows at that moment and nothing more.
+A descendant on a device counts the same as one on this machine: every pass that decides this machine's read axis, an engine update and an operator's focus move alike, reads the one lineage across machines (`Runtime::lineage_across_machines`), and trims by what the devices' agents send as well as this machine's.
+Two passes that each built the tree their own way once read a parent with a device child as unread and read again in turn, so the row flashed into 읽을 것 on every focus move.
+An agent on a device cannot start one on another machine, so a device row's own read axis needs no other machine's rows.
 
 A descendant's signal never puts an ancestor in Needs You: a child's question leaves a working root in Working.
 That is the boundary: a child is asked for its status through its parent, and a parent that has heard from a child is drawn bright until the operator looks at it.
 The one way a descendant moves its root between groups is the waiting state below, and it moves the root into Working, never into an attention group.
 
-Regression owners: `a_descendants_demand_or_completion_turns_every_ancestor_unread_and_nothing_else_does`, `an_ancestors_group_comes_from_its_own_axes_and_a_child_never_makes_it_needs_you`.
+Regression owners: `a_descendants_demand_or_completion_turns_every_ancestor_unread_and_nothing_else_does`, `an_ancestors_group_comes_from_its_own_axes_and_a_child_never_makes_it_needs_you`, `a_parent_read_with_its_device_child_stays_read_on_every_pass_until_the_child_finishes_again`.
 
 ## A View to look at
 
