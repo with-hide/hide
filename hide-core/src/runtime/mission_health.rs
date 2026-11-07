@@ -681,7 +681,7 @@ impl Runtime {
                 // number names a pull request only beside its repository.
                 let own_prs = record
                     .filter(|record| !record.ended)
-                    .and_then(|record| self.agent_row(&record.pane))
+                    .and_then(|record| self.agent_row(&record.pane_on(self.node.as_str())))
                     .and_then(|row| row.pulls.as_ref())
                     .map(|list| {
                         list.pulls

@@ -600,6 +600,7 @@ impl Runtime {
             _ => BTreeMap::new(),
         };
         let ledger = self.delivery_state().ok();
+        let node = self.node.as_str().to_owned();
         let read = move || -> Result<ReadPage, ReadFailure> {
             let link = link.map_err(|_| ReadFailure::Unreachable)?;
             crate::node_access::call_as::<ThreadPage>(
@@ -607,7 +608,7 @@ impl Runtime {
                 Call::SessionThread { request },
                 READ_TIMEOUT,
             )
-            .map(|page| ReadPage::of(page, &earlier, ledger.as_deref()))
+            .map(|page| ReadPage::of(page, &earlier, ledger.as_deref(), &node))
             .map_err(|error| {
                 let failure = ReadFailure::of(&error);
                 if matches!(failure, ReadFailure::NoRecord | ReadFailure::Refused) {
@@ -1028,8 +1029,13 @@ struct ReadPage {
 impl ReadPage {
     /// `earlier` holds the parts of the pages before this one, so a spawn
     /// called there takes the agent this page's output names; `ledger`
-    /// places the sessions the page names.
-    fn of(page: ThreadPage, earlier: &BTreeMap<String, HideCall>, ledger: Option<&Ledger>) -> Self {
+    /// places the sessions the page names, on the core's node `node`.
+    fn of(
+        page: ThreadPage,
+        earlier: &BTreeMap<String, HideCall>,
+        ledger: Option<&Ledger>,
+        node: &str,
+    ) -> Self {
         let updates: Vec<Value> = page
             .updates
             .iter()
@@ -1037,7 +1043,7 @@ impl ReadPage {
             .collect();
         let parts = page_parts(&updates, earlier);
         let sessions = ledger.map_or_else(BTreeMap::new, |ledger| {
-            page_sessions(&updates, &parts, ledger)
+            page_sessions(&updates, &parts, ledger, node)
         });
         Self {
             start: page.start,
@@ -1055,11 +1061,13 @@ impl ReadPage {
 /// Where each session the page names runs now: a letter's addressee, a
 /// spawn's new agent and a received letter's sender, each as written, found
 /// among the live registrations by id or name the way a letter's target is
-/// (`coordination::resolve_registered`).
+/// (`coordination::resolve_registered`), its pane named as its agent row is
+/// (`AgentRecord::pane_on`).
 fn page_sessions(
     updates: &[Value],
     parts: &BTreeMap<String, HideCall>,
     ledger: &Ledger,
+    node: &str,
 ) -> BTreeMap<String, ThreadSession> {
     let called = parts.values().filter_map(|part| match part {
         HideCall::Letter { to, .. } => Some(to.as_str()),
@@ -1076,7 +1084,7 @@ fn page_sessions(
             Some((
                 name.to_owned(),
                 ThreadSession {
-                    pane_id: record.pane.clone(),
+                    pane_id: record.pane_on(node),
                     machine: record.machine.clone(),
                 },
             ))
@@ -1792,7 +1800,8 @@ mod tests {
         };
         let ledger = Ledger {
             agents: vec![
-                record("agent-7", "review", "mini", "remote:mini:pane:w2:p1", false),
+                // A device's registration keeps the device's own pane id.
+                record("agent-7", "review", "mini", "w2:p1", false),
                 record("agent-9", "desk-conductor", "mac", "w1:p3", false),
                 record("agent-42", "old", "mac", "w1:p4", true),
             ],
@@ -1815,7 +1824,7 @@ mod tests {
             machine: machine.into(),
         };
         assert_eq!(
-            page_sessions(&updates, &parts, &ledger),
+            page_sessions(&updates, &parts, &ledger, "mac"),
             BTreeMap::from([
                 (
                     "agent-7".to_owned(),

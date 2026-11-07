@@ -33,6 +33,11 @@ struct Node {
     trust_fails: AtomicBool,
     /// How many checks the spawn has asked this node.
     calls: AtomicUsize,
+    /// What the device's kit answers a pass, and the passes it ran.
+    kit: Mutex<Option<hide_kit::KitReport>>,
+    kit_passes: Mutex<Vec<hide_node_link::protocol::KitAction>>,
+    /// Whether the device's next kit call fails before it answers.
+    kit_fails: AtomicBool,
 }
 
 impl NodeLink for Node {
@@ -45,7 +50,7 @@ impl NodeLink for Node {
             }
             Call::Repository { .. } => Value::Null,
             Call::AgentInstalled { name } => {
-                assert_eq!(name, "codex");
+                assert!(matches!(name.as_str(), "codex" | "claude"), "{name}");
                 // How the device starts it, or null when it is not there.
                 if self.installed.load(Ordering::SeqCst) {
                     json!("program")
@@ -60,6 +65,14 @@ impl NodeLink for Node {
             // start plain, and a start is confirmed after typing.
             Call::ShellIntegration => {
                 json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}})
+            }
+            Call::Kit { action, .. } => {
+                self.kit_passes.lock().unwrap().push(action);
+                if self.kit_fails.swap(false, Ordering::SeqCst) {
+                    return Err(LinkError::Unknown("the kit call broke off".to_owned()));
+                }
+                serde_json::to_value(self.kit.lock().unwrap().clone().expect("a kit report"))
+                    .unwrap()
             }
             Call::AgentTrust { .. } if self.trust_fails.swap(false, Ordering::SeqCst) => {
                 return Err(LinkError::Refused(hide_node_link::HostError::new(
@@ -290,6 +303,9 @@ fn spawner() -> Spawner {
         trusted: Mutex::new(Vec::new()),
         trust_fails: AtomicBool::new(false),
         calls: AtomicUsize::new(0),
+        kit: Mutex::new(None),
+        kit_passes: Mutex::new(Vec::new()),
+        kit_fails: AtomicBool::new(false),
     });
     {
         let mut guard = runtime.lock().unwrap();
@@ -424,6 +440,19 @@ impl Spawner {
         launch: hide_agent_adapter::LaunchChoice,
         args: Vec<String>,
     ) -> Result<Value, String> {
+        self.spawn_kind("codex", parent, machine, intent, launch, args)
+    }
+
+    /// A spawn of the agent `kind`.
+    fn spawn_kind(
+        &self,
+        kind: &str,
+        parent: Option<&str>,
+        machine: Option<&str>,
+        intent: &str,
+        launch: hide_agent_adapter::LaunchChoice,
+        args: Vec<String>,
+    ) -> Result<Value, String> {
         crate::coordination::run(
             self.client.clone(),
             authority(&self.actor),
@@ -436,7 +465,7 @@ impl Spawner {
                 machine: machine.map(str::to_owned),
                 name: "worker".into(),
                 intent: intent.into(),
-                kind: "codex".into(),
+                kind: kind.into(),
                 repo: "/srv/repo".into(),
                 branch: "topic".into(),
                 path: None,
@@ -1167,6 +1196,345 @@ fn a_spawn_on_a_machine_at_its_holder_cap_names_the_machine_and_starts_once_one_
         .spawn(Some("here"), Some(DEVICE), "full")
         .expect("the same intent starts once a pane is free");
     assert_eq!(child["pane"], "w2:p1");
+}
+
+/// The device's kit report with Codex's hook in `state` for `cause`, and
+/// Codex on or off.
+fn codex_kit(
+    state: hide_kit::ComponentState,
+    cause: Option<hide_kit::PartCause>,
+    enabled: bool,
+) -> hide_kit::KitReport {
+    agent_kit("codex", state, cause, enabled)
+}
+
+/// A machine's kit report with the one agent `id` and its hook in `state`.
+fn agent_kit(
+    id: &str,
+    state: hide_kit::ComponentState,
+    cause: Option<hide_kit::PartCause>,
+    enabled: bool,
+) -> hide_kit::KitReport {
+    let piece = |state, cause: Option<hide_kit::PartCause>| hide_kit::PieceReport {
+        state,
+        reason: None,
+        why: cause.map(|cause| hide_kit::PartWhy { cause, value: None }),
+        location: None,
+    };
+    hide_kit::KitReport {
+        codex_daemon: Some(true),
+        agents: vec![hide_kit::AgentReport {
+            id: id.to_owned(),
+            label: id.to_owned(),
+            availability: hide_kit::Availability::Available,
+            enabled,
+            chosen: true,
+            skill: piece(hide_kit::ComponentState::Installed, None),
+            hook: Some(piece(state, cause)),
+            update: None,
+            doc_url: String::new(),
+        }],
+        ..Default::default()
+    }
+}
+
+impl Spawner {
+    /// The device's kit last reported `report`, a pass there answers
+    /// `pass`, and its kit worker can run: the device's helper is allowed.
+    fn kit(&self, report: hide_kit::KitReport, pass: hide_kit::KitReport) {
+        *self.node.kit.lock().unwrap() = Some(pass);
+        let mut runtime = self.runtime.lock().unwrap();
+        let consent = runtime.new_host_consent();
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == DEVICE)
+            .unwrap()
+            .host_consent = Some(consent);
+        runtime.install_worker_context(Arc::downgrade(&self.runtime), ChangeNotifier::noop());
+        runtime.ingest_kit_report(DEVICE, &report);
+    }
+
+    fn kit_passes(&self) -> Vec<hide_node_link::protocol::KitAction> {
+        self.node.kit_passes.lock().unwrap().clone()
+    }
+}
+
+/// with-hide/hide-private#661, #662: a device whose last kit pass left the
+/// agent's hook out (Codex had not trusted it, or the agent had not made its
+/// folder yet) has one pass run there before the spawn makes anything, and
+/// the spawn goes on once that pass puts the hook in.
+#[test]
+fn a_spawn_runs_one_kit_pass_where_the_hook_was_left_out_and_starts_once_it_is_in() {
+    use hide_kit::{ComponentState, PartCause};
+    for (cause, state) in [
+        (PartCause::CodexUntrusted, ComponentState::Failed),
+        (PartCause::AgentAbsent, ComponentState::Absent),
+    ] {
+        let spawner = spawner();
+        spawner.kit(
+            codex_kit(state, Some(cause), true),
+            codex_kit(ComponentState::Installed, None, true),
+        );
+        let child = spawner
+            .spawn(Some("here"), Some(DEVICE), "one")
+            .unwrap_or_else(|error| panic!("{cause:?}: {error}"));
+        assert_eq!(child["machine"], DEVICE);
+        assert_eq!(
+            spawner.kit_passes(),
+            [hide_node_link::protocol::KitAction::Apply],
+            "{cause:?}"
+        );
+        assert_eq!(spawner.count("start_agent"), 1);
+        // The pass's answer is the device's row now.
+        let kit = spawner.runtime.lock().unwrap().kit_state(DEVICE);
+        assert_eq!(
+            kit.agents[0].hook.as_ref().unwrap().state,
+            ComponentState::Installed
+        );
+    }
+}
+
+/// The same, where the pass cannot put the hook in: the spawn is refused with
+/// what the operator does, and nothing is made or typed on the device.
+#[test]
+fn a_spawn_whose_hook_a_pass_cannot_put_in_is_refused_before_anything_is_made() {
+    use hide_kit::{ComponentState, PartCause};
+    for (state, cause, enabled, code, passes) in [
+        (
+            ComponentState::Failed,
+            Some(PartCause::CodexUntrusted),
+            true,
+            "agent_hook_untrusted",
+            1,
+        ),
+        (
+            ComponentState::Absent,
+            Some(PartCause::AgentAbsent),
+            true,
+            "agent_not_set_up",
+            1,
+        ),
+        (
+            ComponentState::NotInstalled,
+            None,
+            true,
+            "agent_hook_missing",
+            1,
+        ),
+        // What no pass changes is answered from the report alone.
+        (ComponentState::Off, None, false, "agent_hook_off", 0),
+        (
+            ComponentState::Removed,
+            Some(PartCause::TakenOut),
+            true,
+            "agent_hook_missing",
+            0,
+        ),
+    ] {
+        let spawner = spawner();
+        let report = codex_kit(state, cause, enabled);
+        spawner.kit(report.clone(), report);
+        let error = spawner
+            .spawn(Some("here"), Some(DEVICE), "one")
+            .expect_err("refused");
+        assert_eq!(split_refusal(&error), (code, None), "{state:?} {cause:?}");
+        assert_eq!(spawner.kit_passes().len(), passes, "{state:?} {cause:?}");
+        assert!(spawner.ledger().spawns.is_empty());
+        assert!(
+            spawner.fake.methods().is_empty(),
+            "{:?}",
+            spawner.fake.methods()
+        );
+    }
+}
+
+/// with-hide/hide-private#662 as the operator met it: a device joined before
+/// Claude Code was first started there has no `~/.claude`, so the kit left
+/// Claude's hook out. A spawn of Claude runs one pass there; one that still
+/// finds no folder refuses with what the operator does, and one that finds
+/// it made puts the hook in and types the start.
+#[test]
+fn a_claude_spawn_onto_a_device_without_its_folder_waits_for_a_pass() {
+    use hide_kit::{ComponentState, PartCause};
+    let absent = || {
+        agent_kit(
+            "claude-code",
+            ComponentState::Absent,
+            Some(PartCause::AgentAbsent),
+            true,
+        )
+    };
+    let claude = |spawner: &Spawner| {
+        spawner.spawn_kind(
+            "claude",
+            Some("here"),
+            Some(DEVICE),
+            "one",
+            Default::default(),
+            Vec::new(),
+        )
+    };
+
+    {
+        // Each spawner holds the process's spawn turn until it is dropped.
+        let still_absent = spawner();
+        still_absent.kit(absent(), absent());
+        let error = claude(&still_absent).expect_err("refused");
+        assert_eq!(split_refusal(&error), ("agent_not_set_up", None));
+        assert_eq!(still_absent.kit_passes().len(), 1);
+        assert!(still_absent.ledger().spawns.is_empty());
+        let made = still_absent.fake.methods();
+        assert!(made.is_empty(), "{made:?}");
+    }
+
+    let made_since = spawner();
+    made_since.kit(
+        absent(),
+        agent_kit("claude-code", ComponentState::Installed, None, true),
+    );
+    // What the start does after that is the spawn's as for any agent.
+    let _ = claude(&made_since);
+    assert_eq!(made_since.kit_passes().len(), 1);
+    assert_eq!(made_since.count("start_agent"), 1);
+}
+
+fn refused_kit() -> hide_kit::KitReport {
+    hide_kit::KitReport {
+        refused: Some(Box::new(hide_kit::KitRefusal {
+            cause: hide_kit::RefusalCause::Busy,
+            path: None,
+            variable: None,
+            stop: None,
+            detail: "another Hide was changing the kit".to_owned(),
+        })),
+        ..Default::default()
+    }
+}
+
+/// The pass a spawn asks for can fail as well as answer: a device whose
+/// pass stopped before changing anything, or whose kit call broke off, is
+/// refused as unchecked with nothing made, never started without its hook
+/// or refused for what an older report said.
+#[test]
+fn a_device_pass_that_fails_refuses_the_spawn_as_unchecked() {
+    use hide_kit::{ComponentState, PartCause};
+    let absent = || {
+        agent_kit(
+            "claude-code",
+            ComponentState::Absent,
+            Some(PartCause::AgentAbsent),
+            true,
+        )
+    };
+    for fails in [false, true] {
+        let spawner = spawner();
+        spawner.kit(absent(), refused_kit());
+        spawner.node.kit_fails.store(fails, Ordering::SeqCst);
+        let error = spawner
+            .spawn_kind(
+                "claude",
+                Some("here"),
+                Some(DEVICE),
+                "one",
+                Default::default(),
+                Vec::new(),
+            )
+            .expect_err("refused");
+        assert_eq!(
+            split_refusal(&error),
+            ("agent_hook_unchecked", None),
+            "call fails: {fails}"
+        );
+        assert_eq!(spawner.kit_passes().len(), 1);
+        assert!(spawner.ledger().spawns.is_empty());
+        let made = spawner.fake.methods();
+        assert!(made.is_empty(), "{made:?}");
+    }
+}
+
+/// Stands in for this machine's kit worker: takes the pass a start asks
+/// for and answers it with `answer`. True when there was a pass to take.
+#[allow(clippy::disallowed_methods)] // polls for the pass it takes, bounded by a deadline
+fn local_kit_worker(
+    runtime: &Arc<Mutex<Runtime>>,
+    answer: impl FnOnce(&mut Runtime) + Send + 'static,
+) -> std::thread::JoinHandle<bool> {
+    let runtime = Arc::clone(runtime);
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let mut locked = runtime.lock().unwrap();
+            if locked.take_local_kit_job(Instant::now()).is_some() {
+                answer(&mut locked);
+                return true;
+            }
+            drop(locked);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    })
+}
+
+/// This machine's path, through its own kit worker: a hook left out has one
+/// pass taken and answered there before the spawn makes anything, and the
+/// spawn goes on once that pass put it in.
+#[test]
+fn a_local_spawn_runs_one_pass_on_this_machine_and_goes_on_once_the_hook_is_in() {
+    use hide_kit::ComponentState;
+    let spawner = spawner();
+    spawner.runtime.lock().unwrap().ingest_kit_report(
+        crate::node::TEST_NODE,
+        &agent_kit("codex", ComponentState::NotInstalled, None, true),
+    );
+    spawner.runtime.lock().unwrap().local_kit_pending = None;
+    let worker = local_kit_worker(&spawner.runtime, |runtime| {
+        runtime.ingest_kit_report(
+            crate::node::TEST_NODE,
+            &agent_kit("codex", ComponentState::Installed, None, true),
+        );
+    });
+    let answer = spawner.spawn(Some("here"), None, "one");
+    assert!(worker.join().unwrap(), "the spawn asked for a pass");
+    // This fixture gives this machine no engine of its own, so the spawn,
+    // past its hook, stops at the first step that asks for one.
+    assert_eq!(answer.expect_err("no local engine"), "herdr_unavailable");
+}
+
+/// The same on this machine when the pass fails: a read that failed, then a
+/// pass that fails again or stops, refuses the start as unchecked.
+#[test]
+fn a_local_pass_that_fails_refuses_the_spawn_as_unchecked() {
+    use crate::model::KitUnavailable;
+    for refuses in [false, true] {
+        let spawner = spawner();
+        spawner
+            .runtime
+            .lock()
+            .unwrap()
+            .set_local_kit_unavailable(KitUnavailable::Unreadable, "the read broke off");
+        let worker = local_kit_worker(&spawner.runtime, move |runtime| {
+            if refuses {
+                runtime.ingest_kit_report(crate::node::TEST_NODE, &refused_kit());
+            } else {
+                runtime.set_local_kit_unavailable(KitUnavailable::Unreadable, "the pass broke off");
+            }
+        });
+        let error = spawner
+            .spawn(Some("here"), None, "one")
+            .expect_err("refused");
+        assert!(worker.join().unwrap(), "the spawn asked for a pass");
+        assert_eq!(
+            split_refusal(&error),
+            ("agent_hook_unchecked", None),
+            "refuses: {refuses}"
+        );
+        assert!(spawner.ledger().spawns.is_empty());
+        let made = spawner.fake.methods();
+        assert!(made.is_empty(), "{made:?}");
+    }
 }
 
 fn count(methods: &[&str], name: &str) -> usize {

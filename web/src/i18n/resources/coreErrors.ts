@@ -68,6 +68,8 @@ export const coreErrorsEnglish = {
 
   "coreError.startReason.session_route_unconfirmed": "The conversation's record could not be confirmed, so nothing was started. Refresh the session record and try again.",
   "coreError.startReason.session_route_in_motion": "The device is busy with other file work, so nothing was started. Try again in a moment.",
+  "coreError.startReason.agent_hook_unconfirmed": "Hide's check of the agent's hook on that device didn't finish. Try again.",
+  "coreError.startReason.agent_hook_not_ready": "Hide's hook for the agent isn't ready on that device. Check that device in Settings, then try again.",
   "coreError.startReason.session_resume_scope_required": "The conversation to resume could not be confirmed, so nothing was started. Refresh the session record and try again.",
   "coreError.startReason.session_resume_intent_changed": "The start changed while it was being prepared, so nothing was started. Start again.",
   "coreError.startReason.session_resume_control_changed": "The connection changed while the start was being prepared, so nothing was started. Start again.",
@@ -209,6 +211,8 @@ const ko = {
 
   "coreError.startReason.session_route_unconfirmed": "대화 기록을 확인하지 못해서 시작하지 않았어요. 세션 기록을 새로 고친 뒤 다시 시도하세요.",
   "coreError.startReason.session_route_in_motion": "기기가 다른 파일 작업을 하는 중이라 시작하지 않았어요. 잠시 뒤 다시 시도하세요.",
+  "coreError.startReason.agent_hook_unconfirmed": "그 기기에서 에이전트의 Hide 훅 확인이 끝나지 않았어요. 다시 시도하세요.",
+  "coreError.startReason.agent_hook_not_ready": "그 기기에 에이전트의 Hide 훅이 준비되지 않았어요. 설정에서 그 기기를 확인한 뒤 다시 시도하세요.",
   "coreError.startReason.session_resume_scope_required": "이어 갈 대화를 확인하지 못해서 시작하지 않았어요. 세션 기록을 새로 고친 뒤 다시 시도하세요.",
   "coreError.startReason.session_resume_intent_changed": "준비하는 동안 시작 요청이 바뀌어서 시작하지 않았어요. 다시 시작하세요.",
   "coreError.startReason.session_resume_control_changed": "준비하는 동안 연결이 바뀌어서 시작하지 않았어요. 다시 시작하세요.",
@@ -350,6 +354,8 @@ const ja = {
 
   "coreError.startReason.session_route_unconfirmed": "会話の記録を確認できなかったため、開始しませんでした。セッション記録を更新してからもう一度お試しください。",
   "coreError.startReason.session_route_in_motion": "デバイスが別のファイル処理中のため、開始しませんでした。しばらくしてからもう一度お試しください。",
+  "coreError.startReason.agent_hook_unconfirmed": "そのデバイスでのエージェントの Hide フックの確認が終わりませんでした。もう一度お試しください。",
+  "coreError.startReason.agent_hook_not_ready": "そのデバイスでエージェントの Hide フックが準備できていません。設定でそのデバイスを確認してから、もう一度お試しください。",
   "coreError.startReason.session_resume_scope_required": "再開する会話を確認できなかったため、開始しませんでした。セッション記録を更新してからもう一度お試しください。",
   "coreError.startReason.session_resume_intent_changed": "準備中に開始の依頼が変わったため、開始しませんでした。もう一度開始してください。",
   "coreError.startReason.session_resume_control_changed": "準備中に接続が変わったため、開始しませんでした。もう一度開始してください。",
@@ -491,6 +497,8 @@ const zhCN = {
 
   "coreError.startReason.session_route_unconfirmed": "无法确认对话记录，因此未启动。请刷新会话记录后重试。",
   "coreError.startReason.session_route_in_motion": "设备正在处理其他文件操作，因此未启动。请稍后重试。",
+  "coreError.startReason.agent_hook_unconfirmed": "那台设备上该智能体 Hide 钩子的检查没有完成。请重试。",
+  "coreError.startReason.agent_hook_not_ready": "那台设备上该智能体的 Hide 钩子尚未就绪。请在设置中查看那台设备，然后重试。",
   "coreError.startReason.session_resume_scope_required": "无法确认要恢复的对话，因此未启动。请刷新会话记录后重试。",
   "coreError.startReason.session_resume_intent_changed": "准备期间启动请求发生了变化，因此未启动。请重新启动。",
   "coreError.startReason.session_resume_control_changed": "准备期间连接发生了变化，因此未启动。请重新启动。",

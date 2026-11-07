@@ -492,6 +492,7 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                     match start_failure.as_ref().map(|failure| failure.code) {
                         None => "no_change",
                         Some(MemoryStartFailureCode::AgentNotStarted) => "agent_not_started",
+                        Some(MemoryStartFailureCode::AgentHookNotReady) => "agent_hook_not_ready",
                         Some(MemoryStartFailureCode::ShellStarting) => "shell_starting",
                         Some(MemoryStartFailureCode::CardNotProcessed) => "card_not_processed",
                         Some(MemoryStartFailureCode::Other) => "start_failed",

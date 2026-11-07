@@ -325,6 +325,17 @@ pub(crate) const PANE_WAIT: std::time::Duration = std::time::Duration::from_secs
 /// wait.
 pub const END_ANSWER_WAIT: std::time::Duration = hide_node_link::link_panes::END_WAIT;
 
+/// How long a spawn waits for the pass it asked of its child's machine's
+/// kit before it makes anything (`runtime::start_hook`). A pass asks Codex
+/// to trust Hide's hooks, which is bounded at 19 s
+/// (`hide_agent_hooks::codex_trust`), and reads each agent once; a kit that
+/// is still busy past this, waiting on another kit's account lock or on a
+/// slow device, has the spawn refused so the same command asks again,
+/// rather than held for the 90 s that lock allows. The `hide` CLI's spawn
+/// exchange adds it to its own wait, so this refusal arrives before the
+/// exchange gives up.
+pub const HOOK_PASS_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past
 /// this failed and was left (a retry under a new intent is its own spawn),
@@ -803,6 +814,15 @@ pub(crate) enum Mutation {
 }
 
 impl AgentRecord {
+    /// The registration's pane as the core and the screen name it: the
+    /// engine's own id on the core's node `node`, `remote:<device>:pane:<id>`
+    /// on a device. Every place that shows the operator where a registration
+    /// is, or finds its agent row, takes it from here, never from `pane`,
+    /// which is the device's own id (with-hide/hide-private#679).
+    pub(crate) fn pane_on(&self, node: &str) -> String {
+        crate::address::pane_id_on(node, &self.machine, &self.pane)
+    }
+
     /// The name this agent has on the wire and in the ledger: the name it
     /// registered under, else its registration id, which is stable and which
     /// `hide request send` and `--parent` already resolve. Never a pane id and

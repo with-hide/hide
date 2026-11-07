@@ -229,19 +229,44 @@ function coreLog(daemon: Daemon): string {
     .join("\n");
 }
 
-type Listed = { kind: string; pane_id?: string; children?: Listed[]; more_children?: Listed[] };
+type Listed = { kind: string; pane_id?: string; read?: boolean; children?: Listed[]; more_children?: Listed[] };
 
 /** Whether a top row, or a child under it, is the pane. */
 function lists(row: Listed, pane: string): boolean {
   return row.pane_id === pane || [...(row.children ?? []), ...(row.more_children ?? [])].some((child) => lists(child, pane));
 }
 
+/** The row of the pane, at the top or under its parent. */
+function rowIn(rows: Listed[], pane: string): Listed | null {
+  for (const row of rows) {
+    if (row.pane_id === pane) return row;
+    const child = rowIn([...(row.children ?? []), ...(row.more_children ?? [])], pane);
+    if (child) return child;
+  }
+  return null;
+}
+
+type AgentsFrame = { type?: string; groups?: { group: string; rows: Listed[]; more?: Listed[] }[] };
+
+/** The phone's last `agents` frame. */
+function lastAgents(frames: string[]): AgentsFrame | null {
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const frame = JSON.parse(frames[index] ?? "{}") as AgentsFrame;
+    if (frame.type === "agents") return frame;
+  }
+  return null;
+}
+
 /** The group the phone was last told a pane is in, from its own `agents` frames. */
 function groupOf(frames: string[], pane: string): string | null {
-  for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = JSON.parse(frames[index] ?? "{}") as { type?: string; groups?: { group: string; rows: Listed[]; more?: Listed[] }[] };
-    if (frame.type !== "agents") continue;
-    return frame.groups?.find((group) => [...group.rows, ...(group.more ?? [])].some((row) => lists(row, pane)))?.group ?? null;
+  return lastAgents(frames)?.groups?.find((group) => [...group.rows, ...(group.more ?? [])].some((row) => lists(row, pane)))?.group ?? null;
+}
+
+/** Whether the phone was last told the pane's ask is one the operator read. */
+function readOf(frames: string[], pane: string): boolean | null {
+  for (const group of lastAgents(frames)?.groups ?? []) {
+    const row = rowIn([...group.rows, ...(group.more ?? [])], pane);
+    if (row) return row.read === true;
   }
   return null;
 }
@@ -489,15 +514,15 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     expect(JSON.stringify(done.payload)).not.toContain("fixture %");
     expect(done.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
 
-    // B33: while the phone views one, one's request sends nothing.
+    // B33: while the phone views one, its ask is read as under the desktop's focus (listed read, never announced).
     await oneRow.tap();
     await expect(detail).toBeVisible();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "정말 배포할까요?");
     await expect.poll(() => groupOf(frames, one)).toBe("needs_you");
+    await expect.poll(() => readOf(frames, one)).toBe(true);
     await noPushFor(push.received, 1);
-    await expect.poll(() => coreLog(daemon as Daemon)).toContain('"reason":"viewing"');
     await phone.locator('[data-phone-back="true"]').tap();
 
     // B33 (off): nothing.

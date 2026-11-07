@@ -252,6 +252,31 @@ test("start and wake use the same encrypted command path", async ({ page, relay 
   expect(relay.received.filter((frame) => frame.type === "start_agent")).toMatchObject([{ text: "Start the next task", target: "home:test-device" }]);
 });
 
+test("an HTML file is drawn in the bundle's sandboxed look frame, running its script in an origin of its own", async ({ page, relay }) => {
+  relay.state.html = `<!doctype html><html><head><meta charset="utf-8"><style>h1 { color: rgb(67, 56, 202) }</style></head><body>
+<h1 id="title">알림 설정 목업</h1><img id="img" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">
+<p id="script">not run</p><p id="storage">?</p><p id="parent">?</p>
+<script>document.getElementById("script").textContent = "script ran";
+try { localStorage.length; document.getElementById("storage").textContent = "storage open"; } catch { document.getElementById("storage").textContent = "storage refused"; }
+try { parent.document.title; document.getElementById("parent").textContent = "parent reachable"; } catch { document.getElementById("parent").textContent = "parent isolated"; }</script></body></html>`;
+  await pair(page, relay);
+  await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+  await page.locator('[data-phone-view="looks"]').click();
+  await expect(page.locator('[data-phone-look="v-html"]')).toContainText("HTML page");
+  await page.locator('[data-phone-look="v-html"]').click();
+  const frame = page.frameLocator("[data-phone-look-html]");
+  await expect(frame.locator("#title")).toHaveText("알림 설정 목업");
+  await expect(frame.locator("#title")).toHaveCSS("color", "rgb(67, 56, 202)");
+  await expect(frame.locator("#script")).toHaveText("script ran");
+  await expect(frame.locator("#storage")).toHaveText("storage refused");
+  await expect(frame.locator("#parent")).toHaveText("parent isolated");
+  expect(await frame.locator("#img").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1);
+  // The bundle's frame sits beside its page.
+  await expect(page.locator("[data-phone-look-html]")).toHaveAttribute("src", "look-frame.html");
+  expect(page.frames().map((child) => new URL(child.url(), relay.origin).pathname)).toContain(`/p/${PHONE_PROTOCOL}/look-frame.html`);
+  expect(relay.received.filter((frame) => frame.type === "look_seen")).toMatchObject([{ view_id: "v-html" }]);
+});
+
 test("hosted push registers and removes only the device scope while keeping the root worker", async ({ page, relay }) => {
   relay.state.push = true;
   await page.addInitScript(() => {

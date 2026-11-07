@@ -743,9 +743,10 @@ pub fn request_delivery(
     // which takes longer than a local command, and one on another device
     // makes several calls over SSH besides; running it again after a timeout
     // returns the same agent either way.
-    // The spawn answers within its own answer wait, which ends its new
-    // shell's wait too, so the CLI waits that and an ordinary command's
-    // wait for the answer to come back.
+    // The spawn answers within its own answer wait, which starts after the
+    // wait for a kit pass on the child's machine and ends its new shell's
+    // wait too, so the CLI waits both and an ordinary command's wait for the
+    // answer to come back.
     let timeout = match &command {
         hide_core::delivery::Command::Agents {
             command: hide_core::coordination::Command::Spawn { machine, .. },
@@ -756,6 +757,7 @@ pub fn request_delivery(
                 } else {
                     hide_core::coordination::SPAWN_ANSWER_WAIT
                 }
+                + hide_core::coordination::HOOK_PASS_WAIT
         }
         // An end closes its agent's pane after its record ended.
         hide_core::delivery::Command::Agents {

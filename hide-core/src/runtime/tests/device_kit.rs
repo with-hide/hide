@@ -1047,6 +1047,61 @@ fn check_again_shows_a_read_under_way_and_a_failed_one_as_a_code_beside_the_last
     assert!(kit(&shared).check_failed.is_none());
 }
 
+/// with-hide/hide-private#661: Codex on the device had not trusted Hide's
+/// hook. Only a pass asks Codex again, so once the operator has approved
+/// the hooks in Codex, Check again runs one and the Codex hook row leaves
+/// Failed; a trusted hook is only read again.
+#[test]
+fn check_again_after_codex_trusts_the_hook_clears_its_failure() {
+    // The Codex hook part and Codex's row, as a pass reports them.
+    let codex_report = |state, cause: Option<hide_kit::PartCause>| {
+        let why = cause.map(|cause| hide_kit::PartWhy { cause, value: None });
+        let mut report = report(&[(ComponentId::CodexHook, state)]);
+        report.components[0].why = why.clone();
+        let mut codex = agent_report(
+            "codex",
+            hide_kit::Availability::Available,
+            true,
+            ComponentState::Installed,
+        );
+        codex.hook = Some(hide_kit::PieceReport {
+            state,
+            reason: None,
+            why,
+            location: None,
+        });
+        report.agents = vec![codex];
+        report
+    };
+    let helper = KitDevice::answering(Ok(codex_report(
+        ComponentState::Failed,
+        Some(hide_kit::PartCause::CodexUntrusted),
+    )));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    let codex = |kit: &crate::model::KitSnapshot| {
+        kit.components
+            .iter()
+            .find(|part| part.id == ComponentId::CodexHook)
+            .map(|part| part.state)
+    };
+    assert_eq!(codex(&kit(&shared)), Some(ComponentState::Failed));
+
+    // The operator chose Trust all in Codex there.
+    *helper.answer.lock().unwrap() = Ok(codex_report(ComponentState::Installed, None));
+    let before = helper.calls().len();
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    assert_eq!(helper.calls()[before].0, KitAction::Apply);
+    assert_eq!(codex(&kit(&shared)), Some(ComponentState::Installed));
+
+    let before = helper.calls().len();
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    assert_eq!(helper.calls()[before].0, KitAction::Status);
+}
+
 fn registered(shared: &Mutex<Runtime>) -> bool {
     shared
         .lock()

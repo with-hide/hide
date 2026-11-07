@@ -145,15 +145,57 @@ fn checkout_is_inactive(
     if checkout_has_live_exception(checkout, focused_checkout_id) {
         return false;
     }
-    let settled = checkout.landed
-        || checkout
-            .pull_request
-            .as_ref()
-            .is_some_and(|pull_request| pull_request.badge.is_settled());
-    let stale = checkout_activity(checkout, by_pane)
+    // Merged work settles a feature worktree. The primary checkout is where the
+    // next work starts, so a merge never settles it: only a week of quiet does.
+    let settled = !checkout.is_primary
+        && (checkout.landed
+            || checkout
+                .pull_request
+                .as_ref()
+                .is_some_and(|pull_request| pull_request.badge.is_settled()));
+    settled || is_stale(checkout_activity(checkout, by_pane), now_unix_ms)
+}
+
+/// Nothing is known to have touched it for a week. A checkout or project
+/// whose activity time is unknown is not stale: a missing fact never folds.
+fn is_stale(activity: Activity, now_unix_ms: u64) -> bool {
+    activity
         .unix_ms
-        .is_some_and(|last| now_unix_ms.saturating_sub(last) > INACTIVE_AFTER_MS);
-    settled || stale
+        .is_some_and(|last| now_unix_ms.saturating_sub(last) > INACTIVE_AFTER_MS)
+}
+
+/// The newest activity in any checkout of the project: a commit, or an agent
+/// of any of its panes, however settled that checkout's branch is.
+fn project_activity(
+    workspace: &WorkspaceSnapshot,
+    by_pane: &HashMap<&str, &SidebarAgentSnapshot>,
+) -> Activity {
+    workspace
+        .checkouts
+        .iter()
+        .map(|checkout| checkout_activity(checkout, by_pane))
+        .max()
+        .unwrap_or_default()
+}
+
+/// The one decision of the device's Inactive projects fold. It is for a
+/// project nothing touched for a week: no checkout holds live work (working or
+/// waiting agents, changes, unpushed commits, the focus), every checkout is
+/// settled or stale, and the project's newest activity (an agent finishing in
+/// a merged worktree counts) is a week old. A pinned project is exempt (D-04).
+/// A project with no known time anywhere never folds.
+pub(crate) fn project_is_inactive(
+    workspace: &WorkspaceSnapshot,
+    by_pane: &HashMap<&str, &SidebarAgentSnapshot>,
+    focused_checkout_id: Option<&str>,
+    now_unix_ms: u64,
+) -> bool {
+    !workspace.pinned
+        && !workspace.checkouts.is_empty()
+        && workspace.checkouts.iter().all(|checkout| {
+            checkout_is_inactive(checkout, by_pane, focused_checkout_id, now_unix_ms)
+        })
+        && is_stale(project_activity(workspace, by_pane), now_unix_ms)
 }
 
 /// The `session_open_folds` key that holds a device's No agents fold open.
@@ -299,11 +341,8 @@ pub(crate) fn refresh_inactive_groups(
         // A pinned project is exempt from the device fold: the operator asked
         // to see it whatever its activity (D-04). Its own checkouts still
         // fold above.
-        let project_is_inactive = !workspace.pinned
-            && !workspace.checkouts.is_empty()
-            && workspace.checkouts.iter().all(|checkout| {
-                checkout_is_inactive(checkout, &by_pane, focused_checkout_id, now_unix_ms)
-            });
+        let project_is_inactive =
+            project_is_inactive(workspace, &by_pane, focused_checkout_id, now_unix_ms);
         let (presence, has_rows) =
             agent_presence(workspace, &by_pane, sleeping, &ui_state.session_open_folds);
         workspace.agent_presence = presence;
@@ -872,6 +911,68 @@ mod tests {
                 .checkout_ids
                 .is_empty()
         );
+    }
+
+    /// with-hide/hide#2174. The Inactive project fold is for a project nothing
+    /// touched for a week. Merged pull requests settle a feature worktree, never
+    /// the primary checkout where the next work starts, and a worktree's merge
+    /// does not fold a project that an agent used within the week.
+    #[test]
+    fn a_project_used_within_the_week_stays_out_of_inactive_after_its_pull_requests_merge() {
+        let day_ms = 24 * 60 * 60 * 1_000;
+        let now_ms = 20 * day_ms;
+        let seconds_ago = |days: u64| (now_ms - days * day_ms) / 1_000;
+        let landed_worktree = |project: &str, id: &str, commit: u64| {
+            let mut worktree = make_worktree_checkout(project, id, Some(commit));
+            worktree.landed = true;
+            worktree
+        };
+        // The primary checkout landed, and its commits are two days old.
+        let mut primary_landed = project("primary-landed", "local", Some(seconds_ago(2)), &[]);
+        primary_landed.checkouts[0].landed = true;
+        // Every worktree merged and the primary untouched for eight days, but
+        // an agent finished in a merged worktree an hour ago.
+        let mut used = project("used", "local", Some(seconds_ago(8)), &["worker"]);
+        used.checkouts[0].tabs.clear();
+        let mut worker = landed_worktree("used", "worker", seconds_ago(8));
+        worker.tabs = checkout("worker", None, &["worker"]).tabs;
+        used.checkouts.push(worker);
+        // The same shape with nothing touched for eight days.
+        let mut untouched = project("untouched", "local", Some(seconds_ago(8)), &[]);
+        untouched.checkouts[0].landed = true;
+        untouched
+            .checkouts
+            .push(landed_worktree("untouched", "merged", seconds_ago(8)));
+        let mut navigator = navigator(vec![primary_landed, used, untouched]);
+        navigator.agents = agents(json!([
+            {"pane_id": "worker", "state_change_seq": 1, "tokens": {"activity": format!("{:013}", now_ms - 60 * 60 * 1_000)}},
+        ]));
+
+        refresh_inactive_groups(&mut navigator, &UiStateSnapshot::default(), now_ms);
+
+        let inactive: Vec<_> = navigator
+            .inactive_projects
+            .iter()
+            .flat_map(|group| group.project_ids.clone())
+            .collect();
+        assert_eq!(inactive, ["untouched"]);
+    }
+
+    /// A merged worktree with no known time must not keep a project open
+    /// once its primary checkout has been quiet for a week.
+    #[test]
+    fn an_unknown_worktree_time_does_not_hold_a_quiet_project_open() {
+        let day_ms = 24 * 60 * 60 * 1_000;
+        let now_ms = 20 * day_ms;
+        let mut quiet = project("quiet", "local", Some((now_ms - 8 * day_ms) / 1_000), &[]);
+        let mut merged = make_worktree_checkout("quiet", "merged", None);
+        merged.landed = true;
+        quiet.checkouts.push(merged);
+        let mut navigator = navigator(vec![quiet]);
+
+        refresh_inactive_groups(&mut navigator, &UiStateSnapshot::default(), now_ms);
+
+        assert_eq!(navigator.inactive_projects[0].project_ids, ["quiet"]);
     }
 
     /// B3, B7. Every live-work exception wins over a settled branch, including

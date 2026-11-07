@@ -647,7 +647,9 @@ fn a_pass_over_a_project_answers_what_the_fixture_says() {
 
     let pass = store.pass(PROJECT).unwrap().unwrap();
 
-    let summary = store.summary_in(&pass, &[]).unwrap();
+    let summary = store
+        .summary_in(&pass, &[], &mut crate::links::pr_cache::PrCache::default())
+        .unwrap();
     assert_eq!(summary.prs.len(), 1);
     assert_eq!(summary.prs.get(&8), Some(&1));
     assert_eq!(summary.issues.get("github:acme/app#3"), Some(&1));
@@ -2100,6 +2102,46 @@ fn session(id: &str) -> SessionIdentity {
     }
 }
 
+/// One read of a session file, written as the worker writes it and marked
+/// for the next summary pass.
+fn read_facts(
+    store: &mut LinkStore,
+    scoped: &mut crate::links::worker::State,
+    path: &str,
+    facts: links::LinkFacts,
+) {
+    let answer = links::ReadAnswer {
+        agent: Agent::Claude,
+        path: path.into(),
+        checkpoint: None,
+        has_more: false,
+        rescanned: false,
+        facts,
+        error: None,
+    };
+    store.apply_answer(DEVICE, &answer, "stamp").unwrap();
+    scoped.read_written(store, DEVICE, path);
+}
+
+/// A summary pass through `scoped` and one through a state that never
+/// published, which reads everything, asserting they publish the same;
+/// answers what `scoped` recomputed.
+fn publish_and_compare(
+    store: &LinkStore,
+    scoped: &mut crate::links::worker::State,
+    sink: &Published,
+    what: &str,
+) -> crate::links::worker::Recomputed {
+    use crate::links::worker::{State, publish_summaries};
+    let recomputed = publish_summaries(store, scoped, sink);
+    let mut full = State::new();
+    full.projects = std::sync::Arc::clone(&scoped.projects);
+    let everything = Published::default();
+    publish_summaries(store, &mut full, &everything);
+    assert_eq!(*sink.0.borrow(), *everything.0.borrow(), "{what}");
+    recomputed
+}
+
 /// A summary pass over the projects a change can move publishes exactly what
 /// a pass over every project publishes on the same store, after each write
 /// of a mix that reaches projects through a folder, a learned place, a
@@ -2108,40 +2150,16 @@ fn session(id: &str) -> SessionIdentity {
 /// (with-hide/hide-private#571).
 #[test]
 fn a_pass_over_the_changed_projects_publishes_what_a_full_pass_publishes() {
-    use crate::links::worker::{State, publish_summaries};
+    use crate::links::worker::State;
     let directory = tempfile::tempdir().unwrap();
     let mut store = open(directory.path());
     let mut scoped = State::new();
     let sink = Published::default();
-    let mut step = 0;
     // Runs both passes and answers how many projects the scoped one read.
-    let mut check = |store: &LinkStore, scoped: &mut State, what: &str| -> usize {
-        step += 1;
-        let read = publish_summaries(store, scoped, &sink);
-        let mut full = State::new();
-        full.projects = std::sync::Arc::clone(&scoped.projects);
-        let everything = Published::default();
-        publish_summaries(store, &mut full, &everything);
-        assert_eq!(
-            *sink.0.borrow(),
-            *everything.0.borrow(),
-            "step {step}: {what}"
-        );
-        read
+    let check = |store: &LinkStore, scoped: &mut State, what: &str| -> usize {
+        publish_and_compare(store, scoped, &sink, what).projects
     };
-    let read = |store: &mut LinkStore, scoped: &mut State, path: &str, facts: links::LinkFacts| {
-        let answer = links::ReadAnswer {
-            agent: Agent::Claude,
-            path: path.into(),
-            checkpoint: None,
-            has_more: false,
-            rescanned: false,
-            facts,
-            error: None,
-        };
-        store.apply_answer(DEVICE, &answer, "stamp").unwrap();
-        scoped.read_written(store, DEVICE, path);
-    };
+    let read = read_facts;
     let projects = |merged| std::sync::Arc::new(scoped_projects(merged));
 
     scoped.projects = projects(None);
@@ -2333,4 +2351,353 @@ fn a_pass_over_the_changed_projects_publishes_what_a_full_pass_publishes() {
         check(&store, &mut scoped, "a pull request kept from before"),
         1
     );
+}
+
+/// A pass reads again only the pull requests a change can reach, and still
+/// publishes exactly what a pass that reads every pull request publishes:
+/// each step puts one rule of the cache's invalidation to work, so a rule
+/// dropped leaves a summary that is stale against the full pass
+/// (with-hide/hide-private#571).
+#[test]
+fn a_pass_reads_again_only_the_pull_requests_a_change_reaches() {
+    use crate::links::worker::{Recomputed, State};
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = open(directory.path());
+    let mut cached = State::new();
+    let sink = Published::default();
+    // Six pull requests on branches b1..b6; one may be closed early.
+    let prs = |closed: Option<(u64, u64)>| -> Vec<PrFact> {
+        (1..=6u64)
+            .map(|n| {
+                let closed = closed.filter(|(number, _)| *number == n).map(|(_, at)| at);
+                pr(n, &format!("b{n}"), T0 + n * 10 * MIN, closed)
+            })
+            .collect()
+    };
+    let on = |id: &str, cwd: &str, branches: &[&str]| -> links::LinkFacts {
+        let mut facts = chunk(id, cwd, T0 + 40 * MIN);
+        facts.spans = branches
+            .iter()
+            .map(|branch| span(branch, T0 + 40 * MIN))
+            .collect();
+        facts
+    };
+    let pass = |store: &LinkStore, cached: &mut State, what: &str| {
+        publish_and_compare(store, cached, &sink, what)
+    };
+    let reads = |projects: usize, prs: usize| Recomputed { projects, prs };
+    // The pull requests the published summary shows a session on.
+    let chips = |id: &str| -> Vec<u64> {
+        sink.0.borrow()["ws"]
+            .sessions
+            .get(id)
+            .map(|chips| chips.iter().map(|chip| chip.number).collect())
+            .unwrap_or_default()
+    };
+
+    cached.projects = std::sync::Arc::new(vec![project(prs(None))]);
+    store.apply_project(&cached.projects[0], T0).unwrap();
+    store.refresh_ledger_outputs().unwrap();
+    cached.changed_all();
+    for (id, cwd, branches) in [
+        ("s1", "/work/app", &["b1"][..]),
+        ("s1b", "/work/app", &["b1"]),
+        ("s2", "/work/app", &["b2"]),
+        ("s3", "/work/app", &["b3"]),
+        ("s4", "/work/app", &["b4"]),
+        ("s5", "/work/app", &["b5"]),
+        ("s6", "/work/app", &["b6"]),
+        ("s10", "/work/app-wt", &["b2"]),
+    ] {
+        read_facts(
+            &mut store,
+            &mut cached,
+            &format!("/f/{id}.jsonl"),
+            on(id, cwd, branches),
+        );
+    }
+    assert_eq!(pass(&store, &mut cached, "first"), reads(1, 6));
+    assert_eq!(chips("s1b"), [1]);
+    assert_eq!(chips("s10"), Vec::<u64>::new(), "outside every place");
+
+    assert_eq!(
+        pass(&store, &mut cached, "unchanged"),
+        reads(0, 0),
+        "inputs that did not move recompute no project and read no pull request"
+    );
+
+    // A session that already works PR 3's branch works more branches: it is
+    // reached by the line that holds it and by the branch it is on.
+    read_facts(
+        &mut store,
+        &mut cached,
+        "/f/s3.jsonl",
+        on("s3", "/work/app", &["b3", "b3-more"]),
+    );
+    assert_eq!(pass(&store, &mut cached, "a held session"), reads(1, 1));
+
+    // A new session in a place makes PR 4 and works no branch: only the
+    // number it printed reaches it.
+    let mut facts = chunk("s7", "/work/app", T0 + 40 * MIN);
+    facts.prs = vec![mark("acme/app", 4, T0 + 40 * MIN, true)];
+    read_facts(&mut store, &mut cached, "/f/s7.jsonl", facts);
+    assert_eq!(pass(&store, &mut cached, "a number printed"), reads(1, 1));
+    assert_eq!(chips("s7"), [4]);
+
+    // A new session works PR 5's branch and names nothing: only the branch
+    // reaches it.
+    read_facts(
+        &mut store,
+        &mut cached,
+        "/f/s8.jsonl",
+        on("s8", "/work/app", &["b5"]),
+    );
+    assert_eq!(pass(&store, &mut cached, "a branch worked"), reads(1, 1));
+    assert_eq!(chips("s8"), [5]);
+
+    // A session outside every place names PR 6 by number from the project's
+    // folder.
+    let mut facts = chunk("s9", "/tmp/elsewhere", T0 + 42 * MIN);
+    facts.named = vec![links::NamedMark {
+        pr: hide_session::NamedPr {
+            repository: None,
+            number: 6,
+            folder: Some("/work/app".into()),
+        },
+        at_unix_ms: T0 + 42 * MIN,
+        request: None,
+    }];
+    read_facts(&mut store, &mut cached, "/f/s9.jsonl", facts);
+    assert_eq!(pass(&store, &mut cached, "a number named"), reads(1, 1));
+    assert_eq!(chips("s9"), [6]);
+
+    // A session of PR 1 moves to a branch no pull request has: what it left is
+    // reached only by the line that held it.
+    read_facts(
+        &mut store,
+        &mut cached,
+        "/f/s1b.jsonl",
+        on("s1b", "/work/app", &["elsewhere"]),
+    );
+    assert_eq!(pass(&store, &mut cached, "a session leaves"), reads(1, 1));
+    assert_eq!(chips("s1b"), Vec::<u64>::new());
+
+    // A pre-check of PR 5 starts a session of PR 2: the reviewed number
+    // reaches PR 5, and the session's own line PR 2.
+    store
+        .apply_reviews(
+            &[crate::links::ReviewFact {
+                device_id: DEVICE.into(),
+                agent: "claude".into(),
+                session_id: "s2".into(),
+                repo_name: "acme/app".into(),
+                number: 5,
+            }],
+            T0 + 43 * MIN,
+        )
+        .unwrap();
+    cached.changed(session("s2"));
+    assert_eq!(pass(&store, &mut cached, "a review"), reads(1, 2));
+    assert_eq!(chips("s2"), [5, 2]);
+
+    // PR 3 closes before its session worked, while only an unrelated session
+    // is marked: its row differs from the one held.
+    assert!(sink.0.borrow()["ws"].prs.contains_key(&3));
+    cached.projects = std::sync::Arc::new(vec![project(prs(Some((3, T0 + 31 * MIN))))]);
+    store
+        .apply_project(&cached.projects[0], T0 + 50 * MIN)
+        .unwrap();
+    read_facts(
+        &mut store,
+        &mut cached,
+        "/f/s6.jsonl",
+        on("s6", "/work/app", &["b6"]),
+    );
+    assert_eq!(pass(&store, &mut cached, "a row"), reads(1, 2));
+    assert!(!sink.0.borrow()["ws"].prs.contains_key(&3));
+
+    // A worktree is added at a folder a session already worked in, while only
+    // an unrelated session is marked: the places differ from the ones held,
+    // so every pull request is read again.
+    let mut facts = project(prs(Some((3, T0 + 31 * MIN))));
+    facts.worktrees.push(WorktreeFact {
+        path: "/work/app-wt".into(),
+        branch: Some("b2".into()),
+        created_at_unix_ms: None,
+    });
+    cached.projects = std::sync::Arc::new(vec![facts]);
+    store
+        .apply_project(&cached.projects[0], T0 + 55 * MIN)
+        .unwrap();
+    read_facts(
+        &mut store,
+        &mut cached,
+        "/f/s6.jsonl",
+        on("s6", "/work/app", &["b6"]),
+    );
+    assert_eq!(pass(&store, &mut cached, "a place"), reads(1, 6));
+    assert_eq!(chips("s10"), [2]);
+
+    // A change no session can place reads every pull request again.
+    store
+        .connection
+        .execute("DELETE FROM session_branches WHERE id='s5'", [])
+        .unwrap();
+    cached.changed_all();
+    assert_eq!(pass(&store, &mut cached, "unplaced"), reads(1, 6));
+    assert_eq!(chips("s5"), Vec::<u64>::new());
+
+    assert_eq!(pass(&store, &mut cached, "settled"), reads(0, 0));
+}
+
+/// A project holding more pull requests than the cache's limit still
+/// publishes every summary: the ones past it are read on each pass, and the
+/// crossing is reported once.
+#[test]
+fn pull_requests_past_the_cache_limit_are_read_on_each_pass() {
+    use crate::links::pr_cache::PrCache;
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = open(directory.path());
+    store
+        .apply_project(
+            &project(
+                (1..=3u64)
+                    .map(|n| pr(n, &format!("b{n}"), T0 + n * MIN, None))
+                    .collect(),
+            ),
+            T0,
+        )
+        .unwrap();
+    for n in 1..=3u64 {
+        let mut facts = chunk(&format!("s{n}"), ROOT, T0 + 40 * MIN);
+        facts.spans = vec![span(&format!("b{n}"), T0 + 40 * MIN)];
+        let path = format!("/f/s{n}.jsonl");
+        let answer = links::ReadAnswer {
+            agent: Agent::Claude,
+            path,
+            checkpoint: None,
+            has_more: false,
+            rescanned: false,
+            facts,
+            error: None,
+        };
+        store.apply_answer(DEVICE, &answer, "stamp").unwrap();
+    }
+    let pass = store.pass(PROJECT).unwrap().unwrap();
+    let mut cache = PrCache::with_limit(2);
+    let (summaries, diagnostics) = crate::diagnostics::capture(|| {
+        let first = store.summary_in(&pass, &[], &mut cache).unwrap();
+        let before = cache.read_count();
+        let second = store.summary_in(&pass, &[], &mut cache).unwrap();
+        assert_eq!(first, second);
+        (first, cache.read_count() - before)
+    });
+    assert_eq!(summaries.0.prs.len(), 3);
+    assert_eq!(summaries.1, 1, "only the pull request past the limit");
+    let crossings = diagnostics
+        .iter()
+        .filter(|record| record["kind"] == "summary.pr_cache_capacity")
+        .count();
+    assert_eq!(crossings, 1, "the crossing is reported once, not per pass");
+}
+
+/// The candidate pull requests are those any evidence names, as the
+/// per-pull-request question the set-based read replaced asked it.
+#[test]
+fn the_candidate_pull_requests_are_the_ones_any_evidence_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = open(directory.path());
+    store
+        .apply_project(
+            &project(
+                (1..=8u64)
+                    .map(|n| pr(n, &format!("b{n}"), T0 + n * MIN, None))
+                    .collect(),
+            ),
+            T0,
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO repo_names(name, repo) VALUES('Acme/App', 'acme/app')",
+            [],
+        )
+        .unwrap();
+    let read = |store: &mut LinkStore, id: &str, facts: links::LinkFacts| {
+        let answer = links::ReadAnswer {
+            agent: Agent::Claude,
+            path: format!("/f/{id}.jsonl"),
+            checkpoint: None,
+            has_more: false,
+            rescanned: false,
+            facts,
+            error: None,
+        };
+        store.apply_answer(DEVICE, &answer, "stamp").unwrap();
+    };
+    // PR 1: a branch. PR 2: printed by the repository's alias. PR 3: named by
+    // repository. PR 4: named by number alone. PR 5: printed for another
+    // repository's number 5. PR 6: reviewed only. PR 7 and 8: no evidence.
+    let mut facts = chunk("a", ROOT, T0);
+    facts.spans = vec![span("b1", T0)];
+    facts.prs = vec![
+        mark("Acme/App", 2, T0, false),
+        mark("other/repo", 5, T0, false),
+    ];
+    facts.named = vec![
+        links::NamedMark {
+            pr: hide_session::NamedPr {
+                repository: Some("acme/app".into()),
+                number: 3,
+                folder: None,
+            },
+            at_unix_ms: T0,
+            request: None,
+        },
+        links::NamedMark {
+            pr: hide_session::NamedPr {
+                repository: None,
+                number: 4,
+                folder: Some(ROOT.into()),
+            },
+            at_unix_ms: T0,
+            request: None,
+        },
+    ];
+    read(&mut store, "a", facts);
+    store
+        .apply_reviews(
+            &[crate::links::ReviewFact {
+                device_id: DEVICE.into(),
+                agent: "claude".into(),
+                session_id: "a".into(),
+                repo_name: "acme/app".into(),
+                number: 6,
+            }],
+            T0,
+        )
+        .unwrap();
+
+    // The question asked of each pull request in turn.
+    let mut statement = store
+        .connection
+        .prepare(&format!(
+            "SELECT {PR_COLUMNS_P} FROM prs p WHERE p.project=?1 AND (\
+             EXISTS(SELECT 1 FROM session_branches b WHERE b.branch=p.branch) OR \
+             EXISTS(SELECT 1 FROM session_prs s LEFT JOIN repo_names r ON r.name=s.repo_name \
+             WHERE s.number=p.number AND COALESCE(r.repo, s.repo_name)=p.repo) OR \
+             EXISTS(SELECT 1 FROM session_named_prs n LEFT JOIN repo_names r ON r.name=n.repo_name \
+             WHERE n.number=p.number AND (n.repo_name='' OR COALESCE(r.repo, n.repo_name)=p.repo))) \
+             ORDER BY p.number"
+        ))
+        .unwrap();
+    let asked: Vec<PrRow> = statement
+        .query_map([PROJECT], pr_row)
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let numbers = |prs: &[PrRow]| prs.iter().map(|pr| pr.number).collect::<Vec<_>>();
+    assert_eq!(numbers(&asked), [1, 2, 3, 4]);
+    assert_eq!(store.candidate_prs(PROJECT).unwrap(), asked);
 }

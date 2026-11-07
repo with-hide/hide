@@ -1267,16 +1267,30 @@ impl Runtime {
             letter.sender.kind == crate::delivery::OPERATOR_KIND
                 && hide_node_link::feedback::valid_letter_folder(&letter.intent)
         };
+        // The operator's letters of the ledger before, and only if it had any
+        // are the new ledger's ids indexed once to tell which of them are gone,
+        // rather than scanning the new ledger per letter.
         let gone: Vec<(String, String)> = self
             .delivery_ledger
             .as_ref()
             .ok()
             .map(|before| {
+                let mut held: Option<std::collections::HashSet<&str>> = None;
                 before
                     .letters
                     .iter()
                     .filter(operator)
-                    .filter(|old| !ledger.letters.iter().any(|letter| letter.id == old.id))
+                    .filter(|old| {
+                        !held
+                            .get_or_insert_with(|| {
+                                ledger
+                                    .letters
+                                    .iter()
+                                    .map(|letter| letter.id.as_str())
+                                    .collect()
+                            })
+                            .contains(old.id.as_str())
+                    })
                     .map(|old| (old.recipient.device_id.clone(), old.intent.clone()))
                     .collect()
             })

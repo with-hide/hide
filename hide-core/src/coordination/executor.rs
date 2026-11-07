@@ -894,6 +894,54 @@ fn check_target(
     }
 }
 
+/// Judges whether `kind` on `machine` has Hide's hook in place, from that
+/// machine's kit report, before anything is made for the spawn
+/// (`runtime::start_hook`). Where a pass may put it in place, one runs on
+/// the machine's own kit worker, off the runtime lock, and the spawn judges
+/// again from its answer.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Result<(), String> {
+    use crate::runtime::start_hook::{HookRefusal, StartHook};
+    let refused = |refusal: HookRefusal, stage: &str| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "hook.refused", "device": machine,
+            "agent_kind": kind, "intent": intent, "reason": refusal.code(), "stage": stage,
+        }));
+        refusal.code().to_owned()
+    };
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let asked = {
+        let mut locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        match locked.start_hook(machine, kind) {
+            StartHook::Ready => return Ok(()),
+            StartHook::Refused(refusal) => return Err(refused(refusal, "report")),
+            StartHook::Pass(_) => locked.ask_start_pass(machine)?,
+        }
+    };
+    let deadline = Instant::now() + super::HOOK_PASS_WAIT;
+    loop {
+        {
+            let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+            if locked.start_pass_answered(machine, asked) {
+                return locked
+                    .start_hook_after_pass(machine, kind)
+                    .map_err(|refusal| refused(refusal, "pass"));
+            }
+            if !locked.kit_reachable(machine) {
+                return Err("machine_unavailable".into());
+            }
+        }
+        if Instant::now() >= deadline {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "hook.pass_unanswered", "device": machine,
+                "agent_kind": kind, "intent": intent, "waited_ms": super::HOOK_PASS_WAIT.as_millis(),
+            }));
+            return Err(refused(HookRefusal::Unconfirmed, "wait"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn spawn(
     client: &Client,
     authority: &Authority,
@@ -907,11 +955,11 @@ fn spawn(
     {
         *machine = None;
     }
-    // The caller waits this long for the answer; the new shell's wait and
-    // every wait after the start (the agent taking input, its session) end
-    // inside it, so a stopped shell or a slow agent is answered rather than
-    // timed out.
-    let answer_by = Instant::now()
+    // The caller waits this long for the answer, besides the hook's wait
+    // below; the new shell's wait and every wait after the start (the agent
+    // taking input, its session) end inside it, so a stopped shell or a slow
+    // agent is answered rather than timed out.
+    let mut answer_by = Instant::now()
         + answer_wait(matches!(
             &command,
             Command::Spawn {
@@ -985,11 +1033,10 @@ fn spawn(
         return Err("invalid_spawn".into());
     }
     let mut ledger = state(client)?;
-    // A spawn beside its caller opens in the caller's own tab, so it is
-    // judged before anything is registered, reserved or created; a retry of
-    // an intent whose pane exists already is judged by what it did, and a
-    // completed one stays offline (engineering #11).
-    let beside_of = if *beside {
+    // An earlier attempt of this intent by the same parent: every check
+    // below judges a retry by what that attempt already did (engineering
+    // #11).
+    let earlier = {
         let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
             super::live_self(&ledger, actor)
                 .next()
@@ -997,14 +1044,22 @@ fn spawn(
         } else {
             parent.clone()
         };
-        let placed = known_parent.is_some_and(|id| {
-            ledger.spawns.iter().any(|record| {
-                record.parent == id
-                    && record.intent == *intent
-                    && record.beside
-                    && (record.pane.is_some() || record.completed)
-            })
-        });
+        known_parent.and_then(|id| {
+            ledger
+                .spawns
+                .iter()
+                .find(|record| record.parent == id && record.intent == *intent)
+                .cloned()
+        })
+    };
+    // A spawn beside its caller opens in the caller's own tab, so it is
+    // judged before anything is registered, reserved or created; a retry of
+    // an intent whose pane exists already is judged by what it did, and a
+    // completed one stays offline.
+    let beside_of = if *beside {
+        let placed = earlier
+            .as_ref()
+            .is_some_and(|record| record.beside && (record.pane.is_some() || record.completed));
         Some(beside_target(
             client,
             authority,
@@ -1028,24 +1083,14 @@ fn spawn(
         {
             return Err("parent_authority_required".into());
         }
-        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
-            super::live_self(&ledger, actor)
-                .next()
-                .map(|p| p.id.clone())
-        } else {
-            parent.clone()
-        };
-        let earlier = known_parent.and_then(|id| {
-            ledger
-                .spawns
-                .iter()
-                .find(|record| record.parent == id && record.intent == *intent)
-        });
-        if earlier.is_some_and(|record| record.machine != *machine) {
+        if earlier
+            .as_ref()
+            .is_some_and(|record| record.machine != *machine)
+        {
             return Err("intent_conflict".into());
         }
-        let started = earlier.is_some_and(|record| record.pane.is_some());
-        if !earlier.is_some_and(|record| record.completed) {
+        let started = earlier.as_ref().is_some_and(|record| record.pane.is_some());
+        if !earlier.as_ref().is_some_and(|record| record.completed) {
             check_target(
                 client,
                 actor,
@@ -1058,6 +1103,19 @@ fn spawn(
                 !started,
             )?;
         }
+    }
+    // The child's hook is judged before anything is made for it, on every
+    // attempt that has not typed its start yet: one that has is past what a
+    // hook changes (with-hide/hide-private#661, #662).
+    if !earlier
+        .as_ref()
+        .is_some_and(|record| record.completed || record.typed > 0)
+    {
+        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        let hook_started = Instant::now();
+        check_hook(client, child_machine, kind, intent)?;
+        // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
+        answer_by += hook_started.elapsed();
     }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that

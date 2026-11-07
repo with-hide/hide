@@ -30,6 +30,9 @@ use crate::answers::{self, Mark, Scanner};
 use crate::osc::{OscState, parse_reported_cwd};
 use crate::screen::{Capture, Defaults, Frame};
 
+// A write the parser takes always fits the message that carries it.
+const _: () = assert!(hide_vt::MAX_CLIPBOARD_BYTES == hide_holder_protocol::MAX_CLIPBOARD);
+
 /// The parser's scrollback budget, libghostty's approximate bytes (PRD
 /// engine-bundle-2-pane-holder D-17).
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
@@ -73,6 +76,10 @@ pub struct Pane {
     cwd: Option<PathBuf>,
     /// The bells the program rang since the pane began.
     bells: u64,
+    /// The text the program last wrote to the clipboard (OSC 52) and no
+    /// connection has taken yet: only the latest, since each write replaces
+    /// the clipboard.
+    clipboard: Option<Vec<u8>>,
 }
 
 /// What the pane's facts are made from, read under the pane's lock.
@@ -133,6 +140,7 @@ impl Pane {
             osc: OscState::default(),
             cwd: None,
             bells: 0,
+            clipboard: None,
         };
         let theme = theme.cloned().unwrap_or(Theme {
             foreground: None,
@@ -197,10 +205,10 @@ impl Pane {
         };
     }
 
-    /// Takes what the parser collected of the output for the facts: the
-    /// bells, the last whole folder the shell reported (a relative one
-    /// names no folder), and the clipboard writes, which no node is sent
-    /// and which would otherwise grow with every one.
+    /// Takes what the parser collected of the output: the bells and the
+    /// last whole folder the shell reported (a relative one names no
+    /// folder) for the facts, and the last clipboard write for the screen
+    /// ([`Pane::take_clipboard`]).
     fn take_reports(&mut self) {
         self.bells = self
             .bells
@@ -214,7 +222,15 @@ impl Pane {
         {
             self.cwd = Some(cwd);
         }
-        let _ = self.terminal.take_clipboard_writes();
+        if let Some(copied) = self.terminal.take_clipboard_writes().pop() {
+            self.clipboard = Some(copied);
+        }
+    }
+
+    /// The text the program last wrote to the clipboard since this was last
+    /// asked, once.
+    pub fn take_clipboard(&mut self) -> Option<Vec<u8>> {
+        self.clipboard.take()
     }
 
     /// What the pane's facts are made from now; the screen's text only when
