@@ -123,7 +123,9 @@ export function FolderBrowser(props: FolderBrowserProps) {
   const listing = shown?.listing ?? null;
   const filter = place.kind === "filter" ? place.text : place.kind === "folder" && typedRequest === listing?.label ? place.filter : "";
   const items = useMemo(() => filterEntries(listing?.entries ?? [], filter), [listing, filter]);
-  const index = selected === null ? -1 : items.findIndex((entry) => entry.name === selected);
+  // A typed name that is a child's whole name chooses it, so `~/projects/app` names app, not projects.
+  const named = selected ?? items.find((entry) => entry.name === filter.trim())?.name ?? null;
+  const index = named === null ? -1 : items.findIndex((entry) => entry.name === named);
   const chosen = index >= 0 ? items[index]! : null;
 
   const typedRefusal = asked.via === "typed" && answer?.reason ? answer.reason : null;
@@ -217,7 +219,6 @@ export function FolderBrowser(props: FolderBrowserProps) {
         </nav>
         <Input
           ref={fieldRef}
-          mono
           value={text}
           role="combobox"
           aria-expanded="true"

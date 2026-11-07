@@ -204,8 +204,15 @@ it("moves the list to a typed folder and filters it by the rest of the line", as
   expect([...document.querySelectorAll("[data-folder-row]")].map((row) => row.getAttribute("data-folder-row"))).toEqual(["app"]);
   await type("~/projects/");
   expect(lists(events).at(-1)).toEqual({ device_id: "ubuntu", path: "~/projects" });
-  await answerList("ubuntu", "~/projects", { listing: { path: "/home/me/projects", label: "~/projects", home: "/home/me", truncated: false, entries: [] } });
-  expect(find("[data-folder-list-state]")?.getAttribute("data-folder-list-state")).toBe("empty");
+  await answerList("ubuntu", "~/projects", { listing: { path: "/home/me/projects", label: "~/projects", home: "/home/me", truncated: false, entries: [{ name: "app", is_directory: true }] } });
+  expect(find("[data-folder-browser-target]")?.getAttribute("data-folder-browser-target")).toBe("/home/me/projects");
+  // A whole child name typed after the folder names that child (B7, B11).
+  await type("~/projects/app");
+  expect(find("[data-folder-browser-target]")?.getAttribute("data-folder-browser-target")).toBe("/home/me/projects/app");
+  await act(async () => find("[data-folder-browser-field]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/projects/app", label: "app", initialize_git: false }]);
+  await type("~/projects/nothing");
+  expect(find("[data-folder-list-state]")?.getAttribute("data-folder-list-state")).toBe("no-match");
   await unmount();
 });
 
