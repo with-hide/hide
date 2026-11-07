@@ -838,9 +838,14 @@ fn a_windows_core_connects_a_windows_device_over_its_own_openssh() {
     );
 }
 
-/// The bytes of the desktop app's `hide.cmd` (`hide-kit/src/cli_windows.rs`),
-/// which reach its `hide.exe` through the `.hide-kit` junction beside it.
-const APP_SHIM: &[u8] = b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0.hide-kit\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
+/// The bytes of an earlier desktop app's `hide.cmd`, which reached its
+/// `hide.exe` through the `.hide-kit` junction beside it.
+const EARLIER_APP_SHIM: &[u8] = b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0.hide-kit\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
+
+/// The bytes of the desktop app's `hide.cmd` now (`hide-kit/src/cli_windows.rs`)
+/// for a runtime copy at `~/app/resources`: the copy by a relative path, and
+/// no link.
+const APP_SHIM: &[u8] = b"@echo off\r\nrem Hide kit command. Managed by Hide.\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0..\\..\\app\\resources\\hide.exe\" %*\r\nexit /b %errorlevel%\r\n";
 
 /// `FILE_ATTRIBUTE_REPARSE_POINT`: a junction, a symbolic link or any other
 /// entry the system redirects through.
@@ -925,13 +930,16 @@ fn hide_answer(output: &str) -> Option<String> {
 /// ssh session then refuses a junction no administrator made, with "The path
 /// cannot be traversed because it contains an untrusted mount point".
 ///
-/// The desktop app's `hide` holds the account's command folder first, its
-/// junction made by a standard user as the app makes it. The device's kit
-/// leaves it, and a pane of the device whose `PATH` starts with that folder
-/// still runs the device's own `hide`, from the helper root's `current`
-/// folder; neither the helper root nor the command folder holds a reparse
-/// point of the device's. Once the app's command is gone, the device's kit
-/// takes the name, and its `hide.cmd` answers in a plain ssh shell there.
+/// An earlier desktop app's `hide` holds the account's command folder first,
+/// its junction made by a standard user as that app made it. The device's
+/// kit leaves it, and a pane of the device whose `PATH` starts with that
+/// folder still runs the device's own `hide`, from the helper root's
+/// `current` folder; neither the helper root nor the command folder holds a
+/// reparse point of the device's. Once the app's command is gone, the
+/// device's kit takes the name, and its `hide.cmd` answers in a plain ssh
+/// shell there. The desktop app's command as its kit writes it now names its
+/// copy by a relative path, and it too answers in a plain ssh shell
+/// (with-hide/hide-private#596).
 #[test]
 #[ignore = "the runner's OpenSSH Server, its redirection guard and a key it takes; the windows wsl lane sets them up"]
 fn a_windows_device_reaches_its_programs_through_no_link_under_the_redirection_guard() {
@@ -957,8 +965,8 @@ fn a_windows_device_reaches_its_programs_through_no_link_under_the_redirection_g
     let cli = home.join(".local").join("bin");
     let root = hide_kit::layout::helper_root(&home);
 
-    // The desktop app's command, as its kit writes it into the account's
-    // command folder: the shim and a junction to the package's resources.
+    // An earlier desktop app's command, as its kit wrote it into the
+    // account's command folder: the shim and a junction to its resources.
     let resources = home.join("app").join("resources");
     std::fs::create_dir_all(&resources).unwrap();
     std::fs::write(resources.join("app.asar"), b"").unwrap();
@@ -969,7 +977,7 @@ fn a_windows_device_reaches_its_programs_through_no_link_under_the_redirection_g
     )
     .unwrap();
     std::fs::create_dir_all(&cli).unwrap();
-    std::fs::write(cli.join("hide.cmd"), APP_SHIM).unwrap();
+    std::fs::write(cli.join("hide.cmd"), EARLIER_APP_SHIM).unwrap();
     let app_junction = cli.join(".hide-kit");
     untrusted_junction(&app_junction, &resources);
 
@@ -1021,20 +1029,30 @@ fn a_windows_device_reaches_its_programs_through_no_link_under_the_redirection_g
     std::fs::remove_file(cli.join("hide.cmd")).unwrap();
     let report = kit_apply(&walk);
     assert_eq!(reparse_points(&cli), Vec::<PathBuf>::new(), "{report}");
-    let shell = Command::new(Path::new(OPENSSH).join("ssh.exe"))
-        .arg("-F")
-        .arg(server.local.join(".ssh").join("config"))
-        .args(["-o", "BatchMode=yes", "windows-device"])
-        .arg(format!("{} --version", cli.join("hide.cmd").display()))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(
-        shell.status.success(),
-        "the device's hide.cmd in a plain ssh shell: {}{}",
-        String::from_utf8_lossy(&shell.stdout),
-        String::from_utf8_lossy(&shell.stderr)
-    );
+    let plain_shell = |whose: &str| {
+        let shell = Command::new(Path::new(OPENSSH).join("ssh.exe"))
+            .arg("-F")
+            .arg(server.local.join(".ssh").join("config"))
+            .args(["-o", "BatchMode=yes", "windows-device"])
+            .arg(format!("{} --version", cli.join("hide.cmd").display()))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            shell.status.success(),
+            "{whose} hide.cmd in a plain ssh shell: {}{}",
+            String::from_utf8_lossy(&shell.stdout),
+            String::from_utf8_lossy(&shell.stderr)
+        );
+    };
+    plain_shell("the device's");
+
+    // The desktop app's command as its kit writes it now, on a PC whose
+    // command folder it holds.
+    std::fs::remove_file(cli.join("hide.cmd")).unwrap();
+    std::fs::write(cli.join("hide.cmd"), APP_SHIM).unwrap();
+    assert_eq!(reparse_points(&cli), Vec::<PathBuf>::new());
+    plain_shell("the desktop app's");
     walk.end();
 }
 
