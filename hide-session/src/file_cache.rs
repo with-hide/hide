@@ -76,11 +76,12 @@ fn settled(session: &ProjectSession) -> bool {
     }
 }
 
-/// Drops the kept files under `home` that the listing of `home` no longer
-/// names. Other homes' entries stay, so two listings of different homes do
-/// not evict each other's facts.
-pub(crate) fn retain(home: &Path, listed: &HashSet<PathBuf>) {
-    let gone = |path: &PathBuf| path.starts_with(home) && !listed.contains(path);
+/// Drops the kept files under `under` (a home, or one agent's session
+/// folder) that its listing no longer names. Entries elsewhere stay, so two
+/// listings of different homes, or of two agents' folders, do not evict
+/// each other's facts.
+pub(crate) fn retain(under: &Path, listed: &HashSet<PathBuf>) {
+    let gone = |path: &PathBuf| path.starts_with(under) && !listed.contains(path);
     if let Some(kept) = HEADERS.get() {
         lock(kept).retain(|path, _| !gone(path));
     }

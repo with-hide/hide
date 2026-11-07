@@ -6868,6 +6868,10 @@ pub struct StatusSnapshot {
     /// The latest 마무리 맡기기 presses, oldest first and bounded, so a 흘린
     /// 것 row reads its own (PRD project-panel-results B12, B13).
     pub stray_hand_offs: Vec<StrayHandOffSnapshot>,
+    /// The adds that named a request id (Add a project's importable list),
+    /// oldest first and bounded, each with its own outcome, so a row reads
+    /// its answer whatever event came after it (PRD device-add-project B25).
+    pub project_adds: Vec<ProjectAddReceiptSnapshot>,
     /// The operator's agent definition files that were left out, each with
     /// why (PRD engine-bundle-3-core-owns D-17, B24): Settings › Agents draws
     /// one dimmed line for each. `None` until the core has read them.
@@ -7032,6 +7036,30 @@ pub struct StrayHandOffSnapshot {
     pub request_id: String,
     pub checkout_id: String,
     pub state: &'static str,
+}
+
+/// One add's receipt: the folder it named on its machine and where it stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProjectAddReceiptSnapshot {
+    pub request_id: String,
+    pub device_id: String,
+    pub path: String,
+    #[serde(flatten)]
+    pub outcome: ProjectAddOutcome,
+}
+
+/// Where one add stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProjectAddOutcome {
+    Pending,
+    /// The folder's project is registered on its machine.
+    Added,
+    /// The registration was refused: the core's error kind and message.
+    Refused {
+        kind: String,
+        message: String,
+    },
 }
 
 /// One `browser_open` request's outcome: where the page opened, or why not.
@@ -7577,6 +7605,7 @@ impl Snapshot {
                 pane_focus_request: None,
                 browser_opens: Vec::new(),
                 stray_hand_offs: Vec::new(),
+                project_adds: Vec::new(),
                 agent_definitions: None,
                 server_discovery: ServerDiscoverySnapshot {
                     loading: true,

@@ -281,6 +281,19 @@ impl SessionCatalog {
         Ok(files)
     }
 
+    /// The folder one agent of [`FILE_AGENTS`] keeps its session files in,
+    /// when that agent has one here.
+    fn agent_store(&self, agent: Agent) -> Option<PathBuf> {
+        match agent {
+            Agent::Claude => Some(self.home.join(crate::CLAUDE_SESSIONS)),
+            Agent::Codex => Some(self.home.join(crate::CODEX_SESSIONS)),
+            Agent::Pi | Agent::Omp | Agent::Grok | Agent::Cursor => {
+                crate::native_file::root(&self.home, agent).ok()
+            }
+            Agent::OpenCode | Agent::Antigravity => None,
+        }
+    }
+
     /// The session files of one agent of [`FILE_AGENTS`], added to `files`.
     fn agent_files(
         &self,
@@ -289,33 +302,14 @@ impl SessionCatalog {
         visited: &mut usize,
     ) -> Result<(), SessionCatalogError> {
         let limit = SESSION_DISCOVERY_LIMIT;
-        let native = || crate::native_file::root(&self.home, agent).ok();
+        let Some(root) = self.agent_store(agent) else {
+            return Ok(());
+        };
         match agent {
-            Agent::Claude => collect_jsonl(
-                &self.home.join(crate::CLAUDE_SESSIONS),
-                agent,
-                2,
-                files,
-                visited,
-                limit,
-            ),
-            Agent::Codex => collect_jsonl(
-                &self.home.join(crate::CODEX_SESSIONS),
-                agent,
-                4,
-                files,
-                visited,
-                limit,
-            ),
-            Agent::Pi | Agent::Omp => native().map_or(Ok(()), |root| {
-                collect_jsonl(&root, agent, 1, files, visited, limit)
-            }),
-            Agent::Grok => {
-                native().map_or(Ok(()), |root| collect_grok(&root, files, visited, limit))
-            }
-            Agent::Cursor => native().map_or(Ok(()), |root| {
-                collect_jsonl(&root, agent, 2, files, visited, limit)
-            }),
+            Agent::Claude | Agent::Cursor => collect_jsonl(&root, agent, 2, files, visited, limit),
+            Agent::Codex => collect_jsonl(&root, agent, 4, files, visited, limit),
+            Agent::Pi | Agent::Omp => collect_jsonl(&root, agent, 1, files, visited, limit),
+            Agent::Grok => collect_grok(&root, files, visited, limit),
             Agent::OpenCode | Agent::Antigravity => Ok(()),
         }
     }
@@ -341,12 +335,15 @@ impl SessionCatalog {
     /// changed, read from the same walk as [`Self::project_sessions`] plus
     /// the stores that keep no file per session (OpenCode's database,
     /// Antigravity's index). Only a session file changed since then is
-    /// opened. Each agent is read on its own: one whose store cannot be
-    /// listed, or whose session files cannot be read, is a refusal beside
-    /// what the others found, and every agent not reached by `deadline` is
-    /// refused as late, so the call ends by then.
+    /// opened. Each agent is read on its own, under a budget of its own of
+    /// [`SESSION_DISCOVERY_LIMIT`] entries, so the whole search looks at no
+    /// more than that once per store: one whose store cannot be listed or
+    /// is past its budget, or whose session files cannot be read, is a
+    /// refusal beside what the others found, and every agent not reached
+    /// by `deadline` is refused as late, so the call ends by then. The kept
+    /// headers of each store listed whole are pruned to that listing, as a
+    /// project's listing prunes them, whatever another store did.
     pub fn worked_folders(&self, since_unix_ms: u64, deadline: Instant) -> WorkedFolders {
-        let mut visited = 0;
         let mut newest = std::collections::HashMap::<(Agent, PathBuf), u64>::new();
         let mut refusals = Vec::<SessionStoreRefusal>::new();
         let mut refuse = |agent: Agent, reason: String| {
@@ -356,22 +353,21 @@ impl SessionCatalog {
             }
         };
         let late = || Instant::now() >= deadline;
-        let mut listed = HashSet::new();
-        let mut whole = true;
         for agent in FILE_AGENTS {
             if late() {
                 refuse(agent, LATE.to_owned());
-                whole = false;
                 continue;
             }
             let mut files = Vec::new();
-            if let Err(error) = self.agent_files(agent, &mut files, &mut visited) {
+            if let Err(error) = self.agent_files(agent, &mut files, &mut 0) {
                 refuse(agent, error.to_string());
-                whole = false;
                 continue;
             }
+            if let Some(store) = self.agent_store(agent) {
+                let listed = files.iter().map(|(_, path)| path.clone()).collect();
+                file_cache::retain(&store, &listed);
+            }
             for (_, path) in files {
-                listed.insert(path.clone());
                 if late() {
                     refuse(agent, LATE.to_owned());
                     continue;
@@ -405,18 +401,13 @@ impl SessionCatalog {
                 }
             }
         }
-        // Kept headers of files gone from a whole listing are dropped, as
-        // after a project's listing.
-        if whole {
-            file_cache::retain(&self.home, &listed);
-        }
         let opencode = if late() {
             Err(LATE.to_owned())
         } else {
             crate::opencode::worked_directories(
                 &self.home,
                 since_unix_ms,
-                &mut visited,
+                &mut 0,
                 SESSION_DISCOVERY_LIMIT,
             )
             .unwrap_or_else(|error| Err(error.to_string()))
@@ -1134,11 +1125,42 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_store_past_its_budget_leaves_codex_its_own() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let beta = root.path().join("beta");
+        fs::create_dir_all(&beta).unwrap();
+        let claude = home.join(crate::CLAUDE_SESSIONS);
+        fs::create_dir_all(&claude).unwrap();
+        for index in 0..=SESSION_DISCOVERY_LIMIT {
+            fs::write(claude.join(format!("entry-{index}")), "").unwrap();
+        }
+        codex_session(&home, "codex-1", &beta);
+
+        let read = SessionCatalog::new(&home, "local").worked_folders(0, far_deadline());
+        let found = read
+            .folders
+            .iter()
+            .map(|folder| (folder.agent, folder.cwd.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![(Agent::Codex, beta)]);
+        let refused = read
+            .refusals
+            .iter()
+            .map(|refusal| refusal.agent)
+            .collect::<Vec<_>>();
+        assert_eq!(refused, vec![Agent::Claude]);
+    }
+
+    #[test]
     fn a_second_folder_search_keeps_no_header_of_a_session_file_that_left() {
         let root = tempdir().unwrap();
         let home = root.path().join("home");
         let beta = root.path().join("beta");
         fs::create_dir_all(&beta).unwrap();
+        // Claude's store can never be listed; Codex's is pruned all the same.
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::write(home.join(crate::CLAUDE_SESSIONS), "").unwrap();
         let first = codex_session(&home, "one", &beta);
         codex_session(&home, "two", &beta);
         let catalog = SessionCatalog::new(&home, "local");

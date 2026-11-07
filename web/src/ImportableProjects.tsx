@@ -4,12 +4,12 @@
 // time or all at once while the dialog stays open.
 //
 // Every add is the `create_workspace` a picked folder sends, named by a
-// request id of its own. A row lands when its root is registered on its
-// machine, and is refused only by the refusal that names its request id
-// (the core's `last_error` or hided's `path_refused`), so an add made at
-// the same time from another window or the CLI answers no row here. The
-// adds go one at a time, so a row refused stays with its reason to be
-// pressed again (B25).
+// request id of its own, and answered by its own receipt in the core
+// (`status.project_adds`): added, or refused with why, kept past any later
+// event. A refusal hided gives before the core sees the add names that id
+// too (`path_refused`). So an add made at the same time from another window
+// or the CLI answers no row here. The adds go one at a time, so a row
+// refused stays with its reason to be pressed again (B25).
 
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
@@ -19,7 +19,6 @@ import { Button } from "./components/ui/button";
 import { Status } from "./components/settings-rows";
 import { coreErrorText } from "./coreError";
 import { useInterfaceTranslation } from "./i18n/client";
-import { alreadyRegistered } from "./addProject";
 import { importRows, sourceIsApp, sourceName } from "./importProjects";
 import type { WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
@@ -70,24 +69,26 @@ export function ImportableProjects({
   }, [device, offline]);
 
   const rows = importRows(answer, after, device, registrations).filter((row) => !added.has(row.path));
-  const lastError = useShellStore((s) => s.rest?.status?.last_error ?? null);
-  const coreError = sent && lastError?.request_id === sent.request ? lastError : null;
-  const landed = sent !== null && alreadyRegistered(sent.path, device, registrations);
+  const receipt = useShellStore((s) => (sent ? s.rest?.status?.project_adds?.find((row) => row.request_id === sent.request) : undefined));
   const refused = sent && pathRefusal?.request_id === sent.request ? pathRefusal.reason : null;
 
-  // The add on its way is answered: landed (its row leaves through the registrations), or refused with why.
+  // The add on its way is answered by its receipt: added (its row leaves through the registrations), or refused with why.
   useEffect(() => {
     if (!sent) return;
-    if (landed) {
+    if (receipt?.state === "added") {
       setAdded((previous) => new Set(previous).add(sent.path));
       setSent(null);
       return;
     }
-    const reason = refused ? refusalText(refused, t) : coreError ? coreErrorText(coreError, t, "coreError.project.addFailed") : null;
+    const reason = refused
+      ? refusalText(refused, t)
+      : receipt?.state === "refused"
+        ? coreErrorText(receipt, t, "coreError.project.addFailed")
+        : null;
     if (reason === null) return;
     setFailed((previous) => ({ ...previous, [sent.path]: reason }));
     setSent(null);
-  }, [landed, refused, coreError]);
+  }, [receipt?.state, refused]);
 
   // The next row waiting is sent once the one before it is answered.
   useEffect(() => {

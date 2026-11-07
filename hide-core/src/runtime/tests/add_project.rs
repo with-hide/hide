@@ -133,11 +133,20 @@ fn a_new_project_on_a_device_is_refused_for_a_taken_name_or_a_parent_outside_its
     assert!(device_paths(&runtime).is_empty());
 }
 
-/// B25: an add sent with a request id is refused by that id and no other,
-/// so Add a project's importable list reads each row's answer as its own;
-/// an add without one is refused as before, naming no request.
+fn add_receipt(runtime: &Runtime, request_id: &str) -> Option<crate::model::ProjectAddOutcome> {
+    runtime
+        .snapshot
+        .status
+        .project_adds
+        .iter()
+        .find(|receipt| receipt.request_id == request_id)
+        .map(|receipt| receipt.outcome.clone())
+}
+
+/// B25: an add sent with a request id keeps its own receipt, which a later
+/// event of any kind leaves as it is; a registered one reads as added.
 #[test]
-fn a_refused_add_names_the_request_that_sent_it() {
+fn an_add_keeps_its_own_receipt_past_the_next_event() {
     let (_outer, home) = device_home();
     std::fs::create_dir_all(home.join("projects/app")).unwrap();
     let mut runtime = runtime();
@@ -148,25 +157,75 @@ fn a_refused_add_names_the_request_that_sent_it() {
         "create_workspace",
         serde_json::json!({"device_id": DEVICE, "path": gone, "label": "gone", "initialize_git": false, "request_id": "import:1"}),
     );
-    let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.request_id.as_deref(), Some("import:1"));
-
     let app = hide_platform::path::to_wire_lossy(&home.join("projects/app"));
     dispatch(
         &mut runtime,
         "create_workspace",
         serde_json::json!({"device_id": DEVICE, "path": app, "label": "app", "initialize_git": false, "request_id": "import:2"}),
     );
-    assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(device_paths(&runtime), [app]);
-
+    // An unrelated event clears `last_error`, never a receipt.
     dispatch(
         &mut runtime,
-        "create_workspace",
-        serde_json::json!({"device_id": DEVICE, "path": gone, "label": "gone", "initialize_git": false}),
+        "add_project_folder_set",
+        serde_json::json!({"device_id": DEVICE, "path": "C:/Users/me"}),
     );
-    let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.request_id, None);
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert!(
+        matches!(
+            add_receipt(&runtime, "import:1"),
+            Some(crate::model::ProjectAddOutcome::Refused { kind, .. }) if kind == "workspace.create_refused.not_found"
+        ),
+        "{:?}",
+        add_receipt(&runtime, "import:1")
+    );
+    assert_eq!(
+        add_receipt(&runtime, "import:2"),
+        Some(crate::model::ProjectAddOutcome::Added)
+    );
+    assert_eq!(device_paths(&runtime), [app]);
+    // The receipts reach the shell on the wire.
+    let wire: serde_json::Value = serde_json::from_slice(
+        &crate::runtime::serialize_snapshot_delta(&runtime.snapshot_delta_payload(u64::MAX))
+            .unwrap(),
+    )
+    .unwrap();
+    let adds = &wire["rest"]["status"]["project_adds"];
+    assert_eq!(adds[0]["request_id"], "import:1");
+    assert_eq!(adds[0]["state"], "refused");
+    assert_eq!(adds[0]["kind"], "workspace.create_refused.not_found");
+    assert_eq!(adds[1]["state"], "added");
+}
+
+/// B25: two adds of one folder waiting on the same registration each get
+/// its refusal.
+#[test]
+fn two_adds_of_one_folder_each_receive_its_refusal() {
+    let (_outer, home) = device_home();
+    let mut runtime = runtime();
+    with_device(&mut runtime, &home);
+    let gone = hide_platform::path::to_wire_lossy(&home.join("projects/gone"));
+    assert!(runtime.await_add("window-a", DEVICE, &gone));
+    assert!(runtime.await_add("window-b", DEVICE, &gone));
+    runtime.set_error(
+        "workspace.create_refused.not_found",
+        "gone is not there",
+        false,
+    );
+    runtime.settle_project_open(
+        DEVICE,
+        &gone,
+        Err("workspace.create_refused.not_found"),
+        super::super::project_open::Forward::No,
+    );
+    for id in ["window-a", "window-b"] {
+        assert_eq!(
+            add_receipt(&runtime, id),
+            Some(crate::model::ProjectAddOutcome::Refused {
+                kind: "workspace.create_refused.not_found".to_owned(),
+                message: "gone is not there".to_owned(),
+            })
+        );
+    }
 }
 
 /// D-04, B4: the folder list's last folder is kept per machine, this one's
