@@ -3242,10 +3242,14 @@ mod tests {
         assert_eq!(failure.code, INTERRUPTED);
         assert!(failure.maybe_typed, "it may have been typed");
         assert!(letter().bells_spent());
+        // Its last turn ended before the first bell. The store stamps the
+        // lost bell with its own clock, a few milliseconds after `start` on
+        // a fast system, and a turn end after that stamp would start the
+        // record wait again.
         crate::runtime::delivery::tests::observe_turn_ended(
             &mut bell.runtime.lock().unwrap(),
             "recipient",
-            start + 10,
+            start - 10,
         );
         let judged = failure.at_unix_ms + RECORD_WAIT_MS;
         bell.runtime.lock().unwrap().drive_spent_bells(judged);
