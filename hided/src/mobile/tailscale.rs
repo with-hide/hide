@@ -77,6 +77,14 @@ impl CommandFailure {
 }
 
 async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
+    run_within(program, args, COMMAND_TIMEOUT).await
+}
+
+async fn run_within(
+    program: &Path,
+    args: &[&str],
+    limit: Duration,
+) -> Result<Vec<u8>, CommandFailure> {
     let command = format!("tailscale {}", args.join(" "));
     let child = tokio::process::Command::new(program)
         .args(args)
@@ -100,7 +108,7 @@ async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
             stderr: error.to_string(),
             exit_code: None,
         })?;
-    match tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output()).await {
+    match tokio::time::timeout(limit, child.wait_with_output()).await {
         Ok(Ok(output)) if output.status.success() => Ok(output.stdout),
         Ok(Ok(output)) => Err(CommandFailure {
             command,
@@ -114,7 +122,7 @@ async fn run(program: &Path, args: &[&str]) -> Result<Vec<u8>, CommandFailure> {
         }),
         Err(_) => Err(CommandFailure {
             command,
-            stderr: format!("timed out after {}s", COMMAND_TIMEOUT.as_secs()),
+            stderr: format!("timed out after {}s", limit.as_secs()),
             exit_code: None,
         }),
     }
@@ -171,7 +179,14 @@ pub fn parse_status(bytes: &[u8]) -> Result<Status, String> {
 }
 
 pub async fn status(program: &Path) -> Result<Status, CommandFailure> {
-    let bytes = run(program, &["status", "--json"]).await?;
+    status_within(program, COMMAND_TIMEOUT).await
+}
+
+/// `status` with its own deadline, for a caller that is not about the
+/// product's: a test of how the command is started must not fail because a
+/// loaded machine took longer than `COMMAND_TIMEOUT` to start a shell script.
+pub async fn status_within(program: &Path, limit: Duration) -> Result<Status, CommandFailure> {
+    let bytes = run_within(program, &["status", "--json"], limit).await?;
     parse_status(&bytes).map_err(|message| CommandFailure {
         command: "tailscale status --json".to_owned(),
         stderr: format!("unreadable answer: {message}"),

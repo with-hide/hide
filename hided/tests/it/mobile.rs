@@ -100,7 +100,12 @@ async fn renderer(running: &hided::RunningDaemon) -> Socket {
     socket
 }
 
-/// Reads frames until a `mobile` frame satisfies `accept`.
+/// Reads frames until a `mobile` frame satisfies `accept`. The frames queue
+/// on the socket in the order they were published, so a frame that matches
+/// may be an old one: a state that was already true before the step being
+/// waited on (no phones before one was paired) matches a frame published
+/// before that step. Wait first for a frame that only the step before it can
+/// have made, then for the one this step makes.
 async fn mobile_frame(socket: &mut Socket, accept: impl Fn(&Value) -> bool) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -196,7 +201,11 @@ async fn the_app_executable_is_run_as_the_cli() {
     let dir = tempfile::tempdir().unwrap();
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
-    let status = hided::mobile::tailscale::status(&fake.bin)
+    // The test is about how the command is started, not about the product's
+    // 15 s command deadline, which a loaded machine has run past while a
+    // shell script started (with-hide/hide-private#524); a hung start is
+    // ended by nextest's slow-timeout instead.
+    let status = hided::mobile::tailscale::status_within(&fake.bin, Duration::from_secs(600))
         .await
         .expect("tailscale status runs as the CLI");
     assert!(status.logged_in);
@@ -913,7 +922,26 @@ async fn paired_phone(
     let credential = answer["credential"].as_str().unwrap().to_owned();
     let (socket, hello) = phone(running.port, &credential).await;
     assert_eq!(hello["type"], "hello");
+    // The frames queued before the pairing list no phone; reading up to the
+    // one that lists this phone leaves a later "no phones" frame to a revoke.
+    mobile_frame(shell, |frame| {
+        frame["phones"]
+            .as_array()
+            .is_some_and(|phones| phones.iter().any(|phone| phone["id"] == phone_id.as_str()))
+    })
+    .await;
     (socket, phone_id, credential)
+}
+
+/// Revokes the phone in Settings and returns once the shell's list no longer
+/// has it. The phone was listed first (`paired_phone`), so the empty list
+/// this waits for is the revoke's own.
+async fn revoke_from_settings(shell: &mut Socket, phone_id: &str) {
+    event(shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    mobile_frame(shell, |frame| {
+        frame["phones"].as_array().is_some_and(Vec::is_empty)
+    })
+    .await;
 }
 
 async fn send_phone(socket: &mut Socket, message: Value) {
@@ -986,11 +1014,7 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
         .send(Message::Text(start("stranger-1").to_string().into()))
         .await;
     // A phone revoked after it connected is refused before anything is dispatched.
-    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
-    mobile_frame(&mut shell, |frame| {
-        frame["phones"].as_array().is_some_and(Vec::is_empty)
-    })
-    .await;
+    revoke_from_settings(&mut shell, &phone_id).await;
     let answer = running
         .mobile
         .start_agent(&phone_id, &start("revoked-1"))
@@ -1058,11 +1082,7 @@ async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
         json!({"type": "pong", "id": 42})
     );
     // A phone no longer let in is never answered with a pong.
-    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
-    mobile_frame(&mut shell, |frame| {
-        frame["phones"].as_array().is_some_and(Vec::is_empty)
-    })
-    .await;
+    revoke_from_settings(&mut shell, &phone_id).await;
     let _ = socket
         .send(Message::Text(
             json!({"type": "ping", "id": 43}).to_string().into(),
