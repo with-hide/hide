@@ -1199,6 +1199,20 @@ pub(crate) fn write_atomically(
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
 }
 
+/// A folder the test owns, short whatever `TMPDIR` is: a socket made below it
+/// must fit a Unix socket path (104 bytes on macOS), which a long `TMPDIR`
+/// takes (docs/TESTING.md, Writing a Rust test, rule 7). Windows names a pipe
+/// and has no such limit.
+#[cfg(test)]
+pub(crate) fn short_tempdir() -> tempfile::TempDir {
+    let mut folder = tempfile::Builder::new();
+    folder.prefix("hk");
+    #[cfg(unix)]
+    return folder.tempdir_in("/tmp").unwrap();
+    #[cfg(not(unix))]
+    return folder.tempdir().unwrap();
+}
+
 // The suite drives the kit against a stand-in daemon on a Unix socket and with
 // shell scripts for the programs it installs, so it runs where those do; the
 // Windows kit is tested with the device helper that installs it there.

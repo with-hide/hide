@@ -41,10 +41,18 @@ pub struct Home {
 }
 
 impl Home {
+    /// Short whatever `TMPDIR` is: a pane's socket sits below this folder, a
+    /// Unix socket path holds 104 bytes on macOS, and a runner's own `TMPDIR`
+    /// or a deep one takes the rest (docs/TESTING.md, Writing a Rust test,
+    /// rule 7). Windows names a pipe and has no such limit.
     pub fn new() -> Self {
-        Self {
-            dir: tempfile::Builder::new().prefix("hh").tempdir().unwrap(),
-        }
+        let mut home = tempfile::Builder::new();
+        home.prefix("hh");
+        #[cfg(unix)]
+        let home = home.tempdir_in("/tmp");
+        #[cfg(not(unix))]
+        let home = home.tempdir();
+        Self { dir: home.unwrap() }
     }
 
     pub fn path(&self) -> &Path {

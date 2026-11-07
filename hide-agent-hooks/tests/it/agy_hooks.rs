@@ -66,7 +66,15 @@ impl Machine {
     }
 
     fn with_hide(hide: &str) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Short whatever `TMPDIR` is: the payload below carries paths from
+        // here and must fit PIPE_BUF, and the stand-in daemon's socket is below it.
+        // Windows has no `/tmp` and no such limit.
+        let mut folder = tempfile::Builder::new();
+        folder.prefix("ah");
+        #[cfg(unix)]
+        let dir = folder.tempdir_in("/tmp").unwrap();
+        #[cfg(not(unix))]
+        let dir = folder.tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let home = root.join("home");
         let bin = root.join("bin");
