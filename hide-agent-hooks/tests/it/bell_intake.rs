@@ -160,9 +160,11 @@ fn a_prompt_that_only_starts_like_the_bell_is_another_prompt() {
     assert!(!asked[0].contains(LINE_DIGEST), "{asked:?}");
 }
 
-/// A stand-in `hide` whose letter confirmation fails while
-/// `FAKE_CONFIRM_FAILS` is set, as a `hide` run too late for the hook's
-/// deadline does, and is taken otherwise.
+/// A stand-in `hide` whose letter confirmation fails while the file
+/// `<FAKE_HIDE_LOG>.late` exists, as a confirmation that reaches the core too
+/// late for the hook's deadline does, and is taken otherwise. It is a file,
+/// not a variable of the hook, because the stand-in daemon runs it, not the
+/// hook.
 fn late_confirm_hide() -> String {
     format!(
         r#"#!/bin/sh
@@ -170,7 +172,7 @@ echo "$@" >> "$FAKE_HIDE_LOG"
 case "$*" in
   *"--prompt-digest {LINE_DIGEST} "*) echo '{{"ok":true,"result":{{"context":"LETTER-BODY","ids":["letter-1"],"remaining":0}}}}' ;;
   "inbox --confirm letter-1")
-    if [ -n "$FAKE_CONFIRM_FAILS" ]; then echo '{{"ok":false,"reason":"request_timeout"}}'
+    if [ -e "$FAKE_HIDE_LOG.late" ]; then echo '{{"ok":false,"reason":"request_timeout"}}'
     else echo '{{"ok":true,"result":{{"confirmed":["letter-1"]}}}}'; fi ;;
   *) echo '{{"ok":false,"reason":"unexpected"}}' ;;
 esac
@@ -185,16 +187,14 @@ esac
 #[test]
 fn a_confirmation_the_prompt_hook_missed_is_sent_by_its_turn_end_once() {
     let kit = Kit::answering(&late_confirm_hide());
+    let late = kit.log().with_extension("log.late");
+    std::fs::write(&late, "").unwrap();
     let pane = [("HIDE_PANE_ID", "w1:p1")];
     let prompt = serde_json::json!({
         "session_id": "fixture-session", "cwd": "/tmp/fixture-project",
         "hook_event_name": "UserPromptSubmit", "prompt": LINE,
     });
-    let stdout = kit.hook(
-        "UserPromptSubmit",
-        &prompt,
-        &[pane[0], ("FAKE_CONFIRM_FAILS", "1")],
-    );
+    let stdout = kit.hook("UserPromptSubmit", &prompt, &pane);
     assert!(stdout.contains("LETTER-BODY"), "{stdout}");
     let confirms = || {
         kit.asked()
@@ -203,6 +203,7 @@ fn a_confirmation_the_prompt_hook_missed_is_sent_by_its_turn_end_once() {
             .count()
     };
     assert_eq!(confirms(), 1, "{:?}", kit.asked());
+    std::fs::remove_file(&late).unwrap();
     let stop = serde_json::json!({
         "session_id": "fixture-session", "cwd": "/tmp/fixture-project",
         "hook_event_name": "Stop", "stop_hook_active": false,

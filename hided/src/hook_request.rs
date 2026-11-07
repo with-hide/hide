@@ -45,7 +45,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
             .as_ref()
             .is_none_or(|token| token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
         && match &request.command {
-            HookCommand::WorkspaceInfo {} => true,
+            HookCommand::WorkspaceInfo {} | HookCommand::Registration {} => true,
             HookCommand::Memory {
                 event,
                 runtime,
@@ -67,6 +67,9 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                     // A tool event's ask names its session.
                     && (*point == hide_node_link::panes::PullPoint::Prompt || session.is_some())
             }
+            HookCommand::LetterConfirm { ids } => {
+                !ids.is_empty() && hide_agent_hooks::delivery::valid_letter_ids(ids)
+            }
         }
 }
 
@@ -78,6 +81,8 @@ pub(crate) fn answer(
 ) -> Value {
     let result = match &request.command {
         HookCommand::WorkspaceInfo {} => workspace_info(core, cap, desktop),
+        // The caller's proof admitted it to a registered checkout.
+        HookCommand::Registration {} => Ok(json!({})),
         HookCommand::LetterPull {
             prompt_digest,
             session,
@@ -106,6 +111,12 @@ pub(crate) fn answer(
             }
             result
         }),
+        HookCommand::LetterConfirm { ids } => delivery(
+            core,
+            cap,
+            hide_core::delivery::Command::Confirm { ids: ids.clone() },
+            None,
+        ),
         HookCommand::Status { report } => status(core, cap, report),
         HookCommand::Memory {
             event,
@@ -281,6 +292,33 @@ mod tests {
 
     fn ask(event: &str) -> hide_core::memory_hook::Ask {
         memory_ask(event, "claude", "s-1", "").unwrap()
+    }
+
+    /// A hook's confirmation names at most one bundle of letters, each an id
+    /// `hide inbox --confirm` would take; an empty list, an empty id, one
+    /// that reads as a flag or one with a line break is refused before the
+    /// core sees it. Whose letters they are is the core's to decide
+    /// (`hide_core::delivery`), as for the command.
+    #[test]
+    fn a_letter_confirmation_names_letters_the_inbox_would_take() {
+        let request = |ids: Vec<String>| HookRequest {
+            request_id: "r-1".into(),
+            command: HookCommand::LetterConfirm { ids },
+            token: None,
+        };
+        let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        assert!(valid(&request(ids(&["letter-1", "letter-2"]))));
+        for refused in [
+            ids(&[]),
+            ids(&[""]),
+            ids(&["--all"]),
+            ids(&["letter\n1"]),
+            (0..=hide_agent_hooks::delivery::BUNDLE_LETTERS)
+                .map(|n| format!("letter-{n}"))
+                .collect(),
+        ] {
+            assert!(!valid(&request(refused.clone())), "{refused:?}");
+        }
     }
 
     /// B1, D-31: a session start with no Memory still gets the global

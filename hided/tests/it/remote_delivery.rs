@@ -56,6 +56,22 @@ fn stop(binary: &std::path::Path, session: &str) -> String {
 /// A prompt the operator typed.
 const OPERATOR_PROMPT: &str = "please run the tests";
 
+/// A hook's confirmation of the letter `argv[2]`, sent as the hook sends it
+/// (`hide_agent_hooks::hook_request`) to the daemon whose socket record is
+/// `argv[1]`, from the pane it runs in; prints the daemon's answer line.
+const CONFIRM_FROM_PANE: &str = r#"
+import json, os, secrets, socket, sys
+path = open(sys.argv[1]).read().strip()
+stream = socket.socket(socket.AF_UNIX)
+stream.connect(path)
+request = {"pane_id": os.environ.get("HIDE_PANE_ID", ""), "nonce": secrets.token_hex(16),
+    "one_shot": True, "install": os.environ.get("HIDE_INSTALL") or None,
+    "hook": {"request_id": "confirm-1", "token": None,
+        "command": {"kind": "letter_confirm", "ids": [sys.argv[2]]}}}
+stream.sendall((json.dumps(request) + "\n").encode())
+print(stream.makefile().readline().strip())
+"#;
+
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pending() -> Result<()>
@@ -108,6 +124,35 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
                 .iter()
                 .any(|letter| letter.id == first_id && letter.state == State::Pending),
             "manual remote inbox changed delivery state"
+        );
+        // A letter's confirmation is a hook request on the daemon's own
+        // socket, which the core takes only from the letter's recipient
+        // (with-hide/hide-private#663): the sender's pane, proved by that
+        // socket, is refused, and the letter stays pending.
+        let record = hide_agent_hooks::hook_request::bootstrap_socket_record(&fixture.state);
+        let refused = fixture.local.run_in_pane(&format!(
+            "python3 -c {} {} {}",
+            quote(CONFIRM_FROM_PANE),
+            quote(&record),
+            quote(&first_id)
+        ))?;
+        let refused: Value = serde_json::from_str(refused.stdout.trim()).with_context(|| {
+            format!(
+                "the sender's confirmation: {} {}",
+                refused.stdout, refused.stderr
+            )
+        })?;
+        ensure!(
+            refused["ok"] == false && refused["reason"] == "recipient_required",
+            "the sender's pane confirmed the letter it sent: {refused}"
+        );
+        ensure!(
+            fixture
+                .ledger()?
+                .letters
+                .iter()
+                .any(|letter| letter.id == first_id && letter.state == State::Pending),
+            "a refused confirmation changed delivery state"
         );
         let bell = fixture.rung(&first_id)?;
         let delivered =

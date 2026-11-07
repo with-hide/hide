@@ -340,10 +340,21 @@ try {
       ? output("pwsh", ["-NoProfile", "-Command", "hide status --json"], shellEnv)
       : output("/bin/sh", ["-c", "hide status --json"], shellEnv);
     if (JSON.parse(answer).running !== true) throw new Error(`installed command answered ${answer}`);
-    const destination = process.platform === "win32" ? path.join(localBin, ".hide-kit") : command;
-    const expected = process.platform === "win32" ? resources : bundled("hide");
-    // A Windows junction can resolve to the long spelling while TEMP keeps
-    // its 8.3 spelling. Compare the objects, not equivalent path strings.
+    let destination = command;
+    let expected = bundled("hide");
+    if (process.platform === "win32") {
+      // The shim names the runtime copy's folder relative to its own and no
+      // junction sits beside it, since an ssh session refuses a junction no
+      // administrator made (with-hide/hide-private#596).
+      const junction = path.join(localBin, ".hide-kit");
+      if (fs.lstatSync(junction, { throwIfNoEntry: false })) throw new Error(`${junction} is still there`);
+      const named = /"%~dp0([^"]*)\\hide\.exe"/.exec(fs.readFileSync(command, "latin1"))?.[1];
+      if (!named) throw new Error(`${command} names no hide.exe`);
+      destination = path.join(localBin, named);
+      expected = resources;
+    }
+    // TEMP can keep its 8.3 spelling where the shim's way reads the long
+    // one. Compare the objects, not equivalent path strings.
     const actualId = fs.statSync(destination, { bigint: true });
     const expectedId = fs.statSync(expected, { bigint: true });
     if (actualId.dev !== expectedId.dev || actualId.ino !== expectedId.ino) {

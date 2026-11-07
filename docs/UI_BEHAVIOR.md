@@ -1851,6 +1851,7 @@ Core owner: `hide-core/src/runtime/home.rs`, `hide-host/src/home.rs` (see ARCHIT
 
 Each device has one Home, `~/hide` in that account's home directory, for work that belongs to no project or to several.
 Nothing is made on a device until its Home is first used: the first agent or tab started there makes `~/hide` with one link per project registered on that device and Hide's `AGENTS.md` with a `CLAUDE.md` link to it, and a device whose Home was never used has no `~/hide`.
+On Windows Home holds no link: its `AGENTS.md` names each project and its folder, and an agent started there is given those folders as it is on every system.
 Once a device has a Home, registering a project there adds its link and removing the registration removes only that link, never the project's folder; two projects with one folder name get distinct link names.
 A link whose project folder moved away is dropped at the next sync with nothing on screen, only a diagnostic line.
 A `~/hide` that Hide did not make is left untouched, and the start that wanted it says so where it was asked for, in the start panel, with what to do.

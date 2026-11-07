@@ -1,12 +1,12 @@
 //! What every `PreToolUse` guard shares (`hide_agent_hooks::pre_tool`), run
 //! as an agent runs it: the compiled helper with a runtime's `PreToolUse`
-//! payload on stdin, beside a stand-in `hide` that answers `workspace
-//! bootstrap` the way the daemon does (registered, refused, not running, or
-//! not answering) and records every call, and with a stand-in daemon that
-//! answers the hook's own requests from the same table. The opener guard is the guard that
-//! asks the daemon, so its call drives these; what they prove is what the
-//! agent observes: the call is refused, or nothing is printed and the call
-//! runs.
+//! payload on stdin, and a stand-in daemon that answers the hook's own
+//! requests from a stand-in `hide`'s table: whether the pane sits in a
+//! registered checkout the way the daemon does (registered, refused, not
+//! running, or not answering), recording every request as the `hide` command
+//! that sends it. The opener guard is the guard that asks the daemon, so its
+//! call drives these; what they prove is what the agent observes: the call is
+//! refused, or nothing is printed and the call runs.
 
 #![cfg(unix)]
 
@@ -23,8 +23,9 @@ use crate::stand_ins;
 
 pub(crate) const PANE: &str = "w1:p2";
 
-/// The stand-in `hide`: it answers `workspace bootstrap` the way the file
-/// `mode` beside the test's HOME says, and records every call there.
+/// The stand-in `hide` the stand-in daemon answers with: it answers
+/// `workspace bootstrap` the way the file `mode` beside the test's HOME says,
+/// and records every request there.
 const FAKE_HIDE: &str = r#"#!/bin/sh
 [ "$1" = --help ] && exit 0
 fixture="${HOME%/*}"
@@ -47,12 +48,11 @@ if [ "$1 $2" = "inbox --hook" ] && [ "$mode" != letters ] && [ "$mode" != letter
 fi
 case "$mode" in
   registered) echo '{"ok":true,"reference":"/x"}' ;;
-  unregistered) echo checkout_not_registered >&2; exit 2 ;;
-  down) echo hide_unavailable >&2; exit 2 ;;
+  unregistered) echo '{"ok":false,"reason":"checkout_not_registered"}' ;;
   mute) exit 2 ;;
-  bridge) echo bridge_unavailable >&2; exit 2 ;;
-  later) echo a_reason_a_later_build_adds >&2; exit 2 ;;
-  slow) echo $$ > "$fixture/cli-pid"; exec /bin/sleep 30 ;;
+  bridge) echo '{"ok":false,"reason":"bridge_unavailable"}' ;;
+  later) echo '{"ok":false,"reason":"a_reason_a_later_build_adds"}' ;;
+  slow) exec /bin/sleep 30 ;;
   letters-once|letters-confirm-fails)
     case "$*" in
       "inbox --hook"*)
@@ -111,7 +111,7 @@ pub(crate) struct Run {
 }
 
 impl Machine {
-    pub(crate) fn new(daemon: &str) -> Self {
+    pub(crate) fn new(mode: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let home = root.join("home");
@@ -124,8 +124,12 @@ impl Machine {
         let hook = bin.join("hide-agent-hooks");
         stand_ins::place(programs::hook(), &hook);
         stand_ins::program(&bin.join("hide"), FAKE_HIDE);
-        std::fs::write(root.join("mode"), daemon).unwrap();
+        std::fs::write(root.join("mode"), mode).unwrap();
         let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
+        // A daemon that is not running published no socket.
+        if mode == "down" {
+            daemon.withdraw();
+        }
         // The guardrails policy the core writes at its start: no protection on.
         let policy = home.join(".hide/agent-hooks/guardrails.json");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
@@ -216,7 +220,8 @@ impl Machine {
         }
     }
 
-    /// The calls the guard made of `hide`.
+    /// The requests the hook sent the daemon, as the `hide` commands that
+    /// send them.
     pub(crate) fn calls(&self) -> Vec<String> {
         std::fs::read_to_string(self.root.join("hide-calls"))
             .unwrap_or_default()
@@ -303,8 +308,15 @@ fn questions_without_native_identity_or_from_another_runtime_never_query() {
 #[test]
 fn a_daemon_that_cannot_be_asked_lets_the_call_run_and_leaves_one_diagnostic() {
     // A daemon that is down, mute, a device bridge that is gone and a reason this
-    // build does not know are all "could not ask", never "not Hide's".
-    for daemon in ["down", "mute", "bridge", "later"] {
+    // build does not know are all "could not ask", never "not Hide's"; the
+    // diagnostic names the step the request stopped at, and a refusal the
+    // hook cannot read as "not Hide's" is the daemon's.
+    for (daemon, cause) in [
+        ("down", "unavailable"),
+        ("mute", "answer"),
+        ("bridge", "daemon"),
+        ("later", "daemon"),
+    ] {
         let machine = Machine::new(daemon);
         let first = machine.run("claude-code", &machine.payload(OPENER), Some(PANE), &[]);
         assert!(first.status_ok, "B6: the hook does not fail the call");
@@ -320,7 +332,7 @@ fn a_daemon_that_cannot_be_asked_lets_the_call_run_and_leaves_one_diagnostic() {
         let line: serde_json::Value = serde_json::from_str(log.trim()).unwrap();
         assert_eq!(line["kind"], "daemon.unreachable", "{daemon}");
         assert_eq!(line["runtime"], "claude-code");
-        assert_eq!(line["cause"], "daemon");
+        assert_eq!(line["cause"], cause, "{daemon}");
     }
 }
 
@@ -331,7 +343,7 @@ fn a_daemon_that_does_not_answer_in_time_lets_the_call_run() {
     assert!(run.status_ok);
     assert_eq!(run.stdout, "");
     assert!(
-        machine.guard_log().contains("\"cause\":\"deadline\""),
+        machine.guard_log().contains("\"cause\":\"timeout\""),
         "{}",
         machine.guard_log()
     );
