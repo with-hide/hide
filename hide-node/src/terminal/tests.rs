@@ -2506,6 +2506,54 @@ fn an_earlier_holders_failed_write_does_not_count_against_the_next() {
     assert_eq!(harness.service.writes_settled("w1:p1", WAIT), Ok(()));
 }
 
+/// A pane no screen holds is not attached by its holder's renewal: a
+/// session opened only for the engine's input is retired with the earlier
+/// holder, nothing opens for the new one, and the next input attaches the
+/// pane for itself alone, reading released throughout.
+#[test]
+fn a_renewal_leaves_a_pane_no_screen_holds_released() {
+    let harness = harness(RetryPolicy::Automatic);
+    let _first = harness.controlling("w1:p1");
+    harness.service.control(TerminalControl::Release {
+        pane: "w1:p1".into(),
+        message: "detached".into(),
+    });
+    harness.state("w1:p1", "released");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"sleep\r".to_vec()), Typist::Sleeper)
+        .unwrap();
+    let let_go = |opened: &Opened| loop {
+        if let Err(error) = opened.input.recv_timeout(WAIT) {
+            assert_eq!(error, std::sync::mpsc::RecvTimeoutError::Disconnected);
+            break;
+        }
+    };
+    let earlier = harness.opened();
+    assert_eq!(input_bytes(&earlier, b"sleep\r".len()), b"sleep\r");
+    harness.service.holder_replaced("w1:p1");
+    // The earlier holder's session is let go, by the renewal or by the end
+    // of its input, whichever came first.
+    let_go(&earlier);
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()), Typist::Sleeper)
+        .unwrap();
+    let next = harness.opened();
+    assert_eq!(input_bytes(&next, b"resume\r".len()), b"resume\r");
+    let_go(&next);
+    let told: Vec<_> = harness
+        .reports
+        .try_iter()
+        .filter_map(|report| match report {
+            TerminalReport::State { pane, state } if pane == "w1:p1" => Some(state.state),
+            _ => None,
+        })
+        .collect();
+    assert!(told.iter().all(|state| state == "released"), "{told:?}");
+    assert!(harness.opened.try_recv().is_err(), "only the inputs opened");
+}
+
 /// The core's own engine typing a command is not the operator typing: no
 /// key of it is reported, so the first report is the operator's own key.
 #[test]

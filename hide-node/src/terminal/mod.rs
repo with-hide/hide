@@ -509,10 +509,26 @@ impl Service {
     /// of the earlier holder, current or still opening, is
     /// retired or never installed, its writer's late end lands in the state
     /// it was counted in, which is gone, and no writer of the new holder is
-    /// counted before the state it belongs to exists.
+    /// counted before the state it belongs to exists. A pane no screen holds
+    /// is not attached: one attached only for the engine's input is released
+    /// now, its session and any opening one retired as a release retires
+    /// them, and a released one stays so, until the next input attaches it
+    /// to the new holder (`Inner::attach_for_input`).
     pub(crate) fn holder_replaced(&self, pane: &str) {
         self.shared.run(|inner, shared| {
             inner.holder_input.remove(pane);
+            let entry = inner.panes.get(pane);
+            let for_input = entry.and_then(|entry| entry.release_after_input.clone());
+            let released = entry.is_some_and(|entry| {
+                entry.session.is_none() && matches!(entry.lifecycle.state, "released" | "idle")
+            });
+            if let Some(message) = for_input {
+                inner.release(pane, message);
+                return;
+            }
+            if released {
+                return;
+            }
             inner.control(
                 shared,
                 TerminalControl::Attach {
