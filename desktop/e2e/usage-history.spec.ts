@@ -6,6 +6,7 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import { startFixture } from "../../web/e2e/engine-fixture";
 import { usageShim } from "../../web/e2e/usage-fixture";
 import { connectHome, fitWindow, isolate, launchShell, screenshot, test } from "./fixture";
+import { finishNative } from "./native-teardown";
 
 test("native usage history preserves totals, hover geometry and the Overview filter", async () => {
   // Two shells, not agents: the usage shim stands in for `claude` on the daemon's PATH, where an agent
@@ -101,11 +102,10 @@ test("native usage history preserves totals, hover geometry and the Overview fil
       }
     }
   } catch (error) { failures.push(error); }
-  finally {
-    try { await app?.close(); } catch (error) { failures.push(error); }
-    try { run.cleanup(); } catch (error) { failures.push(error); }
-    try { fixture.stop(); } catch (error) { failures.push(error); }
-    try { usage.cleanup(); } catch (error) { failures.push(error); }
-  }
-  if (failures.length) throw new AggregateError(failures, "native history or teardown failed");
+  await finishNative(failures, [
+    ["close the app", () => app?.close()],
+    ["clean up the isolated home", () => run.cleanup()],
+    ["stop the engine", () => fixture.stop()],
+    ["clean up the usage shim", () => usage.cleanup()],
+  ]);
 });

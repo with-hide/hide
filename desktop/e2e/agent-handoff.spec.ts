@@ -7,6 +7,7 @@ import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e
 import { enterWorkspace, openTaskFolds, showTasks } from "../../web/e2e/wire";
 import { launchShell, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
+import { finishNative, inStep } from "./native-teardown";
 import { coreFocus, expectCoreFocus, hideAnswer, makeSpawnRepository, type SpawnedAgent } from "./agent-spawn-fixture";
 
 test("handoff roots have provenance without delegation or a focus change in either checkout path", async () => {
@@ -65,7 +66,7 @@ test("handoff roots have provenance without delegation or a focus change in eith
     await expect(page.locator(`[data-pane-children="${parent}"]`)).toHaveCount(0);
     const facts = { parent, roots, state: run.env.HIDE_STATE_DIR, home: run.env.HOME, head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), provider: "synthetic native CLI" };
     await screenshot(page, "agent-handoff-roots");
-    await captureNativeWindow(app, "agent-handoff-roots-native", facts).catch((error) => failures.push(error));
+    await captureNativeWindow(app, "agent-handoff-roots-native", facts).catch((error) => failures.push(inStep("capture the roots window", error)));
     // Each handed-off root is its own task in the sidebar's 태스크 list, not a child of the spawner's (PRD sidebar-task-lens B4, B7).
     const tasks = await showTasks(page);
     await openTaskFolds(page);
@@ -73,12 +74,9 @@ test("handoff roots have provenance without delegation or a focus change in eith
     await expect(tasks.locator(`[data-task-row="${parent}"] [data-task-children]`)).toHaveCount(0);
     await expect(tasks.locator("[data-task-child]")).toHaveCount(0);
     await screenshot(page, "agent-handoff-tasks");
-    await captureNativeWindow(app, "agent-handoff-tasks-native", facts).catch((error) => failures.push(error));
+    await captureNativeWindow(app, "agent-handoff-tasks-native", facts).catch((error) => failures.push(inStep("capture the tasks window", error)));
   } catch (error) {
     failures.push(error);
-  } finally {
-    try { await app?.close(); } catch (error) { failures.push(error); }
-    try { stack.stop(); } catch (error) { failures.push(error); }
   }
-  if (failures.length) throw new AggregateError(failures, "native handoff fixture or teardown failed");
+  await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
 });

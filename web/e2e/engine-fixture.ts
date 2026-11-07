@@ -311,7 +311,7 @@ async function openFixture(control: HidedControl, server: EngineServer, daemon: 
   for (const agent of FIXTURE_AGENTS) writeFixtureTranscript(claudeProjects(server), agent.session, { task: agent.task });
   const one = await startFirstAgent(control, folder);
   if (runAs) {
-    await parentOnItsSession(control, one.pane);
+    await parentOnItsSession(control, one.pane, runAs);
     const spawned = await runAs(one.pane)(["agent", "spawn", "--parent", "here", "--beside", "--name", "agent-two", "--intent", "fixture-two", "--kind", "claude", "--repo", fs.realpathSync.native(dir), "--branch", "main", "--", "--resume", FIXTURE_AGENTS[1].session]);
     if (spawned.status !== 0) throw new Error(`the fixture's parent could not spawn its child: ${spawned.out}`);
   } else {
@@ -339,7 +339,7 @@ async function openCaller(control: HidedControl, server: EngineServer, daemon: O
   const runAs = installAgentRunner(server as AgentPaneFixture, daemon.stateDir);
   writeFixtureTranscript(claudeProjects(server), FIXTURE_AGENTS[0].session, { task: FIXTURE_AGENTS[0].task });
   const one = await startFirstAgent(control, first.folder);
-  await parentOnItsSession(control, one.pane);
+  await parentOnItsSession(control, one.pane, runAs);
   // The shell Add project opened is not the fixture's: its tab goes.
   await closePane(control, first.pane);
   await agentsResting(control, server, [one.pane], true);
@@ -362,9 +362,27 @@ async function startFirstAgent(control: HidedControl, folder: string) {
   return one;
 }
 
-/** The parent reports its session before it can name itself as one. */
-async function parentOnItsSession(control: HidedControl, pane: string): Promise<void> {
+/**
+ * The parent reports its session before it can name itself as one, and the core can name
+ * the pane as a caller only once a session pass has laid its delivery observation, which
+ * can follow the row that shows the session (with-hide/hide-private#130: `agent spawn` was
+ * refused `agent_pane_required` from a pane whose row already read its session). `agent
+ * show here` resolves the caller the same way a spawn does and only reads, so the wait
+ * polls it and sends no spawn.
+ */
+async function parentOnItsSession(control: HidedControl, pane: string, runAs: (pane: string) => HideRunner): Promise<void> {
   await control.until((rest) => agentIn(rest, pane)?.session_id === FIXTURE_AGENTS[0].session || undefined, `${pane} on its session`, 30_000);
+  const show = runAs(pane);
+  let last = "no answer yet";
+  try {
+    await expect.poll(async () => {
+      const answer = await show(["agent", "show", "here"]);
+      last = answer.out;
+      return answer.status;
+    }, { message: `the core to name ${pane} as a caller`, timeout: 30_000 }).toBe(0);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nthe last answer of \`agent show here\`: ${last}`, { cause: error });
+  }
 }
 
 /** Waits until every agent of `panes` reads its terminal and rests, then gives the first the keyboard. */
