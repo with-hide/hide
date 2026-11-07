@@ -12,6 +12,7 @@
 //! and publishes.
 
 pub mod ledger;
+mod pr_cache;
 pub mod query;
 pub mod session_command;
 pub mod store;

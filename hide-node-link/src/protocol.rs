@@ -328,6 +328,10 @@ use crate::error::HostError;
 /// (`TerminalControl::Mouse`), which the holder encodes for the program's
 /// mouse mode, in place of the core's own bytes (`Write`); a helper on 77
 /// would refuse it, so it upgrades.
+/// 79: a device's terminals send what a pane's program wrote to the
+/// clipboard (`TerminalUp::Clipboard`), once, for the core's window in
+/// front; a core on 78 cannot read the line and would drop every copy, so
+/// the helper upgrades.
 /// 81: a node renews a pane's holder from this build's version folder
 /// (`holders::PaneCall::Renew`, with-hide/hide-private#646), which the core
 /// asks before it wakes an agent in the pane, and takes only the sleep's own

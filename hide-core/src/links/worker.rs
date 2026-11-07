@@ -1551,21 +1551,23 @@ fn prune(
 /// Recomputes the summaries of the projects a change since the last pass can
 /// move and publishes every project's summary when one changed; a project no
 /// change reaches keeps the summary its last pass made, which a pass over it
-/// would make again (with-hide/hide-private#571). Answers how many projects
-/// it recomputed.
+/// would make again (with-hide/hide-private#571). A project it recomputes
+/// reads again only the pull requests a change reaches. Answers what it
+/// recomputed.
 pub(in crate::links) fn publish_summaries(
     store: &LinkStore,
     state: &mut State,
     sink: &impl Sink,
-) -> usize {
+) -> Recomputed {
     let current = state.projects.iter().map(|p| p.key.as_str()).collect();
     store.forget_capacity_except(&current);
     state.placement.keep(&current);
     let scope = state
         .placement
         .scope(store, std::mem::take(&mut state.dirty));
+    state.placement.stale(&scope);
     let mut summaries = BTreeMap::new();
-    let mut recomputed = 0;
+    let mut recomputed = Recomputed::default();
     let projects = Arc::clone(&state.projects);
     for project in projects.iter() {
         let held = state.summaries.get(&project.workspace_id);
@@ -1573,12 +1575,18 @@ pub(in crate::links) fn publish_summaries(
             summaries.insert(project.workspace_id.clone(), held.clone());
             continue;
         }
-        recomputed += 1;
+        recomputed.projects += 1;
         // One pass reads the project's places, fences and repository names for
         // its summary and for both ledger reads, not once per pull request.
         let pass = store.pass(&project.key);
         let summary = match &pass {
-            Ok(Some(pass)) => store.summary_in(pass, &project.worktrees),
+            Ok(Some(pass)) => {
+                let cache = state.placement.cache(&project.key);
+                let before = cache.read_count();
+                let summary = store.summary_in(pass, &project.worktrees, cache);
+                recomputed.prs += cache.read_count() - before;
+                summary
+            }
             Ok(None) => Ok(ProjectLinkSummary::default()),
             Err(code) => Err(code.clone()),
         };
@@ -1648,6 +1656,15 @@ pub(in crate::links) fn publish_summaries(
         sink.summaries(summaries);
     }
     recomputed
+}
+
+/// What one summary pass recomputed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(in crate::links) struct Recomputed {
+    /// The projects whose summary it made again.
+    pub(in crate::links) projects: usize,
+    /// The pull requests whose sessions it read from the store.
+    pub(in crate::links) prs: usize,
 }
 
 /// A read that recorded requests changes which of them a label still owes a

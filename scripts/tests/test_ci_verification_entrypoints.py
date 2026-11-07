@@ -378,6 +378,34 @@ if name == 'playwright' and '--list' in args:
         self.assertEqual(received["env"]["HIDE_E2E_HERDR_BIN"], "explicit-test-binary")
         self.assertEqual(self.run_entry("verify-cargo.sh", "check", "--workspace", FAIL_COMMAND="23").returncode, 23)
 
+    def test_a_hide_pane_s_handles_never_reach_a_test_but_its_inputs_do(self):
+        pane = {"HIDE_STATE_DIR": "operator-state", "HIDE_CAP_REF": "operator-credential",
+                "HIDE_PANE_ID": "h1:p2", "HIDE_INSTALL": "app", "HIDE_INSTALL_CLI": "/operator/hide",
+                "HIDE_PORT": "7777", "HIDE_SOMETHING_NEW": "a daemon setting added later"}
+        inputs = {"HIDE_TEST_HOLDER_BIN": "holder", "HIDE_E2E_WSL_DISTRO": "distro", "HIDE_BUILD_ORDER": "7",
+                  "HIDE_VT_ZIG_CACHE": "zig", "HIDE_HOLDER_CONPTY": "conpty", "HIDE_VERSION": "1.2.3",
+                  "HIDE_AGY_BINARY": "agy"}
+        for mode in (("test",), ("test-scoped", "-p", "hide-kit"), ("nextest", "-p", "hide-kit"), ("check", "--workspace")):
+            with self.subTest(mode=mode[0]):
+                self.record.unlink(missing_ok=True)
+                self.assertEqual(self.run_entry("verify-cargo.sh", *mode, **pane, **inputs).returncode, 0)
+                received = self.records()[0]["env"]
+                self.assertEqual([key for key in received if key in pane], [])
+                self.assertEqual({key: received[key] for key in inputs}, inputs)
+
+    def test_a_test_run_reads_none_of_the_account_s_git_settings(self):
+        for mode in (("test",), ("test-scoped", "-p", "hide-kit"), ("nextest", "-p", "hide-kit")):
+            with self.subTest(mode=mode[0]):
+                self.record.unlink(missing_ok=True)
+                self.assertEqual(self.run_entry("verify-cargo.sh", *mode, GIT_CONFIG_GLOBAL="~/.gitconfig").returncode, 0)
+                received = self.records()[0]["env"]
+                self.assertEqual(received["GIT_CONFIG_GLOBAL"], "/dev/null")
+                self.assertEqual(received["GIT_CONFIG_NOSYSTEM"], "1")
+        # A build or a lint runs no test, and leaves cargo's own git reads alone.
+        self.record.unlink(missing_ok=True)
+        self.assertEqual(self.run_entry("verify-cargo.sh", "check", "--workspace", GIT_CONFIG_GLOBAL="~/.gitconfig").returncode, 0)
+        self.assertEqual(self.records()[0]["env"]["GIT_CONFIG_GLOBAL"], "~/.gitconfig")
+
     def test_a_build_that_can_reach_hide_vt_prepares_its_inputs_first(self):
         self.assertEqual(self.run_entry("verify-cargo.sh", "test").returncode, 0)
         self.assertEqual(self.run_entry("verify-cargo.sh", "nextest", "-p", "hide-vt").returncode, 0)

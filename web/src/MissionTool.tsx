@@ -18,6 +18,7 @@ import { MissionStartGuide } from "./MissionStartGuide";
 import { MissionTakeOver } from "./MissionTakeOver";
 import { groupMissions, CLOSED_SHOWN, missionEntry, missionPillKey, projectMissions, rowLine, rowLineText, shownMission, STATE_PILL, turnCount, type MissionEntry, type MissionGroup } from "./missionList";
 import { missionCells, missionCounts, type TurnItem } from "./missions";
+import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { frontProject } from "./projectStatus";
 import { CandidateAdd, CandidateRows, CapControl, ConductorError, ScopeControl, StrengthControl, useConductorEdit } from "./settings/ConductorControls";
@@ -194,6 +195,7 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
     >
       <RowOverlayButton className="rounded-md" aria-label={t("missionTool.open", { title: mission.title })} aria-current={selected ? "true" : undefined} onClick={() => actions.openMission(mission.id)} />
       <span className="pointer-events-none relative flex min-w-0 items-center gap-xs">
+        <MissionNumber mission={mission} className="text-caption" />
         <Pill mission={mission} turn={turn[0] ?? null} />
         <span className="min-w-0 truncate text-body font-semibold text-foreground" title={mission.title}>{mission.title}</span>
       </span>
@@ -286,6 +288,7 @@ function ClosedRow({ mission, selected, actions }: { mission: Mission; selected:
       data-selected={selected ? "true" : undefined}
       onClick={() => actions.openMission(mission.id)}
     >
+      <MissionNumber mission={mission} />
       {done ? <CheckIcon aria-label={t("mission.pill.done")} className="size-(--size-icon-sm) shrink-0 text-mission-done" /> : <XIcon aria-label={t("mission.pill.cancelled")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
       <span className="min-w-0 flex-1 truncate text-foreground" title={mission.title}>{mission.title}</span>
       {closed != null ? <span className="shrink-0 tabular-nums text-subtle-foreground">{formatDateTime(language, closed, { month: "numeric", day: "numeric" })}</span> : null}

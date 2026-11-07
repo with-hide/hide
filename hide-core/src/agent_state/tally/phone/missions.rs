@@ -61,6 +61,9 @@ pub struct PhoneMission {
     pub answer: Option<PhoneAnswer>,
     pub answer_failed: Option<String>,
     pub conductor: PhoneConductor,
+    /// The Conductor's letters only the operator can let through
+    /// (`MissionView::conductor_letters`), which the shared 내 차례 rule reads.
+    pub conductor_letters: Option<PhoneHeldLetters>,
     pub nodes: Vec<PhoneNode>,
     /// The steps a finished mission left behind on the Mac because the frame
     /// had no room for them; `nodes` and `landing_order` are empty then.
@@ -72,6 +75,15 @@ pub struct PhoneMission {
     pub closed_at_unix_ms: Option<u64>,
     /// The mission's device does not answer, so the values are the last ones.
     pub stale: bool,
+}
+
+/// How many letters wait for the Conductor, what the operator does about
+/// them and since when (`delivery::held::HeldLetters`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneHeldLetters {
+    pub count: u32,
+    pub reason: String,
+    pub since_unix_ms: u64,
 }
 
 /// Where the operator's answer is: `sending`, `waiting` or `unconfirmed`.
@@ -179,6 +191,8 @@ struct MissionIn {
     #[serde(default)]
     answer_failed: Option<String>,
     conductor: ConductorIn,
+    #[serde(default)]
+    conductor_letters: Option<PhoneHeldLetters>,
     #[serde(default)]
     nodes: Vec<NodeIn>,
     #[serde(default)]
@@ -423,6 +437,7 @@ fn phone_mission(
         answer: mission.answer,
         answer_failed: mission.answer_failed,
         conductor,
+        conductor_letters: mission.conductor_letters,
         nodes,
         nodes_omitted: 0,
         landing_order: mission.landing_order,

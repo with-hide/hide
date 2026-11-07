@@ -34,6 +34,7 @@ import { SleepingSessionRow } from "./components/sleeping-session-row";
 import { StatusBadge } from "./components/status-badge";
 import { Usage } from "./components/usage";
 import { agentGroupTitle, agentPlaces, allAgents, type ListedAgent } from "./navigation";
+import { allAgents as everyPaneAgent } from "./paneAgents";
 import {
   activeCheckouts,
   checkoutCard,
@@ -460,8 +461,10 @@ function ProjectList({ actions }: { actions: Actions }) {
   );
   // The folds are this machine's choices, like the inactive groups, so a
   // selected SSH device's tree is drawn open with every checkout's line two.
+  const treeAgents = useMemo(() => everyPaneAgent(localAgents, remoteStatuses), [localAgents, remoteStatuses]);
   const context: ListContext = {
     agents,
+    treeAgents,
     childrenOf: (agent) => children.get(agent.pane_id)!,
     familyOf: (agent) => (agent.state.root ? rowPulls(agent) : undefined),
     placeOf,
@@ -526,6 +529,8 @@ type TreeContext = Pick<ListContext, "agents" | "childrenOf" | "familyOf" | "num
 
 type ListContext = {
   agents: AgentRow[];
+  /** Every device's rows: a delegation crosses machines, so the core's sidebar trees name rows of other devices (`allAgents`, `paneAgents.ts`). */
+  treeAgents: AgentRow[];
   childrenOf: (agent: AgentRow) => AgentRow[];
   /** A root's own and every descendant's PRs, undefined for a child or a root without children. */
   /** A root's whole PR list, as the 태스크 row draws it (PRD project-tree-pr-family D-01, D-02); a child row keeps its own. */
@@ -914,10 +919,10 @@ function RepositoryMark({ workspace, actions }: { workspace: Workspace; actions:
 
 function WorkspaceRows({ workspace, level, first = false, context }: { workspace: Workspace; level: "root" | "child"; first?: boolean; context: ListContext }) {
   const { t } = useInterfaceTranslation();
-  const { agents, actions, disclosure } = context;
+  const { treeAgents, actions, disclosure } = context;
   const active = activeCheckouts(workspace);
   const inactive = inactiveCheckouts(workspace);
-  const rowsByCheckout = useMemo(() => checkoutAgentRows(workspace, agents, "sidebar"), [workspace, agents]);
+  const rowsByCheckout = useMemo(() => checkoutAgentRows(workspace, treeAgents, "sidebar"), [workspace, treeAgents]);
   const hideAiListed = useShellStore((s) => s.rest?.navigator?.hide_ai_checkouts);
   const issueSource = useShellStore((s) => projectIssueSource(s.rest, workspace));
   const expanded = !disclosure || projectExpanded(workspace);
@@ -1058,7 +1063,7 @@ function CleanupRows({ workspaces, context, deviceId }: { workspaces: Workspace[
   return <li data-session-cleanup={deviceId}>
     <FoldRow label={t("agentSessions.cleanup")} count={rows.length} expanded={expanded} current={current} onToggle={() => context.actions.toggleSessionFold(`cleanup/${deviceId}`)} />
     {expanded ? <ul>{rows.map(({ workspace, checkout }) => <CheckoutRowView key={checkout.id} workspace={workspace} checkout={checkout} hideAi={hideAiCheckoutOf(hideAiListed, workspace, checkout)}
-      agentRows={checkoutAgentRows(workspace, context.agents, "sidebar").get(checkout.id) ?? NO_BOARD_ROWS}
+      agentRows={checkoutAgentRows(workspace, context.treeAgents, "sidebar").get(checkout.id) ?? NO_BOARD_ROWS}
       focused={context.workspaceScreen && context.focusedCheckoutId === checkout.id} context={context} />)}</ul> : null}
   </li>;
 }

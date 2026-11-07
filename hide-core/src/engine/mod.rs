@@ -411,6 +411,14 @@ pub(crate) trait Engine: Send + Sync {
 
     // A pane's processes.
 
+    /// Returns once the engine has laid its saved session out again around
+    /// the holders its node found, the wait every call that makes a pane
+    /// takes, or refuses when that has not happened `within`. Until then a
+    /// saved pane is drawn but its holder is not yet taken back, so a start
+    /// into it reads nothing. An engine that restores nothing answers at once.
+    fn wait_restored(&self, _within: Duration) -> Answer<()> {
+        Ok(())
+    }
     /// The pane's shell and its foreground processes.
     fn pane_processes(&self, wait: Wait, pane: &str) -> Answer<PaneProcessGroup>;
     /// The session a foreground `agent` was explicitly resumed with, as its

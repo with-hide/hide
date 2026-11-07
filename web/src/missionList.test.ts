@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupMissions, missionEntry, projectMissions, shownMission, turnCount } from "./missionList";
+import { groupMissions, missionEntry, missionPillKey, projectMissions, rowLine, rowLineText, shownMission, turnCount } from "./missionList";
 import { workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionNode } from "./snapshot";
 
@@ -78,5 +78,19 @@ describe("the selected row (B6, B23)", () => {
     expect(shownMission({ items: [{ kind: "mission", mission: "m1" }, { kind: "pull_request", workspace_id: "w", number: 2 }], shown: true })).toBeNull();
     expect(shownMission({ items: [{ kind: "mission", mission: "m1" }], shown: false })).toBeNull();
     expect(shownMission(null)).toBeNull();
+  });
+});
+
+describe("a mission whose Conductor has not got its letters (hide-private issue 678)", () => {
+  it("stands in 내 차례 with the count and what to do, and leaves it once they are delivered", async () => {
+    const { initializeInterfaceI18n } = await import("./i18n/instance");
+    const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
+    const held = mission("a", { conductor_letters: { count: 4, reason: "unanswered", since_unix_ms: 1 } });
+    const entry = missionEntry(held, () => null);
+    expect(entry.group).toBe("turn");
+    expect(turnCount([entry])).toBe(1);
+    expect(missionPillKey(held, entry.turn[0] ?? null)).toBe("missionTool.pill.letters");
+    expect(rowLineText(rowLine(held, entry.turn[0] ?? null)!, t)).toBe("Letters waiting for the Conductor: 4 · three bells went unanswered: tell the Conductor to read its letters");
+    expect(group(mission("a", { conductor_letters: null }))).toBe("running");
   });
 });

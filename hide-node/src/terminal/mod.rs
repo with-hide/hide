@@ -22,6 +22,7 @@
 //! return at once and never call back.
 
 mod command;
+pub mod copies;
 pub mod device;
 mod echo_timing;
 pub mod engine_panes;
@@ -61,6 +62,11 @@ pub trait OutputSink: Send + Sync {
     /// The pane's output so far is no longer anyone's: it was released or is
     /// gone.
     fn forget(&self, pane: &str);
+    /// The text the pane's program wrote to the clipboard (OSC 52), for the
+    /// screen that looks at it to put on its own clipboard once. It is no
+    /// part of the pane's output: a sink never keeps it for a screen that
+    /// connects or draws the pane again later.
+    fn clipboard(&self, pane: &str, text: &[u8]);
 }
 
 pub use hide_node_link::terminal::ReportSink;
@@ -295,6 +301,10 @@ enum Delivery {
     },
     Forget {
         pane: String,
+    },
+    Clipboard {
+        pane: String,
+        text: Vec<u8>,
     },
 }
 
@@ -883,17 +893,20 @@ impl Shared {
             let handed = panic::catch_unwind(AssertUnwindSafe(|| match &delivery {
                 Delivery::Output { pane, bytes, full } => self.outputs.output(pane, bytes, *full),
                 Delivery::Forget { pane } => self.outputs.forget(pane),
+                Delivery::Clipboard { pane, text } => self.outputs.clipboard(pane, text),
             }));
             if handed.is_err() {
-                let (pane, forget) = match &delivery {
-                    Delivery::Output { pane, .. } => (pane, false),
-                    Delivery::Forget { pane } => (pane, true),
+                let (pane, what) = match &delivery {
+                    Delivery::Output { pane, .. } => (pane, "output"),
+                    Delivery::Forget { pane } => (pane, "forget"),
+                    Delivery::Clipboard { pane, .. } => (pane, "clipboard"),
                 };
                 crate::diagnostic!(json!({
                     "component": "terminal_session",
                     "kind": "terminal.sink_panicked",
                     "pane_id": pane,
-                    "forget": forget,
+                    "forget": what == "forget",
+                    "delivery": what,
                 }));
             }
             // A frame's bytes are freed before the queue's lock is taken.
@@ -2502,11 +2515,31 @@ impl Inner {
                     full,
                 )
                 .is_some(),
+            SessionEvent::Clipboard { text } => self.clipboard(pane, generation, text),
             SessionEvent::Ended { category, message } => {
                 self.closed(shared, pane, generation, category, message);
                 false
             }
         }
+    }
+
+    /// Hands the screen what the current session's program wrote to the
+    /// clipboard, once; answers whether the session is still current.
+    fn clipboard(&mut self, pane: &str, generation: u64, text: Vec<u8>) -> bool {
+        let Some(entry) = self.panes.get(pane) else {
+            return false;
+        };
+        if entry.current_generation != Some(generation) || entry.session.is_none() {
+            return false;
+        }
+        // A pane attached only to take input has no screen looking at it.
+        if entry.release_after_input.is_none() {
+            self.deliveries.push(Delivery::Clipboard {
+                pane: pane.to_owned(),
+                text,
+            });
+        }
+        true
     }
 
     /// Hands a frame of the current session to the screen, unless its grid

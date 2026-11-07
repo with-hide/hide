@@ -239,6 +239,7 @@ fn open_watched(
             Capability::Notices,
             Capability::Keys,
             Capability::Submit,
+            Capability::Clipboard,
         ],
         Instant::now() + OPEN_LIMIT,
     )
@@ -370,6 +371,7 @@ impl HolderEvents {
                 }));
                 return None;
             }
+            Ok(HolderMessage::Clipboard(text)) => SessionEvent::Clipboard { text },
             Ok(HolderMessage::Fragment(fragment)) => {
                 // A full fragment opens an epoch at 0; every other one is the
                 // next of its epoch. One out of order means the screen this
