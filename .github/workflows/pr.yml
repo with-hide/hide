@@ -297,6 +297,13 @@ jobs:
             (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
             bash scripts/verify-cargo.sh nextest --profile ci "${packages[@]}"
           fi
+      - name: Install the real shells
+        # Its own step with its own limit: a slow Ubuntu mirror is retried and
+        # cut off here (scripts/ci-apt-install.sh), never spent from the real
+        # shell tests' 15 minutes or the job's 20.
+        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
+        timeout-minutes: 6
+        run: bash scripts/ci-apt-install.sh zsh fish tcsh csh
       - name: Shell integration and agent start in real shells
         # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
         # fish read the user's files in their order, zsh gives ZDOTDIR back,
@@ -311,7 +318,6 @@ jobs:
         if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
         timeout-minutes: 15
         run: |
-          sudo apt-get install -y --no-install-recommends zsh fish tcsh csh
           export HIDE_TEST_ZSH_BIN=$(command -v zsh) HIDE_TEST_FISH_BIN=$(command -v fish) HIDE_TEST_BASH_BIN=$(command -v bash)
           export HIDE_TEST_TCSH_BIN=$(command -v tcsh) HIDE_TEST_CSH_BIN=$(command -v bsd-csh)
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
