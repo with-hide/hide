@@ -357,10 +357,10 @@ impl Service {
 
     /// Types `input` into `pane` as the core's own engine, behind every key
     /// typed there before it. It is not the operator's typing: no input fact
-    /// is reported for it, and a letter's hold does not take it. A pane
-    /// whose session was released, since its tab left the last shown, is
-    /// attached again for it, and the input waits in the pane's hold as a
-    /// new pane's keys do (64 KiB, 3 s).
+    /// is reported for it, and a letter's hold does not take it. A pane no
+    /// screen holds is attached for it and released once the input ends
+    /// (`Inner::attach_for_input`), and the input waits in the pane's hold
+    /// as a new pane's keys do (64 KiB, 3 s).
     fn type_input(
         &self,
         pane: &str,
@@ -381,11 +381,7 @@ impl Service {
                 ));
             }
             let (receipt, command) = command::Receipt::take(&inner.permits)?;
-            if inner.panes.get(pane).is_some_and(|entry| {
-                entry.session.is_none() && !entry.closing && entry.lifecycle.state == "released"
-            }) {
-                inner.request_control(shared, pane, now);
-            }
+            inner.attach_for_input(shared, pane, now);
             inner
                 .panes
                 .get_mut(pane)
@@ -2644,6 +2640,32 @@ impl Inner {
             "message": message,
             "retry_decision": self.retry_decision(pane, "manual"),
         }));
+    }
+
+    /// Attaches `pane` for the engine's input only when no screen holds it:
+    /// one the core released, or one this node knows only from a control
+    /// such as `Asleep` that came before any attach (a device just linked,
+    /// with-hide/hide-private#660). It reads released throughout and is
+    /// released again once the input ends, unless the core attaches it
+    /// meanwhile, so a pane no screen shows keeps no session (and a
+    /// device's node sends no output) after it.
+    fn attach_for_input(&mut self, shared: &Arc<Shared>, pane: &str, now: Instant) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        if entry.session.is_some()
+            || entry.closing
+            || !matches!(entry.lifecycle.state, "released" | "idle")
+        {
+            return;
+        }
+        let message = entry
+            .lifecycle
+            .message
+            .clone()
+            .unwrap_or_else(|| format!("Pane {pane} is attached only while Hide types into it"));
+        entry.release_after_input.get_or_insert(message);
+        self.request_control(shared, pane, now);
     }
 
     fn finish_input_release(&mut self, pane: &str) {

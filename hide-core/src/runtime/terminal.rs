@@ -51,6 +51,19 @@ impl TerminalRoutes for NoTerminals {
 
 /// Whether a pane in `state` may be asked to attach: one with a session, or
 /// on its way to one, or failed and waiting for the operator, is not.
+/// The attach state of a pane its node has said nothing of yet.
+fn idle_terminal_state() -> PaneTerminalState {
+    PaneTerminalState {
+        state: "idle".to_owned(),
+        generation: 0,
+        attempt: 0,
+        message: None,
+        exit_category: None,
+        retry_decision: "automatic_initial".to_owned(),
+        last_attempt_at_unix_ms: None,
+    }
+}
+
 pub(super) fn attach_allowed(state: &str) -> bool {
     !matches!(
         state,
@@ -226,14 +239,32 @@ impl Runtime {
             .map(|pane| pane.pane_id.clone())
             .collect::<HashSet<_>>();
         let mut changed = &projected_pane_ids != live_pane_ids;
-        // A pane the remote no longer lists loses everything; a pane it lists
-        // but does not run a session for keeps its sizes and loses the session.
+        // A pane the remote no longer lists loses everything, its node entry
+        // too.
         changed |= self.retain_terminal_pane_state(|pane_id| {
             !belongs_to_target(pane_id) || live_pane_ids.contains(pane_id)
         });
-        changed |= self.retain_terminal_session_state(|pane_id| {
-            !belongs_to_target(pane_id) || active_pane_ids.contains(pane_id)
-        });
+        // A pane it lists that is not on screen is released, as a pane of
+        // this machine outside the attach window is: its node keeps it, so
+        // the engine's typing (a letter's bell, a mission answer, a sleep's
+        // keys) attaches it again for the input. Its holder attached it at
+        // its start, so one the core never attached is released too.
+        let mut releasing = live_pane_ids
+            .iter()
+            .filter(|pane_id| !active_pane_ids.contains(*pane_id))
+            .filter(|pane_id| {
+                self.terminal_states
+                    .get(*pane_id)
+                    .is_none_or(|state| state.state != "released")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        releasing.sort();
+        for pane_id in releasing {
+            let message = format!("Pane {pane_id} was detached while its tab is not shown");
+            self.release_terminal_session(&pane_id, message);
+            changed = true;
+        }
 
         self.snapshot.terminal.panes.retain(|pane| {
             !belongs_to_target(&pane.pane_id) || live_pane_ids.contains(&pane.pane_id)
@@ -263,21 +294,6 @@ impl Runtime {
     /// being inherited if the engine reuses an id.
     pub(super) fn retain_terminal_pane_state(&mut self, keep: impl Fn(&str) -> bool) -> bool {
         let before = self.terminal_state_len();
-        self.retain_terminal_session_state(&keep);
-        self.terminal_sizes.retain(|pane_id, _| keep(pane_id));
-        let close_held_panes = self
-            .close_operations
-            .values()
-            .flat_map(|operation| operation.pane_ids.iter().cloned())
-            .collect::<HashSet<_>>();
-        self.panes_closing
-            .retain(|pane_id| keep(pane_id) || close_held_panes.contains(pane_id));
-        before != self.terminal_state_len()
-    }
-    /// Ends the terminal session of every pane `keep` rejects while the pane
-    /// itself, and so its sizes, stays known: its node forgets the pane.
-    pub(super) fn retain_terminal_session_state(&mut self, keep: impl Fn(&str) -> bool) -> bool {
-        let before = self.terminal_state_len();
         // A pane the engine named for typed keys is not gone before its layout
         // first carries it (D-11, B9).
         let gone = self
@@ -295,6 +311,14 @@ impl Runtime {
         }
         self.reconcile_attachment_target();
         self.wheel_before_attach.retain(|pane_id, _| keep(pane_id));
+        self.terminal_sizes.retain(|pane_id, _| keep(pane_id));
+        let close_held_panes = self
+            .close_operations
+            .values()
+            .flat_map(|operation| operation.pane_ids.iter().cloned())
+            .collect::<HashSet<_>>();
+        self.panes_closing
+            .retain(|pane_id| keep(pane_id) || close_held_panes.contains(pane_id));
         before != self.terminal_state_len()
     }
     /// Every pane-keyed terminal map, counted together so a retain pass can
@@ -431,15 +455,7 @@ impl Runtime {
     }
 
     pub(super) fn terminal_pane_snapshot(&self, pane_id: &str) -> TerminalPaneSnapshot {
-        let idle = PaneTerminalState {
-            state: "idle".to_owned(),
-            generation: 0,
-            attempt: 0,
-            message: None,
-            exit_category: None,
-            retry_decision: "automatic_initial".to_owned(),
-            last_attempt_at_unix_ms: None,
-        };
+        let idle = idle_terminal_state();
         let state = self.terminal_states.get(pane_id).unwrap_or(&idle);
         TerminalPaneSnapshot {
             pane_id: pane_id.to_owned(),
@@ -1338,25 +1354,34 @@ impl Runtime {
             let message = format!(
                 "Pane {pane_id} was detached after its tab left the last {ATTACHED_TAB_LIMIT} shown"
             );
-            // The node says the same once it has ended the session; the
-            // screen shows it from this event on.
-            if let Some(state) = self.terminal_states.get_mut(&pane_id) {
-                state.state = "released".to_owned();
-                state.message = Some(message.clone());
-                state.exit_category = None;
-                state.retry_decision = "on_next_visit".to_owned();
-            }
-            self.terminals.control(TerminalControl::Release {
-                pane: pane_id.clone(),
-                message,
-            });
-            self.sync_transport_projection(&pane_id);
-            self.push_diagnostic(
-                "terminal.session_released",
-                format!("Released the terminal session for pane {pane_id}"),
-            );
+            self.release_terminal_session(&pane_id, message);
         }
         true
+    }
+    /// Ends `pane_id`'s terminal session while its node keeps the pane, and
+    /// records it `released` with `message`. The node says the same once it
+    /// has ended the session; the screen shows it from this event on.
+    fn release_terminal_session(&mut self, pane_id: &str, message: String) {
+        let state = self
+            .terminal_states
+            .entry(pane_id.to_owned())
+            .or_insert_with(idle_terminal_state);
+        state.state = "released".to_owned();
+        state.message = Some(message.clone());
+        state.exit_category = None;
+        state.retry_decision = "on_next_visit".to_owned();
+        // Its attach is no longer asked for; a retired pane is still
+        // forgotten at its node, by its recorded state.
+        self.terminal_attach_requested.remove(pane_id);
+        self.terminals.control(TerminalControl::Release {
+            pane: pane_id.to_owned(),
+            message,
+        });
+        self.sync_transport_projection(pane_id);
+        self.push_diagnostic(
+            "terminal.session_released",
+            format!("Released the terminal session for pane {pane_id}"),
+        );
     }
     /// Names the pane whose first frame ends record `id`. A created pane's
     /// node watches for its next frame now; a resized pane's node is asked
