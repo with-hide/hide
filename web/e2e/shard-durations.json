@@ -110,7 +110,7 @@
   "hide-ai-usage-limit.spec.ts › a week under the limit shows its percent, and a lower limit moves Hide AI at once": 11.2,
   "hide-ai-usage-limit.spec.ts › every agent past the limit pauses Hide AI, and Memory shows its dimmed state": 10.1,
   "home.spec.ts › Home stays selected when its empty registration is listed before its first pane": 6.7,
-  "home.spec.ts › Home's ~/hide holds a link to each registered project": 6.2,
+  "home.spec.ts › Home's ~/hide reaches each registered project": 6.2,
   "home.spec.ts › a start aimed at Home makes ~/hide with its guide files and runs the agent there": 6.4,
   "home.spec.ts › a ~/hide that is not Hide's is left alone, and the reason shows in the start panel": 2.0,
   "interface-language.spec.ts › one confirmed choice follows every window, persists, and resets to each system language": 8.8,
