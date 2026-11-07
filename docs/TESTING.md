@@ -607,6 +607,8 @@ A pull request that wants its desktop specs run on macOS before it merges can ru
 The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes) and on Linux only in the nightly.
 
 The remote mailbox lane runs `hided/tests/it/device_own_engine.rs`, a device of the core's own engine (PRD engine-bundle-3-core-owns B35): it stages the built `hide-holder` (the lane restores the vt lane's Zig inputs for it) beside the shipped `hided`, starts a pane by the node link's pane requests, proves a caller in another pane by that pane's holder record, ends the link and its node, and checks the next link's node finds the pane with the same process and that no file of Herdr's reached the account.
+Its asker program waits for the test before it asks the node's pane socket, and the test releases it once the node's proof of the pane says it runs: the holder writes a pane's record as running after its program started, and a program that asks in between is refused as a pane the node does not know yet, once, with no retry (with-hide/hide-private#503).
+Each test's loopback `sshd` (`hided/tests/it/support/sshd.rs`) chooses its port by binding port 0 and letting it go, so another test's server can take the port before this one binds; the server is ready only when its own log says `Server listening on 127.0.0.1 port N.`, never when a connection to the port succeeds, because that reaches whichever server holds it, and a server that lost the bind (`Address already in use`) is started again on another port (with-hide/hide-private#210).
 Locally: `bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only`.
 
 ### WSL device lane
@@ -882,6 +884,7 @@ A lane whose run has no key, such as a fork's, files nothing and still passes.
   Artifact downloads use the existing `gh` credentials, need gh 2.97 or newer, stop at the byte cap and a 45-second deadline, and reap the child process on every exit.
   Unsupported provenance, ambiguity, API refusal or a resource cap stops history filing with a warning and summary rather than guessing from partial evidence; a history notice cannot turn a failed lane green or block a passing lane.
   Local reporter regressions use fixture reports and mocked APIs, never live test issues or comments.
+- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`), and a pass whose log has no `FLAKY` line is the evidence.
 - At the deadline a flaky test is fixed or deleted.
   Whoever knows the cause opens the fix or the deletion; if nobody does, the issue goes to the operator.
   The deadline is not a timer that moves the test somewhere quieter, and a later flake on an issue past its deadline says so in its comment.

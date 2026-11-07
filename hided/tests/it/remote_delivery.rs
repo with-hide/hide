@@ -6,7 +6,7 @@
 use crate::support::remote_delivery as fixture;
 
 use anyhow::{Context, Result, ensure};
-use fixture::{Fixture, quote, wait_for};
+use fixture::{Fixture, hook_diagnostics, quote, wait_for};
 use hide_core::delivery::ledger::State;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,7 +121,10 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
         let intake = context(&delivered.stdout)?;
         ensure!(
             intake.contains(&first_id) && intake.contains("DELIVERY_REMOTE_ONCE"),
-            "remote hook did not receive the real letter"
+            "remote hook did not receive the real letter: after {:?}, stderr {:?}, recorded {}",
+            delivered.elapsed,
+            delivered.stderr,
+            hook_diagnostics(&fixture.remote.environment.home)
         );
         wait_for("durable remote delivery confirmation", || {
             Ok(fixture
