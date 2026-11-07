@@ -333,7 +333,10 @@ describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28,
     expect(criterionNote(line("ci", "ci", { state: "pass", reruns: 1 }), m, t)).toBe("rerun 1 time");
     expect(criterionNote(line("ci", "ci", { state: "fail", rerunning: true }), m, t)).toBe("rerunning");
     // Two of three passed under `all`: the line is open and says so (B6).
-    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex", "pass"), checker("gemini")] }), m, t)).toBe("2/3 passed");
+    // The count is the core's: two of the three asked are bound, one passed, and the empty slot is in neither number.
+    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex"), checker("gemini")], tally: { passed: 1, total: 2 } }), m, t)).toBe("1/2 passed");
+    // Without a tally from the core the page counts nothing itself.
+    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex", "pass"), checker("gemini")] }), m, t)).toBeNull();
     expect(criterionNote(line("verify", "verify", { checkers: [checker("claude")] }), m, t)).toBeNull();
     expect(criterionNote(line("d1", "defect", { text: "the filter resets", found_by: "verify-all" }), m, t)).toBe("found by Check together");
   });
