@@ -130,8 +130,13 @@ jobs:
       - name: Install zsh on Linux
         # Every private pane starts from SHELL=/bin/zsh; the Linux image has none.
         if: runner.os == 'Linux'
+        # The step keeps the 5 minutes it had, which the job's cap is summed
+        # from; the mirror gets 3 of them, the cache and dpkg the rest.
         timeout-minutes: 5
-        run: sudo apt-get install -y --no-install-recommends zsh
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
+          minutes: 3
       - name: Build hided, hide, the hooks, Hide's conversation reader and the composer judge
         timeout-minutes: 25
         run: |
@@ -272,8 +277,13 @@ jobs:
           python-version: "3.12"
       - name: Install zsh on Linux
         if: runner.os == 'Linux'
+        # The step keeps the 5 minutes it had, which the job's cap is summed
+        # from; the mirror gets 3 of them, the cache and dpkg the rest.
         timeout-minutes: 5
-        run: sudo apt-get install -y --no-install-recommends zsh
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
+          minutes: 3
       - name: Measure the CLI versions the caller named
         # The install, the report's version check and the lane's verdict all
         # read this table instead of the pins (scripts/agent_journey/clis.py).

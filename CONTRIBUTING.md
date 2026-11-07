@@ -300,6 +300,12 @@ The remote mailbox crate-boundary lane is the `remote mailbox` job on a Linux ru
 Run it locally with `bash scripts/verify-cargo.sh cli && HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only`; it needs the system's `sshd` and runs every pane on the core's own engine.
 It starts only private daemons, pane holders and a loopback SSH account, with no external device.
 
+A Linux job gets the packages it needs from the Ubuntu archive (the shells, the virtual display, `rpm`, `openssh-server`) from `.github/actions/apt-install`, never from a bare `apt-get install` step: a slow Ubuntu mirror once held 5 MB of zsh for minutes and the job's timeout killed it.
+The two installs that stay bare are tests of an install and not setup: `package.yml` installs the `.deb` it just built, and `relay-deploy-check.yml` installs from a third-party repository it adds.
+The action caches the `.deb` files under the runner image's version, so a usual run does not reach the mirror.
+On a miss, `scripts/ci-apt-install.sh` fetches with `--download-only` inside one budget (`minutes`), refreshes the lists between tries, installs once offline, and fails by naming the packages.
+The step's own `timeout-minutes` is only a backstop a few minutes above that budget (the cache restore may spend 2 of them), and a job's limit has to hold its usual time plus the backstop; `scripts/tests/test_ci_apt_install.py` holds the script to its budget.
+
 The additional gates that drive an installed app or reach an external device are local steps and are not required in CI.
 They are listed under "Local gates" below; every script in `scripts/` is either a required gate above, a local gate there, or a generator named in [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md).
 The separate `design-contract.yml` workflow runs `node scripts/check-design-contract.mjs` and `node --test scripts/tests/token-contrast.test.mjs scripts/tests/ui-parts.test.mjs`.
