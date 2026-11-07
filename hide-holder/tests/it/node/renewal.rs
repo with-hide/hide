@@ -442,13 +442,13 @@ fn a_close_during_a_renewal_ends_the_holder_the_renewal_leaves() {
 }
 
 /// The writes handed to the pane's holder before its agent slept are
-/// waited for before anything is judged; the core's input that comes
-/// beside them never reaches the asleep pane, and
-/// writes that do not settle leave the earlier holder untouched. The holder
-/// is stopped, so its connection stops taking what the node writes.
+/// waited for before anything is judged, a released session's included,
+/// whose writer goes on writing what it was handed; the core's input that
+/// comes beside them never reaches the asleep pane, and writes that do not
+/// settle leave the earlier holder untouched. The holder is stopped, so its
+/// connection stops taking what the node writes.
 #[cfg(unix)]
-#[test]
-fn a_renewal_waits_for_the_writes_before_it_and_keeps_a_pane_whose_writes_do_not_settle() {
+fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
     let folder = Folder::new();
     let before = started_by_earlier_build(&folder);
     let earlier_holder = before.holder.unwrap();
@@ -480,13 +480,37 @@ fn a_renewal_waits_for_the_writes_before_it_and_keeps_a_pane_whose_writes_do_not
         let cancelled = typed.join().unwrap();
         assert!(cancelled.is_err(), "{cancelled:?}");
     });
+    if released {
+        // The pane's tab left the last shown: its session goes, and its
+        // writer still holds the keys.
+        next.service.control(TerminalControl::Release {
+            pane: PANE.to_owned(),
+            message: "released".to_owned(),
+        });
+    }
     let started = Instant::now();
     let kept = next.linked.renew(&shell_start(&folder));
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_input_unsettled"),
         "{kept:?}"
     );
-    assert!(started.elapsed() >= Duration::from_secs(4), "it waited");
+    if !released {
+        assert!(started.elapsed() >= Duration::from_secs(4), "it waited");
+    }
+    // A released session's writer is let go a second after its release, its
+    // keys not written: the renewal is told that, or waits it out.
     assert_eq!(pane_record(&folder), before);
     assert!(earlier_holder.runs());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_renewal_waits_for_the_writes_before_it_and_keeps_a_pane_whose_writes_do_not_settle() {
+    keeps_a_pane_whose_writes_do_not_settle(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_released_sessions_unwritten_keys_keep_the_pane_on_its_holder() {
+    keeps_a_pane_whose_writes_do_not_settle(true);
 }

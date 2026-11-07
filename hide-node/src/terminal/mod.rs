@@ -33,7 +33,7 @@ pub mod protocol;
 pub mod router;
 pub mod session;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
@@ -276,6 +276,12 @@ struct Inner {
     deliveries: Vec<Delivery>,
     spawns: Vec<(SpawnRequest, ChildHold)>,
     retired: Vec<Session>,
+    /// Each pane's session writers that have not ended, the current one's
+    /// included: a released or replaced session's writer still writes what
+    /// was handed to it ([`Service::writes_settled`]). Ended ones are
+    /// dropped at each session's start, so it holds no more than the
+    /// writers that run and one ended one per pane.
+    writers: BTreeMap<String, Vec<session::WriterLife>>,
     /// Something may now be due earlier than the clock's current wait.
     wake_clock: bool,
     refusals: Refusals,
@@ -374,34 +380,53 @@ impl Service {
             .run(|inner, _| inner.panes.get(pane).is_some_and(|entry| entry.asleep))
     }
 
-    /// Waits until everything handed to `pane`'s session writer before this
-    /// call has been written to its holder, up to `within`. A write that
-    /// failed, or one still waiting when `within` passes, is an error: what
-    /// reached the holder is then not known. A pane with no session has no
-    /// writer and nothing waiting in one. Input held for the pane, for its
-    /// attach or behind a letter, is not waited for: a pane that is asleep
-    /// drops or refuses it when it is written.
+    /// Waits until everything handed to `pane`'s session writers before this
+    /// call has been written to its holder, up to `within`: the current
+    /// session's, and those of the sessions released or replaced before it,
+    /// whose writers write what they were handed until they end. A write
+    /// that failed, or one still waiting when `within` passes, is an error:
+    /// what reached the holder is then not known. Input held for the pane,
+    /// for its attach or behind a letter, is not waited for: a pane that is
+    /// asleep drops or refuses it when it is written.
     pub(crate) fn writes_settled(&self, pane: &str, within: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + within;
         let (done, settled) = std::sync::mpsc::channel();
-        let handed = self.shared.run(|inner, _| {
-            let Some(session) = inner
+        let (earlier, handed) = self.shared.run(|inner, _| {
+            let session = inner
                 .panes
                 .get(pane)
-                .and_then(|entry| entry.session.as_ref())
-            else {
-                return Ok(false);
+                .and_then(|entry| entry.session.as_ref());
+            let current = session.map(Session::life);
+            let earlier: Vec<_> = inner
+                .writers
+                .get(pane)
+                .into_iter()
+                .flatten()
+                .filter(|life| !current.as_ref().is_some_and(|current| current.same(life)))
+                .cloned()
+                .collect();
+            let Some(session) = session else {
+                return Ok((earlier, false));
             };
             session
                 .after_writes(session::Written::new(move |written| {
                     let _ = done.send(written);
                 }))
-                .map(|()| true)
+                .map(|()| (earlier, true))
                 .map_err(|refused| refused.message(pane))
         })?;
+        for life in earlier {
+            life.settled_by(deadline).map_err(|why| {
+                format!(
+                    "an earlier session's writes to pane {pane}'s holder {why}, within {within:?}"
+                )
+            })?;
+        }
         if !handed {
             return Ok(());
         }
-        match settled.recv_timeout(within) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match settled.recv_timeout(left) {
             Ok(true) => Ok(()),
             Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
                 "a write to pane {pane}'s holder failed or never reached it"
@@ -2430,6 +2455,14 @@ impl Inner {
             );
             return;
         }
+        self.writers.retain(|_, lives| {
+            lives.retain(|life| !life.ended());
+            !lives.is_empty()
+        });
+        self.writers
+            .entry(pane.to_owned())
+            .or_default()
+            .push(session.life());
         let entry = self.panes.get_mut(pane).expect("checked above");
         entry.session = Some(session);
         let message = entry.lifecycle.message.clone();

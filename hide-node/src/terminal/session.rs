@@ -363,6 +363,91 @@ impl WriteRefused {
     }
 }
 
+/// How a session's writer thread ended, or that it still runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WriterEnd {
+    Running,
+    /// Everything handed to it was written, or it was let go: a release, or
+    /// its session dropped.
+    Settled,
+    /// A write failed, so what reached the pane is not known.
+    Failed,
+}
+
+#[derive(Debug)]
+struct WriterState {
+    end: Mutex<WriterEnd>,
+    moved: Condvar,
+}
+
+/// A session's writer as its pane's node remembers it after the session is
+/// gone: a released or replaced session's writer keeps writing what was
+/// handed to it before its release (with-hide/hide-private#646).
+#[derive(Clone, Debug)]
+pub(super) struct WriterLife(Arc<WriterState>);
+
+impl WriterLife {
+    fn new() -> Self {
+        Self(Arc::new(WriterState {
+            end: Mutex::new(WriterEnd::Running),
+            moved: Condvar::new(),
+        }))
+    }
+
+    fn end(&self) -> WriterEnd {
+        *self.0.end.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether its writer thread has ended, however it ended.
+    pub(super) fn ended(&self) -> bool {
+        self.end() != WriterEnd::Running
+    }
+
+    /// Whether `self` and `other` are the same session's writer.
+    pub(super) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// Waits until its writer has ended, up to `deadline`: whether it ended
+    /// having written everything handed to it.
+    pub(super) fn settled_by(&self, deadline: Instant) -> Result<(), &'static str> {
+        let mut end = self.0.end.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match *end {
+                WriterEnd::Settled => return Ok(()),
+                WriterEnd::Failed => return Err("failed"),
+                WriterEnd::Running => {}
+            }
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return Err("still writing");
+            };
+            end = self
+                .0
+                .moved
+                .wait_timeout(end, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+}
+
+/// Marks its writer ended when the writer thread leaves, on every way out.
+struct Ends {
+    life: WriterLife,
+    failed: bool,
+}
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        *self.life.0.end.lock().unwrap_or_else(|e| e.into_inner()) = if self.failed {
+            WriterEnd::Failed
+        } else {
+            WriterEnd::Settled
+        };
+        self.life.0.moved.notify_all();
+    }
+}
+
 /// The writer's backlog, shared by the session that adds to it and the
 /// writer thread that drains it.
 #[derive(Default)]
@@ -376,6 +461,7 @@ struct Unwritten {
 pub(super) struct Session {
     pub(super) generation: u64,
     writer: Option<Sender<WriterCommand>>,
+    life: WriterLife,
     unwritten: Arc<Unwritten>,
     cleanup: Cleanup,
     /// Its child counted live until the reaper has seen it exit.
@@ -408,9 +494,11 @@ impl Session {
         } = transport;
         let unwritten = Arc::new(Unwritten::default());
         let echo = Arc::new(EchoClock::new(pane_id));
+        let life = WriterLife::new();
         let writer = match spawn_session_writer(
             pane_id,
             writer,
+            life.clone(),
             Arc::clone(&unwritten),
             Arc::clone(&echo),
             on_write_failure,
@@ -425,6 +513,7 @@ impl Session {
             Self {
                 generation,
                 writer: Some(writer),
+                life,
                 unwritten,
                 cleanup,
                 child: None,
@@ -435,6 +524,11 @@ impl Session {
             },
             events,
         ))
+    }
+
+    /// Its writer, which outlives it until what was handed to it is written.
+    pub(super) fn life(&self) -> WriterLife {
+        self.life.clone()
     }
 
     /// The clock its reader closes at each frame.
@@ -608,6 +702,7 @@ impl Session {
 fn spawn_session_writer(
     pane_id: &str,
     mut writer: Box<dyn SessionWriter>,
+    life: WriterLife,
     unwritten: Arc<Unwritten>,
     echo: Arc<EchoClock>,
     on_failure: Box<dyn Fn(String) + Send>,
@@ -616,6 +711,10 @@ fn spawn_session_writer(
     thread::Builder::new()
         .name(format!("hide-node-terminal-writer-{pane_id}"))
         .spawn(move || {
+            let mut ends = Ends {
+                life,
+                failed: false,
+            };
             let mut carried = None;
             loop {
                 let command = match carried.take() {
@@ -730,6 +829,7 @@ fn spawn_session_writer(
                     return;
                 }
                 if let Err(error) = result {
+                    ends.failed = true;
                     on_failure(format!("terminal control write failed: {error}"));
                     return;
                 }
@@ -875,6 +975,7 @@ mod tests {
         spawn_session_writer(
             pane_id,
             Box::new(FakeWriter(stdin)),
+            WriterLife::new(),
             unwritten,
             Arc::new(EchoClock::new(pane_id)),
             on_failure,
