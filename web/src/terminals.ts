@@ -792,7 +792,13 @@ function onMouseDown(instance: Instance, event: MouseEvent) {
   const up = (released: MouseEvent) => {
     if (released.button === 0) onPointerUp(instance, released);
   };
-  const blur = () => endGesture(instance);
+  // A window that loses focus mid-drag never sees the release: the program
+  // is told it now, so it does not keep the button held.
+  const blur = () => {
+    const gesture = instance.gesture;
+    if (gesture?.kind === "program") sendMouse(instance, "release", gesture.cell, gesture.modifiers);
+    endGesture(instance);
+  };
   window.addEventListener("mousemove", move, true);
   window.addEventListener("mouseup", up, true);
   window.addEventListener("blur", blur);
