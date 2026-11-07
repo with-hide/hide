@@ -57,19 +57,6 @@ impl Drop for ArmedSystemAliasFixture {
     }
 }
 
-/// A folder the test owns, short whatever `TMPDIR` is: a socket made below it
-/// must fit a Unix socket path (104 bytes on macOS), which a long `TMPDIR`
-/// takes (docs/TESTING.md, Writing a Rust test, rule 7). Windows names a pipe
-/// and has no such limit.
-pub(crate) fn short_tempdir() -> tempfile::TempDir {
-    let mut folder = tempfile::Builder::new();
-    folder.prefix("hk");
-    #[cfg(unix)]
-    return folder.tempdir_in("/tmp").unwrap();
-    #[cfg(not(unix))]
-    return folder.tempdir().unwrap();
-}
-
 pub(crate) fn before_supervisor_index_read(path: &Path) {
     if let Some(hook) = SUPERVISOR_INDEX_READ_HOOK.with(|slot| slot.borrow_mut().take()) {
         hook(path);

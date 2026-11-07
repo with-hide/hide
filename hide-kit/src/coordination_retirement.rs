@@ -818,7 +818,7 @@ mod daemon_tests {
 
     #[test]
     fn an_existing_socket_with_a_long_name_keeps_its_transport_failure() {
-        let fixture = crate::tests::short_tempdir();
+        let fixture = crate::short_tempdir();
         let original = fixture.path().join("original.sock");
         let listener = UnixListener::bind(&original).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -843,7 +843,7 @@ mod daemon_tests {
     #[test]
     fn untrusted_socket_entries_are_refused_without_connecting_or_changing_them() {
         for entry in ["file", "folder", "link", "writable socket"] {
-            let fixture = crate::tests::short_tempdir();
+            let fixture = crate::short_tempdir();
             let home = fixture.path().join("home");
             fs::create_dir(&home).unwrap();
             let path = home.join("api.sock");
@@ -895,7 +895,7 @@ mod daemon_tests {
 
     #[test]
     fn an_endpoint_that_cannot_be_inspected_is_not_absent() {
-        let fixture = crate::tests::short_tempdir();
+        let fixture = crate::short_tempdir();
         let home = fixture.path().join("not-a-folder");
         fs::write(&home, b"preserved bytes").unwrap();
         let failure = stop_daemon(&home).unwrap_err();
