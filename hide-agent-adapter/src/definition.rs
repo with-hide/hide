@@ -158,6 +158,19 @@ pub fn builtin(id: &str) -> Option<&'static Definition> {
     builtins().iter().find(|definition| definition.id == id)
 }
 
+/// The definition among `definitions` that `kind` names, by its id or one of
+/// its aliases, ignoring case: the one rule every caller reads a kind by.
+pub fn find<'a>(definitions: &'a [Definition], kind: &str) -> Option<&'a Definition> {
+    let kind = kind.trim();
+    definitions.iter().find(|definition| {
+        definition.id.eq_ignore_ascii_case(kind)
+            || definition
+                .aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(kind))
+    })
+}
+
 impl Catalog {
     /// The built-in definitions with the operator's files read over them,
     /// in the order handed in (the folder's name order).
