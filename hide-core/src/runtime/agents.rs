@@ -1444,18 +1444,19 @@ impl Runtime {
     /// Reads every row again when the operator's look has moved from the
     /// look the rows were last read with, and does nothing otherwise.
     ///
-    /// This is the one place a moved look is read: whatever moved it (a
+    /// This is the one place a moved look is read, whatever moved it (a
     /// pane or tab chosen on this machine, a device brought forward or
     /// left, the tab a device's window shows, a device's own keyboard, a
-    /// phone), each entry that changes the runtime calls this once its
-    /// change is complete, under the same lock: an event's dispatch
+    /// phone). It runs after every announced change on the core's read
+    /// settle (`crate::read_settle`), whichever entry made it, and inside
+    /// the change itself, under the same lock, for an event's dispatch
     /// (`dispatch_json`), a device's session (`ingest_remote_session`), this
     /// machine's engine session (`ingest_session_with_focus_check`), and the
     /// pass that settles the front Workspace and the tab a device's window
     /// shows (`sync_workspace_view`). A device's own keyboard that already
     /// rests on a pane sends nothing new, so the read cannot wait for the
     /// device's next session (with-hide/hide-private#685).
-    pub(super) fn follow_operator_look(&mut self) -> bool {
+    pub(crate) fn follow_operator_look(&mut self) -> bool {
         if self.operator_look() == self.read_look {
             return false;
         }

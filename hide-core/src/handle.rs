@@ -27,6 +27,9 @@ pub struct ChangeNotifier {
     registration: Arc<Mutex<Option<Callback>>>,
     /// True from an announcement until the read that answers it begins.
     announced: Arc<AtomicBool>,
+    /// Raised by every announcement, read or not: the core's read settle
+    /// compares the operator's look after it (`crate::read_settle`).
+    settle: Arc<crate::read_settle::SettleSignal>,
 }
 
 impl ChangeNotifier {
@@ -34,10 +37,14 @@ impl ChangeNotifier {
         Self {
             registration: Arc::new(Mutex::new(None)),
             announced: Arc::new(AtomicBool::new(false)),
+            settle: Arc::default(),
         }
     }
 
     pub fn notify(&self) {
+        // Before the reader's latch: the look is compared after every
+        // announcement, whether or not a window reads it.
+        self.settle.raise();
         let registration = lock_recover(&self.registration).clone();
         // Latching with nobody listening would swallow the first real
         // announcement, so an unregistered notifier stays silent and unlatched.
@@ -61,6 +68,10 @@ impl ChangeNotifier {
     /// something else happened to notify.
     fn clear_announcement(&self) {
         self.announced.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn settle_signal(&self) -> Arc<crate::read_settle::SettleSignal> {
+        Arc::clone(&self.settle)
     }
 
     fn set_callback(&self, registration: Option<Callback>) {
@@ -89,6 +100,7 @@ impl ChangeNotifier {
 
 pub struct Core {
     _delivery: Option<crate::delivery::worker::Worker>,
+    _read_settle: Option<crate::read_settle::ReadSettle>,
     _terminal_reports: Option<crate::terminal_reports::ReportPump>,
     _changes: Option<crate::changes::ChangesPump>,
     _fetch: Option<crate::fetch::FetchPump>,
@@ -107,6 +119,8 @@ pub struct Core {
 impl Drop for Core {
     fn drop(&mut self) {
         self._delivery.take();
+        // Joined outside the lock, which its comparison takes.
+        self._read_settle.take();
         // Reserve cancellation before any coordinator shutdown can wait: a
         // completing attachment must not enqueue input during destruction.
         let attachment_worker = { lock_recover(&self.runtime).take_attachment_worker() };
@@ -251,7 +265,11 @@ impl Core {
     pub(crate) fn for_runtime_fixture(runtime: Arc<Mutex<Runtime>>) -> (Self, ChangeNotifier) {
         let notifier = ChangeNotifier::new();
         let own_node = lock_recover(&runtime).own_node();
+        let read_settle =
+            crate::read_settle::ReadSettle::spawn(Arc::downgrade(&runtime), notifier.clone())
+                .expect("the read settle thread starts");
         let core = Self {
+            _read_settle: Some(read_settle),
             own_node,
             _terminal_reports: None,
             _changes: None,
@@ -374,6 +392,21 @@ impl Core {
                     .to_path_buf(),
             );
         }
+        // Before any worker can announce, so no moved look waits for a
+        // second announcement.
+        let read_settle =
+            match crate::read_settle::ReadSettle::spawn(Arc::downgrade(&runtime), notifier.clone())
+            {
+                Ok(settle) => Some(settle),
+                Err(error) => {
+                    lock_recover(&runtime).set_error(
+                        "read_settle.unavailable",
+                        error.to_string(),
+                        true,
+                    );
+                    None
+                }
+            };
         // Started before anything can attach, so no report waits on it.
         let terminal_reports = match crate::terminal_reports::ReportPump::spawn(
             reports,
@@ -611,6 +644,7 @@ impl Core {
             };
         Some(Box::new(Core {
             _delivery: delivery,
+            _read_settle: read_settle,
             _terminal_reports: terminal_reports,
             _changes: changes,
             _fetch: fetch,

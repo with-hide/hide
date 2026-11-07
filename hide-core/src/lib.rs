@@ -72,6 +72,7 @@ pub mod product_analytics;
 mod project_context;
 pub mod project_open;
 mod project_settings;
+mod read_settle;
 mod reader;
 mod recent_closed;
 pub mod remote;

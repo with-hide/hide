@@ -65,6 +65,9 @@ One request every 30 seconds is retained only for the front target, with one nod
 The pump joins both admitted readers outside Runtime's mutex on shutdown; a superseded read may finish within that bound and its answer is discarded, with no additional job queued for each intermediate selection.
 Five seconds without a successful Git observation marks retained data stale; CI ages at 90 seconds and a disconnected shell also labels retained state stale locally.
 
+The read axis's look is compared after every announced change by the core's read settle (`hide-core/src/read_settle.rs`): the change notifier raises its one pending mark, and its one thread, started by `Core::create` and stopped and joined when the core drops, takes the runtime lock once to run `Runtime::follow_operator_look`.
+It exists because a worker can move the operator's look after its own change and announce outside the lock, so no entry list stays complete; `docs/status-model.md`, Hide owns the read axis, owns the rule and its regression tests.
+
 Choose the authority, publication need and durability of a value separately before adding a field, store or worker.
 `Mutex<Runtime>` serializes Hide's accepted domain and UI transitions; it is not the place to perform the reads, writes or analyses that produce them.
 An off-lock store remains core-owned and must name its scope, freshness rule, resource bound and shutdown owner; a second copy in the shell cannot become an authority.

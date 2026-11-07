@@ -407,3 +407,123 @@ fn reads_follow_the_look_with_no_window_pulling_snapshots() {
     );
     assert!(unread(&runtime, "t1"), "behind, the next turn is news");
 }
+
+/// This machine with two tabs, a finished turn in each, its keyboard on
+/// `t1`'s pane.
+fn local_two_tabs(path: &str) -> SessionSnapshotPayload {
+    let tab = |tab_id: &str| {
+        json!({
+            "workspace_id": "w-look", "tab_id": tab_id, "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "focused_pane_id": format!("{tab_id}:p"),
+            "panes": [{"pane_id": format!("{tab_id}:p"), "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+            "splits": []
+        })
+    };
+    let agent = |tab_id: &str| {
+        json!({
+            "pane_id": format!("{tab_id}:p"), "workspace_label": "look", "agent": "codex",
+            "agent_status": "done", "state_change_seq": 1,
+            "tokens": {"status_done_new": "\u{25cf}", "activity": "0000000000001"}
+        })
+    };
+    crate::sidebar::owned_label_fixture(json!({
+        "agents": [agent("w-look:t1"), agent("w-look:t2")],
+        "focused_workspace_id": "w-look",
+        "focused_pane_id": "w-look:t1:p",
+        "workspaces": [{"workspace_id": "w-look", "label": "look", "active_tab_id": "w-look:t1"}],
+        "tabs": [
+            {"workspace_id": "w-look", "tab_id": "w-look:t1", "label": ""},
+            {"workspace_id": "w-look", "tab_id": "w-look:t2", "label": ""}
+        ],
+        "panes": [
+            {"pane_id": "w-look:t1:p", "cwd": path},
+            {"pane_id": "w-look:t2:p", "cwd": path}
+        ],
+        "layouts": [tab("w-look:t1"), tab("w-look:t2")]
+    }))
+    .expect("two tabs with a finished turn each")
+}
+
+/// What a worker does with the runtime: changes it under the lock, lets the
+/// lock go, and announces; no window pulls a snapshot. Answers how many
+/// comparisons the core's read settle has finished once it is idle.
+fn as_a_worker(
+    shared: &Arc<Mutex<Runtime>>,
+    notifier: &ChangeNotifier,
+    change: impl FnOnce(&mut Runtime),
+) -> u64 {
+    change(&mut shared.lock().unwrap());
+    notifier.notify();
+    notifier
+        .settle_signal()
+        .wait_settled(std::time::Duration::from_secs(10))
+        .expect("the read settle goes idle")
+}
+
+/// Rule: a worker that moves the look after its own change, here a moved
+/// pane focused as the move ends (`place_moved_pane`), has it read once it
+/// announces the change, with no window: the core's read settle compares
+/// after every announcement. It reads once and then finds nothing more, so
+/// an announcement never loops.
+#[test]
+fn a_pane_a_worker_focuses_is_read_once_it_announces_with_no_window() {
+    let path = "/private/tmp/hide-read-settle-pane";
+    let (mut runtime, _checkout) = live_tab_order_runtime(path);
+    runtime.ingest_session(Ok(local_two_tabs(path)));
+    assert!(runtime.dispatch_json(&operator_focus_event("w-look:t1:p")));
+    assert_eq!(unread_panes(&runtime), vec!["w-look:t2:p"]);
+    let shared = Arc::new(Mutex::new(runtime));
+    let (_core, notifier) = crate::Core::for_runtime_fixture(Arc::clone(&shared));
+
+    let passes = as_a_worker(&shared, &notifier, |runtime| {
+        runtime.focus_pane("w-look:t2:p".into(), PaneFocusOrigin::Operator, None);
+        assert_eq!(
+            unread_panes(runtime),
+            vec!["w-look:t2:p"],
+            "the focus alone reads nothing"
+        );
+    });
+    assert!(
+        unread_panes(&shared.lock().unwrap()).is_empty(),
+        "the moved pane is read once the worker announces"
+    );
+    assert_eq!(
+        passes, 2,
+        "one comparison read it, one more found nothing and announced nothing"
+    );
+
+    let again = as_a_worker(&shared, &notifier, |_| {});
+    assert_eq!(
+        again,
+        passes + 1,
+        "an announcement that moved no look is one comparison"
+    );
+}
+
+/// Rule: the same for a device a worker brings forward, as a project open
+/// does when its folder's answer arrives (`settle_project_open`): the
+/// device's own keyboard rests on its finished pane, so it is read once the
+/// worker announces, with no window.
+#[test]
+fn a_device_a_worker_brings_forward_is_read_once_it_announces_with_no_window() {
+    for origin in origins() {
+        let t = tree();
+        let (mut runtime, _views) = device(origin.clone(), false);
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(&t.main, &[("t1", "done", 1)], "t1")),
+        );
+        assert!(unread(&runtime, "t1"), "{origin:?}");
+        let shared = Arc::new(Mutex::new(runtime));
+        let (_core, notifier) = crate::Core::for_runtime_fixture(Arc::clone(&shared));
+
+        as_a_worker(&shared, &notifier, |runtime| {
+            runtime.bring_device_forward(DEVICE.into());
+        });
+        assert!(
+            !unread(&shared.lock().unwrap(), "t1"),
+            "{origin:?}: the device in front shows the pane its keyboard holds"
+        );
+    }
+}
