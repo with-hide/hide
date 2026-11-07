@@ -15,20 +15,15 @@
 //! the panes of its unstarted attempts: it enters no Reopen Closed, and a
 //! tab it empties leaves the screen as one the engine closed.
 
-use super::executor::{context, mutate, registrations};
+use super::executor::{RecordedPane, close_pane, context, mutate, recorded_pane, registrations};
 use super::{AgentRecord, Mutation, agent_view};
 use crate::delivery::answer::{AgentEnd, ConversationEnd, PaneEnd};
 use crate::delivery::{
     Actor,
     worker::{Authority, Client},
 };
-use crate::engine::{EngineError, Wait};
 use crate::runtime::session_archive::EndPlan;
 use serde_json::{Value, json};
-use std::time::Duration;
-
-/// Each engine call of the close; the CLI waits 10 s for the whole command.
-const ENGINE_WAIT: Duration = Duration::from_secs(3);
 
 /// Ends registration `id` for `actor`, and closes its pane unless
 /// `keep_pane`.
@@ -68,7 +63,8 @@ pub(super) fn end(
 }
 
 /// Closes the pane `record` ran in while it is still the registration's,
-/// and keeps the conversation that ran there.
+/// and keeps the conversation that ran there. Each engine call waits at
+/// most `PANE_WAIT`, which the CLI's wait for an end covers.
 fn close(client: &Client, record: &AgentRecord) -> Result<(PaneEnd, ConversationEnd), String> {
     let machine = record.actor.device_id.as_str();
     let on_device = crate::address::pane_device(&record.actor.pane_id).is_some();
@@ -88,23 +84,15 @@ fn close(client: &Client, record: &AgentRecord) -> Result<(PaneEnd, Conversation
             "machine": machine, "pane_id": pane, "outcome": outcome, "reason": reason,
         }));
     };
-    let terminal_recorded = match engine.pane_terminal(Wait::Each(ENGINE_WAIT), pane) {
-        Err(error) if error.code() == Some("pane_not_found") => {
-            logged("gone", None);
-            return Ok((PaneEnd::Gone, ConversationEnd::None));
-        }
-        Err(error) => return Err(close_failed(record, &error)),
-        // The pane id now names another terminal: the agent's pane is gone.
-        Ok(terminal)
-            if record
-                .terminal_id
-                .as_ref()
-                .is_some_and(|at| *at != terminal) =>
-        {
-            logged("gone", Some("pane_replaced"));
-            return Ok((PaneEnd::Gone, ConversationEnd::None));
-        }
-        Ok(_) => record.terminal_id.is_some(),
+    let gone = |reason: Option<&str>| {
+        logged("gone", reason);
+        Ok((PaneEnd::Gone, ConversationEnd::None))
+    };
+    let terminal = match recorded_pane(engine.as_ref(), record.terminal_id.as_deref(), pane) {
+        Ok(RecordedPane::Gone) => return gone(None),
+        Ok(RecordedPane::Replaced) => return gone(Some("pane_replaced")),
+        Ok(terminal) => terminal,
+        Err(error) => return Err(close_failed(record, &error.to_string())),
     };
     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
     let plan = runtime
@@ -118,43 +106,41 @@ fn close(client: &Client, record: &AgentRecord) -> Result<(PaneEnd, Conversation
         }
         // A registration from before terminals were recorded owns its pane
         // only while the pane shows its conversation.
-        EndPlan::Close { keep: None } if !terminal_recorded => {
-            logged("gone", Some("pane_identity_unrecorded"));
-            return Ok((PaneEnd::Gone, ConversationEnd::None));
+        EndPlan::Shell if terminal == RecordedPane::Unrecorded => {
+            return gone(Some("pane_identity_unrecorded"));
         }
-        EndPlan::Close { keep } => keep,
+        EndPlan::Shell => Err("no_agent"),
+        EndPlan::Own(keep) => keep.map_err(|why| why.code()),
     };
-    engine
-        .close_pane(Wait::Each(ENGINE_WAIT), pane)
-        .map_err(|error| close_failed(record, &error))?;
-    let conversation = match keep {
-        None => ConversationEnd::None,
-        Some(ended) => match runtime
+    close_pane(engine.as_ref(), pane).map_err(|detail| close_failed(record, &detail))?;
+    let (conversation, reason) = match keep {
+        Err(reason) => (ConversationEnd::None, Some(reason)),
+        Ok(ended) => match runtime
             .lock()
             .map_err(|_| "delivery_unavailable")?
-            .archive_ended(ended)
+            .archive_ended(*ended)
         {
-            Ok(()) => ConversationEnd::Archived,
+            Ok(()) => (ConversationEnd::Archived, None),
             Err(reason) => {
                 crate::diagnostic!(json!({
                     "component": "coordination", "kind": "agent.end_not_archived",
                     "agent_id": record.id, "pane_id": pane, "reason": reason,
                 }));
-                ConversationEnd::ArchiveFull
+                (ConversationEnd::ArchiveFull, Some("archive_full"))
             }
         },
     };
-    logged("closed", None);
+    logged("closed", reason);
     Ok((PaneEnd::Closed, conversation))
 }
 
 /// The refusal for a close the engine did not take: the registration has
 /// ended, and the same command closes the pane once the engine answers.
-fn close_failed(record: &AgentRecord, error: &EngineError) -> String {
+fn close_failed(record: &AgentRecord, detail: &str) -> String {
     crate::diagnostic!(json!({
         "component": "coordination", "kind": "agent.end_pane_failed",
         "agent_id": record.id, "machine": record.actor.device_id, "pane_id": record.pane,
-        "detail": error.to_string(),
+        "detail": detail,
     }));
     "pane_close_failed".to_owned()
 }

@@ -289,6 +289,13 @@ pub const SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_sec
 /// [`SPAWN_ANSWER_WAIT`] for a spawn on a connected device, whose checks,
 /// worktree, tab and start are each a round trip over SSH.
 pub const DEVICE_SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// Each engine call that reads or closes a pane a spawn or an end made.
+pub const PANE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// What `hide agent end` takes beyond an ordinary command: after its record
+/// ended, it reads its pane's terminal and closes the pane, each within
+/// [`PANE_WAIT`]. The CLI waits this and an ordinary command's wait.
+pub const END_ANSWER_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(2 * PANE_WAIT.as_secs());
 
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past

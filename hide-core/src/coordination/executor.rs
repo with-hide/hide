@@ -1216,6 +1216,7 @@ fn spawn(
                             caller,
                             &existing,
                             &reserved.id,
+                            &child_device,
                         )?;
                         // Drawing ahead is only the screen's: the engine's layout
                         // replaces it, so a runtime that cannot draw it now
@@ -1815,6 +1816,7 @@ fn beside_pane(
     caller: &str,
     cwd: &str,
     spawn: &str,
+    machine: &str,
 ) -> Result<(String, bool), String> {
     let label = crate::start_claim::spawn_label(spawn);
     if let Some(pane) = snapshot
@@ -1838,6 +1840,11 @@ fn beside_pane(
         Default::default(),
     ) {
         Err(EngineError::Request(message)) => return Err(message),
+        Err(EngineError::Refused { code, message })
+            if code == hide_node_link::holders::HOLDER_CAP_REFUSAL =>
+        {
+            return Err(holder_cap(machine, &message));
+        }
         pane => pane.map_err(|error| refused(error.to_string()))?,
     };
     match engine.rename_pane(Wait::Each(Duration::from_secs(5)), &pane, Some(&label)) {
@@ -1879,8 +1886,40 @@ fn shell_alone(engine: &dyn Engine, pane: &str) -> Result<bool, String> {
 /// The terminal the engine runs in `pane` now.
 fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
     engine
-        .pane_terminal(Wait::Each(Duration::from_secs(5)), pane)
+        .pane_terminal(Wait::Each(super::PANE_WAIT), pane)
         .map_err(String::from)
+}
+
+/// What the pane a spawn or a registration recorded is now, against the
+/// terminal recorded with it: a pane id can outlive its terminal (Herdr
+/// handed ids out again after a new server, and a live handoff moves a
+/// pane), so the pane is the record's only while it runs that terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RecordedPane {
+    /// It runs the recorded terminal.
+    Same,
+    /// The record is from before terminals were recorded.
+    Unrecorded,
+    /// The id runs another terminal now.
+    Replaced,
+    /// The engine has no such pane.
+    Gone,
+}
+
+pub(super) fn recorded_pane(
+    engine: &dyn Engine,
+    recorded: Option<&str>,
+    pane: &str,
+) -> Result<RecordedPane, EngineError> {
+    match engine.pane_terminal(Wait::Each(super::PANE_WAIT), pane) {
+        Err(error) if error.code() == Some("pane_not_found") => Ok(RecordedPane::Gone),
+        Err(error) => Err(error),
+        Ok(terminal) => Ok(match recorded {
+            None => RecordedPane::Unrecorded,
+            Some(recorded) if recorded == terminal => RecordedPane::Same,
+            Some(_) => RecordedPane::Replaced,
+        }),
+    }
 }
 
 /// Closes the pane of every earlier attempt of `reserved`: a spawn of the
@@ -1993,16 +2032,16 @@ fn same_terminal(engine: &dyn Engine, record: &SpawnRecord, pane: &str) -> Resul
         .terminal
         .as_deref()
         .ok_or("pane_identity_unrecorded")?;
-    if pane_terminal(engine, pane)? == recorded {
-        Ok(())
-    } else {
-        Err("pane_replaced".to_owned())
+    match recorded_pane(engine, Some(recorded), pane).map_err(String::from)? {
+        RecordedPane::Same => Ok(()),
+        RecordedPane::Replaced | RecordedPane::Unrecorded => Err("pane_replaced".to_owned()),
+        RecordedPane::Gone => Err("pane_gone".to_owned()),
     }
 }
 
-fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
+pub(super) fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
     engine
-        .close_pane(Wait::Each(Duration::from_secs(5)), pane)
+        .close_pane(Wait::Each(super::PANE_WAIT), pane)
         .map_err(String::from)
 }
 

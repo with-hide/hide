@@ -405,7 +405,7 @@ impl Runtime {
     /// resume still confirms the session by id and folder.
     pub(crate) fn end_pane_plan(&self, pane_id: &str, session: Option<&str>) -> EndPlan {
         let Some(row) = self.archive_rows().find(|agent| agent.pane_id == pane_id) else {
-            return EndPlan::Close { keep: None };
+            return EndPlan::Shell;
         };
         if row
             .session_id
@@ -416,21 +416,23 @@ impl Runtime {
         {
             return EndPlan::OtherAgent;
         }
-        let proof = self
+        let Some((project_root, project_label, checkout)) = self.archive_place(pane_id) else {
+            return EndPlan::Own(Err(NotKept::CheckoutUnlisted));
+        };
+        let Some(proof) = self
             .archive_proof(row)
-            .or_else(|| Some((row.session_id.clone()?, None)));
-        let keep =
-            self.archive_place(pane_id)
-                .zip(proof)
-                .map(|((root, label, checkout), proof)| EndedConversation {
-                    project_root: root,
-                    project_label: label,
-                    member: self.archive_member(row, &checkout, proof),
-                    starred_at_unix_ms: self
-                        .revisit_mark(pane_id)
-                        .and_then(|mark| mark.starred_at_unix_ms),
-                });
-        EndPlan::Close { keep }
+            .or_else(|| Some((row.session_id.clone()?, None)))
+        else {
+            return EndPlan::Own(Err(NotKept::SessionUnknown));
+        };
+        EndPlan::Own(Ok(Box::new(EndedConversation {
+            project_root,
+            project_label,
+            member: self.archive_member(row, &checkout, proof),
+            starred_at_unix_ms: self
+                .revisit_mark(pane_id)
+                .and_then(|mark| mark.starred_at_unix_ms),
+        })))
     }
 
     /// Keeps the conversation of an agent `hide agent end` closed, as an
@@ -1785,13 +1787,34 @@ impl Runtime {
     }
 }
 
-/// What `hide agent end` does with the pane its registration ran in
-/// (`Runtime::end_pane_plan`).
+/// What `hide agent end` does with the pane a registration ran in.
 pub(crate) enum EndPlan {
-    /// Close it, keeping `keep` once it closed.
-    Close { keep: Option<EndedConversation> },
+    /// The pane shows the registration's conversation: it closes, and the
+    /// conversation is kept for 이어가기, or [`NotKept`] says why not.
+    Own(Result<Box<EndedConversation>, NotKept>),
+    /// No agent shows in the pane: the registration's leftover shell, its
+    /// own only while it runs the terminal the registration recorded.
+    Shell,
     /// Another conversation runs in the pane now; it is left alone.
     OtherAgent,
+}
+
+/// Why the conversation of a pane `hide agent end` closes is not kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NotKept {
+    /// The pane's checkout is not listed, so no project holds the record.
+    CheckoutUnlisted,
+    /// Neither the label reader nor the registration names its session.
+    SessionUnknown,
+}
+
+impl NotKept {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::CheckoutUnlisted => "checkout_unlisted",
+            Self::SessionUnknown => "session_unknown",
+        }
+    }
 }
 
 /// The conversation of an agent `hide agent end` closes, kept for 이어가기

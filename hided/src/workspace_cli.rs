@@ -757,6 +757,10 @@ pub fn request_delivery(
                     hide_core::coordination::SPAWN_ANSWER_WAIT
                 }
         }
+        // An end closes its agent's pane after its record ended.
+        hide_core::delivery::Command::Agents {
+            command: hide_core::coordination::Command::End { .. },
+        } => TIMEOUT + hide_core::coordination::END_ANSWER_WAIT,
         _ => TIMEOUT,
     };
     credential.run(|path, after| {

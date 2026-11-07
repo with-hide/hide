@@ -458,7 +458,7 @@ fn an_agent_ended_before_its_session_file_was_confirmed_keeps_its_conversation()
     };
     assert!(row("w1:p2").row_facts.is_none(), "no file confirmed yet");
     let registered = crate::engine::tokens::session_digest("s-w1-p2");
-    let crate::runtime::session_archive::EndPlan::Close { keep: Some(ended) } =
+    let crate::runtime::session_archive::EndPlan::Own(Ok(ended)) =
         runtime.end_pane_plan("w1:p2", registered.as_deref())
     else {
         panic!("the conversation is kept");
