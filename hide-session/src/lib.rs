@@ -1007,10 +1007,11 @@ fn newest_by_modified(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBu
 /// The folder Claude Code keeps a cwd's sessions in, under
 /// `~/.claude/projects`, by its own rule (Claude Code 2.1.319): every UTF-16
 /// unit of the cwd that is not an ASCII letter or digit becomes `-`, so
-/// `/Users/a/.hide/x_y` is `-Users-a--hide-x-y` and `C:\Users\a` is
-/// `C--Users-a`; a name past 200 units keeps its first 200 and adds `-` and
-/// the cwd's string hash in base 36. Replacing `/` alone missed every cwd
-/// with a dot, an underscore or a space, as each worktree under `~/.hide`.
+/// `/Users/example/.hide/x_y` is `-Users-example--hide-x-y` and
+/// `C:\Users\example` is `C--Users-example`; a name past 200 units keeps its
+/// first 200 and adds `-` and the cwd's string hash in base 36. Replacing `/`
+/// alone missed every cwd with a dot, an underscore or a space, as each
+/// worktree under `~/.hide`.
 fn project_directory(cwd: &str) -> String {
     const LIMIT: usize = 200;
     let name: String = cwd
@@ -2541,23 +2542,23 @@ mod tests {
     #[test]
     fn a_cwd_names_the_folder_claude_code_names_for_it() {
         let long = format!(
-            "/Users/grab/.hide-dev/vlp/home/work/{}end",
+            "/Users/example/.hide-dev/vlp/home/work/{}end",
             "deeply_nested.folder/".repeat(9)
         );
         for (cwd, folder) in [
             (
-                "/Users/grab/.hide-dev/vlp/home/work",
-                "-Users-grab--hide-dev-vlp-home-work",
+                "/Users/example/.hide-dev/vlp/home/work",
+                "-Users-example--hide-dev-vlp-home-work",
             ),
             (
-                "/Users/a/.hide/worktrees/herdr_ide/fix device",
-                "-Users-a--hide-worktrees-herdr-ide-fix-device",
+                "/Users/example/.hide/worktrees/herdr_ide/fix device",
+                "-Users-example--hide-worktrees-herdr-ide-fix-device",
             ),
-            ("C:\\Users\\a\\proj.x", "C--Users-a-proj-x"),
+            ("C:\\Users\\example\\proj.x", "C--Users-example-proj-x"),
             ("/tmp/caf\u{e9}/\u{1f600}", "-tmp-caf----"),
             (
                 long.as_str(),
-                "-Users-grab--hide-dev-vlp-home-work-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-fol-cyjqcy",
+                "-Users-example--hide-dev-vlp-home-work-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested--33hm68",
             ),
         ] {
             assert_eq!(project_directory(cwd), folder, "{cwd}");
