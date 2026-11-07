@@ -145,14 +145,18 @@ fn another_installs(target: &KitTarget) -> Option<PathBuf> {
 }
 
 /// Whether the junction beside the shim is this installation's own: one an
-/// earlier build of it made, leading to its command by the file or by the
-/// installation its folder names. Another installation's junction, such as
-/// one the desktop app's pass left before it wrote its shim, is not.
+/// earlier build of it made, leading to its command by the file, by the
+/// installation its folder names, or by the command this installation's own
+/// record last installed, whose folder may be gone (a runtime copy the app
+/// pruned after an update). Another installation's junction, such as one the
+/// desktop app's pass left before it wrote its shim, is not.
 fn own_junction(target: &KitTarget) -> bool {
     std::fs::read_link(junction(target)).is_ok_and(|destination| {
         let destination = destination.join("hide.exe");
         same_file(&destination, &wanted(target))
             || super::install_at(&destination).as_deref() == Some(target.install.as_str())
+            || crate::record::load(&target.home, &target.install)
+                .is_ok_and(|record| record.owns_cli(&destination))
     })
 }
 
@@ -428,6 +432,40 @@ mod tests {
         assert!(matches!(observe(&target), Observed::Blocked(_)));
         assert!(matches!(remove(&target), RemoveOutcome::Kept { .. }));
         assert!(link::is_link_to(&junction(&target), dir.path()));
+    }
+
+    /// with-hide/hide-private#596: an update pruned the runtime copy an
+    /// earlier app's junction led to. The record of the command that app
+    /// last installed still proves the junction its own, so the next pass
+    /// removes it, and the pass after reads the command current.
+    #[test]
+    fn an_earlier_apps_junction_into_a_pruned_copy_goes_with_the_next_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let runtime = home.join(".hide").join("runtime");
+        let old = target(&home, &runtime.join("1.2.1"));
+        // What 1.2.1 left: the junction form, and its record of the command.
+        std::fs::create_dir_all(&old.cli_dir).unwrap();
+        std::fs::write(link_path(&old), shim(JUNCTION)).unwrap();
+        link::create_link(&old.kit_dir, &junction(&old)).unwrap();
+        let mut record = crate::record::load(&home, &old.install).unwrap();
+        assert!(record.remember_cli(wanted(&old)));
+        crate::record::save(&home, &record).unwrap();
+        let new = target(&home, &runtime.join("1.2.2"));
+        std::fs::remove_dir_all(&old.kit_dir).unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                crate::apply(&new, &crate::Scope::automatic()).components[0].state,
+                crate::ComponentState::Installed
+            );
+            assert!(std::fs::symlink_metadata(junction(&new)).is_err());
+            assert!(matches!(observe(&new), Observed::Current));
+        }
+        assert_eq!(
+            std::fs::read(link_path(&new)).unwrap(),
+            shim(r"..\..\.hide\runtime\1.2.2")
+        );
     }
 
     /// A device's helper root as `hided node serve` makes it under `home`:
