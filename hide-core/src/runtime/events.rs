@@ -1475,7 +1475,6 @@ pub(super) struct FirstRunDraftPayload {
     pub(super) agents: Option<Vec<String>>,
     pub(super) devices: Option<Vec<String>>,
     pub(super) project_device: Option<String>,
-    pub(super) project_path: Option<String>,
     pub(super) project_form: Option<crate::model::FirstRunProjectForm>,
 }
 

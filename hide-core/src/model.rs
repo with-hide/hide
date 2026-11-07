@@ -3283,7 +3283,6 @@ pub struct FirstRunChoices {
     /// checked (PRD wsl-device B1) and keep it unchecked once they say so.
     pub devices: Option<Vec<String>>,
     pub project_device: Option<String>,
-    pub project_path: String,
     pub project_form: FirstRunProjectForm,
     pub notifications_answered: bool,
 }
