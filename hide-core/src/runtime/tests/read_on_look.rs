@@ -341,20 +341,29 @@ fn a_look_that_did_not_move_reads_and_announces_nothing() {
         "payload": {"pane_ids": []},
     }))
     .unwrap();
-    let (announced, events) = crate::diagnostics::capture(|| {
+    // Each one alone: an event announces for its own reasons, so whether
+    // the read ran is told by the read records it would move.
+    let no_read_record = |case: &str, events: &[serde_json::Value]| {
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["kind"] == "pane.read_record"),
+            "{case} moved a read record: {events:?}"
+        );
+    };
+    let ((), events) = crate::diagnostics::capture(|| {
         dispatch(&mut runtime, "focus_device", json!({"device_id": DEVICE}));
-        runtime.ingest_remote_session(DEVICE, Ok(finished.clone()));
-        runtime.dispatch_json(&phones)
     });
+    no_read_record("the same device chosen again", &events);
+    let ((), events) = crate::diagnostics::capture(|| {
+        runtime.ingest_remote_session(DEVICE, Ok(finished.clone()));
+    });
+    no_read_record("the same session again", &events);
+    let (announced, events) = crate::diagnostics::capture(|| runtime.dispatch_json(&phones));
+    no_read_record("the phones' same list", &events);
     assert!(
         !announced,
         "the phones' same list moves no look and announces nothing"
-    );
-    assert!(
-        !events
-            .iter()
-            .any(|event| event["kind"] == "pane.read_record"),
-        "no read record moved: {events:?}"
     );
     publish(&mut runtime);
     assert!(
