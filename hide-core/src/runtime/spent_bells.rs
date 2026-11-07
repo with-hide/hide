@@ -256,6 +256,9 @@ fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str
         "engine_refused" => "its pane refused the typing",
         "engine_unreachable" => "its machine could not be reached to type it",
         "herdr_call_failed" => "Hide lost the answer to its typing, and the agent recorded none",
+        crate::delivery::doorbell::INTERRUPTED => {
+            "Hide stopped while typing its last bell, and the agent recorded none"
+        }
         "herdr_format" => "the answer to its typing could not be read, and the agent recorded none",
         "herdr_parameters" => "the bell could not be put into the engine's terms",
         "doorbell_reservation_failed" | "doorbell_reservation_format" => {
