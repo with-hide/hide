@@ -161,6 +161,11 @@ fn device_engine(
         "pane_processes" => reply(fake::processes(&json!({
             "shell_pid": 4100, "foreground_process_group_id": 4100,
             "foreground_processes": [{"pid": 4100, "name": "zsh"}]}))),
+        // What a shell stopped in its startup files shows last.
+        "read_pane" => reply(crate::engine::PaneText {
+            text: "Last login: today\n".to_owned(),
+            truncated: false,
+        }),
         "start_agent" if refused.swap(false, Ordering::SeqCst) => {
             self::refused("internal_error", "the start was refused")
         }
@@ -1023,6 +1028,52 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
         .unwrap();
     assert!(marked < typed, "{methods:?}");
     assert_eq!(count(&methods, "create_worktree"), 1, "{methods:?}");
+}
+
+/// with-hide/hide#2181: a new pane whose shell never finishes starting (a
+/// startup file blocked on a read) answers why while its caller still waits,
+/// rather than a timeout whose spawn holds the spawn lock; it closes the tab
+/// it opened, and the same intent opens a new tab and starts the agent once
+/// a shell starts.
+#[test]
+fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_starts_again() {
+    struct Wait;
+    impl Drop for Wait {
+        fn drop(&mut self) {
+            crate::coordination::executor::TEST_ANSWER_WAIT.set(None);
+        }
+    }
+    let spawner = spawner();
+    spawner.node.integrated.store(true, Ordering::SeqCst);
+    spawner.unmarked.store(usize::MAX, Ordering::SeqCst);
+    let _wait = Wait;
+    crate::coordination::executor::TEST_ANSWER_WAIT.set(Some(Duration::from_millis(300)));
+    let ask = || spawner.spawn(Some("here"), Some(DEVICE), "stuck");
+    let asked = std::time::Instant::now();
+    let refused = ask().expect_err("the shell never marked its first prompt");
+    assert!(
+        asked.elapsed() < crate::agent_start::SHELL_WAIT,
+        "the shell's wait ended inside the spawn's answer time"
+    );
+    assert_eq!(
+        split_refusal(&refused),
+        ("shell_starting", Some("Last login: today")),
+        "the reason, with what the shell shows last"
+    );
+    assert_eq!(spawner.count("start_agent"), 0, "nothing was typed");
+    assert_eq!(spawner.count("close_pane"), 1, "the tab it opened closed");
+    let record = &spawner.ledger().spawns[0];
+    assert_eq!(record.pane, None, "the spawn names no pane");
+    assert!(!record.completed);
+
+    // The shell starts now: the same intent is not refused, and runs in a
+    // new tab.
+    spawner.unmarked.store(0, Ordering::SeqCst);
+    let child = ask().expect("the same intent starts the agent");
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(spawner.count("launch_tab"), 2, "a new tab");
+    assert_eq!(spawner.count("start_agent"), 1);
+    assert_eq!(spawner.count("close_pane"), 1);
 }
 
 fn count(methods: &[&str], name: &str) -> usize {

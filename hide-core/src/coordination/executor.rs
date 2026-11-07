@@ -39,6 +39,28 @@ fn worktree_create_refusal(error: EngineError) -> String {
 // read, so they are not: each is bounded by `TARGET_CHECK_TIMEOUT` and runs
 // beside another spawn's.
 pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
+
+/// How long a spawn has to answer its caller: [`super::SPAWN_ANSWER_WAIT`],
+/// or [`super::DEVICE_SPAWN_ANSWER_WAIT`] on a device.
+fn answer_wait(on_device: bool) -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = TEST_ANSWER_WAIT.with(std::cell::Cell::get) {
+        return wait;
+    }
+    if on_device {
+        super::DEVICE_SPAWN_ANSWER_WAIT
+    } else {
+        super::SPAWN_ANSWER_WAIT
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A spawn's answer wait on this test thread, so a test of a shell that
+    /// never finishes starting does not wait out the real one.
+    pub(crate) static TEST_ANSWER_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
 /// Tests share `SPAWN` through the process, so those that spawn take turns
 /// when a runner puts them on threads of one process.
 #[cfg(test)]
@@ -861,17 +883,13 @@ fn spawn(
     // The caller waits this long for the answer; the new shell's wait ends
     // inside it, so a stopped shell is answered rather than timed out.
     let answer_by = Instant::now()
-        + if matches!(
+        + answer_wait(matches!(
             &command,
             Command::Spawn {
                 machine: Some(_),
                 ..
             }
-        ) {
-            super::DEVICE_SPAWN_ANSWER_WAIT
-        } else {
-            super::SPAWN_ANSWER_WAIT
-        };
+        ));
     let Command::Spawn {
         parent,
         machine,
