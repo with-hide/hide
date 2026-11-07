@@ -620,15 +620,23 @@ impl Service {
     }
 
     /// Forgets a pane whose holder was replaced under the same id, as
-    /// [`TerminalControl::Forget`] does, except the core's sleep mark: the
-    /// core sends that only when the pane falls asleep or wakes, and the new
-    /// holder's shell takes no operator key before the agent's resume line.
+    /// [`TerminalControl::Forget`] does, except what the core told it of the
+    /// pane itself, which it sends only when that changes: the grid it
+    /// settled and the one its view draws, which the new holder's attach is
+    /// resized to, and the sleep mark, so the new shell takes no key of the
+    /// operator's before the agent's resume line.
     pub(crate) fn forget_replaced_holder(&self, pane: &str) {
         self.shared.run(|inner, _| {
-            let asleep = inner.panes.get(pane).is_some_and(|entry| entry.asleep);
+            let kept = inner.panes.get(pane).map(|entry| Pane {
+                size: entry.size,
+                size_from_holder: entry.size_from_holder,
+                view: entry.view,
+                asleep: entry.asleep,
+                ..Pane::default()
+            });
             inner.forget(pane.to_owned());
-            if asleep {
-                inner.panes.entry(pane.to_owned()).or_default().asleep = true;
+            if let Some(kept) = kept {
+                inner.panes.insert(pane.to_owned(), kept);
             }
         });
     }

@@ -22,6 +22,26 @@ fn run_from(folder: &Folder, pane: &str, version_folder: &str) -> String {
 
 const EARLIER: &str = "v1-an-earlier-build";
 
+/// The grid the core settled for the pane, other than the one a holder
+/// starts at.
+const GRID: GridSize = GridSize {
+    rows: 30,
+    cols: 100,
+};
+
+/// Has the shell print its terminal's grid (on Windows its columns), which
+/// reads [`GRID_PRINTED`] at [`GRID`]; the line typed never does.
+const PRINT_GRID: &str = if cfg!(windows) {
+    "for /f \"tokens=2\" %a in ('mode con ^| find \"Columns\"') do @echo grid-%a\r"
+} else {
+    "S=$(stty size); echo \"grid-${S% *}x${S#* }\"\r"
+};
+const GRID_PRINTED: &str = if cfg!(windows) {
+    "grid-100"
+} else {
+    "grid-30x100"
+};
+
 /// Settles a request as the engine settles each one it made.
 fn retire(node: &Node, request: hide_kit::panes::Request<'_>) {
     let number = request.number();
@@ -129,8 +149,13 @@ fn a_shell_on_another_builds_holder_is_replaced_under_its_id_and_a_kept_one_runs
         node.text(pane).contains("still-node")
     });
 
-    // The pane is a sleeping agent's: the core marked it once, as it fell
-    // asleep, and the node keeps the mark through the replacement.
+    // The pane is a sleeping agent's drawn at a grid of its own: the core
+    // told the node both once, and the node keeps them through the
+    // replacement.
+    node.service.control(TerminalControl::Resize {
+        pane: pane.to_owned(),
+        size: GRID,
+    });
     node.service.control(TerminalControl::Asleep {
         pane: pane.to_owned(),
         asleep: true,
@@ -175,6 +200,8 @@ fn a_shell_on_another_builds_holder_is_replaced_under_its_id_and_a_kept_one_runs
     });
     node.type_into(pane, &print_node("after"));
     node.screens.wait_drawn_after(pane, frames, "after-node");
+    node.type_into(pane, PRINT_GRID.as_bytes());
+    node.screens.wait_drawn_after(pane, frames, GRID_PRINTED);
     let text = node.text(pane);
     assert!(
         !text.contains("before-node"),
