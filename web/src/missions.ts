@@ -11,7 +11,7 @@ import { agentsByPane } from "./paneAgents";
 import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -957,20 +957,55 @@ export function conductorUnanswered(mission: Mission): boolean {
   });
 }
 
-export function attentionChoices(reason: MissionAttentionReason): AttentionChoice[] {
-  switch (reason) {
-    case "merged_unproven":
-      return ["done"];
-    case "worker_ended":
-    case "pr_closed":
-    case "wake_refused":
-    case "close_refused":
-      return ["drop"];
-    case "unplanned_pr":
-      return ["attach", "leave"];
-    case "conductor_failed":
-      return ["resume", "drop"];
-  }
+/**
+ * The choices for `reason`, in the order drawn: Conductor에게 맡기기
+ * (`leave`, which hands the raise to the Conductor) first while a Conductor
+ * holds the mission, then what the reason itself takes, and 노드 제외 last,
+ * which never stands alone and is sent only on a second press
+ * (`AttentionChoices`). A failed Conductor's raise has no one to hand it to.
+ */
+export function attentionChoices(reason: MissionAttentionReason, conductor: boolean): AttentionChoice[] {
+  const own: AttentionChoice[] = (() => {
+    switch (reason) {
+      case "merged_unproven":
+        return ["done"];
+      case "worker_ended":
+      case "pr_closed":
+      case "wake_refused":
+      case "close_refused":
+        return ["drop"];
+      case "unplanned_pr":
+        return ["attach"];
+      case "conductor_failed":
+        return ["resume", "drop"];
+    }
+  })();
+  return conductor && reason !== "conductor_failed" ? ["leave", ...own] : own;
+}
+
+/**
+ * The pull request a raise is about, for the words beside its choices: the
+ * raise's own, else the node's current one or the outside one it follows,
+ * with its state as the project's list reads it, else as the node keeps it.
+ * `why` names what that state stands on where the mark alone cannot tell:
+ * its merge-queue place, or a failure split into a change request and a
+ * failed CI.
+ */
+export type AttentionPr = { number: number; state: PrState | null; why: { kind: "queued"; position: number } | { kind: "changes_requested" | "ci_failed" } | null };
+
+export function attentionPr(node: MissionNode, attention: MissionAttention, pulls: readonly PullRequest[] | null | undefined): AttentionPr | null {
+  const number = attention.pr ?? node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+  if (number == null) return null;
+  const pull = pulls?.find((row) => row.number === number) ?? null;
+  const state = pull?.state ?? (number === node.pr ? (node.pr_state ?? null) : null);
+  const queue = pull?.work?.queue;
+  const why: AttentionPr["why"] =
+    queue?.state === "at" && state !== "merged" && state !== "closed"
+      ? { kind: "queued", position: queue.position }
+      : state === "failed" && pull
+        ? { kind: pull.review === "changes_requested" ? "changes_requested" : "ci_failed" }
+        : null;
+  return { number, state, why };
 }
 
 /** Whether the operator can set a done or dropped node to work again (B16): not in a cancelled mission, which does not reopen. */

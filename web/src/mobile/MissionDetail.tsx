@@ -7,7 +7,7 @@
 // state are the shared rules (`missionSteps`, `missionAnswer.ts`); this draws
 // them.
 
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, Loader2Icon } from "lucide-react";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon, Loader2Icon } from "lucide-react";
 import type { ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
 import { Elapsed } from "../components/elapsed";
@@ -20,10 +20,12 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
+import { PR_LOOK } from "../prMark";
 import { attentionReasonText, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
 import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
+import type { PrState } from "../snapshot";
 import { noticeText, type PhoneMission, type PhoneMissionNode } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
@@ -266,7 +268,7 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
         <span className="flex min-w-0 flex-1 flex-col justify-center gap-xs py-sm">
           <span className={cn("break-keep text-title wrap-anywhere", kind === "done" ? "text-subtle-foreground" : "text-foreground")}>{node.title}</span>
           <span className="flex min-w-0 flex-wrap items-center gap-sm text-body text-muted-foreground">
-            {node.pr != null ? <span className="shrink-0 rounded-xs bg-secondary px-xs font-mono text-caption text-subtle-foreground" data-phone-step-pr={node.pr}>#{node.pr}</span> : null}
+            {node.pr != null ? <StepPr number={node.pr} state={node.pr_state} /> : null}
             {detail ? <span className="min-w-0 break-keep wrap-anywhere" data-phone-step-line={kind}>{detail}</span> : null}
             {worker ? <span className="shrink-0">· {worker}</span> : null}
           </span>
@@ -285,6 +287,18 @@ function Step({ mission, node, kind }: { mission: PhoneMission; node: PhoneMissi
         body
       )}
     </li>
+  );
+}
+
+/** A step's pull request: its state's icon and colour and `#number`, the desktop's PR mark; one whose state Hide never read keeps the muted icon. */
+function StepPr({ number, state }: { number: number; state: PrState | null | undefined }) {
+  const look = state ? PR_LOOK[state] : null;
+  const Icon = look?.icon ?? GitPullRequestIcon;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-xxs font-mono text-caption text-subtle-foreground" data-phone-step-pr={number} data-phone-step-pr-state={state ?? "unread"}>
+      <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", look?.tone ?? "text-muted-foreground")} />
+      #{number}
+    </span>
   );
 }
 

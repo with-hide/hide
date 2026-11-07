@@ -72,6 +72,7 @@ it("gives the next node its own choices once the first one's choice is sent", as
     const drop = container.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
     expect(drop.disabled).toBe(false);
     await act(async () => drop.click());
+    await act(async () => drop.click());
     expect(sent.map((event) => (event as { payload: { node: string; action: string } }).payload)).toMatchObject([{ node: first!.node.key, action: "done" }, { node: "screen", action: "drop" }]);
   } finally {
     await act(async () => root.unmount());

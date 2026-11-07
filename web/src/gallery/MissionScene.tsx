@@ -3,8 +3,9 @@
 // `state` parameter: plan, running (every card look: working, review with its
 // checkers, done with a merge left, in main, outside, reopened by a defect),
 // rejected (running, with the search fix's check failed and one reviewer's
-// rejection, its short reason first), decision (a decision, a failed node, a stuck worker and an outside PR
-// closed unmerged in the operator's turn), decision-sent (its answer waiting
+// rejection, its short reason first), decision (a decision, a failed node whose worker ended, raised to the
+// operator with its PR's CI failure beside the choices, a stuck worker and an outside PR closed unmerged in the
+// operator's turn), decision-sent (its answer waiting
 // for the Conductor's turn), decision-unreadable (its answer waiting on a
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // the engine confirming it), stack (the merge order), no-conductor, stale, failed
@@ -153,7 +154,7 @@ function plan(state: string, now: number): MissionNode[] {
     node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), agent_id: "agent-1481", plan: workerPlan("worker-1481", ["빈 목록 재현", "필터 상태 보존", "구현 PR"], 3), launched: { agent_id: "agent-1481", agent: "codex", model: "Astra 2", effort: "high" }, ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, pr_url: "https://github.com/with-hide/hide/pull/1505", stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
-      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) } } : { ...review(30), pr_state: "pending" as const }),
+      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) }, agent_runtime: "ended" as const, attention: { reason: "worker_ended" as const, pr: null, to: "operator" as const, since_unix_ms: ago(2), on_row: false, item: false } } : { ...review(30), pr_state: "pending" as const }),
       ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", landing: stack && state !== "no-conductor" ? MERGE_LEFT : MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")),
