@@ -6,15 +6,23 @@
 //! raises nothing more.
 //!
 //! The device's passes run as its coordinator runs them: the engine's
-//! payload, with what the session read found under that state, is observed
-//! and has the hook's facts laid on it in one step (`observe_device_session`),
-//! then its rows are the device's session. The link ends through the one
-//! place every link end goes (`retire_own_device_engine`).
+//! payload, with the label worker's read of the child's Claude Code session
+//! file laid on it, is observed and has the hook's facts laid on it in one
+//! step (`observe_device_session`), then its rows are the device's session.
+//! Each link has a worker of its own over the one store, as the core runs
+//! them, and the link ends through the one place every link end goes
+//! (`retire_own_device_engine`).
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use super::device_catalog::{engine_workspace, session};
 use super::*;
+use crate::labels::store::LabelStore;
+use crate::labels::tests::{Harness, observe, settle_with_ticks};
+use crate::labels::worker::{LabelWorker, ObservedAgent};
 use hide_node_link::panes::{HookStatusReport, HookTurn};
-use hide_session::turns::TurnEnded;
 use serde_json::json;
 
 const DEVICE: &str = "mini";
@@ -94,10 +102,103 @@ fn hook(runtime: &mut Runtime, turn: HookTurn) {
         .unwrap();
 }
 
+/// The child's session as Claude Code 2.1.319 writes it, read by the
+/// device's label worker, one worker per link over the one store.
+struct Labels {
+    harness: Harness,
+    store: Arc<LabelStore>,
+    worker: Option<(LabelWorker, Receiver<()>)>,
+    path: PathBuf,
+    written: usize,
+}
+
+impl Labels {
+    /// The child's prompt and its first reply: the turn runs.
+    fn new() -> Self {
+        let harness = Harness::new();
+        let folder = harness.home().join(".claude/projects/-srv-repo");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(format!("{SESSION}.jsonl"));
+        std::fs::write(&path, "").unwrap();
+        let store = harness.store();
+        let mut labels = Self {
+            harness,
+            store,
+            worker: None,
+            path,
+            written: 0,
+        };
+        labels.write(&[
+            json!({"type": "user", "promptId": "prompt-1",
+                "message": {"role": "user", "content": "Finish on the device"}}),
+            json!({"type": "assistant", "message": {"role": "assistant",
+                "content": [{"type": "text", "text": "Working on it."}]}}),
+        ]);
+        labels.next_link();
+        labels
+    }
+
+    fn write(&mut self, records: &[serde_json::Value]) {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .unwrap();
+        for record in records {
+            let mut record = record.clone();
+            record["version"] = json!("2.1.319");
+            record["sessionId"] = json!(SESSION);
+            record["cwd"] = json!(PATH);
+            record["isSidechain"] = json!(false);
+            record["timestamp"] = json!(format!("2026-11-08T12:00:{:02}.000Z", self.written));
+            self.written += 1;
+            writeln!(file, "{record}").unwrap();
+        }
+    }
+
+    /// The turn ends while the link is down: the reply, the Stop hooks'
+    /// summary and Claude Code's end of the turn.
+    fn finish(&mut self) {
+        self.write(&[
+            json!({"type": "assistant", "message": {"role": "assistant",
+                "content": [{"type": "text", "text": "Finished."}]}}),
+            json!({"type": "system", "subtype": "stop_hook_summary", "isMeta": false,
+                "hookCount": 1, "preventedContinuation": false}),
+            json!({"type": "system", "subtype": "turn_duration", "isMeta": false,
+                "durationMs": 1200, "messageCount": 4}),
+        ]);
+    }
+
+    /// The worker of the device's next link, over the same store.
+    fn next_link(&mut self) {
+        self.worker = None;
+        let (mut worker, woken, _) = self.harness.worker(Arc::clone(&self.store));
+        worker.set_summaries(false, std::time::Instant::now());
+        self.worker = Some((worker, woken));
+    }
+
+    /// The worker follows the engine's read of the child and answers what
+    /// it lays on the device's payload.
+    fn read(&mut self, status: &str, seq: u64) -> crate::labels::overlay::LabelOverlay {
+        let (worker, woken) = self.worker.as_mut().unwrap();
+        let child = ObservedAgent {
+            pane_id: DEVICE_PANE.to_owned(),
+            agent: Some("claude".to_owned()),
+            status: Some(status.to_owned()),
+            reference: Some(("id".to_owned(), SESSION.to_owned())),
+            cwd: Some(PATH.to_owned()),
+            state_change_seq: seq,
+        };
+        observe(worker, &child);
+        settle_with_ticks(worker, woken);
+        worker.overlay()
+    }
+}
+
 /// One pass of the device's coordinator: its engine reads the child
-/// `status` at state `seq`, the session read made under that state found
-/// its last turn `ended`, and the core publishes the device's session.
-fn device_pass(runtime: &mut Runtime, status: &str, seq: u64, ended: Option<TurnEnded>) {
+/// `status` at state `seq`, the label worker reads the session under that
+/// state, and the core publishes the device's session.
+fn device_pass(runtime: &mut Runtime, labels: &mut Labels, status: &str, seq: u64) {
     let parent_session = parent(runtime)
         .lineage_session
         .clone()
@@ -113,11 +214,8 @@ fn device_pass(runtime: &mut Runtime, status: &str, seq: u64, ended: Option<Turn
         "panes": [{"pane_id": DEVICE_PANE, "cwd": PATH}],
     }))
     .unwrap();
-    payload.agents[0].facts = Some(crate::request_view::RowFacts {
-        turn_ended: ended,
-        ..Default::default()
-    });
-    runtime.observe_device_session(DEVICE, &mut payload, None);
+    let overlay = labels.read(status, seq);
+    runtime.observe_device_session(DEVICE, &mut payload, Some(&overlay));
     // The device's rows, by the ids the core gives its panes.
     for agent in &mut payload.agents {
         agent.pane_id = Some(CHILD.to_owned());
@@ -135,10 +233,12 @@ fn device_pass(runtime: &mut Runtime, status: &str, seq: u64, ended: Option<Turn
     ingest_parent(runtime);
 }
 
-/// The device's link ends, and the next one connects.
-fn reconnect(runtime: &mut Runtime) {
+/// The device's link ends, and the next one connects with a worker of its
+/// own.
+fn reconnect(runtime: &mut Runtime, labels: &mut Labels) {
     runtime.retire_own_device_engine(DEVICE, "The device helper disconnected: test");
     runtime.begin_read_connection(Some(DEVICE));
+    labels.next_link();
 }
 
 fn parent(runtime: &Runtime) -> &SidebarAgentSnapshot {
@@ -172,32 +272,35 @@ fn read_parent(runtime: &mut Runtime) {
 }
 
 /// The child's hook said its turn was running when the link went down, and
-/// its `Stop` was lost with the link. Back on the next link's engine, which
-/// counts its states from the start again, the restore's unknown step
-/// changes nothing; the engine reading it at rest with the session read
-/// saying the turn completed makes the child finished, and its parent
-/// sees one finished child and turns unread. Once the operator has read the
-/// parent, the same pass again and another reconnect leave it read, with
-/// the one finished child.
+/// its `Stop` was lost with the link while Claude Code wrote the turn's end
+/// in the session file. Back on the next link's engine, which counts its
+/// states from the start again, the restore's unknown step changes nothing;
+/// the engine reading it at rest with the next worker's read saying the turn
+/// completed makes the child finished, and its parent sees one finished
+/// child and turns unread. Once the operator has read the parent, the same
+/// pass again and another reconnect leave it read, with the one finished
+/// child.
 #[test]
 fn a_device_child_that_finished_while_its_link_was_down_reads_finished_once_it_is_back() {
     let state = tempfile::tempdir().unwrap();
     let mut runtime = core_with_device(state.path());
+    let mut labels = Labels::new();
     runtime.begin_read_connection(Some(DEVICE));
     hook(&mut runtime, HookTurn::Working);
-    device_pass(&mut runtime, "working", 57, None);
+    device_pass(&mut runtime, &mut labels, "working", 57);
     assert!(child(&runtime).state.working, "working on the first link");
     assert_eq!(parent(&runtime).descendant_counts.done, 0);
     read_parent(&mut runtime);
     assert!(!parent(&runtime).unread);
 
-    reconnect(&mut runtime);
-    device_pass(&mut runtime, "unknown", 0, None);
+    labels.finish();
+    reconnect(&mut runtime, &mut labels);
+    device_pass(&mut runtime, &mut labels, "unknown", 0);
     assert!(
         child(&runtime).state.working,
-        "a pane not yet read again is still the hook's turn"
+        "a pane not yet read at rest is still the hook's turn"
     );
-    device_pass(&mut runtime, "done", 2, Some(TurnEnded::Completed));
+    device_pass(&mut runtime, &mut labels, "done", 2);
     assert!(
         !child(&runtime).state.working,
         "the next engine and the session read end the turn"
@@ -206,11 +309,11 @@ fn a_device_child_that_finished_while_its_link_was_down_reads_finished_once_it_i
     assert!(parent(&runtime).unread, "the child's completion is news");
 
     read_parent(&mut runtime);
-    device_pass(&mut runtime, "done", 2, Some(TurnEnded::Completed));
+    device_pass(&mut runtime, &mut labels, "done", 2);
     assert!(!parent(&runtime).unread, "the same pass is no news");
-    reconnect(&mut runtime);
-    device_pass(&mut runtime, "unknown", 0, None);
-    device_pass(&mut runtime, "done", 1, Some(TurnEnded::Completed));
+    reconnect(&mut runtime, &mut labels);
+    device_pass(&mut runtime, &mut labels, "unknown", 0);
+    device_pass(&mut runtime, &mut labels, "done", 1);
     assert!(!child(&runtime).state.working);
     assert_eq!(parent(&runtime).descendant_counts.done, 1);
     assert!(!parent(&runtime).unread, "another reconnect is no news");
