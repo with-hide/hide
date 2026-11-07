@@ -491,6 +491,17 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
+      - name: A device's agent versions reach the core
+        # A helper answers the hook diagnosis from its own account's program
+        # search, the same call on every system, and the core reads a pane on
+        # a device by the version that device reported, so a letter held on a
+        # possible draft there is released by a composer read like one on the
+        # core's own machine (with-hide/hide-private#654).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=serve::tests::a_hook_diagnosis_answers_for_the_account_the_helper_runs_as)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=runtime::delivery::tests::a_device_pane_is_read_by_the_version_its_own_machine_reported) | test(=runtime::delivery::tests::a_device_s_agent_versions_go_with_the_device))'
       - name: Agent sleep ends the agent's process tree
         # Claude Code, Codex and Antigravity sleep (and Reopen) by ending the
         # pane's foreground job through the node, which Windows refused as

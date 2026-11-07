@@ -1379,6 +1379,12 @@ pub struct Runtime {
     /// thread. `None` until that first read lands, which reads as "not known
     /// yet" rather than as "not installed".
     hook_diagnosis: Option<hide_agent_hooks::Diagnosis>,
+    /// What each registered device's hook diagnosis last said, keyed by
+    /// device id, for the agent versions its panes run
+    /// (`Runtime::composer_version`). The core's own node is `hook_diagnosis`.
+    /// A device's coordinator reads it (`kit::DeviceDiagnosisReader`); an
+    /// entry goes with its device, so it is bounded by the device list.
+    device_hook_diagnoses: BTreeMap<String, hide_agent_hooks::Diagnosis>,
     /// Each machine's install kit as its last check found it, keyed by
     /// device id (the core's own node id for this Mac); `runtime/kit.rs`
     /// owns it.
@@ -2383,6 +2389,7 @@ impl Runtime {
             pane_relocations_in_flight: BTreeMap::new(),
             pane_hook_tokens: BTreeMap::new(),
             hook_diagnosis: None,
+            device_hook_diagnoses: BTreeMap::new(),
             kit_states: BTreeMap::new(),
             unknown_kit_agents: BTreeSet::new(),
             unknown_kit_agents_limit_reported: false,
