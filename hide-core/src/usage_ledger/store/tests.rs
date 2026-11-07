@@ -1179,7 +1179,9 @@ fn an_older_build_counts_into_a_converted_store_and_the_return_counts_each_call_
     assert_eq!(store.convert(), Err("usage_store_decode"));
     assert_eq!(store.daily().unwrap(), before);
     let saved = encode(&last).unwrap().replace('\'', "''");
-    store.execute_for_test(&format!("UPDATE events SET event='{saved}' WHERE event='{{'"));
+    store.execute_for_test(&format!(
+        "UPDATE events SET event='{saved}' WHERE event='{{'"
+    ));
     drop(store);
     let store = convert_all(&path, open);
 
@@ -1203,7 +1205,11 @@ fn an_older_build_counts_into_a_converted_store_and_the_return_counts_each_call_
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
             .unwrap()
     };
-    assert_eq!((rows("calls"), rows("events")), (4, 0), "each call is kept once");
+    assert_eq!(
+        (rows("calls"), rows("events")),
+        (4, 0),
+        "each call is kept once"
+    );
 }
 
 /// The calls a store holds when it is converted for an older build, and
@@ -1255,7 +1261,10 @@ fn cross_build_return() {
     let path = cross_build_store();
     let (first, older, hide_ai) = cross_build_calls();
     let mut store = open(&path).unwrap();
-    assert!(store.converting().unwrap(), "the older build counted nothing");
+    assert!(
+        store.converting().unwrap(),
+        "the older build counted nothing"
+    );
     drop(store);
     store = convert_all(&path, open);
     let dir = tempfile::tempdir().unwrap();

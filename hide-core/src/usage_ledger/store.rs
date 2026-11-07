@@ -250,7 +250,10 @@ impl Totals {
             minus(&mut total.cache_write, tokens.cache_write)?;
             minus(&mut total.cache_write_1h, tokens.cache_write_1h)?;
             if let Some(n) = tokens.reasoning {
-                minus(total.reasoning.as_mut().ok_or("usage_total_inconsistent")?, n)?;
+                minus(
+                    total.reasoning.as_mut().ok_or("usage_total_inconsistent")?,
+                    n,
+                )?;
             }
         }
         minus(&mut self.calls, 1)?;
@@ -1024,7 +1027,9 @@ impl Store {
 /// older build may have counted calls of a device this build never saw.
 fn node_of(tx: &rusqlite::Transaction<'_>, device: &str) -> Result<i64, &'static str> {
     if let Some(node) = tx
-        .query_row("SELECT id FROM nodes WHERE device=?1", [device], |r| r.get(0))
+        .query_row("SELECT id FROM nodes WHERE device=?1", [device], |r| {
+            r.get(0)
+        })
         .optional()
         .map_err(failed)?
     {

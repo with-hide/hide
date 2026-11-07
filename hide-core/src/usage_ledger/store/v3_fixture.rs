@@ -162,7 +162,15 @@ pub(crate) fn count_as_version_3(db: &Connection, device: &str, agent: Agent, ev
     .to_vec();
     db.execute(
         "INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![device, agent, event.key, day, fingerprint, event.at_ms, json],
+        params![
+            device,
+            agent,
+            event.key,
+            day,
+            fingerprint,
+            event.at_ms,
+            json
+        ],
     )
     .unwrap();
     let totals: Option<String> = db
