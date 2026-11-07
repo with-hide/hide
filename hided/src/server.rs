@@ -2367,7 +2367,7 @@ fn handle_client_text(
             state.core.terminals.key(target, bytes, unix_ms_now());
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        Some("terminal_click") => {
+        Some("terminal_mouse") => {
             screen_input(state, connection, &payload_str(&event, "pane_id"));
         }
         // A screen's grid goes on to the core only while the pane follows

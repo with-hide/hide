@@ -56,7 +56,7 @@ function observeFocusFrames(page: Page) {
       return;
     }
     const kind = frame.kind;
-    if (kind === "terminal_click") {
+    if (kind === "terminal_mouse" && frame.payload?.action === "release") {
       completedClicks += 1;
       return;
     }
@@ -123,7 +123,7 @@ async function focusHarness(page: Page, daemon: Daemon, panes: readonly string[]
     await Promise.all(inputs);
     mark("cdp.inputs.after");
     // ACKs from the separate CDP session do not fence frame observation.
-    // Each real mouseup sends terminal_click after its focus event on the
+    // Each real mouseup sends a terminal_mouse release after its focus event on the
     // same WebSocket. The last click fences every earlier focus frame.
     mark("cdp.processed.before");
     await expect.poll(() => focusFrames.completedClicks(), focusObservation).toBe(completedAfter);

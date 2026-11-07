@@ -78,7 +78,7 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   `web/e2e/unit-node-binary.ts` reads the binary once, in vitest's own process before any worker starts, which moves that cold read out of the tests.
   It is a mitigation: whether the cold read caused the 12 to 18 s first-test stalls of with-hide/hide-private#354 is not confirmed.
 - A barrier on what the page sent is not a barrier on what the daemon accepted.
-  After a burst of clicks, `terminal_click` frames counted at the page say the page sent them; hided may still hold a dozen on its socket, and the last `pane.focus` diagnostic the page has seen can be an earlier request's confirmation.
+  After a burst of clicks, `terminal_mouse` release frames counted at the page say the page sent them; hided may still hold a dozen on its socket, and the last `pane.focus` diagnostic the page has seen can be an earlier request's confirmation.
   Count the diagnostics the daemon sent back against the changes the page sent, with a cumulative count (`observeDiagnostics(...).added` in `web/e2e/pane-focus-ordering.spec.ts`): the list is capped and drops from its front, so the number of entries of one kind in it falls while a burst appends.
   Playwright's `framereceived` fires before the page's handler runs, so before reading what the page shows, poll `window.__hideProbe.arrivals()` up to the frames Playwright has seen.
 - A test's own waiting must not compete with a deadline the product enforces.

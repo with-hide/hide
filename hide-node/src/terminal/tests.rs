@@ -55,6 +55,13 @@ impl SessionWriter for FakeWriter {
         }))
     }
 
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
+        self.line(json!({
+            "type": "terminal.mouse", "action": mouse.action, "button": mouse.button,
+            "column": mouse.col, "row": mouse.row, "modifiers": mouse.modifiers.0,
+        }))
+    }
+
     fn release(&mut self) -> std::io::Result<()> {
         self.line(json!({"type": "terminal.release"}))
     }
@@ -263,6 +270,9 @@ impl SessionWriter for Submitting {
         modifiers: u8,
     ) -> std::io::Result<()> {
         self.0.scroll(lines, column, row, modifiers)
+    }
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
+        self.0.mouse(mouse)
     }
     fn release(&mut self) -> std::io::Result<()> {
         self.0.release()
@@ -889,11 +899,11 @@ fn keys_for_a_sleeping_pane_are_dropped_until_it_wakes() {
     assert_eq!(opened.next_input(), b"kept");
 }
 
-/// A dropped file's path and the bytes a screen answers its terminal with are
-/// as much typing as a key: neither reaches the shell under a sleeping agent,
-/// and a paste already held waits for the agent with what was typed behind it.
+/// A dropped file's path is as much typing as a key: it does not reach the
+/// shell under a sleeping agent, and a paste already held waits for the agent
+/// with what was typed behind it.
 #[test]
-fn a_paste_and_control_bytes_for_a_sleeping_pane_wait_for_the_agent() {
+fn a_paste_for_a_sleeping_pane_waits_for_the_agent() {
     let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
     let generation = harness.service.shared.lock().panes["w1:p1"]
@@ -921,10 +931,6 @@ fn a_paste_and_control_bytes_for_a_sleeping_pane_wait_for_the_agent() {
             report,
             TerminalReport::AttachmentDelivered { written: false, .. }
         )
-    });
-    harness.service.control(TerminalControl::Write {
-        pane: "w1:p1".into(),
-        data: protocol::encode_base64(b"\x1b[?1;2c"),
     });
     harness.service.control(TerminalControl::Asleep {
         pane: "w1:p1".into(),

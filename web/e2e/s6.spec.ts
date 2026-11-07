@@ -10,7 +10,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { corePaneFocus, withControl } from "./daemon-actions";
+import { corePaneFocus, sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { spawnChild } from "./fixture-agents";
 import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
@@ -25,6 +25,19 @@ test.describe.configure({ timeout: 120_000 });
 
 async function open(page: Page, daemon: Daemon): Promise<void> {
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+}
+
+/**
+ * Turns on SGR mouse tracking in a fixture agent's pane. The agent writes back
+ * what it reads, so the modes become its own output and its holder then
+ * reports a click to it, as a native terminal would. Answers how many left
+ * button reports the agent has read.
+ */
+async function trackMouse(daemon: Daemon, pane: string, inputLog: string): Promise<() => number> {
+  const modes = "\x1b[?1000h\x1b[?1006h";
+  await withControl(daemon, async (control) => sendKeys(control, pane, modes));
+  await expect.poll(() => fs.readFileSync(inputLog, "latin1").includes(modes), { timeout: 10_000 }).toBe(true);
+  return () => fs.readFileSync(inputLog, "latin1").split("\x1b[<0;").length - 1;
 }
 
 /**
@@ -170,7 +183,7 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     await page.keyboard.type("typed beside the lane");
     await expect.poll(() => fs.readFileSync(fixture.inputLogs[1], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-    const mouseReports = () => fs.readFileSync(fixture.inputLogs[1], "latin1").split("\x1b[<0;").length - 1;
+    const mouseReports = await trackMouse(daemon!, child, fixture.inputLogs[1]);
     const reportsBefore = mouseReports();
     await childHost.click({ position: { x: 40, y: 60 } });
     await expect.poll(mouseReports, { timeout: 10_000 }).toBe(reportsBefore + 2);

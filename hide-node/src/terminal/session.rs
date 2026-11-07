@@ -88,6 +88,9 @@ pub trait SessionWriter: Send {
         row: Option<u16>,
         modifiers: u8,
     ) -> io::Result<()>;
+    /// A pointer event over a zero-based cell, which the transport reports
+    /// in the program's mouse mode or drops when it tracks none.
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> io::Result<()>;
     /// Lets go of the session; the pane runs on.
     fn release(&mut self) -> io::Result<()>;
     /// Answers once everything written before has reached the transport.
@@ -267,6 +270,7 @@ pub(super) enum WriterCommand {
         row: Option<u16>,
         modifiers: u8,
     },
+    Mouse(hide_holder_protocol::Mouse),
     /// Bytes for the pane, counted against [`MAX_UNWRITTEN_INPUT_BYTES`] by
     /// their length.
     Input {
@@ -303,7 +307,9 @@ impl WriterCommand {
 
     fn cost(&self) -> usize {
         match self {
-            Self::Scroll { .. } | Self::Resize(_) | Self::Redraw(_) => CONTROL_LINE_COST,
+            Self::Scroll { .. } | Self::Mouse(_) | Self::Resize(_) | Self::Redraw(_) => {
+                CONTROL_LINE_COST
+            }
             Self::Input { bytes, .. } | Self::Paste(bytes) => bytes.len(),
             Self::Keys(keys) => keys.len(),
             Self::Submit(submit) => super::input::submit_len(submit),
@@ -593,6 +599,10 @@ impl Session {
             modifiers,
         })
     }
+
+    pub(super) fn mouse(&self, mouse: hide_holder_protocol::Mouse) -> Result<(), WriteRefused> {
+        self.send(WriterCommand::Mouse(mouse))
+    }
 }
 
 fn spawn_session_writer(
@@ -700,6 +710,7 @@ fn spawn_session_writer(
                         echo.input();
                         (writer.keys(&keys), None, None)
                     }
+                    WriterCommand::Mouse(mouse) => (writer.mouse(&mouse), None, None),
                     WriterCommand::Resize(size) => (writer.resize(size), None, None),
                     WriterCommand::Redraw(size) => (writer.redraw(size), None, None),
                     WriterCommand::Barrier(written) => (writer.flush(), None, Some(written)),

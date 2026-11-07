@@ -668,9 +668,11 @@ An agent row in the sidebar, and an agent's mark on a pull request row, can be d
 A drop on the agent's own pane or on a pane of another device is refused, because a pane id names a pane only on the machine that owns it.
 The right-click leaves the drag selection as it was, so Copy copies what the operator selected; the program in the pane never hears it.
 Copy joins a row whose text reaches the last column to the next with no break, except, in a pane with no agent and off Windows, a row the program ended with a line break, the same rule a link's join follows (Terminal links).
-A wheel over the pane moves a drag selection with the text it covers: the pane has no scrollback of its own, so the highlight is placed again on the rows that text moved to, drawn only for the part still on screen.
-Clipping the highlight preserves the original selection ends and Copy text; reversing the scroll while part remains visible restores the complete highlight.
+A drag held past the pane's top or bottom edge scrolls its history toward the pointer, faster the farther away it is held, and the selection grows with it, as in a native terminal; Copy then takes every row it covers, the ones scrolled away included.
+A wheel or new output moves a drag selection with the text it covers, drawn only for the part on screen; scrolling back while part remains visible draws the whole highlight again.
 Once none of it is on screen the highlight goes, but Copy (⌘C, the menu, Ctrl+C where a selection makes it copy) still takes the text that was selected, until the next click, drag, select all or key; Ctrl+C interrupts again only after that.
+A program that takes the mouse (Claude Code's fullscreen mode, Codex, OpenCode, pi, vim with mouse on) gets the press, the drag and the release, as in Ghostty, so it selects, scrolls and copies by its own rules; holding ⇧ makes the drag Hide's selection instead, limited to the screen there, since that program keeps its history itself.
+A click with nothing dragged reaches the program only when it takes the mouse.
 
 A pane whose agent sleeps (PRD agent-sleep) shows its state in place of the terminal, which stays hidden until the agent is back because the shell under it is not what the operator was talking to: Sleeping with the last progress line and Wake agent; Waking… with how old the resumed conversation is; or `Couldn’t resume this conversation` with the core's plain reason, Retry, and Start new session.
 Its second row carries no ask while it sleeps, and typed input to the pane goes nowhere, from the first moment its end begins until the agent is back: keys, a dropped file's path, the find keys and a phone's reply alike ([The phone app](#the-phone-app)).

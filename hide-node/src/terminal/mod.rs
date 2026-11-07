@@ -1251,12 +1251,39 @@ impl Inner {
                     self.error(&pane, "terminal.scroll_failed", message);
                 }
             }
-            TerminalControl::Write { pane, data } => match protocol::decode_base64(&data) {
-                Ok(bytes) => {
-                    self.write_control(&pane, Typed::Bytes(bytes), Typist::Operator, None, now)
+            TerminalControl::Mouse {
+                pane,
+                action,
+                button,
+                column,
+                row,
+                modifiers,
+            } => {
+                let mouse = hide_holder_protocol::Mouse {
+                    action,
+                    button,
+                    col: column,
+                    row,
+                    // The screen's bits (shift 1, ctrl 2, alt 4, meta 8) are
+                    // the protocol's.
+                    modifiers: hide_holder_protocol::Modifiers(modifiers),
+                };
+                let result = match self
+                    .panes
+                    .get(&pane)
+                    .and_then(|entry| entry.session.as_ref())
+                {
+                    Some(session) => session
+                        .mouse(mouse)
+                        .map_err(|refused| refused.message(&pane)),
+                    _ => Err(format!(
+                        "Pane {pane} has no terminal control session for a pointer event"
+                    )),
+                };
+                if let Err(message) = result {
+                    self.error(&pane, "terminal.mouse_failed", message);
                 }
-                Err(message) => self.error(&pane, "terminal.invalid_input", message),
-            },
+            }
             TerminalControl::Asleep { pane, asleep } => match self.panes.get_mut(&pane) {
                 Some(entry) => {
                     entry.asleep = asleep;
