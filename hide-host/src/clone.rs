@@ -49,36 +49,45 @@ const LINE_CAP: usize = 400;
 /// `file` is a local repository, which is how the tests clone.
 const ALLOWED_PROTOCOLS: &str = "https:ssh:file";
 
-/// Clones `source` into `parent/<name>` and answers the new folder. `cancel`
-/// is asked every [`POLL`]; answering true ends the run as cancelled.
-/// `progress` hears each change of stage or percent.
+/// Clones `source` into `parent/<name>` under `home` and answers the new
+/// folder. The parent is opened under home by handle and every step goes
+/// through it: the look at the target's name, Git (run in the parent held
+/// open, writing a name relative to it), the rename into place and the
+/// cleanup. A parent swapped for a link after the shell checked it therefore
+/// writes nothing outside home. `cancel` is asked every [`POLL`]; answering
+/// true ends the run as cancelled. `progress` hears each change of stage or
+/// percent.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 pub fn clone_repository(
     source: &CloneSource,
     parent: &Path,
+    home: &Path,
     stall_limit: Duration,
     cancel: &dyn Fn() -> bool,
     progress: &mut dyn FnMut(CloneProgress),
 ) -> Result<PathBuf, CloneFailure> {
-    let target = parent.join(source.name());
-    if target.symlink_metadata().is_ok() {
+    let opened = crate::browse::HomeFolder::open(&parent.to_string_lossy(), home)
+        .map_err(|error| CloneFailure::Io(error.message))?;
+    let target = opened.real.join(source.name());
+    if opened.folder.symlink_metadata(source.name()).is_ok() {
         return Err(CloneFailure::TargetExists(target));
     }
-    let staging = Staging(parent.join(format!(
-        ".{}.hide-clone-{}",
-        source.name(),
-        std::process::id()
-    )));
+    let held = opened
+        .hold(&opened.folder, opened.real.clone())
+        .map_err(|error| CloneFailure::Io(error.message))?;
+    let staging = Staging {
+        parent: &opened.folder,
+        name: format!(".{}.hide-clone-{}", source.name(), std::process::id()),
+    };
     // A staging folder left by a run this process never finished (it was
     // killed mid-clone) has this process's id only by reuse; it is ours to
     // replace.
     staging.remove();
-    let mut command = crate::git_run::remote(parent);
+    let mut command = crate::git_run::remote_in(&held);
     command
         .args(["clone", "--progress", "--"])
         .arg(source.url())
-        .arg(&staging.0)
-        .current_dir(parent)
+        .arg(&staging.name)
         .env("GIT_ALLOW_PROTOCOL", ALLOWED_PROTOCOLS)
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
@@ -140,7 +149,13 @@ pub fn clone_repository(
     if !status.success() {
         return Err(classify(&tail, status.code()));
     }
-    hide_platform::fs::atomic::rename_no_replace_path(&staging.0, &target).map_err(|error| {
+    hide_platform::fs::atomic::rename_no_replace(
+        &opened.folder,
+        std::ffi::OsStr::new(&staging.name),
+        &opened.folder,
+        std::ffi::OsStr::new(source.name()),
+    )
+    .map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             CloneFailure::TargetExists(target.clone())
         } else {
@@ -157,6 +172,7 @@ pub fn clone_repository(
 pub fn clone_reporting(
     source: &CloneSource,
     parent: &Path,
+    home: &Path,
     report: &mut dyn FnMut(CloneReport) -> bool,
 ) -> CloneAnswer {
     let report = std::cell::RefCell::new(report);
@@ -171,6 +187,7 @@ pub fn clone_reporting(
     let result = clone_repository(
         source,
         parent,
+        home,
         STALL_LIMIT,
         &|| {
             if reported.get().elapsed() >= HEARTBEAT {
@@ -188,19 +205,22 @@ pub fn clone_reporting(
     }
 }
 
-/// The folder Git writes into; removed on drop unless the clone moved it into
-/// place.
-struct Staging(PathBuf);
+/// The folder Git writes into, by its name in the parent's handle; removed
+/// on drop unless the clone moved it into place.
+struct Staging<'a> {
+    parent: &'a cap_std::fs::Dir,
+    name: String,
+}
 
-impl Staging {
+impl Staging<'_> {
     fn remove(&self) {
-        if self.0.symlink_metadata().is_ok() {
-            let _ = std::fs::remove_dir_all(&self.0);
+        if self.parent.symlink_metadata(&self.name).is_ok() {
+            let _ = self.parent.remove_dir_all(&self.name);
         }
     }
 }
 
-impl Drop for Staging {
+impl Drop for Staging<'_> {
     fn drop(&mut self) {
         self.remove();
     }

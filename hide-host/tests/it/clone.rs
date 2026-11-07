@@ -88,12 +88,14 @@ fn children(parent: &Path) -> Vec<String> {
 fn a_local_bare_repository_clones_into_its_named_folder() {
     let outer = tempfile::tempdir().unwrap();
     let bare = origin(outer.path());
-    let parent = outer.path().join("projects");
+    let home = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let parent = home.join("projects");
     fs::create_dir_all(&parent).unwrap();
     let mut heard = Vec::new();
     let target = clone_repository(
         &source(&bare),
         &parent,
+        &home,
         STALL_LIMIT,
         &|| false,
         &mut |progress| heard.push(progress),
@@ -115,12 +117,14 @@ fn a_local_bare_repository_clones_into_its_named_folder() {
 fn a_cancel_partway_leaves_no_folder() {
     let outer = tempfile::tempdir().unwrap();
     let bare = origin(outer.path());
-    let parent = outer.path().join("projects");
+    let home = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let parent = home.join("projects");
     fs::create_dir_all(&parent).unwrap();
     let cancelled = std::cell::Cell::new(false);
     let result = clone_repository(
         &source(&bare),
         &parent,
+        &home,
         STALL_LIMIT,
         &|| cancelled.get(),
         &mut |_| {
@@ -139,7 +143,8 @@ fn a_cancel_partway_leaves_no_folder() {
 #[test]
 fn a_transfer_that_goes_quiet_ends_as_stalled_and_leaves_nothing() {
     let outer = tempfile::tempdir().unwrap();
-    let parent = outer.path().join("projects");
+    let home = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let parent = home.join("projects");
     fs::create_dir_all(&parent).unwrap();
     // Accepts the connection and never answers, like a host that stopped.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -148,7 +153,7 @@ fn a_transfer_that_goes_quiet_ends_as_stalled_and_leaves_nothing() {
     let source = CloneSource::parse(&format!("https://127.0.0.1:{port}/repo.git")).unwrap();
     let limit = Duration::from_secs(2);
     let started = std::time::Instant::now();
-    let result = clone_repository(&source, &parent, limit, &|| false, &mut |_| {});
+    let result = clone_repository(&source, &parent, &home, limit, &|| false, &mut |_| {});
     assert_eq!(result, Err(CloneFailure::Stalled(limit)));
     assert!(
         started.elapsed() < Duration::from_secs(20),
@@ -167,10 +172,18 @@ fn a_transfer_that_goes_quiet_ends_as_stalled_and_leaves_nothing() {
 fn a_taken_name_is_refused_before_git_runs() {
     let outer = tempfile::tempdir().unwrap();
     let bare = origin(outer.path());
-    let parent = outer.path().join("projects");
+    let home = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let parent = home.join("projects");
     fs::create_dir_all(parent.join("origin")).unwrap();
     fs::write(parent.join("origin/keep.txt"), "mine").unwrap();
-    let result = clone_repository(&source(&bare), &parent, STALL_LIMIT, &|| false, &mut |_| {});
+    let result = clone_repository(
+        &source(&bare),
+        &parent,
+        &home,
+        STALL_LIMIT,
+        &|| false,
+        &mut |_| {},
+    );
     assert_eq!(
         result,
         Err(CloneFailure::TargetExists(parent.join("origin")))
@@ -185,15 +198,58 @@ fn a_taken_name_is_refused_before_git_runs() {
 #[test]
 fn a_missing_repository_fails_in_plain_words_and_leaves_nothing() {
     let outer = tempfile::tempdir().unwrap();
-    let parent = outer.path().join("projects");
+    let home = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let parent = home.join("projects");
     fs::create_dir_all(&parent).unwrap();
     let source =
         CloneSource::parse(&format!("file://{}/absent.git", outer.path().display())).unwrap();
-    let result = clone_repository(&source, &parent, STALL_LIMIT, &|| false, &mut |_| {});
+    let result = clone_repository(&source, &parent, &home, STALL_LIMIT, &|| false, &mut |_| {});
     assert_eq!(result, Err(CloneFailure::NotFound), "{result:?}");
     assert!(
         children(&parent).is_empty(),
         "left behind: {:?}",
         children(&parent)
+    );
+}
+
+/// The node clones only under home, whatever the shell checked before: a
+/// parent swapped for a link out of home between the check and the clone
+/// writes nothing there, neither the clone nor its staging folder.
+#[cfg(unix)]
+#[test]
+fn a_parent_swapped_for_a_link_out_of_home_after_the_check_clones_nothing_outside() {
+    let outer = tempfile::tempdir().unwrap();
+    let root = hide_platform::fs::identity::canonical(outer.path()).unwrap();
+    let bare = origin(&root);
+    let home = root.join("home");
+    let outside = root.join("outside");
+    fs::create_dir_all(home.join("projects")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    let checked = hide_host::browse::new_folder_target(
+        "~/projects",
+        "origin",
+        hide_node_link::browse::NewFolderKind::Clone,
+        &home,
+    );
+    assert!(
+        checked.is_ok(),
+        "the parent is under home when it is checked: {checked:?}"
+    );
+
+    fs::rename(home.join("projects"), home.join("moved")).unwrap();
+    std::os::unix::fs::symlink(&outside, home.join("projects")).unwrap();
+    let result = clone_repository(
+        &source(&bare),
+        &home.join("projects"),
+        &home,
+        STALL_LIMIT,
+        &|| false,
+        &mut |_| {},
+    );
+    assert!(matches!(result, Err(CloneFailure::Io(_))), "{result:?}");
+    assert!(
+        children(&outside).is_empty(),
+        "written outside home: {:?}",
+        children(&outside)
     );
 }

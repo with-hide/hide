@@ -422,19 +422,6 @@ pub mod git {
         pub issue: Option<String>,
     }
 
-    /// The repository whose root is `directory` itself, read as
-    /// [`discover`] reads one, without looking in the folders above it; a
-    /// `.git` this reader does not follow is no repository here either.
-    pub fn repository_at(directory: &Path) -> Option<Repository> {
-        let directory = fs::canonicalize(directory).ok()?;
-        let (git_dir, common_dir) = git_dir_at(&directory).ok().flatten()?;
-        Some(Repository {
-            root: directory,
-            git_dir,
-            common_dir,
-        })
-    }
-
     pub fn discover(path: &Path) -> Option<Repository> {
         discover_checked(path).ok().flatten()
     }

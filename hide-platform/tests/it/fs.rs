@@ -2546,3 +2546,56 @@ fn a_dotted_name_and_the_systems_hidden_mark_hide_an_entry() {
     #[cfg(not(any(target_os = "macos", windows)))]
     assert!(!hide_platform::fs::hidden(&marked));
 }
+
+/// A program started in a held folder runs in the folder that was held: on
+/// Unix even after its path was moved away and another folder took the name,
+/// and on Windows the path cannot be moved while the folder is held. This is
+/// what keeps a `git init` or a clone in the folder a node checked under
+/// home when the path is swapped between the check and the start.
+#[test]
+fn a_program_started_in_a_held_folder_runs_in_the_folder_that_was_held() {
+    let dir = folder();
+    let base = identity::canonical(dir.path()).unwrap();
+    let path = base.join("held");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("marker"), "held").unwrap();
+    let handle = open_folder(&path);
+    let held = hide_platform::fs::held::HeldFolder::new(&handle, path.clone(), &base).unwrap();
+    let moved = fs::rename(&path, base.join("moved"));
+    if cfg!(windows) {
+        assert!(moved.is_err(), "a held folder cannot be renamed on Windows");
+    } else {
+        moved.unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("marker"), "swapped").unwrap();
+    }
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "type", "marker"]);
+        command
+    } else {
+        let mut command = Command::new("cat");
+        command.arg("marker");
+        command
+    };
+    held.start_in(&mut command);
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "held");
+}
+
+/// A folder opened as a handle, as `cap-std` and the node hold one.
+fn open_folder(path: &Path) -> File {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_BACKUP_SEMANTICS opens a folder.
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .unwrap()
+    }
+    #[cfg(not(windows))]
+    File::open(path).unwrap()
+}
