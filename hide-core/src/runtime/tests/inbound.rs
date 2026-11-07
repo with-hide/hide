@@ -28,6 +28,7 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
                 label: device.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: "fixture-host".to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });
@@ -831,6 +832,7 @@ fn a_linked_node_s_sessions_are_read_through_its_link() {
                     .unwrap()
                     .origin = crate::model::LinkOrigin::Dialed {
                     ssh_alias: "fixture-host".to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 };
             }
             let mut reported = session(vec![engine_workspace(NODE, "w1", &path, &[("t1", &path)])]);
@@ -1006,6 +1008,7 @@ fn a_node_pane_s_hide_memory_reads_for_the_node_s_session() {
         crate::model::LinkOrigin::Inbound,
         crate::model::LinkOrigin::Dialed {
             ssh_alias: "fixture-host".to_owned(),
+            naming: crate::model::DeviceNaming::Named,
         },
     ] {
         runtime

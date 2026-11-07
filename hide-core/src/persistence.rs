@@ -1071,7 +1071,8 @@ mod tests {
                 (
                     "studio",
                     crate::model::LinkOrigin::Dialed {
-                        ssh_alias: "studio-host".to_owned()
+                        ssh_alias: "studio-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Named
                     }
                 ),
                 ("laptop", crate::model::LinkOrigin::Inbound),

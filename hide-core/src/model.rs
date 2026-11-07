@@ -5469,8 +5469,13 @@ pub struct DeviceRegistration {
 /// it (PRD core-host-node-remote-core D-04, D-10).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LinkOrigin {
-    /// The core dials the machine over SSH under this alias.
-    Dialed { ssh_alias: String },
+    /// The core dials the machine over SSH under this alias. The alias is the
+    /// machine's label for the operator; its id is the machine's own once
+    /// `naming` is `Named` (with-hide/hide-private#671).
+    Dialed {
+        ssh_alias: String,
+        naming: DeviceNaming,
+    },
     /// The machine's own node dials this core over the operator's SSH
     /// login; its id is its node id.
     Inbound,
@@ -5479,10 +5484,59 @@ pub enum LinkOrigin {
     Wsl { distro: String },
 }
 
+/// Whether a device the core dials over SSH is named by its machine's own id
+/// (`hide_platform::host::machine_id`, the id that machine's core names
+/// itself by), so one machine has one id whichever machine runs the core
+/// (with-hide/hide-private#671). Stored on the registration itself and never
+/// read from its consent, which the operator revokes and grants again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceNaming {
+    /// Registered before machine ids named devices, under an id its alias
+    /// made, and so possibly with records under that id: the start's one-time
+    /// conversion names it (`node_migration::devices`), and until then the
+    /// core opens nothing on it.
+    Legacy,
+    /// Registered by this build and never connected, under an id its alias
+    /// made: nothing names it yet, so its first connection renames it to the
+    /// id its node reports (`runtime::device_names`).
+    Pending,
+    /// Its id is its machine's own, which every connection's node confirms.
+    Named,
+}
+
+impl DeviceNaming {
+    pub(crate) fn stored(self) -> Option<&'static str> {
+        match self {
+            Self::Legacy => None,
+            Self::Pending => Some("pending"),
+            Self::Named => Some("named"),
+        }
+    }
+
+    fn from_stored(stored: Option<&str>) -> Result<Self, String> {
+        match stored {
+            None => Ok(Self::Legacy),
+            Some("pending") => Ok(Self::Pending),
+            Some("named") => Ok(Self::Named),
+            Some(other) => Err(format!("{other:?} is not a device naming")),
+        }
+    }
+}
+
 impl LinkOrigin {
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
-            Self::Dialed { ssh_alias } => Some(ssh_alias),
+            Self::Dialed { ssh_alias, .. } => Some(ssh_alias),
+            Self::Inbound | Self::Wsl { .. } => None,
+        }
+    }
+
+    /// How a device dialed over SSH is named; `None` for a node that dials in
+    /// (named by its node id) and a WSL distribution (named by the PC and its
+    /// distribution, `docs/INSTALL.md`, What each system supports).
+    pub fn naming(&self) -> Option<DeviceNaming> {
+        match self {
+            Self::Dialed { naming, .. } => Some(*naming),
             Self::Inbound | Self::Wsl { .. } => None,
         }
     }
@@ -5540,14 +5594,27 @@ struct StoredDeviceRegistration {
     inbound: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wsl_distro: Option<String>,
+    /// A dialed device's `DeviceNaming`; absent is `Legacy`, which every
+    /// registration an earlier build wrote reads as. An earlier build reads
+    /// past it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    naming: Option<String>,
 }
 
 impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
     type Error = String;
 
     fn try_from(stored: StoredDeviceRegistration) -> Result<Self, String> {
+        let naming = DeviceNaming::from_stored(stored.naming.as_deref())
+            .map_err(|error| format!("device {}: {error}", stored.id))?;
+        if naming != DeviceNaming::Legacy && stored.ssh_alias.is_none() {
+            return Err(format!(
+                "device {} is named as a dialed device but names no SSH alias",
+                stored.id
+            ));
+        }
         let origin = match (stored.ssh_alias, stored.inbound, stored.wsl_distro) {
-            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias },
+            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias, naming },
             (None, true, None) => LinkOrigin::Inbound,
             (None, false, Some(distro)) => LinkOrigin::Wsl { distro },
             (None, false, None) => {
@@ -5582,6 +5649,11 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             host_consent: registration.host_consent,
             inbound,
             wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
+            naming: registration
+                .origin
+                .naming()
+                .and_then(DeviceNaming::stored)
+                .map(str::to_owned),
         }
     }
 }

@@ -992,6 +992,7 @@ fn withdrawing_consent_drops_a_save_waiting_for_the_helper() {
                 label: DEVICE.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: DEVICE.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });
@@ -1039,6 +1040,7 @@ fn withdrawing_consent_lets_a_running_save_land() {
                 label: DEVICE.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: DEVICE.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });
@@ -1548,6 +1550,7 @@ fn studio_connecting(runtime: &mut Runtime) {
             label: "studio".to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: DEVICE.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent,
         });

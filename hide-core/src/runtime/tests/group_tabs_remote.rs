@@ -407,6 +407,7 @@ fn origins() -> [LinkOrigin; 2] {
         LinkOrigin::Inbound,
         LinkOrigin::Dialed {
             ssh_alias: DEVICE.into(),
+            naming: crate::model::DeviceNaming::Named,
         },
     ]
 }
@@ -1657,6 +1658,7 @@ fn ssh_group_has_tabs_but_refuses_a_second_area() {
     let (mut runtime, _saved) = setup(
         LinkOrigin::Dialed {
             ssh_alias: DEVICE.into(),
+            naming: crate::model::DeviceNaming::Named,
         },
         &t.main,
     );

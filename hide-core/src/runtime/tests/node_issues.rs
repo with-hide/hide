@@ -1516,6 +1516,7 @@ fn a_dialed_device_s_worktree_read_asks_no_branch_notes() {
         runtime.snapshot.ui_state.device_registrations[0].origin =
             crate::model::LinkOrigin::Dialed {
                 ssh_alias: "macbook".to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             };
         runtime.request_device_worktrees(NODE, true);
     }
@@ -1587,6 +1588,7 @@ fn a_device_this_core_dials_keeps_no_issues_here() {
     let mut runtime = shared.lock().unwrap();
     runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
         ssh_alias: "macbook".to_owned(),
+        naming: crate::model::DeviceNaming::Named,
     };
     runtime.refresh_device_catalog(NODE);
     let project = node_project(&runtime).unwrap();
@@ -1637,6 +1639,7 @@ fn a_device_this_core_dials_has_its_pull_requests_read_with_this_machine_s_login
     let mut runtime = shared.lock().unwrap();
     runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
         ssh_alias: "macbook".to_owned(),
+        naming: crate::model::DeviceNaming::Named,
     };
     let request = runtime.device_github_request(NODE, std::time::Instant::now());
     assert_eq!(
@@ -1993,6 +1996,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
 
     runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
         ssh_alias: "macbook".to_owned(),
+        naming: crate::model::DeviceNaming::Named,
     };
     runtime.refresh_device_catalog(NODE);
     let project = node_project(&runtime).unwrap();

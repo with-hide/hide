@@ -303,6 +303,7 @@ fn spawner() -> Spawner {
                     label: id.to_owned(),
                     origin: crate::model::LinkOrigin::Dialed {
                         ssh_alias: id.to_owned(),
+                        naming: crate::model::DeviceNaming::Named,
                     },
                     host_consent: None,
                 });

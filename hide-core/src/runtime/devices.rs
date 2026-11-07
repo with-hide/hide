@@ -154,7 +154,7 @@ impl Runtime {
             LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } if self.effects_held() => {
                 return false;
             }
-            LinkOrigin::Dialed { ssh_alias } => Source::Ssh(ssh_alias.clone()),
+            LinkOrigin::Dialed { ssh_alias, .. } => Source::Ssh(ssh_alias.clone()),
             LinkOrigin::Wsl { distro } => Source::Wsl(distro.clone()),
         };
         if !self
@@ -173,6 +173,25 @@ impl Runtime {
                 catalog: Default::default(),
                 unreachable_since_unix_ms: Some(unix_milliseconds()),
             });
+        }
+        // A device that is not yet, or no longer, the machine its id names
+        // opens no link (`device_names`).
+        if let Some(reason) = self.device_name_hold(registration) {
+            self.begin_device_connect(&device_id);
+            self.fail_device_connect_before_link(
+                &device_id,
+                crate::product_analytics::DeviceFailure::MachineName,
+            );
+            crate::diagnostic!(serde_json::json!({
+                "component": "remote_session_sync",
+                "kind": "device.name_held",
+                "target": device_id,
+                "message": reason,
+            }));
+            return self.ingest_remote_session(
+                &device_id,
+                Err(live::SessionFetchError::Unreachable(reason)),
+            );
         }
         let started = (|| {
             // A registration from before ids were checked, or one a shell
@@ -464,6 +483,12 @@ impl Runtime {
                 format!("Device {device_id} is already connected"),
                 false,
             );
+            return true;
+        }
+        // A renamed device waits for the save that holds its new id; the
+        // retry asks for that save again, and the save connects it.
+        if self.device_names_saving.contains(device_id) {
+            self.persist_current_ui_state();
             return true;
         }
         let focused_device = self.snapshot.navigator.focused_device_id.clone();
@@ -784,8 +809,11 @@ impl DeviceRefusal {
 
 impl Runtime {
     /// Registers an SSH device and starts its connection; the id it was
-    /// registered under on success. Settings' Add and `hide device add` both
-    /// come here.
+    /// registered under on success. Settings' Add, a Host's tile and
+    /// `hide device add` all come here. The id is the alias's until the
+    /// device's first connection names it by its machine's own id
+    /// (`DeviceNaming::Pending`, `device_names`), so a caller reads the
+    /// device back by its alias.
     pub(super) fn register_device(
         &mut self,
         payload: super::events::RegisterDevicePayload,
@@ -801,13 +829,12 @@ impl Runtime {
                 .register_wsl_device(distro.trim(), payload.host_consent)
                 .map(|registration| registration.id);
         }
-        let id = payload.id.trim().to_owned();
         let label = payload.label.trim().to_owned();
         let ssh_alias = payload.ssh_alias.trim().to_owned();
-        if id.is_empty() || label.is_empty() || ssh_alias.is_empty() {
+        if label.is_empty() || ssh_alias.is_empty() {
             return Err(DeviceRefusal::new(
                 "device.invalid",
-                "Device id, label, and SSH alias are required",
+                "Device label and SSH alias are required",
             ));
         }
         if !hide_node_link::device::ssh_alias_is_one_token(&ssh_alias) {
@@ -816,33 +843,23 @@ impl Runtime {
                 "The SSH alias must be one Host name from ~/.ssh/config",
             ));
         }
-        if !hide_node_link::address::device_id_is_unambiguous(&id) {
-            return Err(DeviceRefusal::new(
-                "device.invalid",
-                "A device id cannot contain \":\"",
-            ));
-        }
-        // `local` named this machine before node ids; a device under
-        // that name would read as this machine in an unconverted key.
-        if id == self.node.as_str()
-            || id == crate::node::LEGACY_LOCAL_DEVICE_ID
-            || self
-                .snapshot
+        // Until its first connection the device goes by its alias, made
+        // into an id no registration, this node or `local` holds.
+        let id = crate::device_command::device_id_for(
+            &ssh_alias,
+            self.snapshot
                 .ui_state
                 .device_registrations
                 .iter()
-                .any(|device| device.id == id)
-        {
-            return Err(DeviceRefusal::new(
-                "device.duplicate",
-                format!("Device {id} is already registered"),
-            ));
-        }
+                .map(|device| device.id.as_str())
+                .chain(std::iter::once(self.node.as_str())),
+        );
         let registration = crate::model::DeviceRegistration {
             id: id.clone(),
             label,
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: ssh_alias.clone(),
+                naming: crate::model::DeviceNaming::Pending,
             },
             host_consent: payload.host_consent.then(|| self.new_host_consent()),
         };
@@ -936,6 +953,8 @@ impl Runtime {
             .retain(|device| device.id != device_id);
         self.delivery_panes.remove(device_id);
         self.forget_device_connect_outcome(device_id);
+        self.device_names_saving.remove(device_id);
+        self.device_machine_bound.remove(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.
         let kit_removal = self.queue_device_kit_removal(&registration);
@@ -1019,19 +1038,7 @@ impl Runtime {
             }
             DeviceCommand::Add { ssh_alias, name } => {
                 let ssh_alias = ssh_alias.trim().to_owned();
-                let id = crate::device_command::device_id_for(
-                    &ssh_alias,
-                    self.snapshot
-                        .ui_state
-                        .device_registrations
-                        .iter()
-                        .map(|device| device.id.as_str())
-                        .chain(std::iter::once(self.node.as_str())),
-                );
-                // The helper waits for the operator's Allow on the device's
-                // row: its kit writes that account's hook files.
                 let payload = super::events::RegisterDevicePayload {
-                    id,
                     label: name.unwrap_or_else(|| ssh_alias.clone()),
                     ssh_alias,
                     host_consent: false,
@@ -1058,6 +1065,7 @@ impl Runtime {
                 ))
             }
             DeviceCommand::Remove { device_id } => {
+                let device_id = self.machine_named(&device_id)?;
                 // A file tab's unsaved draft lives in the shell, which
                 // Settings' Remove asks to store first; this command cannot.
                 if self.snapshot.editor.tabs.iter().any(|tab| {
@@ -1069,6 +1077,7 @@ impl Runtime {
                 Ok((serde_json::json!({ "device_id": device_id }), true))
             }
             DeviceCommand::Retry { device_id } => {
+                let device_id = self.machine_named(&device_id)?;
                 let registration = self
                     .device_registration(&device_id)
                     .ok_or("device_unknown")?;
@@ -1125,33 +1134,4 @@ impl Runtime {
             .and_then(|host| host.problem);
         crate::device_command::device_answer(device, remote_state, problem)
     }
-}
-
-/// The id a Host's device registers under, as Add device names it
-/// (`deviceIdFor` in `web/src/settings.ts`): every run of characters other
-/// than lower-case letters, digits, `-` and `_` becomes one `-`, the ends lose
-/// their `-`, and a numeric suffix is added when a device already holds it;
-/// `local`, this machine's id before node ids, is never given.
-pub(super) fn device_id_for_alias(alias: &str, existing: &[&str]) -> String {
-    let mut base = String::new();
-    let mut replacing = false;
-    for character in alias.trim().to_lowercase().chars() {
-        if character.is_ascii_lowercase() || character.is_ascii_digit() || "_-".contains(character)
-        {
-            base.push(character);
-            replacing = false;
-        } else if !replacing {
-            base.push('-');
-            replacing = true;
-        }
-    }
-    let base = base.trim_matches('-');
-    let base = if base.is_empty() { "device" } else { base };
-    if !existing.contains(&base) && base != crate::node::LEGACY_LOCAL_DEVICE_ID {
-        return base.to_owned();
-    }
-    (2..)
-        .map(|index| format!("{base}-{index}"))
-        .find(|candidate| !existing.contains(&candidate.as_str()))
-        .unwrap_or_else(|| base.to_owned())
 }

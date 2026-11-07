@@ -1029,6 +1029,11 @@ impl Runtime {
                 self.device_connect_platform(device_id, &node.hello.os, &node.hello.arch);
                 let mut bound_now = false;
                 let mut helper_path = None;
+                // What the probe on this link read of the machine, before
+                // the consent may take it.
+                let probe = dialed
+                    .as_ref()
+                    .map(|(identity, ..)| identity.machine_id.clone());
                 if let Some((identity, installed, path, upload)) = dialed {
                     let mut machine_carried = false;
                     if let Some(consent) = self
@@ -1059,6 +1064,7 @@ impl Runtime {
                     }
                     if bound_now || machine_carried {
                         self.persist_current_ui_state();
+                        self.device_machine_bound.insert(device_id.to_owned());
                     }
                     if machine_carried {
                         crate::diagnostic!(serde_json::json!({
@@ -1079,6 +1085,37 @@ impl Runtime {
                         "upload": upload,
                     }));
                     helper_path = Some(path);
+                }
+                // A dialed device opens only on the machine its id names, and
+                // a new one takes that machine's id first (`device_names`).
+                if let Some(probe) = probe {
+                    let hello = node.hello.machine_identity.clone().into_result();
+                    match self.device_name_verdict(device_id, probe.as_deref(), &hello) {
+                        super::device_names::NameVerdict::Open => {}
+                        super::device_names::NameVerdict::NamedInPlace => {
+                            self.name_device_in_place(device_id);
+                        }
+                        super::device_names::NameVerdict::Hold(reason) => {
+                            node.host.close(&reason);
+                            return self.ingest_host_established(
+                                device_id,
+                                generation,
+                                Err(EstablishError::MachineName(reason)),
+                            );
+                        }
+                        super::device_names::NameVerdict::Rename(to) => {
+                            node.host.close("the device takes its machine id");
+                            if let Err(reason) = self.name_pending_device(device_id, &to) {
+                                return self.ingest_host_established(
+                                    device_id,
+                                    generation,
+                                    Err(EstablishError::MachineName(reason)),
+                                );
+                            }
+                            self.refresh_device_snapshots();
+                            return true;
+                        }
+                    }
                 }
                 self.device_host_retries.remove(device_id);
                 // Connected: leave the app gave meanwhile has nothing left to
@@ -1223,7 +1260,9 @@ impl Runtime {
                 };
                 if matches!(
                     &error,
-                    EstablishError::IdentityChanged { .. } | EstablishError::Unsupported(_)
+                    EstablishError::IdentityChanged { .. }
+                        | EstablishError::Unsupported(_)
+                        | EstablishError::MachineName(_)
                 ) || problem.is_some_and(|problem| !problem.retried()) && !needs_operator
                 {
                     self.device_wake_pending.remove(device_id);
@@ -1233,6 +1272,9 @@ impl Runtime {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
                     EstablishError::Stopped(_) => HostPhase::Unavailable(message),
+                    // The same machine answers a retry: the operator's
+                    // restart or removal is what changes it.
+                    EstablishError::MachineName(_) => HostPhase::Unavailable(message),
                     // A refused sign-in, a changed server key or a missing
                     // ssh would only be refused again: the operator's retry
                     // tries it (B7, B13, B14, B18).

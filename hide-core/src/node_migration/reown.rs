@@ -76,6 +76,41 @@ impl OwnerChange {
     }
 }
 
+/// How a change of a state folder spells the machines it gives another id:
+/// a core move's owner change, or the one-time naming of devices by their
+/// machines' own ids (`super::devices`). The `KEYS` table says where each
+/// spelling is; this says what it becomes.
+pub(super) trait Change {
+    /// The id a machine id becomes; `None` when it stays.
+    fn device(&self, id: &str) -> Option<String>;
+    /// The id an engine-scoped id of `kind` becomes; `None` when it stays.
+    fn scoped(&self, kind: Kind, id: &str) -> Option<String>;
+    /// The id a checkout id the table lacks becomes; `None` when it stays
+    /// or is dropped (`lacks`).
+    fn checkout(&self, _id: &str) -> Option<String> {
+        None
+    }
+    /// Whether a registration or checkout id the table lacks belongs to a
+    /// machine the change gives another id, and so names something no
+    /// machine still has.
+    fn lacks(&self, id: &str) -> bool;
+}
+
+impl Change for OwnerChange {
+    fn device(&self, id: &str) -> Option<String> {
+        OwnerChange::device(self, id)
+    }
+
+    fn scoped(&self, kind: Kind, id: &str) -> Option<String> {
+        OwnerChange::scoped(self, kind, id)
+    }
+
+    fn lacks(&self, id: &str) -> bool {
+        id.starts_with("workspace:")
+            || crate::address::device_of(id) == Some(self.new_owner_was.as_str())
+    }
+}
+
 /// The registration and checkout ids of the two machines before and after
 /// the move. The source core computes it from what it knows of each path
 /// before it stops (`id_table`), because a project id is a digest of a root
@@ -289,108 +324,122 @@ struct Renumbered {
 
 /// What a mapping makes of one value: the same, another, or nothing (an
 /// entry of a fold or recent list that names what neither machine has).
-enum Mapped {
+pub(super) enum Mapped {
     Same,
     To(String),
     Drop,
 }
 
-impl Mapper<'_> {
-    fn map(&self, moves: Moves, value: &str) -> Mapped {
-        let to = |mapped: Option<String>| mapped.map_or(Mapped::Same, Mapped::To);
-        match moves {
-            Moves::Device => to(self.change.device(value)),
-            Moves::Pane => to(self.change.scoped(Kind::Pane, value)),
-            Moves::Tab => to(self.change.scoped(Kind::Tab, value)),
-            Moves::Registration => self.table(&self.ids.registrations, value),
-            Moves::Checkout => self.table(&self.ids.checkouts, value),
-            Moves::Fold => {
-                // A device's own folds carry its id; a sleeping project's
-                // fold carries the project's (PRD sidebar-titlebar-refresh D-19).
-                if let Some(device) = value.strip_prefix("cleanup/") {
-                    to(self.change.device(device).map(|id| format!("cleanup/{id}")))
-                } else if let Some(device) = value.strip_prefix("no_agents/") {
-                    to(self
-                        .change
-                        .device(device)
-                        .map(|id| format!("no_agents/{id}")))
-                } else if let Some(project) = value.strip_prefix("asleep/") {
-                    match self.table(&self.ids.registrations, project) {
-                        Mapped::To(id) => Mapped::To(format!("asleep/{id}")),
-                        other => other,
-                    }
-                } else {
-                    self.table(&self.ids.registrations, value)
+/// What `change` makes of `value` at a place whose row moves as `moves`.
+pub(super) fn map_id(change: &dyn Change, ids: &IdTable, moves: Moves, value: &str) -> Mapped {
+    let to = |mapped: Option<String>| mapped.map_or(Mapped::Same, Mapped::To);
+    match moves {
+        Moves::Device => to(change.device(value)),
+        Moves::Pane => to(change.scoped(Kind::Pane, value)),
+        Moves::Tab => to(change.scoped(Kind::Tab, value)),
+        Moves::Registration => table(change, &ids.registrations, value),
+        Moves::Checkout => match change.checkout(value) {
+            Some(id) => Mapped::To(id),
+            None => table(change, &ids.checkouts, value),
+        },
+        Moves::Fold => {
+            // A device's own folds carry its id; a sleeping project's
+            // fold carries the project's (PRD sidebar-titlebar-refresh D-19).
+            if let Some(device) = value.strip_prefix("cleanup/") {
+                to(change.device(device).map(|id| format!("cleanup/{id}")))
+            } else if let Some(device) = value.strip_prefix("no_agents/") {
+                to(change.device(device).map(|id| format!("no_agents/{id}")))
+            } else if let Some(project) = value.strip_prefix("asleep/") {
+                match table(change, &ids.registrations, project) {
+                    Mapped::To(id) => Mapped::To(format!("asleep/{id}")),
+                    other => other,
+                }
+            } else {
+                table(change, &ids.registrations, value)
+            }
+        }
+        Moves::Stays | Moves::OwnPath(_) | Moves::Labels | Moves::Whole => Mapped::Same,
+    }
+}
+
+/// A registration or checkout id the change gives another id maps through
+/// the table; one of another machine stays; one the table lacks of a
+/// machine the change respells names something no machine still has.
+fn table(change: &dyn Change, table: &BTreeMap<String, String>, value: &str) -> Mapped {
+    if let Some(id) = table.get(value) {
+        return Mapped::To(id.clone());
+    }
+    if change.lacks(value) {
+        Mapped::Drop
+    } else {
+        Mapped::Same
+    }
+}
+
+/// Maps every value or key `pattern` reaches in a store, as `map` says;
+/// answers how many entries it dropped.
+pub(super) fn apply_pattern(
+    value: &mut Value,
+    pattern: &str,
+    moves: Moves,
+    map: &dyn Fn(Moves, &str) -> Mapped,
+) -> Result<usize, String> {
+    if matches!(
+        moves,
+        Moves::Stays | Moves::OwnPath(_) | Moves::Labels | Moves::Whole
+    ) {
+        return Ok(0);
+    }
+    let parts: Vec<&str> = pattern.trim_start_matches('/').split('/').collect();
+    let mut pruned = 0;
+    walk(value, &parts, &mut |slot| match slot {
+        Slot::Value(value) => {
+            let Some(text) = value.as_str() else {
+                return Ok(false);
+            };
+            match map(moves, text) {
+                Mapped::Same => Ok(false),
+                Mapped::To(id) => {
+                    *value = Value::String(id);
+                    Ok(false)
+                }
+                Mapped::Drop => {
+                    pruned += 1;
+                    Ok(true)
                 }
             }
-            Moves::Stays | Moves::OwnPath(_) | Moves::Labels | Moves::Whole => Mapped::Same,
         }
-    }
-
-    /// A registration or checkout id of either machine maps through the
-    /// table; one of another machine stays; one of the two machines the table
-    /// lacks names something neither still has.
-    fn table(&self, table: &BTreeMap<String, String>, value: &str) -> Mapped {
-        if let Some(id) = table.get(value) {
-            return Mapped::To(id.clone());
-        }
-        let theirs = crate::address::device_of(value) == Some(self.change.new_owner_was.as_str());
-        if value.starts_with("workspace:") || theirs {
-            Mapped::Drop
-        } else {
-            Mapped::Same
-        }
-    }
-
-    fn apply(&mut self, value: &mut Value, pattern: &str, moves: Moves) -> Result<(), String> {
-        if matches!(
-            moves,
-            Moves::Stays | Moves::OwnPath(_) | Moves::Labels | Moves::Whole
-        ) {
-            return Ok(());
-        }
-        let parts: Vec<&str> = pattern.trim_start_matches('/').split('/').collect();
-        let mut pruned = 0;
-        let result = walk(value, &parts, &mut |slot| match slot {
-            Slot::Value(value) => {
-                let Some(text) = value.as_str() else {
-                    return Ok(false);
-                };
-                match self.map(moves, text) {
-                    Mapped::Same => Ok(false),
-                    Mapped::To(id) => {
-                        *value = Value::String(id);
-                        Ok(false)
-                    }
+        Slot::Keys(object) => {
+            let keys: Vec<String> = object.keys().cloned().collect();
+            let mut renamed = Map::new();
+            for key in keys {
+                let entry = object.remove(&key).expect("listed key");
+                let key = match map(moves, &key) {
+                    Mapped::Same => key,
+                    Mapped::To(id) => id,
                     Mapped::Drop => {
                         pruned += 1;
-                        Ok(true)
+                        continue;
                     }
+                };
+                if renamed.insert(key.clone(), entry).is_some() {
+                    return Err(format!("two entries would both be {key}"));
                 }
             }
-            Slot::Keys(map) => {
-                let keys: Vec<String> = map.keys().cloned().collect();
-                let mut renamed = Map::new();
-                for key in keys {
-                    let entry = map.remove(&key).expect("listed key");
-                    let key = match self.map(moves, &key) {
-                        Mapped::Same => key,
-                        Mapped::To(id) => id,
-                        Mapped::Drop => {
-                            pruned += 1;
-                            continue;
-                        }
-                    };
-                    if renamed.insert(key.clone(), entry).is_some() {
-                        return Err(format!("two entries would both be {key}"));
-                    }
-                }
-                *map = renamed;
-                Ok(false)
-            }
-        });
-        self.pruned += pruned;
-        result.map(|_| ())
+            *object = renamed;
+            Ok(false)
+        }
+    })?;
+    Ok(pruned)
+}
+
+impl Mapper<'_> {
+    fn apply(&mut self, value: &mut Value, pattern: &str, moves: Moves) -> Result<(), String> {
+        let (change, ids) = (self.change, self.ids);
+        self.pruned += apply_pattern(value, pattern, moves, &|moves, text| {
+            map_id(change, ids, moves, text)
+        })?;
+        Ok(())
     }
 
     /// The rows a pattern cannot express: the owner's path-keyed settings
@@ -420,52 +469,8 @@ impl Mapper<'_> {
                 self.device_registrations(value)
             }
             WORKSPACE_VIEWS => {
-                for view in each(value, "workspaces") {
-                    let drafts: BTreeSet<String> = view
-                        .pointer("/agent_groups/drafts")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect();
-                    if let Some(layout) = view.get_mut("agent_layout") {
-                        self.agent_layout(layout, &drafts);
-                    }
-                    if let Some(groups) = view.get_mut("agent_groups") {
-                        for group in each(groups, "items") {
-                            if let Some(layout) = group.get_mut("layout") {
-                                self.agent_layout(layout, &drafts);
-                            }
-                        }
-                    }
-                    if let Some(starts) =
-                        view.get_mut("agent_starts").and_then(Value::as_object_mut)
-                    {
-                        for start in starts.values_mut() {
-                            for (field, kind) in
-                                [("live_tab_id", Moves::Tab), ("pane_id", Moves::Pane)]
-                            {
-                                if let Some(value) = start.get_mut(field)
-                                    && let Some(Mapped::To(id)) =
-                                        value.as_str().map(|text| self.map(kind, text))
-                                {
-                                    *value = Value::String(id);
-                                }
-                            }
-                        }
-                    }
-                    super::each_opener(view, &mut |device| match device
-                        .as_str()
-                        .map(|id| self.map(Moves::Device, id))
-                    {
-                        Some(Mapped::To(id)) => {
-                            *device = Value::String(id);
-                            true
-                        }
-                        _ => false,
-                    });
-                }
+                let (change, ids) = (self.change, self.ids);
+                map_views(value, &|moves, text| map_id(change, ids, moves, text));
                 Ok(())
             }
             LABELS => reown_labels(value, self.change),
@@ -503,37 +508,7 @@ impl Mapper<'_> {
     /// choices becoming a device's, the new owner's a device's becoming the
     /// core's own, and a third machine's stay as they are.
     fn project_settings(&mut self, value: &mut Value) -> Result<(), String> {
-        let Some(records) = value
-            .as_object_mut()
-            .and_then(|object| object.get_mut("project_settings"))
-        else {
-            return Ok(());
-        };
-        let records = match records {
-            Value::Object(records) => std::mem::take(records),
-            Value::Null => return Ok(()),
-            _ => return Err("project_settings is not a map".to_owned()),
-        };
-        let mut moved = Map::new();
-        for (key, mut record) in records {
-            let device = record.get("device_id").and_then(Value::as_str);
-            let new_key = match device.map(|device| self.map(Moves::Device, device)) {
-                Some(Mapped::To(device)) => {
-                    let Some(root) = record.get("root").and_then(Value::as_str) else {
-                        return Err(format!("/project_settings/{key} names no root"));
-                    };
-                    let new_key = crate::project_settings::key(&device, root);
-                    record["device_id"] = Value::String(device);
-                    new_key
-                }
-                _ => key,
-            };
-            if moved.insert(new_key.clone(), record).is_some() {
-                return Err(format!("two project settings would both be {new_key}"));
-            }
-        }
-        value["project_settings"] = Value::Object(moved);
-        Ok(())
+        map_project_settings(value, &|device| self.change.device(device))
     }
 
     /// A promotion task names its card by number (`m3`), and a fold of
@@ -669,44 +644,138 @@ impl Mapper<'_> {
         }
         Ok(())
     }
+}
 
-    /// Every tab an Agent layout names: each area's front display and its
-    /// displays, and each canvas's tab.
-    fn agent_layout(&mut self, layout: &mut Value, drafts: &BTreeSet<String>) {
-        fn node(mapper: &Mapper<'_>, value: &mut Value, drafts: &BTreeSet<String>) {
-            if let Some(area) = value.get_mut("area") {
-                if let Some(active) = area.get_mut("active") {
-                    tab(mapper, active, drafts);
+/// Moves each Project's choices whose machine `device` gives another id to
+/// the key that id and the record's root make (`project_settings::key`),
+/// naming the new id in the record; two records meeting at one key stop it.
+pub(super) fn map_project_settings(
+    value: &mut Value,
+    device: &dyn Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    let Some(records) = value
+        .as_object_mut()
+        .and_then(|object| object.get_mut("project_settings"))
+    else {
+        return Ok(());
+    };
+    let records = match records {
+        Value::Object(records) => std::mem::take(records),
+        Value::Null => return Ok(()),
+        _ => return Err("project_settings is not a map".to_owned()),
+    };
+    let mut moved = Map::new();
+    for (key, mut record) in records {
+        let renamed = record
+            .get("device_id")
+            .and_then(Value::as_str)
+            .and_then(device);
+        let new_key = match renamed {
+            Some(device) => {
+                let Some(root) = record.get("root").and_then(Value::as_str) else {
+                    return Err(format!("/project_settings/{key} names no root"));
+                };
+                let new_key = crate::project_settings::key(&device, root);
+                record["device_id"] = Value::String(device);
+                new_key
+            }
+            None => key,
+        };
+        if moved.insert(new_key.clone(), record).is_some() {
+            return Err(format!("two project settings would both be {new_key}"));
+        }
+    }
+    value["project_settings"] = Value::Object(moved);
+    Ok(())
+}
+
+/// The View layouts' machine ids and tabs (`workspace-views.json`): each
+/// Agent layout's areas and canvases, each group's layout, each start's live
+/// tab and pane, and each opener's machine, which a pattern cannot express.
+pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+    for view in each(value, "workspaces") {
+        let drafts: BTreeSet<String> = view
+            .pointer("/agent_groups/drafts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        if let Some(layout) = view.get_mut("agent_layout") {
+            map_layout_tabs(layout, &drafts, map);
+        }
+        if let Some(groups) = view.get_mut("agent_groups") {
+            for group in each(groups, "items") {
+                if let Some(layout) = group.get_mut("layout") {
+                    map_layout_tabs(layout, &drafts, map);
                 }
-                for display in each(area, "displays") {
-                    if let Some(id) = display.get_mut("id") {
-                        tab(mapper, id, drafts);
+            }
+        }
+        if let Some(starts) = view.get_mut("agent_starts").and_then(Value::as_object_mut) {
+            for start in starts.values_mut() {
+                for (field, kind) in [("live_tab_id", Moves::Tab), ("pane_id", Moves::Pane)] {
+                    if let Some(value) = start.get_mut(field)
+                        && let Some(Mapped::To(id)) = value.as_str().map(|text| map(kind, text))
+                    {
+                        *value = Value::String(id);
                     }
                 }
             }
-            if let Some(split) = value.get_mut("split") {
-                for side in ["first", "second"] {
-                    if let Some(child) = split.get_mut(side) {
-                        node(mapper, child, drafts);
-                    }
+        }
+        super::each_opener(view, &mut |device| match device
+            .as_str()
+            .map(|id| map(Moves::Device, id))
+        {
+            Some(Mapped::To(id)) => {
+                *device = Value::String(id);
+                true
+            }
+            _ => false,
+        });
+    }
+}
+
+/// Every tab an Agent layout names: each area's front display and its
+/// displays, and each canvas's tab; a draft group's tab is no engine tab.
+fn map_layout_tabs(
+    layout: &mut Value,
+    drafts: &BTreeSet<String>,
+    map: &dyn Fn(Moves, &str) -> Mapped,
+) {
+    fn node(value: &mut Value, drafts: &BTreeSet<String>, map: &dyn Fn(Moves, &str) -> Mapped) {
+        if let Some(area) = value.get_mut("area") {
+            if let Some(active) = area.get_mut("active") {
+                tab(active, drafts, map);
+            }
+            for display in each(area, "displays") {
+                if let Some(id) = display.get_mut("id") {
+                    tab(id, drafts, map);
                 }
             }
         }
-        fn tab(mapper: &Mapper<'_>, value: &mut Value, drafts: &BTreeSet<String>) {
-            if value.as_str().is_some_and(|id| drafts.contains(id)) {
-                return;
-            }
-            if let Some(Mapped::To(id)) = value.as_str().map(|text| mapper.map(Moves::Tab, text)) {
-                *value = Value::String(id);
+        if let Some(split) = value.get_mut("split") {
+            for side in ["first", "second"] {
+                if let Some(child) = split.get_mut(side) {
+                    node(child, drafts, map);
+                }
             }
         }
-        if let Some(root) = layout.get_mut("root") {
-            node(self, root, drafts);
+    }
+    fn tab(value: &mut Value, drafts: &BTreeSet<String>, map: &dyn Fn(Moves, &str) -> Mapped) {
+        if value.as_str().is_some_and(|id| drafts.contains(id)) {
+            return;
         }
-        if let Some(canvases) = layout.get_mut("canvases").and_then(Value::as_object_mut) {
-            for canvas in canvases.values_mut() {
-                tab(self, canvas, drafts);
-            }
+        if let Some(Mapped::To(id)) = value.as_str().map(|text| map(Moves::Tab, text)) {
+            *value = Value::String(id);
+        }
+    }
+    if let Some(root) = layout.get_mut("root") {
+        node(root, drafts, map);
+    }
+    if let Some(canvases) = layout.get_mut("canvases").and_then(Value::as_object_mut) {
+        for canvas in canvases.values_mut() {
+            tab(canvas, drafts, map);
         }
     }
 }
@@ -977,7 +1046,7 @@ fn reown_memory(path: &Path, change: &OwnerChange) -> Result<(bool, Vec<Renumber
 }
 
 /// What a pattern reaches: a value, or the object whose keys it names.
-enum Slot<'a> {
+pub(super) enum Slot<'a> {
     Value(&'a mut Value),
     Keys(&'a mut Map<String, Value>),
 }
@@ -985,7 +1054,7 @@ enum Slot<'a> {
 /// Calls `visit` for each slot `parts` reach (`*` is each array element or
 /// object value, `{key}` the object's keys); a value slot answering `true`
 /// is removed from the array or object holding it.
-fn walk(
+pub(super) fn walk(
     value: &mut Value,
     parts: &[&str],
     visit: &mut dyn FnMut(Slot<'_>) -> Result<bool, String>,
@@ -1047,7 +1116,7 @@ fn walk(
     }
 }
 
-fn each<'a>(value: &'a mut Value, key: &str) -> impl Iterator<Item = &'a mut Value> {
+pub(super) fn each<'a>(value: &'a mut Value, key: &str) -> impl Iterator<Item = &'a mut Value> {
     value
         .get_mut(key)
         .and_then(Value::as_array_mut)
@@ -1056,7 +1125,7 @@ fn each<'a>(value: &'a mut Value, key: &str) -> impl Iterator<Item = &'a mut Val
 }
 
 /// The fields whose value is a machine id.
-const MACHINE_FIELDS: &[&str] = &[
+pub(super) const MACHINE_FIELDS: &[&str] = &[
     "device_id",
     "focused_device_id",
     "machine",
@@ -1073,10 +1142,20 @@ const MACHINE_FIELDS: &[&str] = &[
 /// fold). Free text (a letter body, a label's conversation) is not a key and
 /// is not read.
 fn still_naming(value: &Value, change: &OwnerChange, at: &str) -> Option<String> {
-    let old_id = change.new_owner_was.as_str();
-
     // A new owner known by its node id keeps that id as the owner's.
-    let alias = old_id != change.new_owner;
+    let alias = change.new_owner_was != change.new_owner;
+    still_naming_id(value, &change.new_owner_was, alias, at)
+}
+
+/// The first place where a key still names a machine by `old_id`: as
+/// `remote:<old_id>:` anywhere, and, when `alias` (the id is not one the
+/// machine keeps), as a machine field's value or an object key.
+pub(super) fn still_naming_id(
+    value: &Value,
+    old_id: &str,
+    alias: bool,
+    at: &str,
+) -> Option<String> {
     // A sleeping project's fold names the project after its own prefix.
     let carries = |text: &str| {
         crate::address::device_of(text.strip_prefix("asleep/").unwrap_or(text)) == Some(old_id)
@@ -1103,7 +1182,7 @@ fn still_naming(value: &Value, change: &OwnerChange, at: &str) -> Option<String>
             match item.as_str() {
                 // A list of machine ids or session folds.
                 Some(text) if is_alias(text) => Some(place),
-                _ => still_naming(item, change, &place),
+                _ => still_naming_id(item, old_id, alias, &place),
             }
         }),
         Value::Object(map) => map.iter().find_map(|(key, entry)| {
@@ -1118,7 +1197,7 @@ fn still_naming(value: &Value, change: &OwnerChange, at: &str) -> Option<String>
             ) {
                 return None;
             }
-            still_naming(entry, change, &place)
+            still_naming_id(entry, old_id, alias, &place)
         }),
         _ => None,
     }

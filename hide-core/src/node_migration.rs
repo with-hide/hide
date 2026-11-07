@@ -27,7 +27,15 @@ use serde_json::Value;
 use crate::node::{LEGACY_LOCAL_DEVICE_ID as LEGACY, NodeId};
 
 pub mod copy;
+mod devices;
 mod reown;
+pub use devices::{DeviceNames, name_devices};
+
+/// The first place in `value`, a core state as it is saved or sent, that
+/// still names the device `device` after it took another id.
+pub(crate) fn still_naming_device(value: &Value, device: &str) -> Option<String> {
+    reown::still_naming_id(value, device, true, "")
+}
 pub use reown::{IdTable, KnownProject, OwnerChange, ReownOutcome, id_table, reown, staging_dir};
 
 pub const MARKER_FILE: &str = "node.json";
@@ -47,6 +55,11 @@ const PROJECT_MEMORY: &str = hide_memory::DATABASE_FILE;
 pub(crate) const SESSION_SEARCH: &str = "session-search.sqlite3";
 const LINKS: &str = "links.sqlite3";
 const LOCAL_ISSUES: &str = "local-issues.json";
+/// The panes the doorbell holds as a draft (`composer_store`) and what each
+/// pane's hooks last reported (`agent_hooks::facts`). Written only by builds
+/// that have node ids; a device's pane is named by its device id.
+const COMPOSER_MARKS: &str = "composer-marks.json";
+const HOOK_FACTS: &str = "hook-facts.json";
 /// The Conductors' missions (`hide_kit::layout::missions`). Written only by
 /// builds that have node ids, so the layer-1 conversion has nothing in it to
 /// rewrite; a core move maps its machines, panes and projects.
@@ -688,6 +701,13 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Moves::Labels,
     ),
     (LABELS, "/targets/*/{key}", Mechanism::Owned, Moves::Labels),
+    // A device's marks, kept under `device:<id>` with its own pane ids.
+    (
+        LABELS,
+        "/devices/{key}",
+        Mechanism::Rewritten,
+        Moves::Labels,
+    ),
     (
         DELIVERY_LEDGER,
         "/letters/*/sender/device_id",
@@ -950,6 +970,25 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
+    (
+        COMPOSER_MARKS,
+        "/marks/*/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        COMPOSER_MARKS,
+        "/marks/*/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        COMPOSER_MARKS,
+        "/marks/*/session",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
+    (HOOK_FACTS, "/panes/{key}", Mechanism::Owned, Moves::Pane),
 ];
 
 /// The rest of a state folder, which names no machine: the daemon's own
@@ -973,6 +1012,8 @@ pub const UNBOUND: &[&str] = &[
     "Logs",
     MARKER_FILE,
     BACKUP_DIR,
+    // The plan of a device renaming in progress (`devices`).
+    devices::JOURNAL,
     // A core move's own files (`hide_kit::layout`).
     MOVE_STAGING,
     "move-incoming",
@@ -1792,7 +1833,17 @@ mod tests {
         );
         write(
             LABELS,
-            json!({"version": 1, "targets": {"local": {"w1:p1": {"owner": "v1:a"}}}}),
+            json!({"version": 1, "targets": {"local": {"w1:p1": {"owner": "v1:a"}}},
+                   "devices": {"device:mini": {"w1:p1": {"owner": "v1:b"}}}}),
+        );
+        write(
+            COMPOSER_MARKS,
+            json!({"schema_version": 1, "marks": [{"pane_id": "w1:p1", "device_id": NODE,
+                   "session": "s1", "since_unix_ms": 1}]}),
+        );
+        write(
+            HOOK_FACTS,
+            json!({"schema_version": 1, "panes": {"w1:p1": {"sessions": [], "seen_agent": true}}}),
         );
         let actor = |device: &str| json!({"pane_id": "w1:p1", "name": "a", "kind": "claude", "device_id": device});
         write(

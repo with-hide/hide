@@ -734,6 +734,7 @@ fn a_device_id_holding_a_colon_is_refused_and_never_connected() {
                 label: id.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: alias.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });

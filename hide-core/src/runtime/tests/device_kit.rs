@@ -1193,6 +1193,7 @@ fn removing_one_keeps_the_kit_for(
         twin.id = "studio-second-herdr".to_owned();
         twin.origin = crate::model::LinkOrigin::Dialed {
             ssh_alias: "studio-by-address".to_owned(),
+            naming: crate::model::DeviceNaming::Named,
         };
         twin.host_consent.as_mut().unwrap().identity = Some(twin_identity);
         twin.label = "Studio, second Herdr".to_owned();
@@ -2200,19 +2201,33 @@ fn established_with_terminals() -> hide_node_link::device::Established {
     )
 }
 
-/// A device's connection over `host`, with `terminals` when its node runs a
+/// `DEVICE`'s connection over `host`, with `terminals` when its node runs a
 /// terminal service.
 pub(super) fn established(
     host: Arc<dyn crate::node_access::NodeLink>,
     terminals: Option<Arc<dyn hide_node_link::terminal::TerminalNode>>,
 ) -> hide_node_link::device::Established {
+    established_on(DEVICE, host, terminals)
+}
+
+/// A connection over `host` to the machine whose id is `machine`, as its
+/// probe and its node both read it: the device registered as `machine`.
+pub(super) fn established_on(
+    machine: &str,
+    host: Arc<dyn crate::node_access::NodeLink>,
+    terminals: Option<Arc<dyn hide_node_link::terminal::TerminalNode>>,
+) -> hide_node_link::device::Established {
+    let mut node = node_ready(host, terminals);
+    node.hello.machine_identity = hide_node_link::protocol::MachineIdentity::Available {
+        id: machine.to_owned(),
+    };
     hide_node_link::device::Established {
-        node: node_ready(host, terminals),
+        node,
         identity: hide_node_link::device::HostIdentity {
             user: "me".to_owned(),
             hostname: "studio.local".to_owned(),
             port: 22,
-            machine_id: None,
+            machine_id: Some(machine.to_owned()),
             host_key_sha256: "key".to_owned(),
         },
         installed: false,

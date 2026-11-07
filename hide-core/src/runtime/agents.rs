@@ -2763,6 +2763,7 @@ impl Runtime {
             self.ingest_dormant_saved(&state.agent_sleep, result.is_ok());
             self.ingest_archive_saved(&state.session_archive, result.is_ok());
             self.acknowledge_project_settings_save(&state, result.is_ok());
+            self.acknowledge_device_naming(&state, result.is_ok());
             return result;
         };
         self.state_save_pending = true;
@@ -2815,6 +2816,8 @@ impl Runtime {
                             | archive_changed;
                         let settings_changed =
                             guard.acknowledge_project_settings_save(&state, result.is_ok());
+                        let naming_changed =
+                            guard.acknowledge_device_naming(&state, result.is_ok());
                         if let Err(message) = &result {
                             if settings_changed {
                                 guard.push_diagnostic(
@@ -2838,7 +2841,11 @@ impl Runtime {
                                 guard.set_error("ui_state.save_failed", message.clone(), true);
                             }
                         }
-                        resolved_changed || dormant_changed || settings_changed || result.is_err()
+                        resolved_changed
+                            || dormant_changed
+                            || settings_changed
+                            || naming_changed
+                            || result.is_err()
                     };
                     if changed {
                         context.notifier.notify();

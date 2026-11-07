@@ -1347,6 +1347,17 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
+        // A machine named by a dialed device's SSH alias is that device's id
+        // from here on (`machine_named`).
+        if let Command::Agents {
+            command:
+                crate::coordination::Command::Spawn { machine, .. }
+                | crate::coordination::Command::Register { machine, .. },
+        } = &mut command
+            && let Some(name) = machine.as_mut()
+        {
+            *name = self.machine_named(name)?;
+        }
         let actor_pane = actor.pane_id.as_str();
         // A prompt hook's digest is the agent's own record of the prompt it
         // took, and confirms a brief a spawn typed into this pane. Judged
@@ -4920,6 +4931,7 @@ pub(crate) mod tests {
                 label: id.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: id.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });

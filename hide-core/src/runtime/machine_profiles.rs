@@ -406,16 +406,7 @@ impl Runtime {
             // A Host registers as Add device registers it (B50): the alias
             // and its name, the default server, and the press's consent.
             (None, None) => {
-                let existing: Vec<&str> = self
-                    .snapshot
-                    .ui_state
-                    .device_registrations
-                    .iter()
-                    .map(|r| r.id.as_str())
-                    .collect();
-                let id = super::devices::device_id_for_alias(&profile.target, &existing);
                 match self.register_device(super::events::RegisterDevicePayload {
-                    id,
                     label: profile.label.clone(),
                     ssh_alias: profile.target.clone(),
                     wsl_distro: None,

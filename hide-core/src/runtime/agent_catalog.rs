@@ -28,7 +28,11 @@ impl Runtime {
         machine: Option<&str>,
         timed_out: bool,
     ) -> Result<Value, String> {
-        let machine = machine.unwrap_or(device);
+        let machine = match machine {
+            Some(name) => self.machine_named(name)?,
+            None => device.to_owned(),
+        };
+        let machine = machine.as_str();
         let on_core = machine == self.node.as_str();
         if !self.device_answers(machine) {
             return Err(
