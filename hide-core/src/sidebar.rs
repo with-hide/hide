@@ -1448,7 +1448,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("root"),
+            &["root"],
         );
         let saved = records.clone();
         let mut after = project_agents(snapshot("갱신된 현재 작업")).agents;
@@ -1458,7 +1458,7 @@ mod tests {
                 Default::default(),
                 &mut records,
                 &mut connection(),
-                None
+                &[]
             )
             .is_empty()
         );
@@ -1924,7 +1924,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            None,
+            &[],
         );
 
         assert_eq!(
@@ -1958,7 +1958,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            None,
+            &[],
         );
         assert_eq!(
             agents
@@ -2354,7 +2354,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            None,
+            &[],
         );
         assert!(
             agents
@@ -2368,7 +2368,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("b"),
+            &["b"],
         );
         let groups = agents
             .iter()
@@ -2391,7 +2391,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("b"),
+            &["b"],
         );
 
         let seen_by_engine = json!([
@@ -2406,7 +2406,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            None,
+            &[],
         );
         assert!(
             agents.iter().all(|agent| agent.unread),
@@ -2434,7 +2434,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("a"),
+            &["a"],
         );
         assert!(!finished[0].unread, "the operator read the question");
 
@@ -2444,7 +2444,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("elsewhere"),
+            &["elsewhere"],
         );
         assert!(
             !seen[0].unread,
@@ -2476,7 +2476,7 @@ mod tests {
                 Default::default(),
                 &mut records,
                 &mut connection(),
-                Some("a"),
+                &["a"],
             );
             assert!(!agents[0].unread);
             records
@@ -2488,7 +2488,7 @@ mod tests {
                 Default::default(),
                 records,
                 &mut connection(),
-                Some("elsewhere"),
+                &["elsewhere"],
             );
             agents[0].unread
         };
@@ -2538,7 +2538,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("a"),
+            &["a"],
         );
         assert!(!watched[0].unread, "a question on the focused pane is read");
         assert_eq!(watched[0].group, "seen");
@@ -2553,7 +2553,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("elsewhere"),
+            &["elsewhere"],
         );
         assert!(later[0].unread, "a new question raised elsewhere is unread");
         assert_eq!(later[0].group, "needs_you");
@@ -2573,7 +2573,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("a"),
+            &["a"],
         );
         assert!(!working[0].unread);
 
@@ -2586,7 +2586,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            None,
+            &[],
         );
         assert!(
             asking[0].unread,
@@ -2606,7 +2606,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            Some("a"),
+            &["a"],
         );
         let after_first = records.clone();
         assert!(
@@ -2615,7 +2615,7 @@ mod tests {
                 Default::default(),
                 &mut records,
                 &mut connection(),
-                Some("a")
+                &["a"]
             )
             .is_empty()
         );
@@ -2627,7 +2627,7 @@ mod tests {
             Default::default(),
             &mut records,
             &mut connection(),
-            None,
+            &[],
         );
         assert!(
             records.contains_key("a"),
@@ -2725,7 +2725,7 @@ mod tests {
             Default::default(),
             &mut saved.records,
             connection,
-            focused,
+            focused.as_slice(),
         );
         agents
     }
@@ -2778,7 +2778,7 @@ mod tests {
                 Default::default(),
                 &mut saved.records,
                 &mut restored,
-                None
+                &[]
             )
             .is_empty()
         );

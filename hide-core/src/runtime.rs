@@ -1614,6 +1614,13 @@ pub struct Runtime {
     /// operator's behalf arms this, and it is memory only: a launch starts
     /// with the operator having looked at nothing.
     operator_focused_pane_id: Option<String>,
+    /// The agents a phone has open now, by the core's pane id (a device's
+    /// pane carries its device): hided names every one whenever a phone opens
+    /// or closes an agent's detail or disconnects (`phone_viewing`). Each is
+    /// read as the desktop's focus pane is, for as long as it stays open, and
+    /// nothing else follows from it: no focus, tab, wake or attach. Memory
+    /// only; a launch starts with no phone looking.
+    phone_viewed_pane_ids: BTreeSet<String>,
     /// The read axis's view of the current connection to the local engine
     /// server and to each device's: the mark that names the server and the
     /// panes settled on it so far (`agent_state::ReadConnection`). Memory
@@ -2489,6 +2496,7 @@ impl Runtime {
             system_language: None,
             agent_worked_at_unix_ms: 0,
             operator_focused_pane_id: None,
+            phone_viewed_pane_ids: BTreeSet::new(),
             local_read_connection: crate::agent_state::ReadConnection::new(read_mark(0)),
             remote_read_connections: BTreeMap::new(),
             read_marks_made: 1,
