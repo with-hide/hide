@@ -421,10 +421,11 @@ export const PaneView = memo(function PaneView({
             </Hint>
           </>
         )}
+        {/* The fork mark stays at every width: an icon alone, and a side fork is what makes a narrow pane. */}
+        {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
         {agentKind ? (
           // What the pane did, which the session record also holds, gives way below the tight breakpoint; the ask and the letters after it stay, since the operator acts on them here.
           <span className="contents pane-head-tight:hidden">
-            <PaneForkMark pane={pane} actions={actions} />
             <PanePrChip paneId={paneId} actions={actions} />
             <PaneWorkChip paneId={paneId} actions={actions} />
             <PaneViews paneId={paneId} name={title} actions={actions} />
