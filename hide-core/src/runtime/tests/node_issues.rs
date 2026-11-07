@@ -2005,6 +2005,19 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         project.checkouts
     );
     assert_eq!(project.inactive_checkouts.checkout_ids, [moved.as_str()]);
+    drop(runtime);
+    // Its fold closes and opens as a node's does.
+    dispatch(
+        &shared,
+        "inactive_checkouts_toggle",
+        serde_json::json!({"project_path": repo.root}),
+    );
+    let runtime = shared.lock().unwrap();
+    assert!(
+        !node_project(&runtime).unwrap().inactive_checkouts.expanded,
+        "{:?}",
+        runtime.snapshot.status.last_error
+    );
 }
 
 /// Starting an issue of a node's project makes its worktree on the node and
