@@ -439,8 +439,9 @@ pub(crate) trait Engine: Send + Sync {
     /// in it (with-hide/hide-private#646): a shell pane whose holder runs from
     /// another build is started again under the same id, in `cwd` when given
     /// (else the folder it was started in), from its machine's current
-    /// holder. A refusal other than `hide_node_link::holders::RENEWAL_LOST`
-    /// leaves the pane's holder as it ran.
+    /// holder. Every answer names the holder that runs the pane, which an
+    /// agent may start in; a refusal is a pane nothing may be typed into,
+    /// since no holder is known to run it.
     fn renew_holder(
         &self,
         wait: Wait,

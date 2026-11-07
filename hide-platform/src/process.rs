@@ -1589,6 +1589,30 @@ pub fn measure_tree(pid: u32) -> io::Result<TreeMeasure> {
     })
 }
 
+/// Whether `shell` runs no other process: nothing under it, in its
+/// foreground or its background, a console host on Windows aside, which is
+/// the console's own and no program the shell started. A pane's shell that
+/// runs alone can be ended and started again without ending anything its
+/// operator started (with-hide/hide-private#646). A look at the process
+/// table that cannot be made is an error, never evidence that it runs alone.
+pub fn runs_alone(shell: u32) -> io::Result<bool> {
+    #[cfg(windows)]
+    {
+        let walk = sys::Walk::new()?;
+        for child in walk.child_identities(shell)? {
+            let (child, _) = child?;
+            if !is_console_host(child) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    #[cfg(unix)]
+    {
+        Ok(descendants(shell)?.is_empty())
+    }
+}
+
 /// Every process under `root`, parents before children, read from one look
 /// at the system's process table. A root that has ended, or has no
 /// children, has none. On Windows a child is only one that started after its

@@ -74,28 +74,42 @@ pub struct HolderReservation {
     pub incarnation: u64,
 }
 
-/// What [`PaneHolders::renew`] did to a pane's holder (with-hide/hide-private#646).
+/// What [`PaneHolders::renew`] found and did to a pane's holder
+/// (with-hide/hide-private#646), each answer one the pane can be used on:
+/// a holder runs it, and which one is said. An outcome after which no
+/// holder may run it, or nobody knows, is an error ([`RENEWAL_LOST`],
+/// [`RENEWAL_UNSETTLED`], or the node's answer lost on the way).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "renewal", rename_all = "snake_case")]
 pub enum HolderRenewal {
     /// The pane's holder already runs from this build's version folder.
     Current,
-    /// The pane's holder, a shell alone at its prompt, was ended and the
-    /// pane started again under its own id from this build's folder,
-    /// replacing the earlier start's incarnation.
+    /// The pane's holder, its shell alone in it, was ended and the pane
+    /// started again under its own id from this build's folder, replacing
+    /// the earlier start's incarnation.
     Renewed {
         /// The version folder the earlier holder ran from.
         from: String,
         /// The version folder the pane runs from now.
         to: String,
     },
+    /// The pane was not renewed and its earlier holder runs it as it did:
+    /// nothing of it was ended. `code` says why (`pane_busy` while anything
+    /// but its shell runs in it).
+    Kept { code: String, message: String },
 }
 
-/// The refusal [`PaneHolders::renew`] answers when the earlier holder was
-/// ended and the pane's new one did not start: the pane has no holder, as a
-/// pane a restore could not start. Every other refusal of a renewal leaves
-/// the earlier holder running as it was.
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder ended
+/// and the pane's new one did not start: no holder runs the pane, as a pane
+/// a restore could not start.
 pub const RENEWAL_LOST: &str = "holder_renewal_lost";
+
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder was
+/// asked to end and what runs the pane then is not known (the close did not
+/// finish, or the new holder's start could not be confirmed): the node's
+/// next reconcile settles its record, and the pane is used as one a restore
+/// could not start, nothing typed into it.
+pub const RENEWAL_UNSETTLED: &str = "holder_renewal_unsettled";
 
 /// An interrupted existence record whose original process is gone. The
 /// replacement must consume this exact incarnation under the same pane ID.
@@ -414,14 +428,15 @@ pub trait PaneHolders: Send + Sync {
         Err(reservation_unsupported())
     }
     /// Brings the pane `start` names to this node's build (with-hide/hide-private#646):
-    /// when its holder runs from another build's version folder and only
-    /// its shell holds its terminal, ends that holder and starts the pane
-    /// again under the same id from `start` (a shell, in `start.cwd`),
-    /// replacing the earlier incarnation, and attaches its screen again. A
-    /// pane already on this build is left alone. Any refusal other than
-    /// [`RENEWAL_LOST`] leaves the earlier holder running as it was.
+    /// when its holder runs from another build's version folder and its
+    /// shell runs alone, ends that holder and starts the pane again under the
+    /// same id from `start` (a shell, in `start.cwd`), replacing the earlier
+    /// incarnation, and attaches its screen again. A pane already on this
+    /// build is [`HolderRenewal::Current`], and one it does not renew,
+    /// nothing of it ended, [`HolderRenewal::Kept`]. A node that cannot
+    /// renew keeps every pane.
     fn renew(&self, _start: &HolderStart) -> Result<HolderRenewal, HolderError> {
-        Err(HolderError::Refused {
+        Ok(HolderRenewal::Kept {
             code: "holder_renewal_unsupported".to_owned(),
             message: "this node cannot renew a pane's holder".to_owned(),
         })

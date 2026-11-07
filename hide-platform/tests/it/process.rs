@@ -2176,6 +2176,27 @@ fn killing_by_pid_ends_the_process_and_its_descendants() {
     );
 }
 
+/// A pane's shell runs alone while no process runs under it, a console
+/// host on Windows aside; one that started a program, in its foreground or
+/// its background, does not (with-hide/hide-private#646).
+#[test]
+fn a_process_runs_alone_until_it_runs_another() {
+    let _serial = serial();
+    let mut command = role_command("tree");
+    let mut child = command.spawn().unwrap();
+    let grandchild = ready_number(child.stdout.take().unwrap());
+    assert!(
+        !hide_platform::process::runs_alone(child.id()).unwrap(),
+        "the root runs its child"
+    );
+    assert!(
+        hide_platform::process::runs_alone(grandchild).unwrap(),
+        "a program that runs nothing runs alone"
+    );
+    kill_tree(child.id()).unwrap();
+    child.wait().unwrap();
+}
+
 #[test]
 fn killing_a_process_that_is_already_gone_is_not_an_error() {
     let _serial = serial();

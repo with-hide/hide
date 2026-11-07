@@ -768,6 +768,8 @@ impl OwnEngine<'static> {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             };
+            // A pane the restore opened a tab for runs this build's holder.
+            let adopted = resume.new_tab.is_none();
             let opened;
             let resume = match &resume.new_tab {
                 None => resume,
@@ -796,19 +798,17 @@ impl OwnEngine<'static> {
                 },
             };
             // An adopted pane may still run an earlier build's holder: its
-            // shell, alone at its prompt, is brought to this build first, as a
-            // wake does (with-hide/hide-private#646); a restarted one already is.
-            if resume.new_tab.is_none()
-                && let Err(EngineError::Refused { code, message }) =
-                    engine.renew(&resume.pane, None)
-                && code == hide_node_link::holders::RENEWAL_LOST
-            {
+            // shell, alone in it, is brought to this build first, as a wake
+            // does (with-hide/hide-private#646); a restarted one already is.
+            // A refusal leaves no holder known to run the pane, and nothing
+            // is typed into it.
+            if adopted && let Err(error) = engine.renew(&resume.pane, None) {
                 crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
                     "kind": "agent.resume_not_typed",
                     "pane_id": resume.pane,
                     "agent": resume.kind,
-                    "message": format!("{code}: {message}"),
+                    "message": error.to_string(),
                 }));
                 continue;
             }

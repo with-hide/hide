@@ -300,6 +300,7 @@ mod tests {
                     reply(())
                 }
                 "start_agent" => started(),
+                "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
                 other => panic!("unexpected {other}"),
             });
             let reaper = thread::spawn(move || {
@@ -376,6 +377,7 @@ mod tests {
             "delivery_agent" => reply(crate::engine::fake::delivery_agent(&json!({
                 "pane_id": "w1:p9", "name": "held", "agent": "claude"
             }))),
+            "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
             other => panic!("unexpected {other}"),
         });
         let reaper = thread::spawn(move || {
@@ -440,6 +442,7 @@ mod tests {
                 refused("agent_name_taken", "agent name reviewer is already used")
             }
             "start_agent" => started(),
+            "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
             other => panic!("unexpected {other}"),
         });
         let reaper = thread::spawn(move || {

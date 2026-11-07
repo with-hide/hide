@@ -151,6 +151,8 @@ fn starting_engine() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Va
                 terminal_id: Some("term".into()),
             })
         }
+        // A wake's pane already runs this build's holder.
+        "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
         // What the fork's registration asks after its start is no part of
         // the start; refusing it leaves a working fork.
         other => refused("unsupported", &format!("fixture answers no {other}")),

@@ -15,7 +15,7 @@ use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
-use super::holder::{Holders, RenewRefusal, Renewal};
+use super::holder::{Holders, Renewal};
 use super::input::Typed;
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
@@ -23,8 +23,8 @@ use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
     HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
-    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_LOST, ScreenRules, StyledRead,
-    UNSUPPORTED_HOLDER,
+    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_LOST, RENEWAL_UNSETTLED, ScreenRules,
+    StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -403,14 +403,18 @@ impl PaneHolders for LocalPanes {
             .renew(self.owner()?, &self.service, &intent, || {
                 self.expand(start).map_err(|error| format!("{error:?}"))
             }) {
-            Ok(Renewal::Current) => Ok(HolderRenewal::Current),
-            Ok(Renewal::Renewed { from, to }) => Ok(HolderRenewal::Renewed { from, to }),
-            Err(RenewRefusal::Kept { code, message }) => Err(HolderError::Refused {
+            Renewal::Current => Ok(HolderRenewal::Current),
+            Renewal::Renewed { from, to } => Ok(HolderRenewal::Renewed { from, to }),
+            Renewal::Kept { code, message } => Ok(HolderRenewal::Kept {
                 code: code.to_owned(),
                 message,
             }),
-            Err(RenewRefusal::Lost(message)) => Err(HolderError::Refused {
+            Renewal::Lost(message) => Err(HolderError::Refused {
                 code: RENEWAL_LOST.to_owned(),
+                message,
+            }),
+            Renewal::Unsettled(message) => Err(HolderError::Refused {
+                code: RENEWAL_UNSETTLED.to_owned(),
                 message,
             }),
         }

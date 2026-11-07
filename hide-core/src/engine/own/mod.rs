@@ -29,7 +29,7 @@ use std::time::Instant;
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
     HolderError, HolderKey, HolderRenewal, HolderScroll, HolderStart, PaneFacts, PaneHolders,
-    PaneInput, RENEWAL_LOST, StyledRead, UNSUPPORTED_HOLDER,
+    PaneInput, RENEWAL_LOST, RENEWAL_UNSETTLED, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 use super::keys::PaneKey;
@@ -1018,7 +1018,7 @@ impl OwnEngine<'_> {
         self.topology().pane(pane).map(|_| ())
     }
 
-    /// Reads wait for the start already represented by this pane, outside
+    /// Reads and input wait for the start already represented by this pane, outside
     /// the topology lock. Its actual refusal is kept for later readers too.
     fn ready(&self, pane: &str) -> Result<(), EngineError> {
         let starting = self.topology().pane(pane)?.starting.clone();
@@ -1045,9 +1045,11 @@ impl OwnEngine<'_> {
     /// Types into the pane through its holder, in order with every other
     /// key typed there; a paste and named keys are encoded by the holder for
     /// the program's modes when they are written (PRD
-    /// engine-bundle-3-core-owns D-21).
+    /// engine-bundle-3-core-owns D-21). Input for a pane drawn starting,
+    /// a renewal's included, waits for the holder that runs it then, as a
+    /// read does, so none reaches a holder that is ending.
     fn type_input(&self, pane: &str, input: PaneInput) -> Answer<()> {
-        self.known(pane)?;
+        self.ready(pane)?;
         self.shared.holders.input(pane, input).map_err(holder_error)
     }
 
@@ -1112,12 +1114,16 @@ impl OwnEngine<'_> {
     /// [`Engine::renew_holder`], as a wake and a restore's resume ask it
     /// before an agent starts again in `pane` (with-hide/hide-private#646): its
     /// node compares the holder's version folder with its own build's and
-    /// renews a shell alone at its prompt. It counts as one of the engine's
-    /// starts, and the pane is drawn starting meanwhile, so its reads wait
-    /// for the holder that runs once it is done. A pane closed meanwhile has
-    /// the holder its renewal started ended here; one whose new holder did
-    /// not start is marked as a pane a restore could not start.
+    /// renews a shell alone in it. It counts as one of the engine's starts,
+    /// and the pane is drawn starting meanwhile, so its reads and the input
+    /// typed into it wait for the holder that runs once it is done. A pane
+    /// closed meanwhile has the holder its renewal started ended here; one
+    /// its node says no holder of the renewal runs ([`RENEWAL_LOST`],
+    /// [`RENEWAL_UNSETTLED`]) is marked as a pane a restore could not start.
     pub(super) fn renew(&self, pane: &str, cwd: Option<&str>) -> Answer<HolderRenewal> {
+        // A start under way, a restore's restart of the pane included, is
+        // waited for: its holder is the one judged.
+        self.ready(pane)?;
         let mut turn = self.shared.starts.reserve()?;
         turn.enter()?;
         let (start, starting) = {
@@ -1126,17 +1132,17 @@ impl OwnEngine<'_> {
             if held.closing {
                 return Err(refused("pane_closing", format!("pane {pane} is closing")));
             }
-            if held.command.is_some() {
-                return Err(refused(
-                    "pane_runs_program",
-                    format!("pane {pane} runs a program of its own, not a shell"),
-                ));
-            }
             if held.failed.is_some() || held.starting.as_ref().is_some_and(|s| !s.started()) {
                 return Err(refused(
                     "pane_not_running",
                     format!("pane {pane}'s holder is not running"),
                 ));
+            }
+            if held.command.is_some() {
+                return Ok(HolderRenewal::Kept {
+                    code: "pane_runs_program".to_owned(),
+                    message: format!("pane {pane} runs a program of its own, not a shell"),
+                });
             }
             let starting = Arc::new(starts::Starting::default());
             held.starting = Some(Arc::clone(&starting));
@@ -1147,9 +1153,11 @@ impl OwnEngine<'_> {
             )
         };
         let renewed = self.shared.holders.renew(&start).map_err(holder_error);
-        let lost = match &renewed {
-            Err(EngineError::Refused { code, message }) if code == RENEWAL_LOST => {
-                Some(message.clone())
+        let failed = match &renewed {
+            Err(EngineError::Refused { code, message })
+                if code == RENEWAL_LOST || code == RENEWAL_UNSETTLED =>
+            {
+                Some((code.clone(), message.clone()))
             }
             _ => None,
         };
@@ -1157,7 +1165,7 @@ impl OwnEngine<'_> {
             let mut topology = self.topology();
             match topology.pane_mut(pane) {
                 Ok(held) if !held.closing => {
-                    if let Some(why) = &lost {
+                    if let Some((_, why)) = &failed {
                         held.failed = Some(why.clone());
                     }
                     false
@@ -1165,9 +1173,9 @@ impl OwnEngine<'_> {
                 _ => true,
             }
         };
-        starting.finish(match &lost {
+        starting.finish(match &failed {
             None => Ok(()),
-            Some(why) => Err(refused(RENEWAL_LOST, why.clone())),
+            Some((code, why)) => Err(refused(code, why.clone())),
         });
         if gone && matches!(renewed, Ok(HolderRenewal::Renewed { .. })) {
             let _ = end_holders(&*self.shared.holders, &[pane.to_owned()]);
@@ -1186,15 +1194,22 @@ impl OwnEngine<'_> {
                 "to": to,
                 "closed_meanwhile": gone,
             }),
+            Ok(HolderRenewal::Kept { code, message }) => serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.holder_kept",
+                "pane_id": pane,
+                "code": code,
+                "message": message,
+            }),
             Err(error) => serde_json::json!({
                 "component": "own_engine",
                 "kind": "engine.holder_renewal_refused",
                 "pane_id": pane,
-                "lost": lost.is_some(),
+                "failed": failed.is_some(),
                 "message": error.to_string(),
             }),
         });
-        if lost.is_some() {
+        if failed.is_some() {
             self.changed();
         }
         renewed
@@ -3556,9 +3571,11 @@ mod tests {
 
     /// with-hide/hide-private#646: a wake asks the pane's node to renew its
     /// holder with the shell start the pane runs, in the folder the agent
-    /// works in; a refusal that kept the earlier holder leaves the pane as it
-    /// runs, and one that left the pane no holder marks it as a pane whose
-    /// terminal could not start, which no wake renews again.
+    /// works in; a pane the node kept on its earlier holder runs as it did,
+    /// as does one whose node's answer never came, and one the node says no
+    /// holder of the renewal runs (lost, or its earlier holder's close
+    /// unsettled) is marked as a pane whose terminal could not start, which
+    /// no wake renews again.
     #[test]
     fn a_renewal_asks_with_the_panes_shell_and_one_that_left_no_holder_marks_the_pane() {
         let holders = Arc::new(Holders::default());
@@ -3576,12 +3593,16 @@ mod tests {
             from: "v79-earlier".to_owned(),
             to: "v79-current".to_owned(),
         };
+        let kept = HolderRenewal::Kept {
+            code: "pane_busy".to_owned(),
+            message: "the shell runs a program".to_owned(),
+        };
         holders.renewals.lock().unwrap().extend([
             Ok(renewed.clone()),
             Ok(HolderRenewal::Current),
-            Err(HolderError::Refused {
-                code: "pane_busy".to_owned(),
-                message: "a program other than the shell holds the terminal".to_owned(),
+            Ok(kept.clone()),
+            Err(HolderError::Unreachable {
+                message: "the device's answer never came".to_owned(),
             }),
             Err(HolderError::Refused {
                 code: RENEWAL_LOST.to_owned(),
@@ -3614,10 +3635,10 @@ mod tests {
         );
         assert!(asked.iter().all(|start| start.env == first.env));
 
-        match engine.renew_holder(WAIT, &pane, None) {
-            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "pane_busy"),
-            other => panic!("expected the node's refusal, got {other:?}"),
-        }
+        assert_eq!(engine.renew_holder(WAIT, &pane, None).unwrap(), kept);
+        assert_eq!(restore_error(&engine, &pane), None, "the pane runs on");
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        assert!(engine.renew_holder(WAIT, &pane, None).is_err());
         assert_eq!(restore_error(&engine, &pane), None, "the pane runs on");
         engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
 
@@ -3630,10 +3651,80 @@ mod tests {
             "the pane is marked"
         );
         match engine.renew_holder(WAIT, &pane, None) {
-            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "pane_not_running"),
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, RENEWAL_LOST),
             other => panic!("expected the marked pane's refusal, got {other:?}"),
         }
-        assert_eq!(holders.renewed.lock().unwrap().len(), 4, "not asked again");
+        assert_eq!(holders.renewed.lock().unwrap().len(), 5, "not asked again");
+
+        // A close that did not settle marks a pane as a lost renewal does.
+        let (_, _, unsettled) = engine
+            .create_workspace(WAIT, "/u", "u", true, Env::new())
+            .unwrap();
+        engine.read_pane(WAIT, &unsettled, "recent", 1).unwrap();
+        holders
+            .renewals
+            .lock()
+            .unwrap()
+            .push_back(Err(HolderError::Refused {
+                code: RENEWAL_UNSETTLED.to_owned(),
+                message: "the close did not finish".to_owned(),
+            }));
+        match engine.renew_holder(WAIT, &unsettled, None) {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, RENEWAL_UNSETTLED),
+            other => panic!("expected the unsettled renewal, got {other:?}"),
+        }
+        assert!(
+            restore_error(&engine, &unsettled).is_some_and(|why| why.contains("did not finish")),
+            "the pane is marked"
+        );
+    }
+
+    /// Input typed into a pane while its holder renews waits for the holder
+    /// that runs it once the renewal answers, so none reaches a holder that
+    /// is ending.
+    #[test]
+    fn input_typed_while_a_holder_renews_waits_for_the_renewal() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        holders
+            .renewals
+            .lock()
+            .unwrap()
+            .push_back(Ok(HolderRenewal::Renewed {
+                from: "v79-earlier".to_owned(),
+                to: "v79-current".to_owned(),
+            }));
+        let (began, renewing) = std::sync::mpsc::channel();
+        let (go, held) = std::sync::mpsc::channel();
+        *holders.renew_hold.lock().unwrap() = Some((began, held));
+
+        std::thread::scope(|scope| {
+            let renewal = scope.spawn(|| engine.renew_holder(WAIT, &pane, None));
+            assert_eq!(renewing.recv_timeout(Duration::from_secs(5)).unwrap(), pane);
+            let typing = scope.spawn(|| engine.send_text(WAIT, &pane, "ls"));
+            let typed = holders.typed.0.lock().unwrap();
+            let (typed, _) = holders
+                .typed
+                .1
+                .wait_timeout_while(typed, Duration::from_millis(300), |typed| {
+                    typed_into(typed, &pane).is_empty()
+                })
+                .unwrap();
+            assert_eq!(
+                typed_into(&typed, &pane),
+                "",
+                "nothing reaches the ending holder"
+            );
+            drop(typed);
+            go.send(()).unwrap();
+            assert!(renewal.join().unwrap().is_ok());
+            typing.join().unwrap().unwrap();
+        });
+        assert_eq!(holders.typed(&pane), "ls");
     }
 
     /// A pane closed while its holder renews has the holder the renewal

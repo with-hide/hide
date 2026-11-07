@@ -79,6 +79,7 @@ fn device_engine() -> Arc<FakeEngine<'static>> {
             pane_id: DEVICE_PANE.into(),
             terminal_id: Some("device-terminal".into()),
         }),
+        "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
         other => refused("unsupported", &format!("the fake answers no {other}")),
     })
 }
@@ -291,6 +292,12 @@ fn a_dialed_devices_agent_sleeps_by_the_hours_and_wakes_into_the_same_conversati
     wait(&device.shared, "the wake started", |_| {
         !device.engine.calls_of("start_agent").is_empty()
     });
+    // The device's own engine is asked to bring the pane's holder to its
+    // build before the resume (with-hide/hide-private#646).
+    assert_eq!(
+        device.engine.calls_of("renew_holder")[0]["pane"],
+        DEVICE_PANE
+    );
     let start = &device.engine.calls_of("start_agent")[0];
     assert_eq!(start["pane"], DEVICE_PANE);
     assert_eq!(start["kind"], "claude");
