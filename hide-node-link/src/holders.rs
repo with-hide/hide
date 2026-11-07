@@ -275,6 +275,9 @@ pub const UNSUPPORTED_HOLDER: &str = "unsupported_holder";
 /// Every rule set for the pane's agent needs a newer evaluator than its
 /// holder has.
 pub const NO_RULES_FOR_HOLDER: &str = "no_rules_for_holder";
+/// A replacement ended nothing: the pane's holder runs on as it was
+/// ([`PaneHolders::replace`]).
+pub const HOLDER_KEPT: &str = "holder_kept";
 /// The pane's facts are no longer followed: its watch ended some other way
 /// than with the pane (another watch took it, or the connection broke).
 pub const WATCH_LOST: &str = "watch_lost";
@@ -390,6 +393,29 @@ pub trait PaneHolders: Send + Sync {
     fn cancel(&self, _intent: &HolderIntent, _request: HolderRequest) -> Result<(), HolderError> {
         Err(reservation_unsupported())
     }
+    /// The start of the pane's running holder when that holder runs from
+    /// another build's version folder than the one this node starts
+    /// holders from (a folder is named by its files' hash, so the answer is
+    /// "other", never "older"); `None` when it runs this node's.
+    fn outdated(&self, _pane: &str) -> Result<Option<u64>, HolderError> {
+        Err(reservation_unsupported())
+    }
+    /// Replaces the pane's holder of start `previous`, found by
+    /// [`PaneHolders::outdated`], with this node's under the same id: ends
+    /// it and reserves `start` as a restart that consumes `previous`, for
+    /// [`PaneHolders::start_reserved`] to start. Refused [`HOLDER_KEPT`]
+    /// when nothing was ended (the pane is no longer that running start, or
+    /// already runs this node's holder); any other refusal means the old
+    /// holder may be gone. Only a pane that holds nothing but its shell is
+    /// replaced: what the shell held is lost with it.
+    fn replace(
+        &self,
+        _start: &HolderStart,
+        _previous: u64,
+        _request: HolderRequest,
+    ) -> Result<HolderReservation, HolderError> {
+        Err(reservation_unsupported())
+    }
     /// How a pane started with no program runs its shell, when it runs one
     /// with Hide's shell integration, which marks its first prompt on its
     /// screen: what a start into such a pane waits for. `None` for a shell
@@ -493,6 +519,16 @@ pub enum PaneCall {
         request: HolderRequest,
     },
     Retire {
+        request: HolderRequest,
+    },
+    /// [`PaneHolders::outdated`]; answers an optional incarnation.
+    Outdated {
+        pane: String,
+    },
+    /// [`PaneHolders::replace`]; answers the replacement's reservation.
+    Replace {
+        start: HolderStart,
+        previous: u64,
         request: HolderRequest,
     },
     /// [`PaneHolders::shell_launch`]; answers an optional

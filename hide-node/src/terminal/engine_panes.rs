@@ -15,15 +15,15 @@ use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
-use super::holder::Holders;
+use super::holder::{Holders, ReplaceRefusal};
 use super::input::Typed;
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
-    PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HOLDER_KEPT, HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof,
+    HolderRecovery, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
+    PaneFactsSink, PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -387,6 +387,53 @@ impl PaneHolders for LocalPanes {
         self.holders
             .cancel(&guard, &self.service, intent)
             .map_err(start_refusal)
+    }
+
+    fn outdated(&self, pane: &str) -> Result<Option<u64>, HolderError> {
+        self.holders.outdated(pane).map_err(|error| match error {
+            CloseError::NoRecord => HolderError::NoPane {
+                message: format!("pane {pane} has no holder on this machine"),
+            },
+            error => HolderError::Refused {
+                code: "holder_unreadable".to_owned(),
+                message: error.to_string(),
+            },
+        })
+    }
+
+    fn replace(
+        &self,
+        start: &HolderStart,
+        previous: u64,
+        request: HolderRequest,
+    ) -> Result<HolderReservation, HolderError> {
+        let intent = start.intent()?;
+        let guard = self.admit(request, &intent)?;
+        // The replacement runs the account's shell and nothing else, the
+        // only pane whose holder this node ends for a newer one.
+        if start.program.is_some() || start.notice.is_some() {
+            return Err(HolderError::Refused {
+                code: HOLDER_KEPT.to_owned(),
+                message: "only a shell pane's holder is replaced".to_owned(),
+            });
+        }
+        Size::checked(start.rows, start.cols).map_err(|message| HolderError::Refused {
+            code: HOLDER_KEPT.to_owned(),
+            message,
+        })?;
+        self.holders
+            .replace(self.owner()?, &guard, &self.service, &intent, previous)
+            .map_err(|refusal| match refusal {
+                ReplaceRefusal::Kept(_) => HolderError::Refused {
+                    code: HOLDER_KEPT.to_owned(),
+                    message: refusal.to_string(),
+                },
+                ReplaceRefusal::NotEnded(_) => HolderError::Refused {
+                    code: "holder_close_failed".to_owned(),
+                    message: refusal.to_string(),
+                },
+                ReplaceRefusal::NotReserved(why) => start_refusal(why),
+            })
     }
 
     fn shell_launch(&self) -> Option<ShellLaunch> {

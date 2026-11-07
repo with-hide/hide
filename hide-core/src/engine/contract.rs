@@ -353,6 +353,8 @@ pub(crate) struct BuiltHolders {
     service: std::sync::Arc<hide_node::terminal::Service>,
     /// The node's account home, which its panes' programs run in.
     pub(crate) home: std::path::PathBuf,
+    /// The node's state folder, which keeps its panes' records.
+    state_dir: std::path::PathBuf,
     folder: String,
     _root: tempfile::TempDir,
 }
@@ -463,6 +465,7 @@ impl BuiltHolders {
             panes: linked,
             service,
             home,
+            state_dir,
             folder: hide_platform::path::to_wire(&folder).unwrap(),
             _root: root,
         }
@@ -1614,10 +1617,31 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
 /// way the pane menu's Sleep and Wake run (`agent_sleep_engine`). The
 /// stand-in `claude` records each start's arguments and rests until Ctrl+C
 /// ends it, as Claude Code quits on one press into an empty composer.
+/// Its holder runs this build's, so the wake keeps it: the pane's record is
+/// the same start, run by the same holder.
 #[cfg(unix)]
 #[test]
 #[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
 fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
+    claude_sleeps_and_wakes_resuming(false);
+}
+
+/// with-hide/hide-private#646: a Claude that slept in a pane whose holder
+/// runs another build's version folder, as every pane open across an update
+/// does, wakes in a holder of this build under the same pane id: the old
+/// holder and the shell it held are gone, the pane keeps its place and its
+/// agent's name, and the resume runs the same conversation in the new
+/// holder. The record's folder is the node's only witness of the build, so
+/// the test names another build there.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the built pane holder: HIDE_TEST_HOLDER_BIN"]
+fn an_own_engine_claude_slept_on_another_builds_holder_wakes_on_this_builds() {
+    claude_sleeps_and_wakes_resuming(true);
+}
+
+#[cfg(unix)]
+fn claude_sleeps_and_wakes_resuming(outdated: bool) {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
@@ -1718,6 +1742,28 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         ..ClosedAgent::default()
     })
     .expect("Claude resumes by id");
+    let record_path =
+        hide_kit::layout::pane_record(&built.state_dir, &hide_kit::panes::holder_pane(&pane));
+    let record = || {
+        hide_holder_protocol::record::read(&record_path)
+            .expect("the pane's record reads")
+            .expect("the pane has a record")
+    };
+    if outdated {
+        let lock = hide_holder_protocol::record::lock(
+            &hide_kit::layout::pane_records_lock(&built.state_dir),
+            hide_holder_protocol::record::LOCK_WAIT,
+        )
+        .unwrap()
+        .expect("the records' lock is taken");
+        let mut earlier = record();
+        earlier.version_folder = "v1-an-earlier-build".into();
+        hide_holder_protocol::record::write(&record_path, &earlier).unwrap();
+        drop(lock);
+    }
+    let slept = record();
+    let slept_holder = slept.holder.expect("the slept pane's holder is written in");
+    let layout = engine.pane_layout(WAIT, &pane).unwrap();
     let woke = start_agent(
         engine,
         &node,
@@ -1753,6 +1799,32 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         Some(SESSION),
         "the woken agent runs the conversation it resumed"
     );
+    assert_eq!(woken.len(), 1, "one agent runs: {woken:?}");
+    assert_eq!(woken[0].pane_id, pane, "the agent woke in its own pane");
+    assert_eq!(
+        engine.pane_layout(WAIT, &pane).unwrap(),
+        layout,
+        "the pane kept its place"
+    );
+    let now = record();
+    if outdated {
+        assert_ne!(
+            now.incarnation, slept.incarnation,
+            "the holder was replaced"
+        );
+        assert_ne!(now.version_folder, slept.version_folder);
+        assert!(
+            !slept_holder.runs(),
+            "the earlier build's holder still runs beside its replacement"
+        );
+        assert_ne!(now.holder.map(|holder| holder.pid), Some(slept_holder.pid));
+    } else {
+        assert_eq!(
+            now.incarnation, slept.incarnation,
+            "a current holder was replaced"
+        );
+        assert!(slept_holder.runs(), "a current holder was ended");
+    }
     built.stop();
 }
 

@@ -765,6 +765,10 @@ impl<'g> Engine for FakeEngine<'g> {
         Ok(PreparedStart::new(launch, line))
     }
 
+    fn replace_outdated_holder(&self, _wait: Wait, pane: &str) -> Answer<bool> {
+        self.ask("replace_outdated_holder", json!({ "pane": pane }))
+    }
+
     fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
         let launch = start.launch();
         self.ask(

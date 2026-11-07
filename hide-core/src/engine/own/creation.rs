@@ -326,6 +326,23 @@ impl OwnEngine<'_> {
         ticket: Ticket,
         previous: Option<u64>,
     ) -> Result<Ticket, EngineError> {
+        self.reserve_admitted_by(ticket, |holders, start, request| {
+            holders.reserve(start, previous, request)
+        })
+    }
+
+    /// [`Self::reserve_admitted`] with the node call that makes the
+    /// reservation named: a plain reserve, or a holder's replacement that
+    /// ends the earlier holder first ([`PaneHolders::replace`]).
+    pub(super) fn reserve_admitted_by(
+        &self,
+        ticket: Ticket,
+        reserve: impl FnOnce(
+            &dyn PaneHolders,
+            &HolderStart,
+            HolderRequest,
+        ) -> Result<HolderReservation, hide_node_link::holders::HolderError>,
+    ) -> Result<Ticket, EngineError> {
         if let Err(error) = ticket.place() {
             ticket.withdraw()?;
             retire(
@@ -336,12 +353,7 @@ impl OwnEngine<'_> {
             return Err(error);
         }
         ticket.submit()?;
-        match self
-            .shared
-            .holders
-            .reserve(&ticket.start, previous, ticket.request)
-            .map_err(holder_error)
-        {
+        match reserve(&*self.shared.holders, &ticket.start, ticket.request).map_err(holder_error) {
             Ok(reserved) => {
                 let _ = ticket.reserved.set(reserved);
                 Ok(ticket)

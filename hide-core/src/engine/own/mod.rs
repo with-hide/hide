@@ -46,6 +46,7 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 mod agents;
 mod creation;
 pub(crate) mod herdr_session;
+mod holder_replace;
 mod ids;
 pub(crate) mod layout;
 mod restore;
@@ -2116,6 +2117,10 @@ impl<'g> Engine for OwnEngine<'g> {
         self.restored_within(within)
     }
 
+    fn replace_outdated_holder(&self, _wait: Wait, pane: &str) -> Answer<bool> {
+        self.replace_outdated(pane)
+    }
+
     fn pane_processes(&self, _wait: Wait, pane: &str) -> Answer<PaneProcessGroup> {
         self.check()?;
         self.processes(pane)
@@ -2490,6 +2495,12 @@ mod tests {
         /// does. The time each ask was given, in order.
         processes_held: (Mutex<bool>, Condvar),
         processes_within: Mutex<Vec<Duration>>,
+        /// Panes whose holder runs another build's, by the start it is.
+        outdated: Mutex<BTreeMap<String, u64>>,
+        /// What the next replacement answers instead of replacing.
+        replace_refusal: Mutex<Option<HolderError>>,
+        /// Each replacement asked, with the start it consumes.
+        replaced: Mutex<Vec<(String, u64)>>,
         /// How many of the next process asks about each pane are lost, as a
         /// node's ask is that never comes back.
         processes_lost: Mutex<BTreeMap<String, usize>>,
@@ -2661,6 +2672,27 @@ mod tests {
             } else {
                 Ok(hide_node_link::holders::HolderReservation { incarnation })
             }
+        }
+
+        fn outdated(&self, pane: &str) -> Result<Option<u64>, HolderError> {
+            Ok(self.outdated.lock().unwrap().get(pane).copied())
+        }
+
+        fn replace(
+            &self,
+            start: &HolderStart,
+            previous: u64,
+            request: hide_node_link::holders::HolderRequest,
+        ) -> Result<hide_node_link::holders::HolderReservation, HolderError> {
+            if let Some(refusal) = self.replace_refusal.lock().unwrap().take() {
+                return Err(refusal);
+            }
+            self.replaced
+                .lock()
+                .unwrap()
+                .push((start.pane.clone(), previous));
+            self.outdated.lock().unwrap().remove(&start.pane);
+            self.reserve(start, Some(previous), request)
         }
 
         fn start_reserved(
@@ -2889,6 +2921,7 @@ mod tests {
     }
 
     mod creation;
+    mod holder_replace;
     mod rules_recovery;
 
     /// What a placement saw: each call, in order, with whether the pane's

@@ -420,6 +420,16 @@ pub(crate) trait Engine: Send + Sync {
     fn wait_restored(&self, _within: Duration) -> Answer<()> {
         Ok(())
     }
+    /// Replaces the holder of `pane`, a shell pane an agent slept in, with
+    /// one of the build its machine's node runs now when it runs another
+    /// build's, under the same pane id, before a wake types its resume line
+    /// (with-hide/hide-private#646). Answers whether it replaced it: false
+    /// when the pane is not a plain shell pane, already runs the node's
+    /// build, or its node kept the holder as it was, which the engine logs.
+    /// Refused only when the old holder was ended and its replacement did
+    /// not start, which marks the pane as one whose terminal could not
+    /// start.
+    fn replace_outdated_holder(&self, wait: Wait, pane: &str) -> Answer<bool>;
     /// The pane's shell and its foreground processes.
     fn pane_processes(&self, wait: Wait, pane: &str) -> Answer<PaneProcessGroup>;
     /// The session a foreground `agent` was explicitly resumed with, as its

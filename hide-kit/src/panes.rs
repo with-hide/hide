@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{self, End, EndReason, Identity, PaneRecord, Phase, Unreadable};
 use hide_holder_protocol::{
-    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, Size, Theme,
-    read_holder, write_client,
+    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION,
+    Size, Theme, read_holder, write_client,
 };
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
@@ -52,7 +52,7 @@ pub use ownership::Owner;
 mod requests;
 mod reservation;
 #[cfg(test)]
-use hide_holder_protocol::{PROTOCOL_VERSION, record::RECORD_FORMAT};
+use hide_holder_protocol::record::RECORD_FORMAT;
 pub use requests::Request;
 
 /// The most holders a state folder keeps: every record that is not ended
@@ -273,6 +273,10 @@ pub enum CloseError {
     RecordUnreadable(Unreadable),
     OtherOwner,
     Failed(String),
+    /// A close for a replacement found the pane not the running start it
+    /// names, or already on this build's holder, and changed nothing
+    /// ([`Panes::close_outdated`]).
+    Kept(String),
 }
 
 impl std::fmt::Display for CloseError {
@@ -282,7 +286,7 @@ impl std::fmt::Display for CloseError {
             Self::Starting => write!(f, "the pane is still starting; its start was told to stop"),
             Self::RecordUnreadable(why) => write!(f, "{why}"),
             Self::OtherOwner => write!(f, "the pane's record belongs to another state folder"),
-            Self::Failed(why) => write!(f, "{why}"),
+            Self::Failed(why) | Self::Kept(why) => write!(f, "{why}"),
         }
     }
 }
@@ -956,6 +960,97 @@ impl Panes {
             current
         };
         self.finish_close(owner, current)
+    }
+
+    /// The version folder this build's holder from `source` runs from, by
+    /// the name a start of it would make it under.
+    pub fn current_folder(&self, source: &holders::Source) -> std::io::Result<String> {
+        self.names.name(PROTOCOL_VERSION, source)
+    }
+
+    /// The incarnation of `pane`'s running holder when it runs from a
+    /// version folder other than `current`, the folder this build's holder
+    /// runs from; `None` when it runs from `current`. A pane that is not
+    /// running, has no record or whose record cannot be read is refused.
+    pub fn outdated(&self, pane: &str, current: &str) -> Result<Option<u64>, CloseError> {
+        let record = match self.record(pane) {
+            Ok(Some(record)) => record,
+            Ok(None) => return Err(CloseError::NoRecord),
+            Err(error) => return Err(CloseError::RecordUnreadable(error)),
+        };
+        if record.owner != self.owner {
+            return Err(CloseError::OtherOwner);
+        }
+        if record.phase != Phase::Running {
+            return Err(CloseError::Kept(format!(
+                "the pane's holder is {:?}, not running",
+                record.phase
+            )));
+        }
+        Ok((record.version_folder != current).then_some(record.incarnation))
+    }
+
+    /// Ends `pane`'s holder for a replacement under the same id, as
+    /// [`Self::close`] ends it, but only while the record is still the
+    /// running start `incarnation` and its holder runs from a version folder
+    /// other than `current`: the check and the closing mark are one decision
+    /// under the records' lock, so a pane started or replaced since is never
+    /// ended. Refused [`CloseError::Kept`] with nothing changed otherwise.
+    /// The ended record keeps `incarnation`, which the replacement's
+    /// reservation names as the one it consumes (`reserve`'s `previous`).
+    pub fn close_outdated(
+        &self,
+        owner: &Owner,
+        pane: &str,
+        incarnation: u64,
+        current: &str,
+    ) -> Result<PaneRecord, CloseError> {
+        self.check_owner(owner).map_err(CloseError::Failed)?;
+        let path = layout::pane_record(&self.state_dir, pane);
+        let current_record = {
+            let _lock = self.lock().map_err(CloseError::Failed)?;
+            let mut record = match record::read(&path) {
+                Ok(Some(record)) => record,
+                Ok(None) => return Err(CloseError::NoRecord),
+                Err(error) => return Err(CloseError::RecordUnreadable(error)),
+            };
+            if record.owner != self.owner {
+                return Err(CloseError::OtherOwner);
+            }
+            if record.incarnation != incarnation || record.phase != Phase::Running {
+                return Err(CloseError::Kept(format!(
+                    "the pane is start {} and {:?}, not running start {incarnation}",
+                    record.incarnation, record.phase
+                )));
+            }
+            if record.version_folder == current {
+                return Err(CloseError::Kept(format!(
+                    "the pane's holder already runs from {current}"
+                )));
+            }
+            // The replacement's reservation would be refused behind it,
+            // after the holder had ended: refused here, before anything is.
+            if record.reservation.as_ref().is_some_and(|intent| {
+                intent.owner == owner.incarnation() && owner.request_pending(intent.number)
+            }) {
+                return Err(CloseError::Kept(
+                    "the pane's start still has an unresolved request".to_owned(),
+                ));
+            }
+            self.prepare_close(&mut record);
+            record::write(&path, &record).map_err(|error| CloseError::Failed(error.to_string()))?;
+            record
+        };
+        self.emit(
+            "pane_holder.replacing",
+            json!({
+                "pane": pane,
+                "incarnation": incarnation,
+                "from": current_record.version_folder,
+                "to": current,
+            }),
+        );
+        self.finish_close(owner, current_record)
     }
 
     // Called under the records lock, including by exact-intent cancellation.

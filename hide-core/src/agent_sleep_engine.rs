@@ -438,11 +438,13 @@ pub(crate) fn start_agent(
             };
         }
     };
+    let correlation = format!("hide-core:agent-sleep:{}:wake", request.pane_id);
+    let shell = replace_outdated_holder(engine, node, &request.pane_id, &correlation);
     match crate::agent_start::start_at_shell_reusing_name(
         engine,
         Some(node),
-        &format!("hide-core:agent-sleep:{}:wake", request.pane_id),
-        crate::agent_start::ShellStart::Plain,
+        &correlation,
+        shell,
         &start,
         crate::agent_start::START_ANSWER_WAIT,
         &|| Ok(()),
@@ -485,6 +487,46 @@ pub(crate) fn start_agent(
             reason: WAKE_NOT_READY.to_owned(),
             detail: error.to_string(),
         },
+    }
+}
+
+/// Moves the sleeping pane onto the holder of the build its node runs now
+/// when it runs another build's (with-hide/hide-private#646), once the
+/// pane's engine has finished its restore, and answers how the shell the
+/// resume is typed into says it is ready: a new holder's shell is Hide's
+/// integrated one, which marks its first prompt, as a restored pane's is.
+/// A holder kept as it was, for any reason, is woken as before; a
+/// replacement that ended the old holder and could not start the new one
+/// leaves the pane marked, and the start that follows fails on it.
+fn replace_outdated_holder(
+    engine: &dyn Engine,
+    node: &dyn NodeLink,
+    pane: &str,
+    correlation: &str,
+) -> crate::agent_start::ShellStart {
+    use crate::agent_start::ShellStart;
+    if engine
+        .wait_restored(crate::agent_start::SHELL_WAIT)
+        .is_err()
+    {
+        // The start's own restore wait reports it.
+        return ShellStart::Plain;
+    }
+    match engine.replace_outdated_holder(Wait::Each(crate::agent_start::START_ANSWER_WAIT), pane) {
+        Ok(true) => ShellStart::of_tab(
+            true,
+            crate::agent_start::shell_launch(Some(node), correlation).as_ref(),
+        ),
+        Ok(false) => ShellStart::Plain,
+        Err(error) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_sleep",
+                "kind": "agent_sleep.holder_not_replaced",
+                "pane_id": pane,
+                "message": error.to_string(),
+            }));
+            ShellStart::Plain
+        }
     }
 }
 
@@ -647,6 +689,7 @@ mod tests {
         ] {
             let expected = args.clone();
             let fake = FakeEngine::start(move |method, params| match method {
+                "replace_outdated_holder" => reply(false),
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => {
                     assert_eq!(params["kind"], canonical);
@@ -674,8 +717,44 @@ mod tests {
                 WakeOutcome::Started,
                 "{kind}"
             );
-            assert_eq!(fake.methods(), ["pane_processes", "start_agent"]);
+            // The pane's holder is brought to this build before anything
+            // is read of its shell or typed into it.
+            assert_eq!(
+                fake.methods(),
+                ["replace_outdated_holder", "pane_processes", "start_agent"]
+            );
         }
+    }
+
+    /// with-hide/hide-private#646: a holder the engine could not replace
+    /// does not stop the wake, which goes on in the pane as it is.
+    #[test]
+    fn a_wake_whose_holder_was_not_replaced_still_starts_the_agent() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "replace_outdated_holder" => refused("holder_start_failed", "the holder did not start"),
+            "pane_processes" => process_info(42, 42),
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        let outcome = start_agent(
+            fake.engine().as_ref(),
+            &hide_node::Local::of_process(),
+            &WakeRequest {
+                pane_id: "w1:p1".into(),
+                name: "wake".into(),
+                kind: "claude".into(),
+                mode: WakeMode::Resume,
+                args: vec!["--resume".into(), "session".into()],
+                cwd: None,
+                session_id: None,
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+            },
+        );
+        assert_eq!(outcome, WakeOutcome::Started);
+        assert_eq!(
+            fake.methods(),
+            ["replace_outdated_holder", "pane_processes", "start_agent"]
+        );
     }
 
     #[test]
@@ -1159,6 +1238,7 @@ mod tests {
     #[test]
     fn a_refused_wake_names_a_plain_reason_and_keeps_the_engine_s_words_for_the_log() {
         let fake = FakeEngine::start(|method, _| match method {
+            "replace_outdated_holder" => reply(false),
             "pane_processes" => process_info(42, 42),
             "start_agent" => refused("agent_name_taken", "agent name one is already used"),
             // Another agent holds the name, so reading it changes nothing.
@@ -1221,6 +1301,7 @@ mod tests {
             (json!("program"), Value::Null),
         ] {
             let fake = FakeEngine::start(|method, _| match method {
+                "replace_outdated_holder" => reply(false),
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => started(),
                 other => panic!("unexpected {other}"),
@@ -1282,6 +1363,7 @@ mod tests {
             let fake = FakeEngine::start(|method, _| match method {
                 "pane_processes" => process_info(42, 42),
                 "start_agent" => started(),
+                "replace_outdated_holder" => reply(false),
                 other => panic!("unexpected {other}"),
             });
             let node = Starts(Mutex::default());
