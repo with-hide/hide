@@ -394,12 +394,7 @@ pub fn settle_owed(home: &Path, session: &str, deadline: Instant) {
 /// ids it named.
 pub fn confirm(ids: &[String], deadline: Instant) -> Result<(), Failure> {
     for run in confirm_runs(ids) {
-        let answer = ask(
-            HookCommand::LetterConfirm {
-                ids: run.to_vec(),
-            },
-            deadline,
-        )?;
+        let answer = ask(HookCommand::LetterConfirm { ids: run.to_vec() }, deadline)?;
         let confirmed = answer
             .get("confirmed")
             .and_then(serde_json::Value::as_array)
