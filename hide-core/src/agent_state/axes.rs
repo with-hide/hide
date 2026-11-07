@@ -548,6 +548,20 @@ fn descendant_state(agent: &SidebarAgentSnapshot, own_wait: Option<AgentWait>) -
     }
 }
 
+/// What each settled pane sends up its lineage now, by pane.
+pub(crate) type SentSignals = BTreeMap<String, Vec<crate::model::DescendantSignal>>;
+
+/// The signals `rows` send up their lineage, settled panes only: a pane the
+/// engine has not settled says nothing about what it stopped sending.
+pub(crate) fn sent_signals<'a>(
+    rows: impl IntoIterator<Item = &'a SidebarAgentSnapshot>,
+) -> SentSignals {
+    rows.into_iter()
+        .filter(|agent| settled(agent))
+        .map(|agent| (agent.pane_id.clone(), descendant_signals_of(agent)))
+        .collect()
+}
+
 /// The signals one descendant sends up its lineage: its outstanding demand,
 /// and its completion, each on its own so that a demand being cleared from a
 /// finished child does not read as a fresh completion (PRD B5, B6).
@@ -962,19 +976,18 @@ pub fn prune_completions(
 /// that loses the engine's numbers cannot turn an unread pane read or the reverse.
 pub fn apply_read_state(
     agents: &mut [SidebarAgentSnapshot],
+    beyond: SentSignals,
     records: &mut BTreeMap<String, PaneReadRecord>,
     connection: &mut ReadConnection,
     operator_pane_id: Option<&str>,
 ) -> Vec<ReadRecordChange> {
     let mut changes = Vec::new();
-    // What each settled pane sends up its lineage now. A signal a record
-    // keeps for a pane that is not settled, or not listed while its lineage
-    // tokens are being written again after a restart, stays.
-    let emitted = agents
-        .iter()
-        .filter(|agent| settled(agent))
-        .map(|agent| (agent.pane_id.clone(), descendant_signals_of(agent)))
-        .collect::<BTreeMap<_, _>>();
+    // What each settled pane sends up its lineage now, a descendant on a
+    // device (`beyond`) included. A signal a record keeps for a pane that is
+    // not settled, or not listed while its lineage tokens are being written
+    // again after a restart, stays.
+    let mut emitted = beyond;
+    emitted.extend(sent_signals(agents.iter()));
     for agent in agents.iter_mut() {
         let settled_here = settled(agent);
         let first_settled = settled_here && connection.settled.insert(agent.pane_id.clone());

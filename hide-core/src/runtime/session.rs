@@ -3136,11 +3136,13 @@ impl Runtime {
             // the lineage and the read axis decide.
             self.lay_unseen_views(&mut agents);
             self.lay_start_prompts(&mut agents, local, live_pane_ids.as_ref());
-            crate::agent_state::apply_lineage(
-                &mut agents,
-                &self.snapshot.navigator.workspaces,
-                &self.snapshot.ui_state.expanded_agent_pane_ids,
-            );
+            // The tree takes in the children this machine's agents have on
+            // devices, as `refresh_agent_lineage` below and every later read
+            // pass do: a read decided over this machine's rows alone would
+            // miss a device child's news and be undone by the next pass.
+            let count = agents.len();
+            agents = self.lineage_across_machines(agents);
+            agents.truncate(count);
             changed |= self.apply_pane_read_state(&mut agents, local, live_pane_ids.as_ref());
             changed |= self.sync_conversation_modes(&agents);
             self.lay_local_requests(&mut agents, live_pane_ids.as_ref());

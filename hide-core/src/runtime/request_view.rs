@@ -361,6 +361,7 @@ impl Runtime {
             let mut agents = self.snapshot.navigator.agents.clone();
             changes = crate::agent_state::apply_read_state(
                 &mut agents,
+                self.device_signals(),
                 &mut records,
                 &mut self.local_read_connection,
                 Some(pane_id),
@@ -377,6 +378,7 @@ impl Runtime {
             if let Some((target_id, mut agents)) = remote {
                 changes = crate::agent_state::apply_read_state(
                     &mut agents,
+                    Default::default(),
                     &mut records,
                     self.read_connection(Some(&target_id)),
                     Some(pane_id),
@@ -399,6 +401,7 @@ impl Runtime {
             let before = session.agents.clone();
             crate::agent_state::apply_read_state(
                 &mut session.agents,
+                Default::default(),
                 &mut records,
                 self.read_connection(Some(&remote.target_id)),
                 session.focused_pane_id.as_deref(),

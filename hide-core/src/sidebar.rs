@@ -1443,10 +1443,25 @@ mod tests {
         };
         let mut before = project_agents(snapshot("기존 현재 작업")).agents;
         let mut records = BTreeMap::new();
-        apply_read_state(&mut before, &mut records, &mut connection(), Some("root"));
+        apply_read_state(
+            &mut before,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("root"),
+        );
         let saved = records.clone();
         let mut after = project_agents(snapshot("갱신된 현재 작업")).agents;
-        assert!(apply_read_state(&mut after, &mut records, &mut connection(), None).is_empty());
+        assert!(
+            apply_read_state(
+                &mut after,
+                Default::default(),
+                &mut records,
+                &mut connection(),
+                None
+            )
+            .is_empty()
+        );
         assert_eq!(records, saved);
         for (before, after) in before.iter().zip(&after) {
             assert_eq!(before.id, after.id);
@@ -1904,7 +1919,13 @@ mod tests {
                 checks_ended: None,
             },
         );
-        apply_read_state(&mut agents, &mut records, &mut connection(), None);
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            None,
+        );
 
         assert_eq!(
             agents
@@ -1932,7 +1953,13 @@ mod tests {
         };
         let mut agents = projected(json!([same("first"), same("second"), same("third")]));
         let mut records = BTreeMap::new();
-        apply_read_state(&mut agents, &mut records, &mut connection(), None);
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            None,
+        );
         assert_eq!(
             agents
                 .iter()
@@ -2322,7 +2349,13 @@ mod tests {
         ]));
         let mut records = BTreeMap::new();
 
-        apply_read_state(&mut agents, &mut records, &mut connection(), None);
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            None,
+        );
         assert!(
             agents
                 .iter()
@@ -2330,7 +2363,13 @@ mod tests {
             "nothing is read before the operator focuses anything"
         );
 
-        apply_read_state(&mut agents, &mut records, &mut connection(), Some("b"));
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("b"),
+        );
         let groups = agents
             .iter()
             .map(|agent| (agent.pane_id.as_str(), (agent.unread, agent.group.as_str())))
@@ -2347,7 +2386,13 @@ mod tests {
     fn read_record_ignores_the_engine_marking_the_tab_seen() {
         let mut agents = projected(json!([finished("a", 1), finished("b", 2)]));
         let mut records = BTreeMap::new();
-        apply_read_state(&mut agents, &mut records, &mut connection(), Some("b"));
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("b"),
+        );
 
         let seen_by_engine = json!([
             {"pane_id":"a","agent_status":"idle","state_change_seq":9,
@@ -2356,7 +2401,13 @@ mod tests {
              "tokens":{"status_done":"\u{25cf}","activity":"0000000000001"}}
         ]);
         let mut agents = projected(seen_by_engine);
-        apply_read_state(&mut agents, &mut records, &mut connection(), None);
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            None,
+        );
         assert!(
             agents.iter().all(|agent| agent.unread),
             "Herdr's tab-scoped seen never decides Hide's read axis"
@@ -2378,12 +2429,19 @@ mod tests {
         };
         let mut records = BTreeMap::new();
         let mut finished = projected(asking("done"));
-        apply_read_state(&mut finished, &mut records, &mut connection(), Some("a"));
+        apply_read_state(
+            &mut finished,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("a"),
+        );
         assert!(!finished[0].unread, "the operator read the question");
 
         let mut seen = projected(asking("idle"));
         apply_read_state(
             &mut seen,
+            Default::default(),
             &mut records,
             &mut connection(),
             Some("elsewhere"),
@@ -2413,13 +2471,25 @@ mod tests {
         let read = |status: &str| {
             let mut records = BTreeMap::new();
             let mut agents = projected(state(status, 4, "s1"));
-            apply_read_state(&mut agents, &mut records, &mut connection(), Some("a"));
+            apply_read_state(
+                &mut agents,
+                Default::default(),
+                &mut records,
+                &mut connection(),
+                Some("a"),
+            );
             assert!(!agents[0].unread);
             records
         };
         let unread = |records: &mut BTreeMap<String, PaneReadRecord>, status, seq, session| {
             let mut agents = projected(state(status, seq, session));
-            apply_read_state(&mut agents, records, &mut connection(), Some("elsewhere"));
+            apply_read_state(
+                &mut agents,
+                Default::default(),
+                records,
+                &mut connection(),
+                Some("elsewhere"),
+            );
             agents[0].unread
         };
 
@@ -2463,7 +2533,13 @@ mod tests {
         let mut records = BTreeMap::new();
 
         let mut watched = projected(asking.clone());
-        apply_read_state(&mut watched, &mut records, &mut connection(), Some("a"));
+        apply_read_state(
+            &mut watched,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("a"),
+        );
         assert!(!watched[0].unread, "a question on the focused pane is read");
         assert_eq!(watched[0].group, "seen");
 
@@ -2474,6 +2550,7 @@ mod tests {
         let mut later = projected(moved_on);
         apply_read_state(
             &mut later,
+            Default::default(),
             &mut records,
             &mut connection(),
             Some("elsewhere"),
@@ -2491,14 +2568,26 @@ mod tests {
             "pane_id":"a","agent_status":"working","state_change_seq":7,
             "tokens":{"status_working":"\u{25cf}","activity":"0000000000001"}
         }]));
-        apply_read_state(&mut working, &mut records, &mut connection(), Some("a"));
+        apply_read_state(
+            &mut working,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("a"),
+        );
         assert!(!working[0].unread);
 
         let mut asking = projected(json!([{
             "pane_id":"a","agent_status":"working","state_change_seq":7,
             "tokens":{"status_question_new":"?","status_working":"\u{25cf}","activity":"0000000000001"}
         }]));
-        apply_read_state(&mut asking, &mut records, &mut connection(), None);
+        apply_read_state(
+            &mut asking,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            None,
+        );
         assert!(
             asking[0].unread,
             "a new demand is unread even at the same sequence"
@@ -2512,15 +2601,34 @@ mod tests {
     fn read_records_are_evicted_only_against_authoritative_pane_topology() {
         let mut agents = projected(json!([finished("a", 1)]));
         let mut records = BTreeMap::new();
-        apply_read_state(&mut agents, &mut records, &mut connection(), Some("a"));
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            Some("a"),
+        );
         let after_first = records.clone();
         assert!(
-            apply_read_state(&mut agents, &mut records, &mut connection(), Some("a")).is_empty()
+            apply_read_state(
+                &mut agents,
+                Default::default(),
+                &mut records,
+                &mut connection(),
+                Some("a")
+            )
+            .is_empty()
         );
         assert_eq!(records, after_first, "a repeated apply changes nothing");
 
         let mut none: Vec<SidebarAgentSnapshot> = Vec::new();
-        apply_read_state(&mut none, &mut records, &mut connection(), None);
+        apply_read_state(
+            &mut none,
+            Default::default(),
+            &mut records,
+            &mut connection(),
+            None,
+        );
         assert!(
             records.contains_key("a"),
             "an empty agent list must not wipe a pane record"
@@ -2612,7 +2720,13 @@ mod tests {
         let mut agents = projected(rows);
         apply_completions(&mut agents, &mut saved.completions, connection);
         apply_lineage(&mut agents, &[], &[]);
-        apply_read_state(&mut agents, &mut saved.records, connection, focused);
+        apply_read_state(
+            &mut agents,
+            Default::default(),
+            &mut saved.records,
+            connection,
+            focused,
+        );
         agents
     }
 
@@ -2658,7 +2772,16 @@ mod tests {
             &mut saved.completions,
             &restored
         ));
-        assert!(apply_read_state(&mut again, &mut saved.records, &mut restored, None).is_empty());
+        assert!(
+            apply_read_state(
+                &mut again,
+                Default::default(),
+                &mut saved.records,
+                &mut restored,
+                None
+            )
+            .is_empty()
+        );
         assert_eq!((saved.records.clone(), saved.completions.clone()), before);
 
         let rows = pass(
