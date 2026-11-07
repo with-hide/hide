@@ -48,7 +48,7 @@ impl NodeLink for Node {
             }
             Call::Repository { .. } => Value::Null,
             Call::AgentInstalled { name } => {
-                assert_eq!(name, "codex");
+                assert!(matches!(name.as_str(), "codex" | "claude"), "{name}");
                 // How the device starts it, or null when it is not there.
                 if self.installed.load(Ordering::SeqCst) {
                     json!("program")
@@ -417,6 +417,19 @@ impl Spawner {
         launch: hide_agent_adapter::LaunchChoice,
         args: Vec<String>,
     ) -> Result<Value, String> {
+        self.spawn_kind("codex", parent, machine, intent, launch, args)
+    }
+
+    /// A spawn of the agent `kind`.
+    fn spawn_kind(
+        &self,
+        kind: &str,
+        parent: Option<&str>,
+        machine: Option<&str>,
+        intent: &str,
+        launch: hide_agent_adapter::LaunchChoice,
+        args: Vec<String>,
+    ) -> Result<Value, String> {
         crate::coordination::run(
             self.client.clone(),
             authority(&self.actor),
@@ -429,7 +442,7 @@ impl Spawner {
                 machine: machine.map(str::to_owned),
                 name: "worker".into(),
                 intent: intent.into(),
-                kind: "codex".into(),
+                kind: kind.into(),
                 repo: "/srv/repo".into(),
                 branch: "topic".into(),
                 path: None,
@@ -1042,6 +1055,16 @@ fn codex_kit(
     cause: Option<hide_kit::PartCause>,
     enabled: bool,
 ) -> hide_kit::KitReport {
+    agent_kit("codex", state, cause, enabled)
+}
+
+/// A machine's kit report with the one agent `id` and its hook in `state`.
+fn agent_kit(
+    id: &str,
+    state: hide_kit::ComponentState,
+    cause: Option<hide_kit::PartCause>,
+    enabled: bool,
+) -> hide_kit::KitReport {
     let piece = |state, cause: Option<hide_kit::PartCause>| hide_kit::PieceReport {
         state,
         reason: None,
@@ -1051,8 +1074,8 @@ fn codex_kit(
     hide_kit::KitReport {
         codex_daemon: Some(true),
         agents: vec![hide_kit::AgentReport {
-            id: "codex".to_owned(),
-            label: "Codex".to_owned(),
+            id: id.to_owned(),
+            label: id.to_owned(),
             availability: hide_kit::Availability::Available,
             enabled,
             chosen: true,
@@ -1172,6 +1195,56 @@ fn a_spawn_whose_hook_a_pass_cannot_put_in_is_refused_before_anything_is_made() 
         assert!(spawner.ledger().spawns.is_empty());
         assert!(spawner.fake.methods().is_empty(), "{:?}", spawner.fake.methods());
     }
+}
+
+/// with-hide/hide-private#662 as the operator met it: a device joined before
+/// Claude Code was first started there has no `~/.claude`, so the kit left
+/// Claude's hook out. A spawn of Claude runs one pass there; one that still
+/// finds no folder refuses with what the operator does, and one that finds
+/// it made puts the hook in and types the start.
+#[test]
+fn a_claude_spawn_onto_a_device_without_its_folder_waits_for_a_pass() {
+    use hide_kit::{ComponentState, PartCause};
+    let absent = || {
+        agent_kit(
+            "claude-code",
+            ComponentState::Absent,
+            Some(PartCause::AgentAbsent),
+            true,
+        )
+    };
+    let claude = |spawner: &Spawner| {
+        spawner.spawn_kind(
+            "claude",
+            Some("here"),
+            Some(DEVICE),
+            "one",
+            Default::default(),
+            Vec::new(),
+        )
+    };
+
+    {
+        // Each spawner holds the process's spawn turn until it is dropped.
+        let still_absent = spawner();
+        still_absent.kit(absent(), absent());
+        let error = claude(&still_absent).expect_err("refused");
+        assert_eq!(split_refusal(&error), ("agent_not_set_up", None));
+        assert_eq!(still_absent.kit_passes().len(), 1);
+        assert!(still_absent.ledger().spawns.is_empty());
+        let made = still_absent.fake.methods();
+        assert!(made.is_empty(), "{made:?}");
+    }
+
+    let made_since = spawner();
+    made_since.kit(
+        absent(),
+        agent_kit("claude-code", ComponentState::Installed, None, true),
+    );
+    // What the start does after that is the spawn's as for any agent.
+    let _ = claude(&made_since);
+    assert_eq!(made_since.kit_passes().len(), 1);
+    assert_eq!(made_since.count("start_agent"), 1);
 }
 
 fn count(methods: &[&str], name: &str) -> usize {
