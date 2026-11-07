@@ -1139,6 +1139,14 @@ pub fn handle_with_progress(
             worktrees::ignored_repository(&absolute(&worktree)?)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
         ),
+        Call::HomeList { path } => {
+            let home = env.home("HOME is not set, so no folder under it can be listed")?;
+            to_value(crate::browse::home_list(&path, &home)?)
+        }
+        Call::NewFolderTarget { parent, name, kind } => {
+            let home = env.home("HOME is not set, so no folder can be judged against it")?;
+            to_value(crate::browse::new_folder_target(&parent, &name, kind, &home)?)
+        }
         Call::ProjectCreate {
             path,
             new_folder,

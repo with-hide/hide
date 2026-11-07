@@ -324,7 +324,12 @@ use crate::error::HostError;
 /// launcher read as the program it runs, so a first input rides the start
 /// there too; a helper on 76 would answer `program` or `batch` for it, so
 /// it upgrades.
-pub const PROTOCOL_VERSION: u32 = 77;
+/// 78: `home_list` lists one folder under the node's home for Add a
+/// project's folder list and `new_folder_target` says where a clone or a new
+/// project would land under that home, so both run on any device (PRD
+/// device-add-project D-01, D-07); a helper on 77 would refuse both, so it
+/// upgrades.
+pub const PROTOCOL_VERSION: u32 = 78;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -604,6 +609,23 @@ pub enum Call {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         confirmed_outside_home: Option<String>,
+    },
+    /// One folder under this host's home as Add a project lists it
+    /// (`browse::HomeListing`): `path` is `~`, `~/...` or an absolute path
+    /// in either spelling, and has to lead to home or a folder under it
+    /// without leaving it through a link. Hidden names are left out, and a
+    /// repository carries its branch and a folder its repository count.
+    HomeList {
+        path: String,
+    },
+    /// Where a clone (`kind` `clone`) or a new project (`project`) named
+    /// `name` would land in `parent`, home or a folder under it, judged
+    /// against this host's home (`browse::NewFolderTarget`); nothing is
+    /// made.
+    NewFolderTarget {
+        parent: String,
+        name: String,
+        kind: crate::browse::NewFolderKind,
     },
     /// Makes this host's Hide Home folder (`~/hide`) hold one link per
     /// project in `projects` and nothing Hide did not make
@@ -1269,6 +1291,8 @@ impl Call {
             | Self::Directory { .. }
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
+            | Self::HomeList { .. }
+            | Self::NewFolderTarget { .. }
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
             | Self::BranchMergePush { .. }

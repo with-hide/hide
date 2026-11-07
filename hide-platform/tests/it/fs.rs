@@ -2506,3 +2506,39 @@ fn a_network_share_is_not_a_local_volume() {
         );
     }
 }
+
+/// A dotted name is hidden everywhere, an ordinary one nowhere, and the
+/// system's own mark (macOS's hidden flag, Windows' hidden attribute) hides
+/// a folder whatever its name.
+#[test]
+fn a_dotted_name_and_the_systems_hidden_mark_hide_an_entry() {
+    let dir = folder();
+    let plain = dir.path().join("work");
+    let dotted = dir.path().join(".ssh");
+    let marked = dir.path().join("Library");
+    for path in [&plain, &dotted, &marked] {
+        fs::create_dir(path).unwrap();
+    }
+    assert!(!hide_platform::fs::hidden(&plain));
+    assert!(hide_platform::fs::hidden(&dotted));
+    assert!(hide_platform::fs::hidden(&dir.path().join(".missing")));
+    assert!(!hide_platform::fs::hidden(&dir.path().join("missing")));
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("/usr/bin/chflags")
+            .arg("hidden")
+            .arg(&marked)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(hide_platform::fs::hidden(&marked));
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("attrib").arg("+h").arg(&marked).status().unwrap();
+        assert!(status.success());
+        assert!(hide_platform::fs::hidden(&marked));
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    assert!(!hide_platform::fs::hidden(&marked));
+}

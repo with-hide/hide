@@ -24,6 +24,18 @@ const GIT_DIR_NAME: &str = ".git";
 /// `real_root` is followed as that relative path, through the same handle;
 /// the resolution only classifies the row and never opens anything.
 pub fn list(dir: &Dir, relative: &Path, real_root: &Path) -> HostResult<Listing> {
+    list_where(dir, relative, real_root, |name| name == GIT_DIR_NAME)
+}
+
+/// [`list`] with the caller's own names to leave out (`skip`), which are
+/// passed over before the cap counts them, so a folder of hidden names
+/// never fills a listing that shows none of them.
+pub fn list_where(
+    dir: &Dir,
+    relative: &Path,
+    real_root: &Path,
+    skip: impl Fn(&str) -> bool,
+) -> HostResult<Listing> {
     let folder = if relative.as_os_str().is_empty() {
         dir.try_clone()
             .map_err(|error| HostError::io(&error, "The folder could not be opened"))?
@@ -40,7 +52,7 @@ pub fn list(dir: &Dir, relative: &Path, real_root: &Path) -> HostResult<Listing>
         let Ok(item) = item else { continue };
         let name = item.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name == GIT_DIR_NAME {
+        if skip(name) {
             continue;
         }
         let Ok(file_type) = item.file_type() else {
