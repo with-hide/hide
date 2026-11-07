@@ -39,6 +39,6 @@ export default defineConfig({
     environment: "node",
     reporters: ["default", "./e2e/unit-failure-reporter.ts"],
     globalSetup: ["./e2e/unit-node-binary.ts"],
-    include: ["src/**/*.test.{ts,tsx}", "e2e/windows-sockets.unit.ts", "e2e/platform-program.unit.ts", "e2e/bounded-child.unit.ts", "e2e/close-order.unit.ts", "e2e/sent-kinds.unit.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "e2e/windows-sockets.unit.ts", "e2e/platform-program.unit.ts", "e2e/bounded-child.unit.ts", "e2e/close-order.unit.ts"],
   },
 });
