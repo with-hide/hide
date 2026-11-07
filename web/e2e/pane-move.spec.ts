@@ -72,7 +72,8 @@ test("a tab drop and the keyboard move menu keep the same terminal in a new tab"
     await page.locator('[data-menu-item="pane_move_area:a1"]').focus(); await page.keyboard.press("ArrowRight");
     const choice = page.getByRole("menuitem", { name: "Move to new tab", exact: true }); await choice.focus(); await page.keyboard.press("Enter"); await flow.completed(2);
     await expect.poll(async () => { const tab = await tabNow(flow, source); return tab !== undefined && tab !== flow.target.tab; }).toBe(true);
-    expect(await page.evaluate(id => window.__hideProbe!.paneText(id), source)).toContain("MOVE_KEPT");
+    // The pane's view in the new tab is a new one: it takes the screen back from its terminal when it attaches, after the move completes.
+    await expect.poll(() => page.evaluate(id => window.__hideProbe!.paneText(id), source)).toContain("MOVE_KEPT");
     expect(await sessionIn(flow.daemon, source)).toBe(session);
     expect(flow.sent.get("pane_move")).toBe(2);
     await screenshot(page, "pane-move-menu-new-tab");
