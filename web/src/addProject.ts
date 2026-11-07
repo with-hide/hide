@@ -1,49 +1,106 @@
-// Add a project's own rules: which hosts the dialog offers, the one refusal
-// the shell can tell from the snapshot before an event goes out, the line a
-// refusal is shown as, and Clone from URL's reading of a URL and its default
-// parent. Everything else about a path hided (this Mac) or the device's
-// helper decides and answers, and the core parses a URL again before Git
-// sees it (`hide_host::clone`).
+// Add a project's own rules: which hosts the dialog offers, how Browse folder
+// opens on each, what a line typed into the folder list asks for, the one
+// refusal the shell can tell from the snapshot before an event goes out, the
+// line a refusal is shown as, and Clone from URL's reading of a URL and its
+// default parent. Everything else about a path hided (this Mac) or the
+// machine's node decides and answers, and the core parses a URL again before
+// Git sees it (`hide_host::clone`).
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { isCoreMachine, machineName, thisMachineKey, windowDeviceId, windowFirst } from "./screenMachine";
+import { machineName, thisMachineKey, windowDeviceId, windowFirst } from "./screenMachine";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
-export type Host = { id: string; label: string };
+/** `offline`: a device that is not connected now, listed dimmed and not chosen (PRD device-add-project B31). */
+export type Host = { id: string; label: string; offline: boolean };
 
 /** This window's machine first as This Mac, then every other device, as the Host selector lists them (PRD core-host-node-move N1). */
 export function addProjectHosts(devices: readonly Device[] | undefined, t: TFunction<"translation">): Host[] {
   const own = windowDeviceId(devices);
   const rows = windowFirst(devices);
-  const hosts = rows.map((device) => ({ id: device.id, label: machineName(devices, device.id, t) }));
+  // The machine this window runs on is reachable whatever its row says: the window is drawn from it.
+  const hosts = rows.map((device) => ({ id: device.id, label: machineName(devices, device.id, t), offline: device.id !== own && deviceOffline(device) }));
   // Before the snapshot names this machine, it is the core's own node by the empty id.
-  return rows.some((device) => device.id === own) ? hosts : [{ id: own, label: t(thisMachineKey(null)) }, ...hosts];
+  return rows.some((device) => device.id === own) ? hosts : [{ id: own, label: t(thisMachineKey(null)), offline: false }, ...hosts];
+}
+
+/** A device whose connection is not up now: its node cannot list, clone or create. The core's own row is never offline. */
+export function deviceOffline(device: Device | undefined): boolean {
+  return device !== undefined && device.kind === "remote" && device.state !== "ready";
 }
 
 /**
- * What the dialog offers on a host: Browse folder only on the machine this
- * window runs on, whose folders the native picker shows, and a typed `~/`
- * path that machine's node judges anywhere else; the other ways to add only on
- * the core's machine, the one a new project can be made on (the core refuses
- * a new folder on any other), and their parent picker only when the window
- * runs there too. `picker` is whether this window can open the system's
- * folder picker (the desktop app can, a browser tab cannot): without it the
- * window's own machine takes a typed `~/` path too, judged by its node like
- * any other machine's.
+ * How Browse folder and the parent pickers open on a host (PRD
+ * device-add-project D-01, D-02): every host offers the same three ways, and
+ * the folders are picked with the system's own folder window (`native`) only
+ * on the machine this window runs on when the window can open one (the
+ * desktop app can, a browser tab cannot); anywhere else, a connected device
+ * or the core's machine seen from a node's window, the dialog's own folder
+ * list shows that machine's folders as its node answers them.
  */
-export type HostWays = { own: boolean; browse: boolean; otherWays: boolean; pickParent: boolean };
+export type HostWays = { own: boolean; native: boolean };
 
 export function hostWays(host: string, devices: readonly Device[] | undefined, picker: boolean): HostWays {
   const own = host === windowDeviceId(devices);
-  const core = isCoreMachine(devices, host);
-  const browse = own && picker;
-  return { own, browse, otherWays: core, pickParent: browse && core };
+  return { own, native: own && picker };
 }
 
-/** The host the dialog opens on: the focused device while it is still listed, this Mac otherwise. */
+/** The host the dialog opens on: the focused device while it is listed and connected, this Mac otherwise. */
 export function initialHost(hosts: readonly Host[], focused: string | null | undefined): string {
-  return focused && hosts.some((host) => host.id === focused) ? focused : (hosts[0]?.id ?? "");
+  return focused && hosts.some((host) => host.id === focused && !host.offline) ? focused : (hosts[0]?.id ?? "");
+}
+
+/**
+ * Where the folder list starts on `device`: the folder it last showed there,
+ * which the core keeps across a restart (PRD device-add-project D-04), else
+ * home. `node` is the core's own machine, whose folder is kept apart from
+ * the devices'.
+ */
+export function rememberedFolder(state: { add_project_folder?: string | null; device_add_project_folders?: Record<string, string> } | undefined, device: string, node: string): string | null {
+  return (device === node || device === "" ? state?.add_project_folder : state?.device_add_project_folders?.[device]) || null;
+}
+
+/**
+ * What a line typed into the folder list asks for (PRD device-add-project
+ * D-06): a `~` path moves the list to the folder before its last `/` and
+ * filters by the name after it; an absolute path, a Windows one included
+ * (Explorer's quoted `Copy as path` too), names a folder the machine's node
+ * places against its home, spelled as a WSL device shows the PC's drives
+ * when `drives` says where; a drive path on a machine that is neither
+ * Windows nor WSL names nothing there and filters, like anything else.
+ */
+export type TypedPlace = { kind: "filter"; text: string } | { kind: "folder"; folder: string; filter: string } | { kind: "path"; path: string };
+
+export function typedPlace(raw: string, drives: string | null | undefined, windows: boolean): TypedPlace {
+  const text = raw.trim().replace(/^"(.*)"$/, "$1");
+  if (text === "~" || text.startsWith("~/")) {
+    const cut = text.lastIndexOf("/");
+    if (cut < 0) return { kind: "folder", folder: "~", filter: "" };
+    return { kind: "folder", folder: text.slice(0, cut) || "~", filter: text.slice(cut + 1) };
+  }
+  if ((windows || drives) && /^[A-Za-z]:([\\/]|$)/.test(text)) {
+    const spelled = drives ? wslDrivePath(text, drives) : text.replace(/\\/g, "/");
+    return { kind: "path", path: trimFolder(spelled) };
+  }
+  if (text.startsWith("/")) return { kind: "path", path: trimFolder(text) };
+  return { kind: "filter", text: raw };
+}
+
+/** The entries whose names hold `filter`, letter case ignored; an empty filter keeps them all. */
+export function filterEntries<T extends { name: string }>(entries: readonly T[], filter: string): T[] {
+  const wanted = filter.trim().toLocaleLowerCase();
+  return wanted ? entries.filter((entry) => entry.name.toLocaleLowerCase().includes(wanted)) : [...entries];
+}
+
+/** A child of a folder as the machine spells it: `/` between names, whatever system it runs. */
+export function childPath(folder: string, name: string): string {
+  return `${folder.replace(/\/+$/, "")}/${name}`;
+}
+
+/** The crumbs of a folder's `~` label, each with the label it moves to: `~`, `~/a`, `~/a/b`. */
+export function folderCrumbs(label: string): { name: string; label: string }[] {
+  const names = label.split("/").filter(Boolean);
+  return names.map((name, index) => ({ name, label: names.slice(0, index + 1).join("/") }));
 }
 
 /** A path without its trailing slashes, so `~/a/` and `~/a` are one folder. */

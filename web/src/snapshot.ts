@@ -1974,7 +1974,7 @@ export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | 
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
-export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
 export type MachineProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
 
 /** A machine the first-run Devices step offers: an ssh config Host, or this PC's WSL. */
@@ -2363,6 +2363,8 @@ export type TaskOperation = {
  */
 export type RepositoryClone = {
   id: number;
+  /** The machine the clone runs on and registers its project on; absent from an older daemon, whose clones ran on the core's machine. */
+  device_id?: string;
   host: string;
   /** The folder the clone creates, canonical; the registration carries the same path. */
   path: string;
@@ -3195,6 +3197,10 @@ export type SnapshotRest = {
     expanded_paths?: string[];
     /** Each SSH device's expanded Explorer folders; this machine's are `expanded_paths`. */
     device_expanded_paths?: Record<string, string[]>;
+    /** The folder Add a project's folder list last showed on the core's machine (PRD device-add-project D-04). */
+    add_project_folder?: string | null;
+    /** The same for each device, by device id. */
+    device_add_project_folders?: Record<string, string>;
     /** Projects whose checkouts the sidebar folds. */
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */

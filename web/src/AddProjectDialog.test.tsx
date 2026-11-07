@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { useShellStore } from "./store";
+import { useShellStore, type HomeListing } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
@@ -18,7 +18,8 @@ type Sent = Parameters<DispatchFn>[0];
 
 const machines = (drives: string | null) => [
   { id: "local", kind: "local", label: null, host: { platform: "macos aarch64" } },
-  { id: "ubuntu", kind: "remote", label: "Ubuntu", host: { platform: "linux x86_64", state: "ready", windows_drives: drives } },
+  { id: "ubuntu", kind: "remote", label: "Ubuntu", state: "ready", host: { platform: "linux x86_64", state: "ready", windows_drives: drives } },
+  { id: "win", kind: "remote", label: "Windows", state: "unavailable", host: { platform: "windows x86_64" } },
 ];
 
 const state = (drives: string | null = null, focused = "local") => ({
@@ -26,7 +27,7 @@ const state = (drives: string | null = null, focused = "local") => ({
   revision: 1,
   pathRefusal: null,
   rest: {
-    ui_state: { workspace_registrations: [] },
+    ui_state: { workspace_registrations: [{ id: 7, path: "/home/me/old", device_id: "ubuntu" }] },
     navigator: { devices: machines(drives), focused_device_id: focused },
     status: { last_error: null },
   },
@@ -130,15 +131,95 @@ it("leaves out the slow line for a folder outside home that is not on the C driv
   await unmount();
 });
 
-it("asks the same question when a device's helper answers that its folder is outside that device's home", async () => {
+const lists = (events: Sent[]) => events.filter((event) => event.kind === "home_folder_list").map((event) => event.payload);
+
+/** What hided answers a `home_folder_list` with, as the frame handler stores it. */
+const answerList = (device: string, request: string, answer: { listing?: HomeListing; reason?: string }) =>
+  act(async () =>
+    useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => {
+      const seq = current.homeFolderSeq + 1;
+      return {
+        homeFolderSeq: seq,
+        homeFolders: { ...current.homeFolders, [`${device}\n${request}`]: { device_id: device, request, listing: answer.listing ?? null, reason: answer.reason ?? null, seq } },
+      };
+    }) as never,
+  );
+
+const home: HomeListing = {
+  path: "/home/me",
+  label: "~",
+  home: "/home/me",
+  truncated: false,
+  entries: [
+    { name: "app", is_directory: true, repository: true, branch: "main" },
+    { name: "old", is_directory: true, repository: true, branch: "main" },
+    { name: "projects", is_directory: true, repositories: 3 },
+    { name: "notes.txt", is_directory: false },
+  ],
+};
+
+/** Types `text` into the folder list's field and lets the typed ask settle. */
+const type = (text: string) =>
+  act(async () => {
+    const field = find("[data-folder-browser-field]") as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+
+it("lists a device's folders through its node and adds the one chosen there (PRD device-add-project B3-B9)", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
   const { events, unmount } = await mount(state("/mnt", "ubuntu"));
-  const field = find("[data-add-project-path]") as HTMLInputElement;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "/mnt/c/work/app");
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(async () => find("[data-add-project-submit]")!.click());
+  expect(find("[data-add-project-browse]")?.getAttribute("data-add-project-browse")).toBe("list");
+  await act(async () => find("[data-add-project-browse]")!.click());
+  expect(lists(events)).toEqual([{ device_id: "ubuntu", path: "~" }]);
+  expect(find("[data-folder-list-state]")?.getAttribute("data-folder-list-state")).toBe("loading");
+
+  await answerList("ubuntu", "~", { listing: home });
+  expect([...document.querySelectorAll("[data-folder-row]")].map((row) => row.getAttribute("data-folder-row"))).toEqual(["app", "old", "projects", "notes.txt"]);
+  expect(find('[data-folder-row="app"] [data-folder-row-branch]')?.getAttribute("data-folder-row-branch")).toBe("main");
+  expect(find('[data-folder-row="old"]')?.hasAttribute("data-folder-row-added")).toBe(true);
+  expect(find('[data-folder-row="projects"] [data-folder-row-repositories]')?.textContent).toBe("3 repos");
+  // Home itself is never a project; the list says so and Add waits for a choice.
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  // The list it showed is the folder the core keeps for that machine (D-04).
+  expect(events.filter((event) => event.kind === "add_project_folder_set").map((event) => event.payload)).toEqual([{ device_id: "ubuntu", path: "/home/me" }]);
+
+  await act(async () => find('[data-folder-row="notes.txt"]')!.click());
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => find('[data-folder-row="old"]')!.click());
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => find('[data-folder-row="app"]')!.click());
+  await act(async () => find("[data-folder-browser-submit]")!.click());
+  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false }]);
+  await unmount();
+});
+
+it("moves the list to a typed folder and filters it by the rest of the line", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: home });
+  await type("ap");
+  expect([...document.querySelectorAll("[data-folder-row]")].map((row) => row.getAttribute("data-folder-row"))).toEqual(["app"]);
+  await type("~/projects/");
+  expect(lists(events).at(-1)).toEqual({ device_id: "ubuntu", path: "~/projects" });
+  await answerList("ubuntu", "~/projects", { listing: { path: "/home/me/projects", label: "~/projects", home: "/home/me", truncated: false, entries: [] } });
+  expect(find("[data-folder-list-state]")?.getAttribute("data-folder-list-state")).toBe("empty");
+  await unmount();
+});
+
+it("asks the same question when a device's node answers that a typed folder is outside its home (PRD wsl-device B15)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state("/mnt", "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: home });
+  // A Windows path pasted on a WSL device is that device's own path (B16).
+  await type("C:\\work\\app");
+  expect(lists(events).at(-1)).toEqual({ device_id: "ubuntu", path: "/mnt/c/work/app" });
+  await answerList("ubuntu", "/mnt/c/work/app", { reason: "outside_home" });
+  expect(find("[data-folder-browser-hint]")?.getAttribute("data-folder-browser-hint")).toBe("outside_home");
+  await act(async () => find("[data-folder-browser-submit]")!.click());
   expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/mnt/c/work/app", label: "app", initialize_git: false }]);
   await act(async () =>
     useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
@@ -150,7 +231,7 @@ it("asks the same question when a device's helper answers that its folder is out
   await act(async () => find("[data-registration-confirm-add]")!.click());
   expect(creates(events).at(-1)).toEqual({ device_id: "ubuntu", path: "/mnt/c/work/app", label: "app", initialize_git: false, confirmed_outside_home: "/mnt/c/work/app" });
 
-  // The helper names the repository the folder belongs to; that is what is asked about and confirmed.
+  // The node names the repository the folder belongs to; that is what is asked about and confirmed.
   await act(async () =>
     useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
       rest: { ...current.rest, status: { last_error: { kind: "workspace.create_refused.needs_confirmation", message: "outside", occurred_at: Date.now() + 2_000, confirm: "/mnt/c/work" } } },
@@ -162,30 +243,18 @@ it("asks the same question when a device's helper answers that its folder is out
   await unmount();
 });
 
-/** Pastes `text` into the path field, as the browser hands a paste to it. */
-const paste = (field: HTMLInputElement, text: string) =>
-  act(async () => {
-    const event = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: { getData: () => string } };
-    event.clipboardData = { getData: () => text };
-    field.dispatchEvent(event);
-  });
-
-it("shows a Windows path pasted on a WSL device as that device's own path (PRD wsl-device B16)", async () => {
+it("keeps a Windows path as written on a Linux device that is not WSL", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
-  const { events, unmount } = await mount(state("/mnt", "ubuntu"));
-  const field = find("[data-add-project-path]") as HTMLInputElement;
-  await paste(field, "C:\\work\\app");
-  expect(field.value).toBe("/mnt/c/work/app");
-  await act(async () => find("[data-add-project-submit]")!.click());
-  expect(creates(events).at(-1)?.path).toBe("/mnt/c/work/app");
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await type("C:\\work\\app");
+  expect(lists(events)).toEqual([{ device_id: "ubuntu", path: "~" }]);
   await unmount();
 });
 
-it("keeps a Windows path as written on a Linux device that is not WSL", async () => {
-  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
-  const { unmount } = await mount(state(null, "ubuntu"));
-  const field = find("[data-add-project-path]") as HTMLInputElement;
-  await paste(field, "C:\\work\\app");
-  expect(field.value).toBe("~/");
+it("shows a device that is not connected as one that cannot be chosen, and opens on this Mac (PRD device-add-project B31)", async () => {
+  const { unmount } = await mount(state(null, "win"));
+  expect(find("[data-add-project-browse]")?.getAttribute("data-add-project-browse")).toBe("list");
+  expect((find("[data-add-project-browse]") as HTMLButtonElement).disabled).toBe(false);
   await unmount();
 });

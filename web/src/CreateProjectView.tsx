@@ -1,10 +1,11 @@
 // Add a project's Create new project: a name and the folder it goes in, and
 // one `create_workspace` with `new_folder` that makes the folder, starts a Git
-// repository in it and registers it (on the core's machine only, whose hided
-// makes it, so `node` here is the core's machine). hided answers a
-// `project_target` probe as the operator types, on the same `$HOME` line the
-// create is checked on, so an existing folder, a parent outside home or a
-// name that is not one folder is said here before anything is sent.
+// repository in it and registers it, on the machine the dialog chose (PRD
+// device-add-project D-07). That machine answers a `project_target` probe as
+// the operator types (hided's `$HOME` line for the core's machine, the
+// device's node for a device), by the same line the create is checked on, so
+// an existing folder, a parent outside home or a name that is not one folder
+// is said here before anything is sent.
 
 import { ArrowLeftIcon, FolderOpenIcon, GitBranchIcon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -14,15 +15,20 @@ import { Note } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { DialogBody, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
+import { RowButton } from "./components/ui/row-button";
 import { RegistrationStatus, useRegistration } from "./registration";
-import { localDeviceId, type WorkspaceRegistration } from "./snapshot";
+import type { WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
 
-/** `pickParent`: the native folder picker shows the core's folders, which it does only in a window on the core's machine. */
-export function CreateProjectView({ actions, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; registrations: readonly WorkspaceRegistration[]; pickParent: boolean; onBack: () => void; draft?: { name?: string; parent?: string }; onDraft?: (draft: { name?: string; parent?: string }) => void }) {
+/**
+ * `device` is the machine the project is made on and `hostLabel` its name;
+ * `pickParent` opens that machine's folder picker and answers the folder, or
+ * null when it was cancelled or the dialog's own list took over.
+ */
+export function CreateProjectView({ actions, device, hostLabel, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; device: string; hostLabel: string; registrations: readonly WorkspaceRegistration[]; pickParent: () => Promise<string | null>; onBack: () => void; draft?: { name?: string; parent?: string }; onDraft?: (draft: { name?: string; parent?: string }) => void }) {
   const { t } = useInterfaceTranslation();
-  const [parent, setParent] = useState(() => draft?.parent || defaultProjectParent(registrations, localDeviceId(useShellStore.getState().rest)));
+  const [parent, setParent] = useState(() => draft?.parent || defaultProjectParent(registrations, device));
   const [typed, setTyped] = useState(draft?.name ?? "");
   const registration = useRegistration(registrations);
   const { pending, shown } = registration;
@@ -30,16 +36,16 @@ export function CreateProjectView({ actions, registrations, pickParent, onBack, 
   const nameProblem = projectNameProblem(name);
   const asked = nameProblem === null ? name : "";
   const answer = useShellStore((s) => s.projectTarget);
-  const target = answer && answer.parent === parent && answer.name === asked ? answer : null;
+  const target = answer && answer.device_id === device && answer.parent === parent && answer.name === asked ? answer : null;
 
   // Asked again when a create is refused or fails, since a failed create may
   // have left its folder behind, which the next create continues into.
   const failure = shown ? `${shown.reason}\n${shown.text}` : "";
   useEffect(() => {
-    actions.probeProjectTarget(parent, asked);
-  }, [actions, parent, asked, failure]);
+    actions.probeProjectTarget(parent, asked, device);
+  }, [actions, device, parent, asked, failure]);
 
-  const registered = target?.path ? alreadyRegistered(target.path, localDeviceId(useShellStore.getState().rest), registrations) : false;
+  const registered = target?.path ? alreadyRegistered(target.path, device, registrations) : false;
   const problem = nameProblem ? t(nameProblem) : registered ? refusalText("already_registered", t) : target?.reason ? refusalText(target.reason, t) : null;
   const ready = name !== "" && problem === null && target?.path != null && !pending;
   const shownParent = target?.parent_label ?? parent;
@@ -48,12 +54,12 @@ export function CreateProjectView({ actions, registrations, pickParent, onBack, 
   const create = () => {
     if (!ready || !target?.path) return;
     const path = target.path;
-    registration.send(localDeviceId(useShellStore.getState().rest), path, () => actions.createProject(path, name));
+    registration.send(device, path, () => actions.createProject(path, name, device));
   };
 
   const choose = async () => {
     if (pending) return;
-    const folder = await actions.pickFolder();
+    const folder = await pickParent();
     // A cancelled pick keeps the folder that was there.
     if (folder !== null) { setParent(folder); onDraft?.({ parent: folder }); }
   };
@@ -73,7 +79,7 @@ export function CreateProjectView({ actions, registrations, pickParent, onBack, 
           {t("common.back")}
         </Button>
         <DialogTitle>{t("addProject.create.title")}</DialogTitle>
-        <DialogDescription>{t("addProject.create.description")}</DialogDescription>
+        <DialogDescription>{t("addProject.wayCreateDetail", { host: hostLabel })}</DialogDescription>
       </DialogHeader>
       <DialogBody className="flex flex-col gap-md">
         <label className="block text-body text-subtle-foreground">
@@ -92,23 +98,16 @@ export function CreateProjectView({ actions, registrations, pickParent, onBack, 
             onChange={(event) => { setTyped(event.target.value); onDraft?.({ name: event.target.value }); }}
           />
         </label>
-        {pickParent ? (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => void choose()}
-            aria-label={t("addProject.create.locationAria", { parent: shownParent })}
-            data-create-project-location={target?.parent_path ?? parent}
-            className="flex w-full items-center gap-md rounded-md border border-border bg-card px-md py-sm text-left outline-none transition-colors hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
-          >
-            <ProjectLocation parent={shownParent} path={shownPath} />
-            <FolderOpenIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-          </button>
-        ) : (
-          <div className="flex w-full items-center gap-md rounded-md border border-border bg-card px-md py-sm" data-create-project-location={target?.parent_path ?? parent}>
-            <ProjectLocation parent={shownParent} path={shownPath} />
-          </div>
-        )}
+        <RowButton
+          disabled={pending}
+          onClick={() => void choose()}
+          aria-label={t("addProject.create.locationAria", { parent: shownParent })}
+          data-create-project-location={target?.parent_path ?? parent}
+          className="gap-md rounded-md border border-border bg-card px-md py-sm"
+        >
+          <ProjectLocation parent={shownParent} path={shownPath} />
+          <FolderOpenIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+        </RowButton>
         {problem ? (
           <Note tone="warn" data-create-project-problem={registered ? "already_registered" : (target?.reason ?? "name")}>
             {problem}
