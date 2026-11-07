@@ -3660,6 +3660,7 @@ The remote session preserves a declared raw pane and machine id, and the runtime
 A parent's header opens the tree popover from its tree button, a child's header draws its ancestor path, and the pane menu lists parent, siblings and children.
 Each explicit Open follows the same tracked navigation as the sidebar and Sessions; Escape returns to its badge, and the tree popover's `개요에서 보기` opens the Overview at the agent's task.
 Each of those moves is one `focus_pane` carrying a `request_id` (on a device, `remote_control` with `report_pane_focus_outcome`), and the core's `status.pane_focus_request` is the only answer the header shows: pending until the engine's layout confirms, or failed with the core's reason and Retry when it can be retried; a second click on the same target while one is in flight is dropped, and a failure never splits the parent or makes a pane.
+On a device, a delegated child whose owner group the core cannot resolve (its agent registration ended, so no row names its root) still opens: the Agent area selects that tab in the group in front and logs `agent_layout.owner_unresolved`, rather than answering the device's acknowledgement with a request that succeeded and a screen that did not move.
 
 ### The `$HOME` filesystem boundary
 

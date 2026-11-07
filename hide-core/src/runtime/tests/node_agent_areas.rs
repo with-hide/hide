@@ -403,3 +403,52 @@ fn a_dialed_device_shows_agent_groups_but_refuses_a_second_area() {
         "both tabs remain arranged in the single area for {checkout}"
     );
 }
+
+/// A delegated child whose registration ended keeps its window on the device:
+/// choosing it from the parent's tree still brings that tab forward, as it
+/// does for a tab whose agent row is still listed.
+#[test]
+fn choosing_an_ended_delegated_tab_on_a_device_brings_it_forward() {
+    let t = tree();
+    let (mut runtime, _requests, _views) = device_in_front(
+        crate::model::LinkOrigin::Dialed {
+            ssh_alias: NODE.to_owned(),
+        },
+        &t.main,
+    );
+    runtime.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .workspaces[0]
+        .checkouts[0]
+        .tabs
+        .iter_mut()
+        .find(|item| item.id.as_deref() == Some(&tab("t2")))
+        .unwrap()
+        .delegated = true;
+    let key = (NODE.to_owned(), t.main.clone());
+    runtime
+        .reconcile_agent_topology(&key, &[(tab("t1"), false), (tab("t2"), true)])
+        .unwrap();
+    runtime.sync_workspace_view();
+    assert_eq!(
+        runtime.agent_layout_of(&key).unwrap().active(),
+        Some(tab("t1").as_str())
+    );
+
+    assert!(runtime.request_remote_control(RemoteControlPayload {
+        target_id: NODE.to_owned(),
+        request_id: "child-focus-1".to_owned(),
+        report_pane_focus_outcome: true,
+        focus_device: false,
+        request: RemoteControlRequest::FocusPane {
+            pane_id: format!("remote:{NODE}:pane:t2"),
+        },
+    }));
+    assert_eq!(
+        runtime.agent_layout_of(&key).unwrap().active(),
+        Some(tab("t2").as_str()),
+        "the chosen tab is the one the Agent area shows"
+    );
+}
