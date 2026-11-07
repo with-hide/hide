@@ -409,11 +409,16 @@ impl OwnEngine<'_> {
     /// Waits for the restore to finish before a pane is made; refused when
     /// it has not within its own bound.
     fn restored(&self) -> Result<(), EngineError> {
+        self.restored_within(restore::BOUND)
+    }
+
+    /// The same wait, refused once `bound` has passed.
+    fn restored_within(&self, bound: std::time::Duration) -> Result<(), EngineError> {
         let restored = &self.shared.restored;
         let done = restored.done.lock().unwrap_or_else(PoisonError::into_inner);
         let (done, _) = restored
             .finished
-            .wait_timeout_while(done, restore::BOUND, |done| done.is_none())
+            .wait_timeout_while(done, bound, |done| done.is_none())
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(result) = &*done {
             result.clone()
@@ -2060,6 +2065,10 @@ impl<'g> Engine for OwnEngine<'g> {
         self.type_input(pane, PaneInput::Paste(text.as_bytes().to_vec()))
     }
 
+    fn wait_restored(&self, within: std::time::Duration) -> Answer<()> {
+        self.restored_within(within)
+    }
+
     fn pane_processes(&self, _wait: Wait, pane: &str) -> Answer<PaneProcessGroup> {
         self.check()?;
         self.processes(pane)
@@ -3467,6 +3476,60 @@ mod tests {
             "a focus of the shown tab and a tab made without focus move nothing"
         );
         let _ = quiet;
+    }
+
+    /// A start into a saved pane right after the daemon (or a device's link)
+    /// started, as a sleeping agent's wake on a visit is, reads the pane only
+    /// once the node has said which holders still run: before that the
+    /// node's answer for the pane is `pane_owner_unavailable`, which failed
+    /// the wake.
+    #[test]
+    fn a_start_into_a_saved_pane_waits_for_the_restore_before_it_reads_the_pane() {
+        let root = tempfile::tempdir().unwrap();
+        let place = place(root.path());
+        std::fs::create_dir_all(home(&place)).unwrap();
+        let first =
+            OwnEngine::open(Holders::found(HolderRecovery::default()), place.clone()).unwrap();
+        let (_, _, pane) = first
+            .create_workspace(WAIT, &wire(&home(&place)), "w", true, Env::new())
+            .unwrap();
+        drop(first);
+
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let next =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        let start = next
+            .prepare_start(launch(&pane, "sleeper", "claude", &[]))
+            .unwrap();
+        let read = || !holders.processes_within.lock().unwrap().is_empty();
+        let refused = std::thread::scope(|scope| {
+            let starting = scope.spawn(|| {
+                crate::agent_start::start_at_shell_reusing_name(
+                    &next,
+                    None,
+                    "test:wake",
+                    crate::agent_start::ShellStart::Plain,
+                    &start,
+                    Duration::from_secs(1),
+                    // Ends the start once its shell was read, before typing.
+                    &|| Err("read".to_owned()),
+                )
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(!read(), "the pane is not read while the restore waits");
+            holders.hand(HolderRecovery {
+                present: vec![pane.clone()],
+                ..HolderRecovery::default()
+            });
+            starting.join().unwrap()
+        });
+        assert!(read(), "the pane is read once the restore lands");
+        assert!(
+            matches!(&refused, Err(crate::agent_start::StartError::NotStarted { reason, .. }) if reason == "read"),
+            "{refused:?}"
+        );
+        assert_eq!(holders.typed(&pane), "", "nothing was typed");
     }
 
     /// A daemon's place under `root`, its machine read by a real node.

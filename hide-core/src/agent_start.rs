@@ -447,6 +447,14 @@ fn start_within(
         start.line(),
         shell_start,
     );
+    // A pane drawn from the saved session before the engine has taken its
+    // holder back (a start right after the daemon or a device link started)
+    // would be refused as unreadable (`pane_owner_unavailable`): the start
+    // waits for that restore inside its shell's wait, as a call that makes a
+    // pane does.
+    engine
+        .wait_restored(deadline.saturating_duration_since(Instant::now()))
+        .map_err(StartError::Engine)?;
     let mut settled = false;
     let mut busy = 0_u32;
     loop {
