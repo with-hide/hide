@@ -365,7 +365,7 @@ impl WriteRefused {
 
 /// How a session's writer thread ended, or that it still runs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WriterEnd {
+pub(super) enum WriterEnd {
     Running,
     /// Everything handed to it was written, or it was let go: a release, or
     /// its session dropped.
@@ -387,25 +387,18 @@ struct WriterState {
 pub(super) struct WriterLife(Arc<WriterState>);
 
 impl WriterLife {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self(Arc::new(WriterState {
             end: Mutex::new(WriterEnd::Running),
             moved: Condvar::new(),
         }))
     }
 
-    fn end(&self) -> WriterEnd {
+    /// How its writer ended, or that it still runs, read once: a caller
+    /// decides from this one value, never from two reads a writer's end can
+    /// fall between.
+    pub(super) fn end(&self) -> WriterEnd {
         *self.0.end.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Whether its writer thread has ended, however it ended.
-    pub(super) fn ended(&self) -> bool {
-        self.end() != WriterEnd::Running
-    }
-
-    /// Whether its writer ended on a failed write.
-    pub(super) fn failed(&self) -> bool {
-        self.end() == WriterEnd::Failed
     }
 
     /// Whether `self` and `other` are the same session's writer.
@@ -433,6 +426,18 @@ impl WriterLife {
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
+    }
+}
+
+#[cfg(test)]
+impl WriterLife {
+    /// Ends it as its writer thread would, `failed` or having written
+    /// everything.
+    pub(super) fn end_as(&self, failed: bool) {
+        drop(Ends {
+            life: self.clone(),
+            failed,
+        });
     }
 }
 

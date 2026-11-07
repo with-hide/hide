@@ -2458,6 +2458,35 @@ fn a_failed_write_keeps_the_panes_writes_unsettled_until_its_holder_changes() {
     assert_eq!(harness.service.writes_settled("w1:p1", WAIT), Ok(()));
 }
 
+/// A pane's input state decides each writer from one reading of how it
+/// ended: one seen running is kept, one that failed after that reading is
+/// counted failed at the next fold whatever else it is, and one that wrote
+/// everything leaves no trace.
+#[test]
+fn a_writer_that_fails_after_it_was_seen_running_is_counted_failed() {
+    let mut input = super::HolderInput::default();
+    let failing = session::WriterLife::new();
+    let settling = session::WriterLife::new();
+    input.count("w1:p1", failing.clone());
+    input.count("w1:p1", settling.clone());
+    input.fold();
+    assert_eq!(input.running.len(), 2);
+    assert!(!input.failed);
+    settling.end_as(false);
+    input.fold();
+    assert_eq!(input.running.len(), 1);
+    assert!(
+        !input.failed,
+        "a writer that wrote everything leaves no trace"
+    );
+    failing.end_as(true);
+    input.fold();
+    assert!(input.running.is_empty());
+    assert!(input.failed, "the failure is kept once its writer is gone");
+    input.fold();
+    assert!(input.failed);
+}
+
 /// A new holder's input starts afresh: a write that failed against the
 /// holder the pane had before does not count against the one that replaced
 /// it, and the pane's screen is attached again to the new one.

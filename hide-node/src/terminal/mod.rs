@@ -278,9 +278,13 @@ const MAX_HOLDER_WRITERS: usize = 8;
 impl HolderInput {
     /// Takes the ended writers out, keeping a failure.
     fn fold(&mut self) {
-        self.running.retain(|life| {
-            self.failed |= life.failed();
-            !life.ended()
+        self.running.retain(|life| match life.end() {
+            session::WriterEnd::Running => true,
+            session::WriterEnd::Settled => false,
+            session::WriterEnd::Failed => {
+                self.failed = true;
+                false
+            }
         });
     }
 
