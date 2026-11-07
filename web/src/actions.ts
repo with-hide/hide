@@ -292,8 +292,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * also brings the pane's device forward when that device is not in front, so
    * a row, a chip or a relationship Open that reaches a pane on another device
    * (or back to this one) shows it, rather than focusing it out of sight. Every
-   * way of opening an agent pane builds its event here (UI_BEHAVIOR, parent row
-   * opens a device child).
+   * way of opening an agent pane builds its event here (docs/UI_BEHAVIOR.md,
+   * "Agent panes and the Agents explorer": a parent row opens a device child).
    */
   const openPaneEvent = (paneId: string, options: { requestId?: string; report?: boolean; revealUnseen?: boolean } = {}) => {
     const node = localDeviceId(rest());
