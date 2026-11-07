@@ -70,9 +70,6 @@ pub struct DeviceNames {
     pub held: Vec<(String, String)>,
     /// The stores written.
     pub files: Vec<String>,
-    /// Why the link record was left as it was, when it does not open; its
-    /// worker reports and rebuilds it.
-    pub links_unopened: Option<String>,
 }
 
 /// `device-ids.json`: everything a resumed start needs that the stores it
@@ -325,12 +322,22 @@ impl Stores {
         } else {
             Ok(BTreeMap::new())
         };
+        // A link record that does not open is not renamed yet: the open sets
+        // a corrupt file aside and makes a new one itself, so what it refuses
+        // (busy, newer, full, unavailable) is a record that still names the
+        // old ids, and the start stops with the journal kept.
         let links_path = state_dir.join(LINKS);
-        let links = links_path
-            .is_file()
-            .then(|| crate::links::store::LinkStore::open(&links_path).ok())
-            .flatten()
-            .map(|(store, _)| store);
+        let links = if links_path.is_file() {
+            let (store, _) = crate::links::store::LinkStore::open(&links_path).map_err(|code| {
+                refuse(
+                    &links_path,
+                    format!("the link record does not open: {code}"),
+                )
+            })?;
+            Some(store)
+        } else {
+            None
+        };
         let link_roots = match &links {
             Some(_) => rows_of(&links_path, "SELECT device, root FROM projects")
                 .map_err(|reason| refuse(&links_path, reason))?,
@@ -681,18 +688,11 @@ fn apply_steps(
     if !renames.is_empty() && links.is_file() {
         let mut stores = Stores::read(state_dir, false)?;
         let pairs = project_pairs(&stores, renames, &journal.projects);
-        match stores.links.as_mut() {
-            Some(store) => {
-                if rename_links(store, &backup, renames, &pairs, state_dir)
-                    .map_err(|reason| refuse(&links, reason))?
-                {
-                    outcome.files.push(LINKS.to_owned());
-                }
-            }
-            None => {
-                outcome.links_unopened =
-                    Some("the link record does not open; its worker rebuilds it".to_owned());
-            }
+        if let Some(store) = stores.links.as_mut()
+            && rename_links(store, &backup, renames, &pairs, state_dir)
+                .map_err(|reason| refuse(&links, reason))?
+        {
+            outcome.files.push(LINKS.to_owned());
         }
     }
 
@@ -1040,13 +1040,38 @@ mod tests {
             .unwrap()
     }
 
-    /// Every JSON store, Memory's cards and the link record's devices, as a
-    /// start reads them.
+    /// The link record's per-device listing stamps and its retention
+    /// aliases.
+    fn link_meta(state: &Path) -> Vec<(String, String)> {
+        let connection = rusqlite::Connection::open_with_flags(
+            state.join(LINKS),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT key, value FROM meta WHERE key LIKE ?1 UNION ALL \
+                 SELECT 'retention:' || old, new FROM retention_aliases ORDER BY 1",
+            )
+            .unwrap();
+        statement
+            .query_map([format!("{}:%", crate::links::worker::LISTED_AT)], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// Every JSON store, Memory's cards and the link record's devices, meta
+    /// and retention, as a start reads them.
+    #[allow(clippy::type_complexity)]
     fn contents(
         state: &Path,
     ) -> (
         BTreeMap<String, Value>,
         Vec<(i64, String, String)>,
+        Vec<(String, String)>,
         Vec<(String, String)>,
     ) {
         let json = STORES
@@ -1054,7 +1079,12 @@ mod tests {
             .chain([&CORE_STATE])
             .map(|file| ((*file).to_owned(), read(state, file)))
             .collect();
-        (json, cards(state, MACHINE), link_devices(state))
+        (
+            json,
+            cards(state, MACHINE),
+            link_devices(state),
+            link_meta(state),
+        )
     }
 
     #[test]
@@ -1268,6 +1298,59 @@ mod tests {
                 1
             );
         }
+    }
+
+    /// A link record another writer holds does not open, and nothing past it
+    /// is taken as renamed: refused before the plan, nothing is written;
+    /// refused after Project Memory, the journal and what it renamed stay;
+    /// once the record opens, the next start ends as an uninterrupted one.
+    #[test]
+    fn a_link_record_that_does_not_open_stops_the_renaming_until_it_does() {
+        let whole = folder();
+        name_devices(whole.path(), &node()).unwrap();
+        let expected = contents(whole.path());
+        let held = |state: &Path| {
+            let writer = rusqlite::Connection::open(state.join(LINKS)).unwrap();
+            writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+            writer
+        };
+        let refused = |state: &Path| {
+            let refusal = name_devices(state, &node()).unwrap_err();
+            assert_eq!(refusal.file, state.join(LINKS));
+            assert!(
+                refusal.reason.contains("links_store_busy"),
+                "{}",
+                refusal.reason
+            );
+        };
+
+        let dir = folder();
+        let state = dir.path();
+        let before = contents(state);
+        let writer = held(state);
+        refused(state);
+        drop(writer);
+        assert!(!state.join(JOURNAL).exists());
+        assert_eq!(contents(state), before);
+
+        let journal = plan(state, &node(), &mut DeviceNames::default())
+            .unwrap()
+            .unwrap();
+        write(&state.join(JOURNAL), &serde_json::to_vec(&journal).unwrap()).unwrap();
+        apply_steps(state, &journal, &mut DeviceNames::default(), 1).unwrap();
+        let writer = held(state);
+        refused(state);
+        drop(writer);
+        assert!(state.join(JOURNAL).exists());
+        assert_eq!(
+            read(state, CORE_STATE)["device_registrations"][0]["id"],
+            ALIAS
+        );
+        assert!(cards(state, ALIAS).is_empty(), "Memory was renamed first");
+
+        name_devices(state, &node()).unwrap();
+        assert_eq!(contents(state), expected);
+        assert!(!state.join(JOURNAL).exists());
     }
 
     #[test]

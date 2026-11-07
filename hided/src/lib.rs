@@ -378,7 +378,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "renamed": named.renamed,
             "named": named.named,
             "files": named.files,
-            "links_unopened": named.links_unopened,
         }));
     }
     if !named.held.is_empty() {
