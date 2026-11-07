@@ -1589,10 +1589,15 @@ pub fn measure_tree(pid: u32) -> io::Result<TreeMeasure> {
     })
 }
 
-/// Whether `shell` runs no other process: nothing under it, in its
-/// foreground or its background, a console host on Windows aside, which is
-/// the console's own and no program the shell started. A pane's shell that
-/// runs alone can be ended and started again without ending anything its
+/// Whether ending the terminal session `shell` leads would end no process
+/// but `shell` itself, judged by the set [`Session::end`] ends: on Unix every
+/// member of the session the shell leads and every process under one, so a
+/// job in the background, or one left behind when the process that started
+/// it exited, counts as the shell's foreground program does; on Windows the
+/// shell's descendants, a console host aside, since the job that the
+/// holder's end ends lists its members only to its holder (a gap,
+/// `docs/INSTALL.md`, What each system supports). A pane's shell that runs
+/// alone can be ended and started again without ending anything its
 /// operator started (with-hide/hide-private#646). A look at the process
 /// table that cannot be made is an error, never evidence that it runs alone.
 pub fn runs_alone(shell: u32) -> io::Result<bool> {
@@ -1609,7 +1614,8 @@ pub fn runs_alone(shell: u32) -> io::Result<bool> {
     }
     #[cfg(unix)]
     {
-        Ok(descendants(shell)?.is_empty())
+        let session = Session::left_by(shell, start_time(shell)?)?;
+        Ok(session.members()?.iter().all(|member| *member == shell))
     }
 }
 

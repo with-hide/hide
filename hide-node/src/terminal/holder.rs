@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 #[cfg(test)]
 use std::thread;
@@ -557,7 +557,7 @@ pub enum Renewal {
 }
 
 /// Whether a pane's holder may be ended for a renewal now, judged once,
-/// by [`Holders::endable`], while the operator's keys for the pane are held.
+/// by [`Holders::endable`], with no input reaching the pane.
 enum Endable {
     /// The holder runs from this build's version folder already.
     Current,
@@ -576,58 +576,6 @@ struct Ending {
     record: PaneRecord,
     request: StartRequest,
     folder: hide_kit::holders::Reservation,
-}
-
-/// The operator's keys for a pane while its holder is renewed, held as a
-/// new pane's creation holds them (`TerminalControl::RequestHold`, bounded by
-/// its bytes and age): [`HeldKeys::release`] hands them, in order, to the
-/// holder that runs the pane then; [`HeldKeys::discard`] drops them when
-/// none of the renewal runs it.
-struct HeldKeys<'a> {
-    service: &'a Service,
-    request: String,
-    pane: &'a str,
-}
-
-impl<'a> HeldKeys<'a> {
-    fn hold(service: &'a Service, pane: &'a str) -> Self {
-        static RENEWALS: AtomicU64 = AtomicU64::new(0);
-        let named: String = pane
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        let request = format!(
-            "renewal-{named}-{}",
-            RENEWALS.fetch_add(1, Ordering::Relaxed)
-        );
-        service.control(TerminalControl::RequestOpen {
-            request: request.clone(),
-            fork: false,
-        });
-        service.control(TerminalControl::RequestHold {
-            request: request.clone(),
-            pane: pane.to_owned(),
-        });
-        Self {
-            service,
-            request,
-            pane,
-        }
-    }
-
-    fn release(self) {
-        self.service.control(TerminalControl::RequestResolve {
-            request: self.request,
-            pane: self.pane.to_owned(),
-        });
-    }
-
-    fn discard(self) {
-        self.service.control(TerminalControl::RequestDiscard {
-            request: self.request,
-            reason: "renewal_lost".to_owned(),
-        });
-    }
 }
 
 /// A state folder's holder panes, as a node runs them.
@@ -866,16 +814,17 @@ impl Holders {
 
     /// Brings `intent`'s pane to this build's holder (with-hide/hide-private#646):
     /// a pane whose holder runs from another build's version folder, and
-    /// whose terminal runs nothing but its shell, is ended and started again
-    /// under its own id from `request`, the replacement naming the earlier
-    /// start's incarnation, and its screen attached again where it was.
+    /// whose terminal session runs nothing but its shell, is ended and
+    /// started again under its own id from `request`, the replacement naming
+    /// the earlier start's incarnation, and its screen attached again where
+    /// it was.
     ///
-    /// The operator's keys for the pane are held for the whole renewal and
-    /// handed in order to the holder that runs it then ([`HeldKeys`]), so
-    /// none is refused while the earlier holder ends and none can start a
-    /// program between the judgment and the close; the core's own engine
-    /// types into the pane only once the renewal it drew starting is done.
-    /// Whether the earlier holder may be ended is judged once
+    /// From just before the judgment until a holder runs the pane again it
+    /// takes no input: a key is refused there as at a closing pane, the
+    /// refusal reported to the screen, so none is lost unsaid and none can
+    /// start a program between the judgment and the close; the core's own
+    /// engine types into the pane only once the renewal it drew starting is
+    /// done. Whether the earlier holder may be ended is judged once
     /// ([`Holders::endable`]); every refusal there ends nothing.
     pub fn renew(
         &self,
@@ -885,11 +834,13 @@ impl Holders {
         request: impl FnOnce() -> Result<StartRequest, String>,
     ) -> Renewal {
         let pane = intent.pane.as_str();
-        let keys = HeldKeys::hold(service, pane);
-        let renewal = self.renew_held(owner, service, intent, request);
-        match &renewal {
-            Renewal::Current | Renewal::Renewed { .. } | Renewal::Kept { .. } => keys.release(),
-            Renewal::Lost(_) | Renewal::Unsettled(_) => keys.discard(),
+        let renewal = self.renew_fenced(owner, service, intent, request);
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: false,
+        });
+        if matches!(renewal, Renewal::Renewed { .. }) {
+            self.attach_again(service, pane);
         }
         crate::diagnostic!(match &renewal {
             Renewal::Current => json!({
@@ -928,12 +879,14 @@ impl Holders {
     }
 
     /// Whether `pane`'s holder may be ended for a renewal now: the one
-    /// judgment [`Holders::renew`] acts on, made while the pane's keys are
-    /// held. A holder is ended only when nothing but its shell runs in its
-    /// terminal, a background job included, since its end ends every
-    /// process the shell started.
+    /// judgment [`Holders::renew`] acts on. A holder is ended only when its
+    /// end would end nothing but its shell
+    /// ([`hide_platform::process::runs_alone`], the set its terminal
+    /// session's end ends), and what runs there is read only once the pane
+    /// takes no more input, which stays so until [`Holders::renew`] answers.
     fn endable(
         &self,
+        service: &Service,
         pane: &str,
         request: impl FnOnce() -> Result<StartRequest, String>,
     ) -> Endable {
@@ -961,6 +914,14 @@ impl Holders {
             Ok(folder) => folder,
             Err(why) => return kept("holder_folder_unprepared", why),
         };
+        // From here the pane takes no input until the renewal answers: a key
+        // is refused, and said to be, as at a closing pane, and an earlier
+        // build's holder's close is one Hide asked for, so its screen draws
+        // no failure.
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: true,
+        });
         let shell = match self.processes(pane, ASK_LIMIT) {
             Ok(Answer::Processes { shell, .. }) => shell,
             Ok(other) => {
@@ -999,12 +960,12 @@ impl Holders {
         }
     }
 
-    /// [`Holders::renew`] with the pane's keys held: acts on
-    /// [`Holders::endable`]. Once the earlier holder was asked to end, its
+    /// [`Holders::renew`] up to its answer, the pane taking no input: acts
+    /// on [`Holders::endable`]. Once the earlier holder was asked to end, its
     /// record says what the close did: one that still names the same running
     /// holder was not taken and is [`Renewal::Kept`]; one that ended is
     /// replaced; anything else is [`Renewal::Unsettled`].
-    fn renew_held(
+    fn renew_fenced(
         &self,
         owner: &hide_kit::panes::Owner,
         service: &Service,
@@ -1017,7 +978,7 @@ impl Holders {
             record,
             request,
             folder: _folder,
-        } = match self.endable(pane, request) {
+        } = match self.endable(service, pane, request) {
             Endable::Current => return Renewal::Current,
             Endable::Kept { code, message } => return Renewal::Kept { code, message },
             Endable::Yes(ending) => *ending,
@@ -1026,18 +987,7 @@ impl Holders {
         // The earlier holder's watch ends here, so its end changes nothing
         // of the pane, whose rules the next watch takes up.
         self.watches.retire(pane);
-        // The earlier holder's close is one Hide asked for, so its screen
-        // draws no failure; the attach below starts its screen again.
-        service.control(TerminalControl::Closing {
-            pane: pane.to_owned(),
-            closing: true,
-        });
-        let closed = self.panes.close(owner, &holder);
-        service.control(TerminalControl::Closing {
-            pane: pane.to_owned(),
-            closing: false,
-        });
-        let ended = match closed {
+        let ended = match self.panes.close(owner, &holder) {
             Ok(ended) => ended,
             Err(error) => {
                 let now = self.panes.record(&holder);
@@ -1046,7 +996,6 @@ impl Holders {
                     && running(now)
                 {
                     self.watches.watch(pane, socket);
-                    self.attach_again(service, pane);
                     return Renewal::Kept {
                         code: "holder_not_ended",
                         message: format!("pane {pane}'s holder was not asked to end: {error}"),
@@ -1101,7 +1050,6 @@ impl Holders {
         };
         self.known.insert(pane, socket.clone());
         self.watches.watch(pane, socket);
-        self.attach_again(service, pane);
         Renewal::Renewed {
             from: ended.version_folder,
             to: renewed.version_folder,

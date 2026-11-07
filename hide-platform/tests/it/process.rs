@@ -265,6 +265,35 @@ fn child_role() {
             write_ready_file();
             thread::sleep(Duration::from_secs(60));
         }
+        // A terminal's shell: the leader of a session of its own, running
+        // nothing.
+        #[cfg(unix)]
+        "session_alone" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
+        }
+        // A session leader whose session holds a process another member
+        // started and left behind when it exited, as `sh -c "sleep 120 &"`
+        // leaves one: no descendant of the leader, still of its session.
+        #[cfg(unix)]
+        "session_with_orphan" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            let mut starter = role_command("orphaner").spawn().unwrap();
+            let orphan = ready_number(starter.stdout.take().unwrap());
+            starter.wait().unwrap();
+            println!("READY {orphan}");
+            thread::sleep(Duration::from_secs(60));
+        }
+        // Starts a sleeping child, says which, and exits without it.
+        #[cfg(unix)]
+        "orphaner" => {
+            let child = role_command("sleep").stdout(Stdio::null()).spawn().unwrap();
+            println!("READY {}", child.id());
+            std::mem::forget(child);
+        }
         // A child with one child of its own that has left no handle behind.
         "tree" => {
             let mut grandchild = Command::new(std::env::current_exe().unwrap())
@@ -2176,9 +2205,41 @@ fn killing_by_pid_ends_the_process_and_its_descendants() {
     );
 }
 
-/// A pane's shell runs alone while no process runs under it, a console
-/// host on Windows aside; one that started a program, in its foreground or
-/// its background, does not (with-hide/hide-private#646).
+/// A pane's shell runs alone while ending its session would end nothing
+/// else (with-hide/hide-private#646). On Unix that is every process of the
+/// session it leads, one left there by a process that exited included,
+/// though it is no descendant of the shell any more.
+#[cfg(unix)]
+#[test]
+fn a_session_leader_runs_alone_until_its_session_holds_another_process() {
+    let _serial = serial();
+    let mut alone = role_command("session_alone").spawn().unwrap();
+    let leader = ready_number(alone.stdout.take().unwrap());
+    assert!(hide_platform::process::runs_alone(leader).unwrap());
+    kill_tree(leader).unwrap();
+    alone.wait().unwrap();
+
+    let mut with = role_command("session_with_orphan").spawn().unwrap();
+    let orphan = ready_number(with.stdout.take().unwrap());
+    let leader = with.id();
+    assert!(
+        !hide_platform::process::descendants(leader)
+            .unwrap()
+            .contains(&orphan),
+        "the orphan was handed to another parent"
+    );
+    assert!(
+        !hide_platform::process::runs_alone(leader).unwrap(),
+        "a process left in the session is ended with it"
+    );
+    hide_platform::process::terminate(orphan).unwrap();
+    kill_tree(leader).unwrap();
+    with.wait().unwrap();
+}
+
+/// On Windows a shell runs alone while no process but a console host runs
+/// under it.
+#[cfg(windows)]
 #[test]
 fn a_process_runs_alone_until_it_runs_another() {
     let _serial = serial();

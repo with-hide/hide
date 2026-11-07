@@ -4,8 +4,8 @@
 //! makes over its link (`LinkPanes`, the same calls a device's node
 //! answers): the shell is started again from this build's version folder,
 //! the earlier start's incarnation replaced, its screen attached again and
-//! its facts followed, the operator's keys typed meanwhile handed to it, and
-//! the pane neither closes nor runs twice; a pane already on this build is
+//! its facts followed, the operator's keys typed meanwhile refused and said
+//! to be, and the pane neither closes nor runs twice; a pane already on this build is
 //! left alone; a pane whose shell runs anything, in its terminal or behind
 //! it, is kept on its holder until a later renewal finds it alone; and a
 //! renewal that ended the earlier holder and could not start the next one
@@ -89,8 +89,9 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
     next.linked.watch_facts(told.sink());
     answers(&next, "the earlier holder's shell answers");
 
-    // The operator types into the pane all through its renewal: no key is
-    // refused while the earlier holder ends.
+    // The operator types into the pane all through its renewal: a key the
+    // pane cannot take while its holder is judged and replaced is refused,
+    // and the refusal is said, never dropped unsaid.
     let (done, typing) = channel::<()>();
     let service = &next.service;
     let renewed = thread::scope(|scope| {
@@ -107,22 +108,31 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
         renewed
     })
     .unwrap();
-    let refused: Vec<_> = next
+    let errors: Vec<(String, String)> = next
         .reports
         .told
         .lock()
         .unwrap()
         .iter()
-        .filter(|report| matches!(report, TerminalReport::Error { pane, .. } if pane == PANE))
-        .map(|report| format!("{report:?}"))
+        .filter_map(|report| match report {
+            TerminalReport::Error { pane, kind, .. } if pane == PANE => {
+                Some((kind.clone(), format!("{report:?}")))
+            }
+            _ => None,
+        })
         .collect();
-    assert!(refused.is_empty(), "keys were refused: {refused:?}");
-    // The keys held through the renewal reach the new shell's line.
-    wait_until("the held keys reach the new shell", || {
-        next.linked
-            .read(PANE, 200)
-            .is_ok_and(|(text, _)| text.contains("xxx"))
-    });
+    assert!(
+        errors
+            .iter()
+            .any(|(kind, _)| kind == "terminal.close_pending"),
+        "keys typed during the renewal were refused unsaid: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|(kind, _)| kind == "terminal.close_pending"),
+        "{errors:?}"
+    );
     let clear_line: &[u8] = if cfg!(windows) { b"\x1b" } else { b"\x15" };
     next.linked
         .input(PANE, PaneInput::Bytes(clear_line.to_vec()))
@@ -360,4 +370,30 @@ fn failing_build(folder: &Folder) -> hide_kit::holders::Source {
         program,
         conpty: source().conpty,
     }
+}
+
+/// A pane closed while its holder renews, and its end asked again once the
+/// renewal answered, as the core asks it of a pane closed meanwhile: however
+/// the close and the renewal met, no holder runs the pane afterwards.
+#[test]
+fn a_pane_closed_while_its_holder_renews_is_left_with_no_holder() {
+    let folder = Folder::new();
+    let before = started_by_earlier_build(&folder);
+    let earlier_holder = before.holder.unwrap();
+    let next = Connection::open(folder.home.path(), &folder.state);
+    next.linked.recovered(HANG_LIMIT).unwrap();
+    answers(&next, "the earlier holder's shell answers");
+
+    thread::scope(|scope| {
+        let renewal = scope.spawn(|| next.linked.renew(&shell_start(&folder)));
+        let _ = next.linked.terminate(PANE);
+        let _ = renewal.join().unwrap();
+    });
+    let _ = next.linked.terminate(PANE);
+    wait_until("the earlier holder ends", || !earlier_holder.runs());
+    wait_until("no holder runs the pane", || {
+        record::read(&layout::pane_record(&folder.state, &holder_pane(PANE)))
+            .unwrap()
+            .is_none_or(|record| record.holder.is_none_or(|holder| !holder.runs()))
+    });
 }

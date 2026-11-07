@@ -1117,7 +1117,8 @@ impl OwnEngine<'_> {
     /// renews a shell alone in it. It counts as one of the engine's starts,
     /// and the pane is drawn starting meanwhile, so its reads and the input
     /// typed into it wait for the holder that runs once it is done. A pane
-    /// closed meanwhile has the holder its renewal started ended here; one
+    /// closed meanwhile has whatever holder its renewal left ended here,
+    /// whatever the renewal answered, an answer that never came included; one
     /// its node says no holder of the renewal runs ([`RENEWAL_LOST`],
     /// [`RENEWAL_UNSETTLED`]) is marked as a pane a restore could not start.
     pub(super) fn renew(&self, pane: &str, cwd: Option<&str>) -> Answer<HolderRenewal> {
@@ -1177,7 +1178,11 @@ impl OwnEngine<'_> {
             None => Ok(()),
             Some((code, why)) => Err(refused(code, why.clone())),
         });
-        if gone && matches!(renewed, Ok(HolderRenewal::Renewed { .. })) {
+        // A pane closed meanwhile owns whatever its renewal left on its
+        // machine: a renewed holder, one whose start the node could not
+        // confirm, or one whose answer never came. Its end is asked whatever
+        // the answer was; a pane no holder runs answers that it is gone.
+        if gone {
             let _ = end_holders(&*self.shared.holders, &[pane.to_owned()]);
         }
         crate::diagnostic!(match &renewed {
@@ -3727,43 +3732,49 @@ mod tests {
         assert_eq!(holders.typed(&pane), "ls");
     }
 
-    /// A pane closed while its holder renews has the holder the renewal
-    /// started ended once the renewal answers, so no holder outlives its
-    /// pane.
+    /// A pane closed while its holder renews has whatever holder the
+    /// renewal left ended once the renewal answers, whatever it answered, so
+    /// no holder outlives its pane.
     #[test]
     fn a_pane_closed_while_its_holder_renews_has_the_renewed_holder_ended() {
-        let holders = Arc::new(Holders::default());
-        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
-        let (_, _, pane) = engine
-            .create_workspace(WAIT, "/w", "w", true, Env::new())
-            .unwrap();
-        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
-        holders
-            .renewals
-            .lock()
-            .unwrap()
-            .push_back(Ok(HolderRenewal::Renewed {
+        for answer in [
+            Ok(HolderRenewal::Renewed {
                 from: "v79-earlier".to_owned(),
                 to: "v79-current".to_owned(),
-            }));
-        let (began, renewing) = std::sync::mpsc::channel();
-        let (go, held) = std::sync::mpsc::channel();
-        *holders.renew_hold.lock().unwrap() = Some((began, held));
+            }),
+            // The node may have started a holder whose answer was lost, or
+            // could not confirm its start.
+            Err(HolderError::Unreachable {
+                message: "the device's answer never came".to_owned(),
+            }),
+            Err(HolderError::Refused {
+                code: RENEWAL_UNSETTLED.to_owned(),
+                message: "the start could not be confirmed".to_owned(),
+            }),
+        ] {
+            let holders = Arc::new(Holders::default());
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+            holders.renewals.lock().unwrap().push_back(answer);
+            let (began, renewing) = std::sync::mpsc::channel();
+            let (go, held) = std::sync::mpsc::channel();
+            *holders.renew_hold.lock().unwrap() = Some((began, held));
 
-        std::thread::scope(|scope| {
-            let renewal = scope.spawn(|| engine.renew_holder(WAIT, &pane, None));
-            assert_eq!(renewing.recv_timeout(Duration::from_secs(5)).unwrap(), pane);
-            engine.close_pane(WAIT, &pane).unwrap();
-            // The earlier holder ended with the close; what ends now is the
-            // one the renewal started.
-            holders.ended.lock().unwrap().clear();
-            go.send(()).unwrap();
-            assert!(matches!(
-                renewal.join().unwrap(),
-                Ok(HolderRenewal::Renewed { .. })
-            ));
-        });
-        assert_eq!(*holders.ended.lock().unwrap(), std::slice::from_ref(&pane));
+            std::thread::scope(|scope| {
+                let renewal = scope.spawn(|| engine.renew_holder(WAIT, &pane, None));
+                assert_eq!(renewing.recv_timeout(Duration::from_secs(5)).unwrap(), pane);
+                engine.close_pane(WAIT, &pane).unwrap();
+                // The earlier holder ended with the close; what ends now is
+                // whatever the renewal left.
+                holders.ended.lock().unwrap().clear();
+                go.send(()).unwrap();
+                let _ = renewal.join().unwrap();
+            });
+            assert_eq!(*holders.ended.lock().unwrap(), std::slice::from_ref(&pane));
+        }
     }
 
     fn moves(engine: &OwnEngine<'_>) -> (Vec<String>, Option<(String, bool)>) {
