@@ -391,16 +391,16 @@ Four say whose move is next, and their shapes alone tell them apart; `unknown` s
 | `turn` | A `!` in a 12 px warning badge | The operator's turn: the row is in Needs You or carries an escalation, or it is an own question, approval or block the operator has read (drawn at `--opacity-read-status`) |
 | `look` | An eye in the same 12 px warning badge | The operator's turn to look at a View the agent opened, with nothing else asked of them on the row (A View to look at); its hover and name read `볼 것 · <View>` |
 | `going` | A static three-quarter ring in the working colour | In progress: the agent works |
-| `waiting` | The same ring dashed, also static (`2.2 2` over a path length of 19) | In progress while the agent waits (`wait`) on children, a background task, its pull request's checks or a reply; its hover and name read `진행 중 · 대기` |
+| `waiting` | The same ring dashed, also static (`2.2 2` over a path length of 19) | In progress while the agent waits (`wait`) on children, a background task, its pull request's checks or a reply, or a delegated child's own question, approval or block waits on its parent's answer; its hover and name read `진행 중 · 대기`, or the request's word for a delegated child's request (`진행 중 · 막힘`) |
 | `done` | A 7 px green dot | Unread, and the label read the turn as finished |
 | `unread` | A 7 px dot in the foreground colour | Unread, with work left (a wait nothing proves is work left), or no verdict |
-| `quiet` | A faint hollow ring in the 12 px slot: radius 3.4 of 12, a 1.3 stroke in the muted foreground at `--opacity-read-status`, smaller and thinner than the in-progress ring (sidebar-quiet-mark-indent D-01, D-02) | At rest: read, idle, a delegated child's own request |
+| `quiet` | A faint hollow ring in the 12 px slot: radius 3.4 of 12, a 1.3 stroke in the muted foreground at `--opacity-read-status`, smaller and thinner than the in-progress ring (sidebar-quiet-mark-indent D-01, D-02) | At rest: read, idle |
 | `unknown` | Nothing; the slot is kept so titles line up, and the row is dimmed whole | No demand and an activity Hide cannot read (`status_code: unknown`, unless a block, a raise or an escalation makes it `turn`); counted on no badge (sidebar-quiet-mark-indent D-04) |
 | `asleep` | A grey moon (`☾`), not dimmed | An agent Hide put to sleep, waking, or one that could not be reopened; counted on no badge |
 
 The ring does not turn (D-02): its dashes, not motion, tell waiting from work, on every surface, the ones with no second line (tabs, pane headers, the ⌃Tab switcher, ⌘K, the child tree popover) included (D-25, B36).
 When the agent starts working again the dashes close, and when a turn ends with a wait left they open.
-A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer; one of the seven escalation causes still makes it `turn`.
+A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer, so it draws `waiting` in the working colour while its line keeps the request's warning colour, dimmed, and never the resting ring a parent's children button would show ahead of a working sibling; one of the seven escalation causes still makes it `turn`.
 Colour never carries the distinction alone: the mark's name and the word that leads its line are its hover text and part of the row's accessible name (`markWords` in `web/src/agentRow.ts`), as in `내 차례 · 질문` or `읽을 것 · 일 남음`.
 
 How a stop ended is the label's verdict (`axes.rs::stop_verdict`): finished, or unfinished (work left); a label `waiting` that nothing proves is running is work left too, since nothing will wake the agent (status-marks D-17).

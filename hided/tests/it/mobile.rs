@@ -100,7 +100,12 @@ async fn renderer(running: &hided::RunningDaemon) -> Socket {
     socket
 }
 
-/// Reads frames until a `mobile` frame satisfies `accept`.
+/// Reads frames until a `mobile` frame satisfies `accept`. The frames queue
+/// on the socket in the order they were published, so a frame that matches
+/// may be an old one: a state that was already true before the step being
+/// waited on (no phones before one was paired) matches a frame published
+/// before that step. Wait first for a frame that only the step before it can
+/// have made, then for the one this step makes.
 async fn mobile_frame(socket: &mut Socket, accept: impl Fn(&Value) -> bool) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -201,6 +206,102 @@ async fn the_app_executable_is_run_as_the_cli() {
         .expect("tailscale status runs as the CLI");
     assert!(status.logged_in);
     assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// The status answer does not follow the size of the tailnet: the full one
+/// lists every peer, about 1.2 KB each, and a tailnet of some 900 puts it past
+/// the 1 MiB a command may print, which would block Mobile for good. hided
+/// asks for the answer without the peers, whose fields it never reads.
+#[tokio::test]
+async fn a_tailnet_too_big_to_list_its_peers_still_answers_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    fake.crowded_tailnet(1_500);
+    let listed = std::fs::metadata(fake.state.join("status-with-peers.json"))
+        .unwrap()
+        .len();
+    assert!(
+        listed > 1024 * 1024,
+        "the tailnet's full answer is {listed} bytes, not past the bound"
+    );
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("the status without peers fits whatever the tailnet's size");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// A command's answer is read when it has exited, not when its output closes:
+/// a process left holding the output open must not keep the answer to the
+/// 15 s command deadline. On macOS a child another thread starts while the
+/// command's pipes are being made keeps them for as long as it lives, and a
+/// command that exited in milliseconds then timed out (with-hide/hide-private
+/// #524). `hide-platform`'s `a_pipe_holder_outside_the_tree_does_not_hold_the_answer`
+/// owns the holder outside the command's tree; this holds that the Tailscale
+/// commands are read the same way, with the holder inside it. The holder lives
+/// 20 s, past the deadline, so a read that waits for the output to close fails.
+#[tokio::test]
+async fn a_process_left_holding_the_command_s_output_does_not_hold_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    fake.hold_pipes();
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("the answer comes at the command's exit");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// Changes of Mobile's own settings that meet a pass already running cost one
+/// pass more, not one each: the pass that follows reads them all (`PassOwed`).
+/// The first pass is held inside `tailscale status` so both changes arrive
+/// while it runs. Each change spawns a pass of its own, which waits on the
+/// pass lock behind it; a forced pass asked for after them is handed the lock
+/// after them (the lock goes in the order it was asked for), so the count is
+/// final once a second one returns. What can run: the held pass, one pass for
+/// the debt the two changes left (a stale pass of the start may take it before
+/// the forced one does, or the forced one settles it), and the two forced
+/// ones, so four at most; a pass for each change is at least five.
+#[tokio::test]
+async fn two_changes_that_meet_a_running_pass_cost_one_pass_more() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let change =
+        |kind: &str, payload: Value| json!({"schema_version": 2, "kind": kind, "payload": payload});
+    let mobile = &running.mobile;
+    mobile
+        .handle_event(0, &change("mobile_method", json!({"method": "tailscale"})))
+        .unwrap();
+    mobile.reconcile().await;
+    assert_eq!(fake.status_runs(), 0, "off never runs tailscale (B1)");
+
+    fake.hold_status();
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": true})))
+        .unwrap();
+    fake.wait_for_status_runs(1).await;
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": false})))
+        .unwrap();
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": true})))
+        .unwrap();
+    fake.release_status();
+    mobile.reconcile().await;
+    mobile.reconcile().await;
+
+    let runs = fake.status_runs();
+    assert!(
+        runs <= 4,
+        "tailscale status ran {runs} times; the two changes should cost one pass"
+    );
+    running.stop();
 }
 
 #[tokio::test]
@@ -913,7 +1014,26 @@ async fn paired_phone(
     let credential = answer["credential"].as_str().unwrap().to_owned();
     let (socket, hello) = phone(running.port, &credential).await;
     assert_eq!(hello["type"], "hello");
+    // The frames queued before the pairing list no phone; reading up to the
+    // one that lists this phone leaves a later "no phones" frame to a revoke.
+    mobile_frame(shell, |frame| {
+        frame["phones"]
+            .as_array()
+            .is_some_and(|phones| phones.iter().any(|phone| phone["id"] == phone_id.as_str()))
+    })
+    .await;
     (socket, phone_id, credential)
+}
+
+/// Revokes the phone in Settings and returns once the shell's list no longer
+/// has it. The phone was listed first (`paired_phone`), so the empty list
+/// this waits for is the revoke's own.
+async fn revoke_from_settings(shell: &mut Socket, phone_id: &str) {
+    event(shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    mobile_frame(shell, |frame| {
+        frame["phones"].as_array().is_some_and(Vec::is_empty)
+    })
+    .await;
 }
 
 async fn send_phone(socket: &mut Socket, message: Value) {
@@ -986,11 +1106,7 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
         .send(Message::Text(start("stranger-1").to_string().into()))
         .await;
     // A phone revoked after it connected is refused before anything is dispatched.
-    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
-    mobile_frame(&mut shell, |frame| {
-        frame["phones"].as_array().is_some_and(Vec::is_empty)
-    })
-    .await;
+    revoke_from_settings(&mut shell, &phone_id).await;
     let answer = running
         .mobile
         .start_agent(&phone_id, &start("revoked-1"))
@@ -1058,11 +1174,7 @@ async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
         json!({"type": "pong", "id": 42})
     );
     // A phone no longer let in is never answered with a pong.
-    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
-    mobile_frame(&mut shell, |frame| {
-        frame["phones"].as_array().is_some_and(Vec::is_empty)
-    })
-    .await;
+    revoke_from_settings(&mut shell, &phone_id).await;
     let _ = socket
         .send(Message::Text(
             json!({"type": "ping", "id": 43}).to_string().into(),

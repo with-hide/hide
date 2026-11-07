@@ -4,8 +4,8 @@ import { emptyScope } from "../test/legacyAgentScope";
 // day an issue states.
 
 import { describe, expect, it } from "vitest";
-import { issueDate, layerDependencies, stageOf } from "./projectBoard";
-import type { Checkout, PrState, PullRequest } from "./snapshot";
+import { checkoutAgentRows, issueDate, layerDependencies, stageOf } from "./projectBoard";
+import type { AgentRow, Checkout, PrState, PullRequest, Workspace } from "./snapshot";
 
 function pr(badge: PullRequest["badge"], checks: PullRequest["checks"] = "unknown", draft = false, state: PrState = "pending"): PullRequest {
   return { number: 7, title: "PR", url: "https://github.com/acme/project/pull/7", badge, review: null, is_draft: draft, checks, state: badge === "merged" || badge === "closed" ? badge : state };
@@ -81,5 +81,25 @@ describe("the day an issue states", () => {
     const day = new Date(2026, 8, 27, 12).getTime();
     expect(issueDate(day, "en")).toBe("Sep 27");
     expect(issueDate(day, "ko")).toBe("9월 27일");
+  });
+});
+
+// with-hide/hide-private#664: a delegation crosses machines, so the rows the core
+// draws under an opened parent can be a row of another device. The sidebar
+// resolves them against every device's agents, never the parent's device alone.
+describe("checkoutAgentRows", () => {
+  it("draws a child that works on another device under its parent, one step in", () => {
+    const parent = { pane_id: "root" } as AgentRow;
+    const child = { pane_id: "remote:win:pane:child" } as AgentRow;
+    const base = checkout("main", { panes: ["root"] });
+    const ref = (pane_id: string, depth: number) => ({ pane_id, occurrence: 0, depth });
+    const tree = { rows: [ref("root", 0)], visible_rows: [ref("root", 0), ref("remote:win:pane:child", 1)], shown: [], more: 0, needs_you: false, turn_kind: null };
+    const withTree = { ...base, agent_scope: { ...base.agent_scope, sidebar_tree: tree } } as unknown as Checkout;
+    const workspace = { checkouts: [withTree] } as unknown as Workspace;
+
+    const rows = checkoutAgentRows(workspace, [parent, child], "sidebar").get("main");
+
+    expect(rows?.map((row) => [row.agent.pane_id, row.depth])).toEqual([["root", 0], ["remote:win:pane:child", 1]]);
+    expect(() => checkoutAgentRows(workspace, [parent], "sidebar")).toThrow("Missing agent occurrence");
   });
 });
