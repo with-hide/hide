@@ -15,7 +15,6 @@
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 
 use base64::Engine;
@@ -270,23 +269,11 @@ pub(crate) fn install_in_command(command: &str) -> Result<Option<String>, ()> {
     )
 }
 
-/// Give every sibling CLI call the same captured route. An invalid installed
-/// route fails the hook rather than silently contacting another daemon.
-pub fn apply(command: &mut Command) -> Result<(), &'static str> {
-    if std::env::var_os(STATE_VARIABLE).is_some_and(|value| !value.is_empty()) {
-        return Ok(());
-    }
-    let route = installed().as_ref().map_err(|_| "record")?;
-    if let Some(route) = route {
-        command.env(STATE_VARIABLE, route);
-    }
-    Ok(())
-}
-
 /// The daemon state folder this hook's requests go to: the one
 /// `HIDE_STATE_DIR` names, else the route the kit installed the hook with,
 /// else the account's own ([`crate::state_folder::state_dir`]). An installed
-/// route that does not read is `record`, as [`apply`] has it.
+/// route that does not read is `record`: an invalid installed route fails the
+/// hook rather than silently contacting another daemon.
 pub fn state_dir(home: &Path) -> Result<PathBuf, &'static str> {
     let read = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
     if let Some(state) = read(STATE_VARIABLE) {

@@ -2,8 +2,8 @@
 //! (`hide_agent_hooks::hook_request`). Each request is answered by the test's
 //! stand-in `hide` program, run with the arguments of the `hide` command that
 //! sends the same request and with the request's input on its stdin, so a
-//! test keeps one table of answers for what the hook asks the daemon and for
-//! the `hide` it still runs (a letter's confirmation).
+//! test keeps one table of answers, keyed by the command an operator would
+//! type, for everything the hook asks the daemon.
 //!
 //! The service lives in a state folder of its own, which [`route`] hands the
 //! hook through `HIDE_STATE_DIR`, so no test's hook can reach the account's
@@ -90,6 +90,15 @@ impl StandInDaemon {
             accepting: Some(accepting),
             answering,
         }
+    }
+
+    /// Withdraws the socket's record, as a daemon that is not running has
+    /// published none: no request reaches this service from here on.
+    pub fn withdraw(&self) {
+        std::fs::remove_file(hide_agent_hooks::hook_request::bootstrap_socket_record(
+            &self.state,
+        ))
+        .unwrap();
     }
 
     /// Points `command`'s hook at this service.
@@ -252,6 +261,21 @@ fn as_hide_command(command: &Value) -> (Vec<String>, String) {
             }
             (arguments, String::new())
         }
+        Some("letter_confirm") => {
+            let mut arguments = vec!["inbox".to_owned(), "--confirm".to_owned()];
+            arguments.extend(
+                command["ids"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_owned)),
+            );
+            (arguments, String::new())
+        }
+        Some("registration") => (
+            ["workspace", "bootstrap"].map(str::to_owned).to_vec(),
+            String::new(),
+        ),
         _ => (Vec::new(), String::new()),
     }
 }

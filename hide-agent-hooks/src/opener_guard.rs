@@ -532,10 +532,11 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, openings: &[Openin
 /// read in `syntax`, the syntax of the shell that runs it:
 /// the reason it is refused, or `None` to let it run. A call that hands no
 /// viewable target to the system opener runs without asking anything; one
-/// that does asks the daemon once, through `program`, whether the pane sits
-/// in a registered checkout, and runs when it does not or the daemon cannot
-/// be asked. The refusal is logged before it is returned, and stands when
-/// the log cannot be written.
+/// that does asks the daemon once, by the hook's own request, whether the
+/// pane sits in a registered checkout, and runs when it does not or the
+/// daemon cannot be asked. The refusal names `program`, the `hide` the agent
+/// runs instead; it is logged before it is returned, and stands when the log
+/// cannot be written.
 pub fn pane_refusal(
     home: &Path,
     runtime: &str,
@@ -552,7 +553,7 @@ pub fn pane_refusal(
     if openings.is_empty() {
         return None;
     }
-    match crate::pre_tool::registration(program, deadline) {
+    match crate::pre_tool::registration(deadline) {
         Registration::Registered => {}
         Registration::NotRegistered => return None,
         Registration::Unreachable(cause) => {
