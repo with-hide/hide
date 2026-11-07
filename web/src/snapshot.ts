@@ -1270,6 +1270,11 @@ export type TaskView = "status" | "project";
 export type SidebarProject = { device_id: string; workspace_id: string };
 
 /** One 마무리 맡기기 and where it stands (`status.stray_hand_offs`). */
+/** One add's receipt: `refused` carries the core's error kind and message. */
+export type ProjectAddReceipt = { request_id: string; device_id: string; path: string } & (
+  | { state: "pending" | "added" }
+  | { state: "refused"; kind: string; message: string }
+);
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
@@ -3319,6 +3324,8 @@ export type SnapshotRest = {
     browser_opens?: import("./viewLayout").BrowserOpenReceipt[];
     /** The latest 마무리 맡기기 presses, oldest first and bounded (PRD project-panel-results B12, B13). */
     stray_hand_offs?: StrayHandOff[];
+    /** The adds that named a request id (Add a project's importable list), oldest first and bounded, each with its own outcome (PRD device-add-project B25). */
+    project_adds?: ProjectAddReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
     last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
   };

@@ -380,3 +380,141 @@ it("shows a device that is not connected as one that cannot be chosen, and opens
   expect((find("[data-add-project-browse]") as HTMLButtonElement).disabled).toBe(false);
   await unmount();
 });
+
+const importAsks = (events: Sent[]) => events.filter((event) => event.kind === "importable_projects").map((event) => event.payload);
+const importRows = () => [...document.querySelectorAll("[data-add-project-import-row]")].map((row) => row.getAttribute("data-add-project-import-row"));
+
+/** What hided answers an `importable_projects` with, through the frame handler. */
+const answerImport = (device: string, projects: { path: string; name: string; sources: string[] }[] | null, reason: string | null = null) =>
+  act(async () => {
+    useShellStore.getState().applyFrame({
+      type: "importable_projects",
+      payload: {
+        device_id: device,
+        projects: projects?.map((project) => ({ ...project, label: project.path.replace("/home/me", "~"), active_at_unix_ms: 1 })) ?? null,
+        reason,
+      },
+    } as never);
+  });
+
+/** The core's answer to a registration: the project listed on its machine. */
+const register = (id: number, path: string, device: string) =>
+  act(async () =>
+    useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
+      rest: { ...current.rest, ui_state: { ...current.rest!.ui_state, workspace_registrations: [...current.rest!.ui_state!.workspace_registrations!, { id, path, device_id: device }] } },
+    }) as never),
+  );
+
+/** The request id the newest add of `path` was sent with. */
+const requestOf = (events: Sent[], path: string) =>
+  creates(events)
+    .filter((payload) => payload.path === path)
+    .map((payload) => payload.request_id as string)
+    .at(-1)!;
+
+/** hided's refusal of the add of `path`, naming that add's request id. */
+const refuseAdd = (events: Sent[], path: string, reason: string) =>
+  act(async () => useShellStore.setState({ pathRefusal: { kind: "create_workspace", path, reason, request_id: requestOf(events, path) } } as never));
+
+/** The core's receipt for the add `request_id`, as the snapshot carries it. */
+const receipt = (request_id: string, path: string, outcome: { state: "added" } | { state: "refused"; kind: string; message: string }) =>
+  act(async () =>
+    useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
+      rest: {
+        ...current.rest,
+        status: { ...current.rest!.status, project_adds: [...(current.rest!.status?.project_adds ?? []), { request_id, device_id: "ubuntu", path, ...outcome }] },
+      },
+    }) as never),
+  );
+
+/** The core's answer to the add of `path`: registered on its machine, and that add's receipt. */
+const added = async (events: Sent[], id: number, path: string) => {
+  await register(id, path, "ubuntu");
+  await receipt(requestOf(events, path), path, { state: "added" });
+};
+
+const found = [
+  { path: "/home/me/app", name: "app", sources: ["claude", "codex"] },
+  { path: "/home/me/site", name: "site", sources: ["paseo", "herdr"] },
+  { path: "/home/me/old", name: "old", sources: ["opencode"] },
+];
+
+it("shows the projects a machine's node found once it answers, without the ones added there, each with its sources (PRD device-add-project B20, B21, B29)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  expect(importAsks(events)).toEqual([{ device_id: "ubuntu" }]);
+  // While the node looks the area is not there.
+  expect(find("[data-add-project-import]")).toBeNull();
+
+  await answerImport("ubuntu", found);
+  expect(importRows()).toEqual(["/home/me/app", "/home/me/site"]);
+  expect([...document.querySelectorAll('[data-add-project-import-row="/home/me/app"] [data-add-project-import-source]')].map((chip) => chip.textContent)).toEqual(["Claude Code", "Codex"]);
+  expect([...document.querySelectorAll('[data-add-project-import-row="/home/me/site"] [data-add-project-import-source]')].map((chip) => chip.textContent)).toEqual(["Paseo", "Herdr"]);
+  expect(find("[data-add-project-import-all]")?.getAttribute("data-add-project-import-all")).toBe("2");
+  await unmount();
+});
+
+it("shows nothing when the node found nothing or could not be asked (PRD device-add-project B22, B27)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { unmount } = await mount(state(null, "ubuntu"));
+  await answerImport("ubuntu", []);
+  expect(find("[data-add-project-import]")).toBeNull();
+  await answerImport("ubuntu", null, "disconnected");
+  expect(find("[data-add-project-import]")).toBeNull();
+  await unmount();
+});
+
+it("adds a row, then every row one at a time, keeping a refused row with its reason and the dialog open (PRD device-add-project B24, B25)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await answerImport("ubuntu", [...found, { path: "/home/me/blog", name: "blog", sources: ["herdr"] }]);
+
+  await act(async () => find('[data-add-project-import-add="/home/me/app"]')!.click());
+  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false, request_id: expect.any(String) }]);
+  await added(events, 8, "/home/me/app");
+  expect(importRows()).toEqual(["/home/me/site", "/home/me/blog"]);
+  expect(useUiStore.getState().overlay).toBe("add_project");
+
+  await act(async () => find("[data-add-project-import-all]")!.click());
+  // One add at a time: the next waits for the answer to the one before it.
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
+  await refuseAdd(events, "/home/me/site", "not_found");
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site", "/home/me/blog"]);
+  await added(events, 9, "/home/me/blog");
+  expect(importRows()).toEqual(["/home/me/site"]);
+  expect(find('[data-add-project-import-failed="/home/me/site"]')?.textContent).toContain("This folder does not exist.");
+
+  // The refused row can be pressed again; it is sent once more, not twice.
+  await act(async () => find('[data-add-project-import-add="/home/me/site"]')!.click());
+  await act(async () => find('[data-add-project-import-add="/home/me/site"]')!.click());
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site", "/home/me/blog", "/home/me/site"]);
+  expect(find('[data-add-project-import-failed="/home/me/site"]')).toBeNull();
+  expect(useUiStore.getState().overlay).toBe("add_project");
+  await unmount();
+});
+
+it("reads a row's answer only from its own receipt, not from a project another window added or another add's refusal (PRD device-add-project B25)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  await answerImport("ubuntu", found);
+
+  await act(async () => find("[data-add-project-import-all]")!.click());
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app"]);
+  // Another window registers another project on the machine, and another add is refused: neither answers app.
+  await register(10, "/home/me/elsewhere", "ubuntu");
+  await receipt("another-window", "/home/me/elsewhere", { state: "refused", kind: "workspace.create_failed", message: "no" });
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app"]);
+  expect(importRows()).toEqual(["/home/me/app", "/home/me/site"]);
+  expect(find("[data-add-project-import-failed]")).toBeNull();
+
+  // app's own refusal stays on app, after the core's last error is gone, and site is sent next with nothing wrong on it.
+  await receipt(requestOf(events, "/home/me/app"), "/home/me/app", { state: "refused", kind: "workspace.create_failed", message: "app could not be added" });
+  expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
+  expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
+  expect(requestOf(events, "/home/me/site")).not.toBe(requestOf(events, "/home/me/app"));
+  expect(find('[data-add-project-import-failed="/home/me/site"]')).toBeNull();
+  await added(events, 11, "/home/me/site");
+  expect(importRows()).toEqual(["/home/me/app"]);
+  expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
+  await unmount();
+});

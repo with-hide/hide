@@ -6,6 +6,12 @@
 //! answer rather than the shared `last_error`, which the next event of any
 //! kind clears. A registration settles every receipt waiting on its device
 //! and path, the dialog's own included.
+//!
+//! A `create_workspace` that names a request id (Add a project's importable
+//! list, which adds one row after another) keeps a receipt here too, beside
+//! these and under the same bound, which brings nothing forward and is
+//! published as `status.project_adds`, so each row reads its own outcome
+//! after any later event.
 
 use std::collections::VecDeque;
 
@@ -22,11 +28,19 @@ pub(super) struct ProjectOpens {
     entries: VecDeque<ProjectOpen>,
 }
 
+/// The longest request id an add may carry.
+const REQUEST_ID_LIMIT: usize = 128;
+
 struct ProjectOpen {
     request_id: String,
     device: String,
     path: String,
     receipt: ProjectOpenReceipt,
+    /// `hide <path>`, which brings its project forward; an add from the
+    /// importable list only adds it, while its dialog stays open.
+    forward: bool,
+    /// The refusal's error kind and message, for an add's receipt.
+    refusal: Option<(String, String)>,
 }
 
 /// What a settled registration brings in front.
@@ -93,14 +107,8 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if self.project_opens.entries.len() >= MAX_OPENS {
-            let settled = self
-                .project_opens
-                .entries
-                .iter()
-                .position(|open| open.receipt != ProjectOpenReceipt::Pending)
-                .ok_or("project_open_busy")?;
-            self.project_opens.entries.remove(settled);
+        if !self.make_open_room() {
+            return Err("project_open_busy".to_owned());
         }
         let receipt = match self.open_target(device, path) {
             Some(target) => {
@@ -126,6 +134,8 @@ impl Runtime {
             device: device.to_owned(),
             path: path.to_owned(),
             receipt,
+            forward: true,
+            refusal: None,
         });
         crate::diagnostic!(serde_json::json!({
             "component": "project_open", "kind": "requested",
@@ -140,6 +150,7 @@ impl Runtime {
                 initialize_git: false,
                 new_folder: false,
                 confirmed_outside_home: None,
+                request_id: None,
             }));
         }
         Ok(true)
@@ -154,9 +165,111 @@ impl Runtime {
             .map(|open| open.receipt.clone())
     }
 
-    /// Settles every request waiting on `device` and `path` with the
-    /// registration's outcome, an error kind or the project registered, and
-    /// brings in front what `forward` says.
+    /// Room for one more receipt: past [`MAX_OPENS`] the oldest settled one
+    /// goes; `false` when every one is still waiting.
+    fn make_open_room(&mut self) -> bool {
+        if self.project_opens.entries.len() < MAX_OPENS {
+            return true;
+        }
+        let Some(settled) = self
+            .project_opens
+            .entries
+            .iter()
+            .position(|open| open.receipt != ProjectOpenReceipt::Pending)
+        else {
+            return false;
+        };
+        self.project_opens.entries.remove(settled);
+        self.publish_project_adds();
+        true
+    }
+
+    /// Keeps a receipt for the add `request_id` of `path` on `device`,
+    /// settled with its registration; `false` when the add is refused
+    /// instead: a malformed or reused id, or [`MAX_OPENS`] requests all
+    /// still waiting, whose refusal is the `last_error` naming that id,
+    /// since no receipt could be kept.
+    pub(super) fn await_add(&mut self, request_id: &str, device: &str, path: &str) -> bool {
+        if request_id.is_empty()
+            || request_id.len() > REQUEST_ID_LIMIT
+            || request_id.chars().any(char::is_control)
+        {
+            self.set_error(
+                "workspace.create_refused",
+                "The add named a request id that is empty, too long or holds a control character",
+                false,
+            );
+            return false;
+        }
+        if self
+            .project_opens
+            .entries
+            .iter()
+            .any(|open| open.request_id == request_id)
+        {
+            self.set_request_error(
+                "workspace.create_refused",
+                "The add named a request id another request already used",
+                false,
+                Some(request_id),
+            );
+            return false;
+        }
+        if !self.make_open_room() {
+            self.set_request_error(
+                "workspace.create_busy",
+                format!(
+                    "{MAX_OPENS} projects are already being added; add this one once they finish"
+                ),
+                true,
+                Some(request_id),
+            );
+            return false;
+        }
+        self.project_opens.entries.push_back(ProjectOpen {
+            request_id: request_id.to_owned(),
+            device: device.to_owned(),
+            path: path.to_owned(),
+            receipt: ProjectOpenReceipt::Pending,
+            forward: false,
+            refusal: None,
+        });
+        self.publish_project_adds();
+        true
+    }
+
+    /// The adds' receipts as the snapshot carries them.
+    fn publish_project_adds(&mut self) {
+        self.snapshot.status.project_adds = self
+            .project_opens
+            .entries
+            .iter()
+            .filter(|open| !open.forward)
+            .map(|open| crate::model::ProjectAddReceiptSnapshot {
+                request_id: open.request_id.clone(),
+                device_id: open.device.clone(),
+                path: open.path.clone(),
+                outcome: match (&open.receipt, &open.refusal) {
+                    (ProjectOpenReceipt::Pending, _) => crate::model::ProjectAddOutcome::Pending,
+                    (ProjectOpenReceipt::Opened { .. }, _) => {
+                        crate::model::ProjectAddOutcome::Added
+                    }
+                    (ProjectOpenReceipt::Refused { reason }, refusal) => {
+                        let (kind, message) = refusal
+                            .clone()
+                            .unwrap_or_else(|| (reason.clone(), reason.clone()));
+                        crate::model::ProjectAddOutcome::Refused { kind, message }
+                    }
+                },
+            })
+            .collect();
+    }
+
+    /// Settles every request waiting on `device` and `path`, each its own
+    /// receipt, with the registration's outcome, an error kind or the
+    /// project registered, and brings in front what `forward` says when a
+    /// `hide <path>` is among them. Every outcome of a `create_workspace`
+    /// passes here, so an add's receipt is settled here too.
     pub(super) fn settle_project_open(
         &mut self,
         device: &str,
@@ -173,28 +286,52 @@ impl Runtime {
                     && open.device == device
                     && open.path == path
             })
-            .map(|open| open.request_id.clone())
+            .map(|open| (open.request_id.clone(), open.forward))
             .collect::<Vec<_>>();
-        let Some(first) = waiting.first() else {
+        if waiting.is_empty() {
             return;
-        };
-        let first = first.clone();
-        let receipt = match outcome {
-            Err(kind) => ProjectOpenReceipt::Refused {
-                reason: kind.replace('.', "_"),
-            },
+        }
+        let leading = waiting
+            .iter()
+            .find(|(_, forward)| *forward)
+            .map(|(id, _)| id.clone());
+        let (receipt, refusal) = match outcome {
+            Err(kind) => {
+                // The refusal's own words when the error it just set is
+                // this one; a refusal that set none is named by its kind.
+                let message = self
+                    .snapshot
+                    .status
+                    .last_error
+                    .as_ref()
+                    .filter(|error| error.kind == kind)
+                    .map_or_else(
+                        || format!("{path} could not be added"),
+                        |error| error.message.clone(),
+                    );
+                (
+                    ProjectOpenReceipt::Refused {
+                        reason: kind.replace('.', "_"),
+                    },
+                    Some((kind.to_owned(), message)),
+                )
+            }
             Ok(()) => {
                 let target = self.open_target(device, path);
-                match (forward, &target) {
-                    (Forward::Checkout, Some(target)) => {
-                        self.bring_target_forward(device, target, &first);
+                if let Some(leading) = &leading {
+                    match (forward, &target) {
+                        (Forward::Checkout, Some(target)) => {
+                            self.bring_target_forward(device, target, leading);
+                        }
+                        (Forward::Checkout | Forward::Device, _)
+                            if !self.device_in_front(device) =>
+                        {
+                            self.bring_device_forward(device.to_owned());
+                        }
+                        _ => {}
                     }
-                    (Forward::Checkout | Forward::Device, _) if !self.device_in_front(device) => {
-                        self.bring_device_forward(device.to_owned());
-                    }
-                    _ => {}
                 }
-                match target {
+                let receipt = match target {
                     Some(target) => ProjectOpenReceipt::Opened {
                         label: target.label,
                         path: target.path,
@@ -207,22 +344,25 @@ impl Runtime {
                         checkout_id: None,
                         added: true,
                     },
-                }
+                };
+                (receipt, None)
             }
         };
         crate::diagnostic!(serde_json::json!({
             "component": "project_open", "kind": "settled",
-            "request_ids": waiting, "device": device,
+            "request_ids": waiting.iter().map(|(id, _)| id).collect::<Vec<_>>(), "device": device,
             "reason": match &receipt {
                 ProjectOpenReceipt::Refused { reason } => Some(reason.as_str()),
                 _ => None,
             },
         }));
         for open in &mut self.project_opens.entries {
-            if waiting.contains(&open.request_id) {
+            if waiting.iter().any(|(id, _)| *id == open.request_id) {
                 open.receipt = receipt.clone();
+                open.refusal = refusal.clone();
             }
         }
+        self.publish_project_adds();
     }
 
     /// The deepest registered checkout on `device` that holds `path`.

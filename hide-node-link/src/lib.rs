@@ -28,6 +28,7 @@ pub mod git;
 pub mod herdr_save;
 pub mod holders;
 pub mod home;
+pub mod importable;
 pub mod index;
 pub mod link;
 pub mod link_panes;
