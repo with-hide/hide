@@ -671,9 +671,7 @@ mod tests {
     /// one.
     #[test]
     fn a_bundle_is_confirmed_in_runs_that_each_fit_one_request() {
-        let longest: Vec<String> = (0..BUNDLE_LETTERS)
-            .map(|n| format!("{n:0>256}"))
-            .collect();
+        let longest: Vec<String> = (0..BUNDLE_LETTERS).map(|n| format!("{n:0>256}")).collect();
         assert!(valid_letter_ids(&longest));
         let usual: Vec<String> = (28_000..28_000 + BUNDLE_LETTERS)
             .map(|n| format!("letter-{n}"))
@@ -683,8 +681,9 @@ mod tests {
             assert_eq!(runs.concat(), *ids);
             for run in &runs {
                 assert!(!run.is_empty());
-                let command = serde_json::to_string(&HookCommand::LetterConfirm { ids: run.to_vec() })
-                    .unwrap();
+                let command =
+                    serde_json::to_string(&HookCommand::LetterConfirm { ids: run.to_vec() })
+                        .unwrap();
                 assert!(command.len() <= CONFIRM_IDS_BYTES + 64, "{}", command.len());
             }
         }
