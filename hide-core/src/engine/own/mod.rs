@@ -4692,13 +4692,28 @@ mod tests {
     /// typed; with every holder ended (a reboot), its conversation is resumed
     /// in the same pane by its session. One that ended before, its shell
     /// back in front, left no record, and nothing is resumed in its pane.
+    /// A device's engine, which runs in the core over the device's node and
+    /// reads no hook files there, does the same.
     #[test]
     fn a_typed_agent_known_by_its_hook_goes_on_in_its_pane_after_a_restart() {
+        for device in [false, true] {
+            typed_agent_goes_on_after_a_restart(device);
+        }
+    }
+
+    fn typed_agent_goes_on_after_a_restart(device: bool) {
         use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
         use hide_agent_hooks::report::HookTurn;
         use hide_node_link::holders::ScreenState;
         let root = tempfile::tempdir().unwrap();
-        let place = place(root.path());
+        let place = match device {
+            false => place(root.path()),
+            // As `open_device` makes it.
+            true => Place {
+                hooks_home: None,
+                ..place(root.path())
+            },
+        };
         let folder = root.path().join("repo");
         for dir in [&home(&place), &folder] {
             std::fs::create_dir_all(dir).unwrap();
@@ -4784,12 +4799,14 @@ mod tests {
             }
             holders.say(&ended, &PaneFacts::default());
             let agents = engine.agents(WAIT).unwrap();
-            assert_eq!(agents.len(), 3, "{agents:?}");
+            assert_eq!(agents.len(), 3, "device {device}: {agents:?}");
             for (pane, _, _, session) in typed {
                 let agent = agents
                     .iter()
                     .find(|agent| agent.pane_id == *pane)
-                    .unwrap_or_else(|| panic!("{pane} lists its agent: {agents:?}"));
+                    .unwrap_or_else(|| {
+                        panic!("{pane} lists its agent (device {device}): {agents:?}")
+                    });
                 assert_eq!(
                     agent
                         .agent_session
@@ -4819,12 +4836,16 @@ mod tests {
         ] {
             assert!(
                 holders.wait_typed(pane).starts_with(resumed),
-                "{:?}",
+                "device {device}: {:?}",
                 holders.typed(pane)
             );
         }
         // Resumes are typed one pane after another, in the panes' order.
-        assert_eq!(holders.typed(&ended), "", "an ended agent is not resumed");
+        assert_eq!(
+            holders.typed(&ended),
+            "",
+            "an ended agent is not resumed (device {device})"
+        );
         assert!(next.session(WAIT).unwrap().resting.is_empty());
     }
 
