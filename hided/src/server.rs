@@ -1043,6 +1043,18 @@ async fn screen_loop(
                 {
                     break;
                 }
+                // Only a window writes a program's copy to its clipboard.
+                let copies = terminals.take_clipboard();
+                let mut gone = false;
+                for copied in copies.iter().filter(|_| renderer) {
+                    if socket.send(Message::Text(copied.as_ref().into())).await.is_err() {
+                        gone = true;
+                        break;
+                    }
+                }
+                if gone {
+                    break;
+                }
             }
             changed = directory_changes.recv() => {
                 match changed {

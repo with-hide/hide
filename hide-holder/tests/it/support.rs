@@ -437,6 +437,8 @@ pub struct Connection {
     heard: mpsc::Receiver<HolderMessage>,
     pub fragments: Vec<Fragment>,
     pub notices: Vec<Notice>,
+    /// What the program wrote to the clipboard, as the holder sent it.
+    pub clipboards: Vec<Vec<u8>>,
     pub closed: Option<Closed>,
 }
 
@@ -459,6 +461,7 @@ impl Connection {
             heard,
             fragments: Vec::new(),
             notices: Vec::new(),
+            clipboards: Vec::new(),
             closed: None,
         }
     }
@@ -475,6 +478,14 @@ impl Connection {
             }
             Ok(HolderMessage::Notice(notice)) => {
                 self.notices.push(notice);
+                true
+            }
+            Ok(HolderMessage::Clipboard(text)) => {
+                assert!(
+                    self.welcome.sends.contains(&Capability::Clipboard),
+                    "a clipboard write to a node that did not accept it"
+                );
+                self.clipboards.push(text);
                 true
             }
             Ok(HolderMessage::Closed(closed)) => {

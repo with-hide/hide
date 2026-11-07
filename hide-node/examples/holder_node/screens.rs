@@ -71,6 +71,8 @@ impl OutputSink for Screens {
     }
 
     fn forget(&self, _pane: &str) {}
+
+    fn clipboard(&self, _pane: &str, _text: &[u8]) {}
 }
 
 impl Screens {
