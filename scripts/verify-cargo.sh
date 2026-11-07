@@ -42,6 +42,41 @@ for name in $(compgen -e); do
     case "$name" in HERDR_*|HCOORD_*) unset "$name" ;; esac
 done
 
+# A Hide pane carries the same kind of handle to the operator's Hide:
+# HIDE_STATE_DIR and HIDE_CAP_REF name the operator's state folder and
+# credential, HIDE_PANE_ID and HIDE_INSTALL(_CLI) name the pane and the
+# installation that started it, and the daemon's own settings (HIDE_PORT,
+# HIDE_KEEP_ALIVE and the rest) ride along. A test that reads one sees the
+# operator's running daemon and refuses or writes there: 104 hide-kit tests
+# failed that way in a pane (with-hide/hide-private#650), and three
+# hide-agent-hooks tests wrote under ~/.hide/agent-hooks (#627).
+# Every HIDE_* variable is therefore dropped, except the inputs a build or a
+# test is meant to be given by its caller: HIDE_TEST_* and HIDE_E2E_* (a
+# program or a prerequisite a test asks for, docs/TESTING.md), HIDE_BUILD_*
+# and HIDE_VT_* (build.rs inputs, set by toolchain-env.sh too), the release
+# identity, HOLDER_CONPTY, and the opt-in live probes. A new input of that
+# kind takes a HIDE_TEST_ name, or is added to this list in the change that
+# reads it; a variable the daemon or a pane sets is never added.
+for name in $(compgen -e); do
+    case "$name" in
+        HIDE_TEST_*|HIDE_E2E_*|HIDE_BUILD_*|HIDE_VT_*) ;;
+        HIDE_HOLDER_CONPTY|HIDE_VERSION|HIDE_COMMIT|HIDE_POSTHOG_PROJECT_TOKEN) ;;
+        HIDE_AGY_*|HIDE_AI_LIVE_EVIDENCE|HIDE_CODEX_BINARY|HIDE_SUGGESTIONS_REPLAY_*|HIDE_SNAPSHOT_OUT) ;;
+        HIDE_*) unset "$name" ;;
+    esac
+done
+
+# A test that runs git reads none of the account's git settings. The account's
+# commit.gpgsign with an SSH signer made a fixture commit fail whenever the
+# signing agent did not answer, under load (with-hide/hide-private#620, #333),
+# and CI's runners carry no such setting, so a test that passes only because
+# of one passes nowhere else. /dev/null is the empty config on every system
+# (Git for Windows reads it as `nul`); a fixture still names its own
+# user.name and user.email.
+isolate_git_config() {
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+}
+
 # Each job's log names the toolchain that builds, the one rust-toolchain.toml
 # pins: a list of installed toolchains does not say which one ran. Once per
 # call, after the arguments are accepted, and on stderr, because `metadata`
@@ -96,6 +131,7 @@ case "${1:-}" in
         done
         report_toolchain
         if [[ "$mode" != metadata ]] && selects_vt "$@"; then prepare_vt_inputs; fi
+        case "$mode" in test-scoped|nextest) isolate_git_config ;; esac
         if [[ "$mode" == nextest ]]; then
             status=0
             cargo nextest run --locked "$@" || status=$?
@@ -113,6 +149,7 @@ case "${1:-}" in
         shift
         report_toolchain
         prepare_vt_inputs
+        isolate_git_config
         exec cargo test --locked --workspace "$@"
         ;;
     fmt-check)

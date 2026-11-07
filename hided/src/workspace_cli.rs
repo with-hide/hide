@@ -30,10 +30,23 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
 /// A spawn on this machine: a Codex start with its brief commonly takes
 /// 10 to 15 seconds, past the 10 every other command gets.
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
+const SPAWN_STEPS: Duration = Duration::from_secs(30);
 /// A spawn on another device: its checks, worktree, tab and agent start are
 /// each a round trip over SSH.
-const REMOTE_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
+const REMOTE_SPAWN_STEPS: Duration = Duration::from_secs(60);
+
+/// How long the CLI waits for a spawn's answer: its steps, after the wait
+/// for a kit pass on the child's machine that comes before them
+/// (`hide_core::coordination::HOOK_PASS_WAIT`), so a refusal of either
+/// arrives before the exchange gives up.
+fn spawn_timeout(remote: bool) -> Duration {
+    let steps = if remote {
+        REMOTE_SPAWN_STEPS
+    } else {
+        SPAWN_STEPS
+    };
+    steps + hide_core::coordination::HOOK_PASS_WAIT
+}
 /// The catalog's own wait for a model-list read is 10 seconds; the exchange
 /// outlives it.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
@@ -752,13 +765,7 @@ pub fn request_delivery(
     let timeout = match &command {
         hide_core::delivery::Command::Agents {
             command: hide_core::coordination::Command::Spawn { machine, .. },
-        } => {
-            if machine.is_some() {
-                REMOTE_SPAWN_TIMEOUT
-            } else {
-                SPAWN_TIMEOUT
-            }
-        }
+        } => spawn_timeout(machine.is_some()),
         _ => TIMEOUT,
     };
     credential.run(|path, after| {

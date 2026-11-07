@@ -328,16 +328,20 @@ use crate::error::HostError;
 /// (`TerminalControl::Mouse`), which the holder encodes for the program's
 /// mouse mode, in place of the core's own bytes (`Write`); a helper on 77
 /// would refuse it, so it upgrades.
-/// 79: `home_list` lists one folder under the node's home for Add a
+/// 79: a device's terminals send what a pane's program wrote to the
+/// clipboard (`TerminalUp::Clipboard`), once, for the core's window in
+/// front; a core on 78 cannot read the line and would drop every copy, so
+/// the helper upgrades.
+/// 80: `home_list` lists one folder under the node's home for Add a
 /// project's folder list and `new_folder_target` says where a clone or a new
 /// project would land under that home, so both run on any device (PRD
-/// device-add-project D-01, D-07); a helper on 78 would refuse both, so it
+/// device-add-project D-01, D-07); a helper on 79 would refuse both, so it
 /// upgrades.
-/// 80: `importable_projects` answers the projects worth adding on the node,
+/// 82: `importable_projects` answers the projects worth adding on the node,
 /// from its agents' sessions and Paseo's and Herdr's lists, for Add a
-/// project on any device (PRD device-add-project D-09); a helper on 79
-/// would refuse it, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 80;
+/// project on any device (PRD device-add-project D-09); a helper on 81
+/// would refuse it, so it upgrades (81 is taken by an open change).
+pub const PROTOCOL_VERSION: u32 = 82;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

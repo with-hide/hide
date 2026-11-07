@@ -104,9 +104,9 @@ export function seedPairedMac(): void {
 }
 
 /** The scenes of the 볼 것 tab and its viewers (PRD mobile-companion-ui B10-B19, B23, B26, B27), in the order the board draws them. */
-export type PhoneLookScene = "phone-looks" | "phone-look-changes" | "phone-look-doc" | "phone-look-image" | "phone-look-shot" | "phone-look-shot-refreshing" | "phone-look-page" | "phone-look-other" | "phone-look-large" | "phone-look-failed" | "phone-look-closed" | "phone-look-device" | "phone-look-loading";
+export type PhoneLookScene = "phone-looks" | "phone-look-changes" | "phone-look-doc" | "phone-look-image" | "phone-look-shot" | "phone-look-shot-refreshing" | "phone-look-page" | "phone-look-other" | "phone-look-large" | "phone-look-html-large" | "phone-look-failed" | "phone-look-closed" | "phone-look-device" | "phone-look-loading";
 
-export const PHONE_LOOK_SCENES: readonly PhoneLookScene[] = ["phone-looks", "phone-look-changes", "phone-look-doc", "phone-look-image", "phone-look-shot", "phone-look-shot-refreshing", "phone-look-page", "phone-look-other", "phone-look-large", "phone-look-failed", "phone-look-closed", "phone-look-device", "phone-look-loading"];
+export const PHONE_LOOK_SCENES: readonly PhoneLookScene[] = ["phone-looks", "phone-look-changes", "phone-look-doc", "phone-look-image", "phone-look-shot", "phone-look-shot-refreshing", "phone-look-page", "phone-look-other", "phone-look-large", "phone-look-html-large", "phone-look-failed", "phone-look-closed", "phone-look-device", "phone-look-loading"];
 
 const LOOK_AGENT = "l1";
 
@@ -161,6 +161,7 @@ export function phoneLooks(): LookRow[] {
     { id: "v1", kind: "changes", name: "경로 구분자 수정", unseen: true, at: Date.now() - 3 * MINUTE },
     { id: "v2", kind: "image", name: "memory-holder.png", unseen: true, at: Date.now() - 5 * MINUTE },
     { id: "v3", kind: "page", name: "랜딩 미리보기", unseen: true, at: Date.now() - 8 * MINUTE, url: "https://withhide.dev/preview" },
+    { id: "v7", kind: "html", name: "설정 화면 목업.html", unseen: true, at: Date.now() - 9 * MINUTE },
     { id: "v4", kind: "doc", name: "INSTALL.md", unseen: false, at: Date.now() - 60 * MINUTE },
   ];
 }
@@ -182,6 +183,7 @@ const VIEWED: Record<Exclude<PhoneLookScene, "phone-looks">, { id: string; conte
   "phone-look-page": { id: "v3", content: { state: "page", url: PAGE_ADDRESS } },
   "phone-look-other": { id: "v5", content: { state: "other" } },
   "phone-look-large": { id: "v6", content: { state: "too_large" } },
+  "phone-look-html-large": { id: "v7", content: { state: "too_large" } },
   "phone-look-failed": { id: "v1", content: { state: "failed" } },
   "phone-look-closed": { id: "v1", content: { state: "closed" } },
   "phone-look-device": { id: "v1", content: { state: "device_unreachable" } },

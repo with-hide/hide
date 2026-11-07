@@ -3767,6 +3767,9 @@ pub enum MemoryStartFailureCode {
     ShellStarting,
     /// The agent's start ended at the shell without the agent, twice.
     AgentNotStarted,
+    /// Hide's hook for the agent is not in place where it would run; that
+    /// machine's row in Settings says why.
+    AgentHookNotReady,
     CardNotProcessed,
     /// Any other answer: the device, the lock, the engine's refusal.
     Other,
@@ -3794,6 +3797,8 @@ impl MemoryStartFailure {
             (code, _) => Self {
                 code: if code == "agent_not_started" {
                     MemoryStartFailureCode::AgentNotStarted
+                } else if crate::runtime::start_hook::HookRefusal::is_code(code) {
+                    MemoryStartFailureCode::AgentHookNotReady
                 } else {
                     MemoryStartFailureCode::Other
                 },
@@ -4580,9 +4585,9 @@ pub struct UiStateSnapshot {
     #[serde(default, skip_serializing)]
     pub request_verbs: BTreeMap<String, crate::request_view::VerbRecord>,
     /// How long an agent may go untouched before Hide ends its process and
-    /// keeps its conversation to resume: 12, 24 or 72 hours, or `None` for
-    /// never, the default (PRD D-10).
-    #[serde(default)]
+    /// keeps its conversation to resume: 12, 24 (the default), 48 or 72
+    /// hours, or `None` for Off (PRD D-10).
+    #[serde(default = "default_sleep_after_hours")]
     pub agent_sleep_after_hours: Option<u32>,
     /// Each local project's chosen issue source, `github` or `local`, by the
     /// project's path; a project without an entry reads its default source
@@ -5341,6 +5346,10 @@ pub struct WorktreeNameSnapshot {
     pub message: Option<String>,
 }
 
+fn default_sleep_after_hours() -> Option<u32> {
+    Some(crate::agent_sleep::DEFAULT_SLEEP_AFTER_HOURS)
+}
+
 impl Default for UiStateSnapshot {
     fn default() -> Self {
         Self {
@@ -5412,7 +5421,7 @@ impl Default for UiStateSnapshot {
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
             request_verbs: BTreeMap::new(),
-            agent_sleep_after_hours: None,
+            agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
             issue_settings: IssueSettingsSnapshot::default(),
             conductor_settings: crate::missions::ConductorSettings::default(),
@@ -8475,6 +8484,7 @@ mod wire_enum_tests {
         let start_failures = [
             MemoryStartFailureCode::ShellStarting,
             MemoryStartFailureCode::AgentNotStarted,
+            MemoryStartFailureCode::AgentHookNotReady,
             MemoryStartFailureCode::CardNotProcessed,
             MemoryStartFailureCode::Other,
         ];
@@ -8483,6 +8493,7 @@ mod wire_enum_tests {
                 MemoryStartFailureCode::ShellStarting
                 | MemoryStartFailureCode::CardNotProcessed
                 | MemoryStartFailureCode::AgentNotStarted
+                | MemoryStartFailureCode::AgentHookNotReady
                 | MemoryStartFailureCode::Other => {}
             }
         }
@@ -9494,6 +9505,49 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
+            use crate::delivery::held::HeldFor;
+            let held = [
+                HeldFor::Unreachable,
+                HeldFor::Undelivered,
+                HeldFor::Approval,
+                HeldFor::Draft,
+                HeldFor::Unanswered,
+            ];
+            for variant in held {
+                match variant {
+                    HeldFor::Unreachable
+                    | HeldFor::Undelivered
+                    | HeldFor::Approval
+                    | HeldFor::Draft
+                    | HeldFor::Unanswered => {}
+                }
+            }
+            assert_wire(&contract, "mission_letters_held_for", &held);
+            checked.insert("mission_letters_held_for");
+            use crate::runtime::missions::NodeWork;
+            let work = [
+                NodeWork::Working,
+                NodeWork::Waiting {
+                    on: crate::missions::WaitingOn::Review,
+                },
+                NodeWork::NoWorker,
+            ];
+            for variant in &work {
+                match variant {
+                    NodeWork::Working | NodeWork::Waiting { .. } | NodeWork::NoWorker => {}
+                }
+            }
+            let states: Vec<String> = work
+                .iter()
+                .map(|variant| {
+                    serde_json::to_value(variant).unwrap()["state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+            assert_wire(&contract, "mission_node_work", &states);
+            checked.insert("mission_node_work");
         }
 
         {
@@ -10173,6 +10227,7 @@ mod wire_enum_tests {
             &[
                 DeskJobFailure::DeviceUnavailable,
                 DeskJobFailure::AgentNotInstalled,
+                DeskJobFailure::AgentHookNotReady,
                 DeskJobFailure::BranchInUse,
                 DeskJobFailure::ProjectUnavailable,
                 DeskJobFailure::AlreadyStarted,

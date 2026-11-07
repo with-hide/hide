@@ -41,10 +41,18 @@ pub struct Home {
 }
 
 impl Home {
+    /// Short whatever `TMPDIR` is: a pane's socket sits below this folder, a
+    /// Unix socket path holds 104 bytes on macOS, and a runner's own `TMPDIR`
+    /// or a deep one takes the rest (docs/TESTING.md, Writing a Rust test,
+    /// rule 7). Windows names a pipe and has no such limit.
     pub fn new() -> Self {
-        Self {
-            dir: tempfile::Builder::new().prefix("hh").tempdir().unwrap(),
-        }
+        let mut home = tempfile::Builder::new();
+        home.prefix("hh");
+        #[cfg(unix)]
+        let home = home.tempdir_in("/tmp");
+        #[cfg(not(unix))]
+        let home = home.tempdir();
+        Self { dir: home.unwrap() }
     }
 
     pub fn path(&self) -> &Path {
@@ -429,6 +437,8 @@ pub struct Connection {
     heard: mpsc::Receiver<HolderMessage>,
     pub fragments: Vec<Fragment>,
     pub notices: Vec<Notice>,
+    /// What the program wrote to the clipboard, as the holder sent it.
+    pub clipboards: Vec<Vec<u8>>,
     pub closed: Option<Closed>,
 }
 
@@ -451,6 +461,7 @@ impl Connection {
             heard,
             fragments: Vec::new(),
             notices: Vec::new(),
+            clipboards: Vec::new(),
             closed: None,
         }
     }
@@ -467,6 +478,14 @@ impl Connection {
             }
             Ok(HolderMessage::Notice(notice)) => {
                 self.notices.push(notice);
+                true
+            }
+            Ok(HolderMessage::Clipboard(text)) => {
+                assert!(
+                    self.welcome.sends.contains(&Capability::Clipboard),
+                    "a clipboard write to a node that did not accept it"
+                );
+                self.clipboards.push(text);
                 true
             }
             Ok(HolderMessage::Closed(closed)) => {

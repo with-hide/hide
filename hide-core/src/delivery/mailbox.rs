@@ -268,10 +268,13 @@ pub fn apply(
         command,
         now,
         InterfaceLanguage::English,
+        &[],
     )
 }
 
-/// [`apply`], with what a handover shows worded in `language`.
+/// [`apply`], with what a handover shows worded in `language` and `also_reads`
+/// the senders whose letters `Show` answers beside the caller's own
+/// (`Authority::also_reads`).
 pub fn apply_in(
     ledger: &mut Ledger,
     actor: &Actor,
@@ -279,6 +282,7 @@ pub fn apply_in(
     command: &Command,
     now: u64,
     language: InterfaceLanguage,
+    also_reads: &[Exchange],
 ) -> Result<Value, String> {
     actor.require_native_identity()?;
     if let Command::Send { intent, .. } | Command::Reply { intent, .. } = command
@@ -415,7 +419,7 @@ pub fn apply_in(
                 acknowledged,
             }))
         }
-        Command::Show { id } => Ok(json!(authorized(ledger, actor, id)?)),
+        Command::Show { id } => Ok(json!(show(ledger, actor, also_reads, id)?)),
         Command::Inbox { bundle: true } => Ok(json!(inbox(ledger, actor))),
         Command::Inbox { bundle: false } => Ok(legacy_inbox(ledger, actor)),
         // A tool event's ask is answered by the worker with the pane's own
@@ -576,14 +580,47 @@ fn end_report_watches(ledger: &mut Ledger, report: Option<(Actor, Actor)>) {
     }
 }
 
-fn authorized<'a>(ledger: &'a Ledger, actor: &Actor, id: &str) -> Result<&'a Letter, String> {
+/// Letters from one agent to another that a third may read.
+#[derive(Clone, Debug)]
+pub struct Exchange {
+    pub from: Actor,
+    pub to: Actor,
+}
+
+/// The letter `id` for `actor` to read: one it sent or received, or one
+/// in `also_reads`, the exchanges the caller may read beside those
+/// (`Authority::also_reads`). This is the one place that decides who reads a
+/// letter; taking one in, cancelling and answering it stay with
+/// [`authorized`].
+fn show<'a>(
+    ledger: &'a Ledger,
+    actor: &Actor,
+    also_reads: &[Exchange],
+    id: &str,
+) -> Result<&'a Letter, String> {
     ledger
         .letters
         .iter()
         .find(|letter| {
             letter.id == id
-                && (letter.sender.same_identity(actor) || letter.recipient.same_identity(actor))
+                && (is_party(letter, actor)
+                    || also_reads.iter().any(|read| {
+                        letter.sender.same_identity(&read.from)
+                            && letter.recipient.same_identity(&read.to)
+                    }))
         })
+        .ok_or_else(|| "letter_unavailable".into())
+}
+
+fn is_party(letter: &Letter, actor: &Actor) -> bool {
+    letter.sender.same_identity(actor) || letter.recipient.same_identity(actor)
+}
+
+fn authorized<'a>(ledger: &'a Ledger, actor: &Actor, id: &str) -> Result<&'a Letter, String> {
+    ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == id && is_party(letter, actor))
         .ok_or_else(|| "letter_unavailable".into())
 }
 

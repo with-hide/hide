@@ -7567,3 +7567,302 @@ fn a_node_from_before_push_times_starts_its_clock_on_the_next_read() {
             .is_some_and(|at| at >= before)
     );
 }
+
+/// The `pane` agent row Hide shows, `status` as the engine reports it, under
+/// the screen's name `shown` (a device's pane under its full address).
+fn shown_row(pane: &str, shown: &str, status: &str) -> crate::model::SidebarAgentSnapshot {
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+        {"pane_id": pane, "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": format!("t-{pane}"),
+         "revision": 1, "focused": false, "agent_status": status, "agent": "codex",
+         "name": pane, "cwd": PROJECT, "state_change_seq": 1},
+    ]}))
+    .unwrap();
+    let mut row = crate::sidebar::project_agents(payload).agents.remove(0);
+    row.pane_id = shown.into();
+    row
+}
+
+/// with-hide/hide-private#679: a node worked, or checked, from a device
+/// names its pane by the full address its agent row has, which the map's
+/// 터미널 button finds and opens; the same node worked here keeps the
+/// engine's own id.
+#[test]
+fn a_device_workers_node_names_the_pane_its_agent_row_has() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        node_view(&runtime, "fix").pane_id.as_deref(),
+        Some("recipient")
+    );
+
+    let (far, record) = far_agent("agent-9", "w2:p0");
+    register(&mut runtime, record);
+    let (checker, record) = far_agent("agent-10", "w2:p1");
+    register(&mut runtime, record);
+    connect_with_repository(&mut runtime, Vec::new());
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-9", "reviewer": "agent-10"}}),
+    )
+    .unwrap();
+    runtime.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .agents = vec![
+        shown_row("w2:p0", &far.pane_id, "working"),
+        shown_row("w2:p1", &checker.pane_id, "working"),
+    ];
+    let view = node_view(&runtime, "fix");
+    assert_eq!(view.pane_id.as_deref(), Some("remote:mini:pane:w2:p0"));
+    assert_eq!(view.machine.as_deref(), Some(DEVICE));
+    assert_eq!(
+        runtime
+            .agent_row(view.pane_id.as_deref().unwrap())
+            .map(|row| row.pane_id.as_str()),
+        Some(far.pane_id.as_str()),
+        "the address finds the worker's row"
+    );
+    let reviewer = view
+        .criteria
+        .iter()
+        .flat_map(|line| &line.checkers)
+        .find(|checker| checker.agent_id.as_deref() == Some("agent-10"))
+        .unwrap();
+    assert_eq!(reviewer.pane_id.as_deref(), Some("remote:mini:pane:w2:p1"));
+    assert_eq!(
+        view.work,
+        Some(crate::runtime::missions::NodeWork::Working),
+        "a device worker's work is read from its row there"
+    );
+    // A device that dropped keeps its last rows; they no longer say what its
+    // worker does, so the card says nothing rather than the last word.
+    runtime.snapshot.status.remote[0].state = "not_connected".into();
+    let view = node_view(&runtime, "fix");
+    assert_eq!(view.work, None, "a worker on a device that does not answer");
+    assert_eq!(view.pane_id.as_deref(), Some("remote:mini:pane:w2:p0"));
+}
+
+/// with-hide/hide-private#680: a node in progress says whether its worker
+/// works now: working while its row works, waiting on what the node waits
+/// on while the row rests, no worker once its registration ended or with
+/// none bound, and nothing at all while Hide cannot see its row; a node not
+/// in progress says nothing.
+#[test]
+fn a_node_in_progress_says_whether_its_worker_works_waits_or_is_gone() {
+    use crate::missions::WaitingOn;
+    use crate::runtime::missions::NodeWork;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    assert_eq!(node_view(&runtime, "fix").work, None, "a planned node");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").work, None, "no row to read");
+
+    runtime.snapshot.navigator.agents = vec![shown_row("recipient", "recipient", "working")];
+    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::Working));
+
+    runtime.snapshot.navigator.agents = vec![shown_row("recipient", "recipient", "idle")];
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::Waiting {
+            on: WaitingOn::Worker
+        })
+    );
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(
+        node_view(&runtime, "fix").work,
+        Some(NodeWork::Waiting {
+            on: WaitingOn::Review
+        }),
+        "a resting worker whose node waits on its review"
+    );
+
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .agents
+        .iter_mut()
+        .find(|record| record.id == "agent-2")
+        .unwrap()
+        .ended = true;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(node_view(&runtime, "fix").work, Some(NodeWork::NoWorker));
+}
+
+/// The missions are drawn again when a row they read moves, and only then:
+/// an agent outside every mission changing its turn leaves the digest the
+/// views are kept by as it was, while the worker's row, or its device
+/// dropping, changes it (review of with-hide/hide#2211).
+#[test]
+fn only_a_missions_own_rows_redraw_its_views() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let digest = |runtime: &Runtime| {
+        let ledger = runtime.delivery_state().unwrap();
+        runtime.rows_and_holds_digest(Some(&ledger))
+    };
+    runtime.snapshot.navigator.agents = vec![
+        shown_row("recipient", "recipient", "working"),
+        shown_row("elsewhere", "elsewhere", "working"),
+    ];
+    let before = digest(&runtime);
+    runtime.snapshot.navigator.agents[1] = shown_row("elsewhere", "elsewhere", "idle");
+    assert_eq!(digest(&runtime), before, "a row no mission holds");
+    runtime.snapshot.navigator.agents[0] = shown_row("recipient", "recipient", "idle");
+    assert_ne!(digest(&runtime), before, "the worker's own row");
+}
+
+/// `runtime`'s letter from the `recipient` pane to the Conductor, written
+/// `ago` before now; its id.
+fn conductor_letter(runtime: &mut Runtime, ago: u64) -> String {
+    let conductor = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .conductor
+        .actor
+        .clone();
+    let from = runtime.delivery_observations["recipient"].actor.clone();
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let intent = format!("report-{}", ledger.next_id);
+    let letter = crate::delivery::mailbox::send(
+        &mut ledger,
+        &from,
+        &conductor,
+        &intent,
+        "Done with the fix",
+        "report",
+        None,
+        crate::delivery::worker::now() - ago,
+    )
+    .unwrap();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    letter.id
+}
+
+/// with-hide/hide-private#678: letters to a running mission's Conductor
+/// that the doorbell holds for something only the operator can lift, for
+/// two minutes or more, are counted on the mission with what to do (a pane
+/// it cannot reach named first); a hold that ends on its own and a letter
+/// held for less than two minutes are not, and a delivered letter leaves
+/// the count, the line going with the last.
+#[test]
+fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
+    use crate::delivery::doorbell::Hold;
+    use crate::delivery::held::HeldFor;
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    let held = |runtime: &Runtime| {
+        runtime
+            .mission_view_of("mission-1")
+            .unwrap()
+            .conductor_letters
+            .map(|held| (held.count, held.reason))
+    };
+    let draft = conductor_letter(&mut runtime, 5 * MINUTE);
+    let quiet = conductor_letter(&mut runtime, 5 * MINUTE);
+    let fresh = conductor_letter(&mut runtime, MINUTE);
+    runtime.delivery_holds = [
+        (draft.clone(), Hold::Draft),
+        (quiet, Hold::Quiet),
+        (fresh.clone(), Hold::Absent),
+    ]
+    .into();
+    let view = runtime.mission_view_of("mission-1").unwrap();
+    assert_eq!(
+        view.conductor_letters.map(|held| (held.count, held.reason)),
+        Some((1, HeldFor::Draft))
+    );
+
+    let gone = conductor_letter(&mut runtime, 3 * MINUTE);
+    runtime.delivery_holds.insert(gone.clone(), Hold::Absent);
+    let shown = runtime
+        .mission_view_of("mission-1")
+        .unwrap()
+        .conductor_letters
+        .unwrap();
+    assert_eq!(
+        (shown.count, shown.reason),
+        (2, HeldFor::Unreachable),
+        "an unreachable pane is named before a draft"
+    );
+    assert!(shown.since_unix_ms <= crate::delivery::worker::now() - 5 * MINUTE);
+
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for letter in &mut ledger.letters {
+        if letter.id == gone || letter.id == draft {
+            letter.state = crate::delivery::ledger::State::Acknowledged;
+        }
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(held(&runtime), None, "delivered letters leave");
+    assert!(runtime.delivery_holds.contains_key(&fresh));
+
+    // A letter that ended undelivered counts at once, until its sender gets
+    // a later one through to the Conductor.
+    let lost = conductor_letter(&mut runtime, 0);
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .letters
+        .iter_mut()
+        .find(|letter| letter.id == lost)
+        .unwrap()
+        .state = crate::delivery::ledger::State::Undelivered;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(held(&runtime), Some((1, HeldFor::Undelivered)));
+    let again = conductor_letter(&mut runtime, 0);
+    assert_eq!(
+        held(&runtime),
+        Some((1, HeldFor::Undelivered)),
+        "sent, not taken in"
+    );
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .letters
+        .iter_mut()
+        .find(|letter| letter.id == again)
+        .unwrap()
+        .state = crate::delivery::ledger::State::Delivered;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        held(&runtime),
+        None,
+        "the later letter's bell was answered: the Conductor is reached again, before any ack"
+    );
+}

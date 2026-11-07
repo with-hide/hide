@@ -70,23 +70,53 @@ pub struct TreeRow {
     pub depth: usize,
 }
 
+/// Every row of every device, indexed once per refresh by pane: what a tree
+/// opens a child from. A delegation crosses machines (`spawn --machine`), so
+/// a parent's child is looked up here and not in the parent's device alone;
+/// a device that stopped answering keeps its last rows, which the shell dims,
+/// so a parent's badge and its tree agree. All scopes share it, which keeps
+/// the work per refresh to one pass over the rows however many checkouts,
+/// projects and devices draw a tree.
+pub(super) struct Family<'a> {
+    by_pane: HashMap<&'a str, &'a SidebarAgentSnapshot>,
+    references: HashMap<*const SidebarAgentSnapshot, RowRef>,
+}
+
+impl<'a> Family<'a> {
+    /// `devices` is each device's rows in order, a disconnected device's last ones included.
+    pub(super) fn new(
+        devices: impl Iterator<Item = &'a [&'a SidebarAgentSnapshot]> + Clone,
+    ) -> Self {
+        let rows: Vec<_> = devices.flat_map(|rows| rows.iter().copied()).collect();
+        // A pane may be listed twice (the overview's first owner, the badge's
+        // last, `scope`'s first_by_pane); a child opens from the last, as the
+        // tree always did.
+        let by_pane = rows
+            .iter()
+            .map(|row| (row.pane_id.as_str(), *row))
+            .collect();
+        Self {
+            by_pane,
+            references: row_references(&rows),
+        }
+    }
+
+    fn reference(&self, row: &SidebarAgentSnapshot) -> &RowRef {
+        &self.references[&(row as *const _)]
+    }
+
+    fn child(&self, id: &str) -> Option<&'a SidebarAgentSnapshot> {
+        self.by_pane.get(id).copied()
+    }
+}
+
 /// The sidebar lists operator sessions as roots (`rows`, which the digit
 /// shortcuts number; a resolved root with a live pane stays one, and rests in
 /// `shown`, `more`, `needs_you` and `turn_kind`) and, under a root the operator opened, its children and
 /// grandchildren wherever they work (`visible_rows`, PRD D-12, D-38): two
 /// levels only, siblings most urgent first. A grandchild's own children open
 /// in its popover instead (D-28).
-pub(super) fn sidebar_tree(
-    agents: &[&SidebarAgentSnapshot],
-    all: &[&SidebarAgentSnapshot],
-) -> Tree {
-    let references = row_references(agents);
-    let all_references = row_references(all);
-    let by_pane: HashMap<_, _> = all
-        .iter()
-        .rev()
-        .map(|row| (row.pane_id.as_str(), *row))
-        .collect();
+pub(super) fn sidebar_tree(agents: &[&SidebarAgentSnapshot], family: &Family<'_>) -> Tree {
     let roots: Vec<_> = agents
         .iter()
         .copied()
@@ -96,15 +126,14 @@ pub(super) fn sidebar_tree(
         .iter()
         .map(|row| TreeRow {
             pane_id: row.pane_id.clone(),
-            occurrence: references[&(*row as *const _)].occurrence,
+            occurrence: family.reference(row).occurrence,
             depth: 0,
         })
         .collect();
     fn open(
         parent: &SidebarAgentSnapshot,
         depth: usize,
-        by_pane: &HashMap<&str, &SidebarAgentSnapshot>,
-        references: &HashMap<*const SidebarAgentSnapshot, RowRef>,
+        family: &Family<'_>,
         out: &mut Vec<TreeRow>,
     ) {
         if parent.lineage_collapsed || depth > TREE_LEVELS {
@@ -112,24 +141,24 @@ pub(super) fn sidebar_tree(
         }
         let children = children_in_order(
             &parent.lineage_child_pane_ids,
-            |id| by_pane.get(id).copied(),
+            |id| family.child(id),
             |child| child.state.tree_rank,
         );
         for child in children {
             out.push(TreeRow {
                 pane_id: child.pane_id.clone(),
-                occurrence: references[&(child as *const _)].occurrence,
+                occurrence: family.reference(child).occurrence,
                 depth,
             });
             if depth < TREE_LEVELS {
-                open(child, depth + 1, by_pane, references, out);
+                open(child, depth + 1, family, out);
             }
         }
     }
     let mut visible_rows = Vec::new();
     for (root, row) in roots.iter().zip(&rows) {
         visible_rows.push(row.clone());
-        open(root, 1, &by_pane, &all_references, &mut visible_rows);
+        open(root, 1, family, &mut visible_rows);
     }
     // A resolved root rests: it is listed and numbered, but it asks for nothing
     // and takes no place in the folded checkout's two shown rows.
@@ -380,7 +409,7 @@ pub(super) fn folded(
 
 #[cfg(test)]
 mod tests {
-    use super::sidebar_tree;
+    use super::{Family, sidebar_tree};
     use crate::model::SidebarAgentSnapshot;
     use crate::sidebar::{SessionSnapshotPayload, project_agents};
     use serde_json::json;
@@ -414,6 +443,10 @@ mod tests {
         rows
     }
 
+    fn tree_of(all: &[&SidebarAgentSnapshot]) -> super::Tree {
+        sidebar_tree(all, &Family::new(std::iter::once(all)))
+    }
+
     fn drawn(rows: &[super::TreeRow]) -> Vec<(String, usize)> {
         rows.iter()
             .map(|row| (row.pane_id.clone(), row.depth))
@@ -424,7 +457,7 @@ mod tests {
     fn an_opened_root_draws_two_levels_most_urgent_first_and_numbers_only_the_root() {
         let rows = lineage();
         let all: Vec<_> = rows.iter().collect();
-        let tree = sidebar_tree(&all, &all);
+        let tree = tree_of(&all);
         assert_eq!(drawn(&tree.rows), [("root".into(), 0)]);
         assert_eq!(
             drawn(&tree.visible_rows),
@@ -438,6 +471,27 @@ mod tests {
         );
     }
 
+    /// A pane listed twice (an overview's first owner and the badge's last)
+    /// opens its parent's child from the last row, as the tree always did.
+    #[test]
+    fn a_child_listed_twice_opens_from_its_last_row() {
+        let mut rows = lineage();
+        let mut older = rows
+            .iter()
+            .find(|row| row.pane_id == "busy")
+            .unwrap()
+            .clone();
+        older.state.tree_rank = 9;
+        rows.insert(0, older);
+        let all: Vec<_> = rows.iter().collect();
+        let family = Family::new(std::iter::once(all.as_slice()));
+        let child = family.child("busy").unwrap();
+        assert_eq!(
+            child.state.tree_rank, 1,
+            "the last row, not the stale first one"
+        );
+    }
+
     #[test]
     fn a_folded_root_or_child_draws_nothing_below_it() {
         let mut rows = lineage();
@@ -446,17 +500,14 @@ mod tests {
         }
         let all: Vec<_> = rows.iter().collect();
         assert_eq!(
-            drawn(&sidebar_tree(&all, &all).visible_rows),
+            drawn(&tree_of(&all).visible_rows),
             [("root".into(), 0), ("asking".into(), 1), ("busy".into(), 1)]
         );
         for row in &mut rows {
             row.lineage_collapsed = row.pane_id == "root";
         }
         let all: Vec<_> = rows.iter().collect();
-        assert_eq!(
-            drawn(&sidebar_tree(&all, &all).visible_rows),
-            [("root".into(), 0)]
-        );
+        assert_eq!(drawn(&tree_of(&all).visible_rows), [("root".into(), 0)]);
     }
     fn resolved_at(row: &mut SidebarAgentSnapshot) {
         row.resolved = Some(crate::agent_state::sessions::Resolution {
@@ -484,7 +535,7 @@ mod tests {
             }
         }
         let all: Vec<_> = rows.iter().collect();
-        let tree = sidebar_tree(&all, &all);
+        let tree = tree_of(&all);
         assert!(
             drawn(&tree.rows).contains(&("root".into(), 0)),
             "a resolved root with a live pane keeps its row and its number"
@@ -504,7 +555,7 @@ mod tests {
         resolved_at(&mut rows[0]);
         rows[0].state.needs_you = true;
         let all: Vec<_> = rows.iter().collect();
-        let tree = sidebar_tree(&all, &all);
+        let tree = tree_of(&all);
         assert_eq!(drawn(&tree.visible_rows), [("root".into(), 0)]);
         assert!(!tree.needs_you);
         assert!(tree.shown.is_empty());

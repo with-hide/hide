@@ -49,6 +49,21 @@ it("numbers grouped roots in physical tab order, skipping children and duplicate
   expect(keycaps("child", "c1")).toBeNull();
 });
 
+// with-hide/hide-private#664: the core's sidebar tree names a child that works on another device, so the
+// numbering resolves it against every device's rows, not the front device's alone.
+it("numbers the roots of a tree that opens a child working on another device", () => {
+  const agents = [agent("a", { lineage_child_pane_ids: ["remote:mini:pane:child"], lineage_collapsed: false }), agent("b")];
+  const child = agent("remote:mini:pane:child", { delegated: true, lineage_parent_pane_id: "a" });
+  const checkout = checkoutWith(["t1"]);
+  checkout.tabs[0]!.panes = [{ id: "a" }, { id: "b" }] as Checkout["tabs"][number]["panes"];
+  const rest = legacyRest({ navigator: { focused_device_id: "local", devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], workspaces: [{ id: "w1", device_id: "local", expanded: true, checkouts: [checkout] }] }, status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [child] } }] } } as unknown as SnapshotRest, agents);
+  const refs = [["a", 0], ["remote:mini:pane:child", 1], ["b", 0]].map(([pane_id, depth]) => ({ pane_id: pane_id as string, occurrence: 0, depth: depth as number, descendants: 0 }));
+  const placed = rest.navigator!.workspaces![0]!.checkouts[0]!;
+  placed.agent_scope.sidebar_tree.rows = refs.filter((row) => row.depth === 0);
+  placed.agent_scope.sidebar_tree.visible_rows = refs;
+  expect([...numberedAgents(agentListOrder({ rest, agents })).values()]).toEqual(["a", "b"]);
+});
+
 describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
   it("numbers the device rail's tiles, the window's machine first, and ⌘n selects by them", () => {
     const devices = [

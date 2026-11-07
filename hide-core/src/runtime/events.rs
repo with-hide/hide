@@ -406,6 +406,14 @@ pub(super) struct PaneTargetPayload {
     pub(super) pane_id: String,
 }
 
+/// Every agent the phones have open now, by the core's pane id; hided sends
+/// the whole list each time it changes, so a repeat converges.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PhoneViewingPayload {
+    pub(super) pane_ids: Vec<String>,
+}
+
 /// Fork agent from the pane menu: where the fork goes, chosen at the press,
 /// who pressed it, and the shell's key request, which holds what is typed
 /// until the fork's agent has started.
@@ -1800,6 +1808,7 @@ pub(super) enum Event {
     FetchLook,
     OverviewRefresh(OverviewRefreshPayload),
     OverviewOpenResult(PaneTargetPayload),
+    PhoneViewing(PhoneViewingPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
     /// The card's refresh button, opening the delete confirmation, and a
@@ -2154,6 +2163,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "fetch_look" => Ok(Event::FetchLook),
         "overview_refresh" => decode!(OverviewRefreshPayload, OverviewRefresh),
         "overview_open_result" => decode!(PaneTargetPayload, OverviewOpenResult),
+        "phone_viewing" => decode!(PhoneViewingPayload, PhoneViewing),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
@@ -3981,6 +3991,7 @@ impl Runtime {
                 changed || payload.refresh
             }
             Event::OverviewOpenResult(payload) => self.open_result(&payload.pane_id),
+            Event::PhoneViewing(payload) => self.set_phone_viewing(payload.pane_ids),
             Event::RequestView(payload) => {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false
