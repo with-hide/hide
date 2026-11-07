@@ -128,9 +128,10 @@ pub(crate) struct ProjectionState {
     /// sleeping agent (`Runtime::adopt_resting`). None is running, so none
     /// is among `agents`.
     pub(crate) resting: Vec<ProjectedAgent>,
-    /// The agents a restore did not bring back and will not, each until the
-    /// core has ended its registration and says so (`Engine::restore_taken`).
-    /// None runs, so none is among `agents`.
+    /// The agents a restore did not bring back and will not, each until an
+    /// agent shows in its pane, by a start, its hook or its foreground; the
+    /// core ends the registration of each while it is named
+    /// (`Runtime::end_unresumed`). None runs, so none is among `agents`.
     pub(crate) not_resumed: Vec<NotResumed>,
     /// The next moment an agent start this read has pending (`launch_pending`)
     /// can end with nothing the engine reports changing: its settle passing

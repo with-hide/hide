@@ -2256,16 +2256,24 @@ impl Runtime {
 }
 
 impl Runtime {
-    /// The node link of the device a spawn names with `--machine`, or why it
-    /// cannot take the spawn: a refusal code the caller can branch on, with
-    /// the ids it could have named when the id is not a device at all. The
-    /// caller's own device is never named here (the spawn drops it first), and a
-    /// caller that is not on this machine may name no other device.
+    /// The node link of the device a spawn names with `--machine`, with the
+    /// engine that starts the agent there (its definitions say what the
+    /// agent's program is called on that machine), or why it cannot take the
+    /// spawn: a refusal code the caller can branch on, with the ids it could
+    /// have named when the id is not a device at all. The caller's own device
+    /// is never named here (the spawn drops it first), and a caller that is
+    /// not on this machine may name no other device.
     pub(crate) fn spawn_target(
         &mut self,
         caller_device: &str,
         device: &str,
-    ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
+    ) -> Result<
+        (
+            Arc<dyn crate::node_access::NodeLink>,
+            crate::engine::SharedEngine,
+        ),
+        String,
+    > {
         // Only an agent on this machine starts work on a device: one on a
         // device would otherwise reach this machine or a third one, and the
         // refusal names no device so it maps nothing.
@@ -2294,10 +2302,14 @@ impl Runtime {
                 &connected.join(", "),
             ));
         }
-        self.coordination_context(device)
+        let engine = self
+            .coordination_context(device)
+            .map_err(|_| "machine_unavailable".to_owned())?
+            .engine;
+        let link = self
+            .node_link(device)
             .map_err(|_| "machine_unavailable".to_owned())?;
-        self.node_link(device)
-            .map_err(|_| "machine_unavailable".to_owned())
+        Ok((link, engine))
     }
 }
 

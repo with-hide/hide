@@ -76,9 +76,10 @@ const FOLDER_WAIT: Duration = Duration::from_secs(10);
 /// and once more after every other resume has had its turn. A machine that
 /// restarted dozens of panes at once holds shells past their start wait
 /// (2026-11-06, 42 resumes at load 324), and by the second pass the load
-/// the others made has settled. Two is the cap, since a resume that fails
-/// twice is a shell that does not take it, and each try can wait a start's
-/// full shell wait.
+/// the others made has settled. Two tries are the cap, since each can wait a
+/// start's full shell wait; a resume that fails both is left as an agent that
+/// was not resumed, whether its shell would not take it or the load had not
+/// settled yet.
 const RESUME_ATTEMPTS: usize = 2;
 
 /// The name of the tab running holders the saved session does not place
