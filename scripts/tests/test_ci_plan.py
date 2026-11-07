@@ -253,7 +253,7 @@ class Selection(unittest.TestCase):
         # the web shell and documentation do not reach the link.
         for path in (
             "hide-core/src/runtime/hosts.rs", "hided/src/lib.rs", "web/src/settings/AddDevice.tsx", "docs/TESTING.md",
-            "hide-kit/src/agents.rs",
+            "hide-kit/src/agents.rs", "hide-kit/src/cli.rs", "hide-kit/src/device.rs",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("windows-wsl", plan(path)["lanes"])
