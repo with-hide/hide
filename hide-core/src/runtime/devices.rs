@@ -961,6 +961,7 @@ impl Runtime {
         let registrations = registrations - self.snapshot.ui_state.workspace_registrations.len();
         let ui = &mut self.snapshot.ui_state;
         ui.device_expanded_paths.remove(device_id);
+        ui.device_add_project_folders.remove(device_id);
         let tabs = self
             .snapshot
             .editor

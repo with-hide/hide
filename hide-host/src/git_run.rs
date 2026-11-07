@@ -25,6 +25,8 @@
 //! which is how a fetch uses the operator's login without asking for it.
 
 use std::path::Path;
+
+use hide_platform::fs::held::HeldFolder;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -89,10 +91,30 @@ pub fn at(cwd: &Path) -> Command {
 /// Another program (a wrapper, `plink`) runs as configured, with no prompt
 /// to answer it, since stdin is closed and every askpass is empty.
 pub fn remote(cwd: &Path) -> Command {
-    let mut command = at(cwd);
+    with_ssh(at(cwd), || configured_ssh_command(at(cwd)))
+}
+
+/// [`command`] that runs in a held folder: the folder a node checked, whatever
+/// its path names by the time Git starts (`hide_platform::fs::held`).
+pub fn in_folder(folder: &HeldFolder) -> Command {
+    let mut command = command();
+    folder.start_in(&mut command);
+    command
+}
+
+/// [`remote`] for a run in a held folder ([`in_folder`]).
+pub fn remote_in(folder: &HeldFolder) -> Command {
+    with_ssh(in_folder(folder), || {
+        configured_ssh_command(in_folder(folder))
+    })
+}
+
+/// `command` with the ssh a remote run starts, read from `config` when the
+/// environment names none.
+fn with_ssh(mut command: Command, config: impl FnOnce() -> Option<String>) -> Command {
     let resolved = ssh_command(
         std::env::var("GIT_SSH_COMMAND").ok(),
-        || configured_ssh_command(cwd),
+        config,
         std::env::var("GIT_SSH").ok(),
     );
     match resolved {
@@ -149,10 +171,10 @@ fn is_ssh(program: &str) -> bool {
     name == "ssh" || name == "ssh.exe"
 }
 
-/// `core.sshCommand` as Git reads it in `cwd`: every scope and include.
-fn configured_ssh_command(cwd: &Path) -> Option<String> {
+/// `core.sshCommand` as Git reads it where `git` runs: every scope and include.
+fn configured_ssh_command(mut git: Command) -> Option<String> {
     let output = output(
-        at(cwd).args(["config", "--get", "core.sshCommand"]),
+        git.args(["config", "--get", "core.sshCommand"]),
         Duration::from_secs(5),
         Some(64 * 1024),
     )
@@ -296,7 +318,7 @@ mod tests {
         git(&["init", "--quiet"]);
         git(&["config", "core.sshCommand", "ssh -i /keys/work"]);
         assert_eq!(
-            configured_ssh_command(folder.path()).as_deref(),
+            configured_ssh_command(at(folder.path())).as_deref(),
             Some("ssh -i /keys/work")
         );
         let environment = remote(folder.path())

@@ -956,20 +956,40 @@ impl Boundary {
     /// anything else there is `already_exists`. Answers the canonical parent
     /// and target, and whether the target is such a leftover.
     pub fn resolve_new_project(&self, parent: &str, name: &str) -> Result<NewProject, Refusal> {
-        let parent = self.resolve_dir(parent)?;
-        if !valid_name(name) {
+        if name.is_empty() {
             return Err(Refusal::InvalidPath);
         }
-        let path = parent.join(name);
-        let leftover = match hide_host::project::folder(&path) {
-            hide_host::project::ProjectFolder::Free => false,
-            hide_host::project::ProjectFolder::Leftover => true,
-            hide_host::project::ProjectFolder::Taken => return Err(Refusal::AlreadyExists),
-        };
+        let target =
+            self.new_folder(parent, name, hide_node_link::browse::NewFolderKind::Project)?;
+        let path = target
+            .path
+            .as_deref()
+            .and_then(hide_host::root::native_absolute)
+            .ok_or(Refusal::InvalidPath)?;
         Ok(NewProject {
-            parent,
+            parent: hide_host::root::native_absolute(&target.parent).ok_or(Refusal::InvalidPath)?,
             path,
-            leftover,
+            leftover: target.leftover,
+        })
+    }
+
+    /// Where a new folder would be made under home, judged by the rule every
+    /// device's node judges with (`hide_host::browse::new_folder_target`), so
+    /// this machine and a device never answer the same folder differently.
+    fn new_folder(
+        &self,
+        parent: &str,
+        name: &str,
+        kind: hide_node_link::browse::NewFolderKind,
+    ) -> Result<hide_node_link::browse::NewFolderTarget, Refusal> {
+        hide_host::browse::new_folder_target(parent, name, kind, &self.home).map_err(|error| {
+            match error.code {
+                hide_host::ErrorCode::OutsideRoot => Refusal::OutsideHome,
+                hide_host::ErrorCode::NotFound => Refusal::NotFound,
+                hide_host::ErrorCode::NotADirectory => Refusal::NotADirectory,
+                hide_host::ErrorCode::AlreadyExists => Refusal::AlreadyExists,
+                _ => Refusal::InvalidPath,
+            }
         })
     }
 
@@ -994,15 +1014,8 @@ impl Boundary {
     /// make. The folder the clone creates is therefore strictly under home,
     /// which is what `create_workspace` then registers.
     pub fn resolve_clone_target(&self, parent: &str, name: &str) -> Result<PathBuf, Refusal> {
-        let real = self.resolve_dir(parent)?;
-        if !valid_name(name) {
-            return Err(Refusal::InvalidPath);
-        }
-        match fs::symlink_metadata(real.join(name)) {
-            Ok(_) => Err(Refusal::AlreadyExists),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(real),
-            Err(_) => Err(Refusal::InvalidPath),
-        }
+        let target = self.new_folder(parent, name, hide_node_link::browse::NewFolderKind::Clone)?;
+        hide_host::root::native_absolute(&target.parent).ok_or(Refusal::InvalidPath)
     }
 
     /// The children of a folder inside a registered checkout: files and

@@ -8,7 +8,7 @@
 //! grown. This machine's daemon runs it in process and a device's helper
 //! answers `Call::Index` with the same walk, so both rank the same list.
 
-use cap_std::fs::{Dir, OpenOptions as CapOpenOptions};
+use cap_std::fs::Dir;
 pub use hide_node_link::index::{INDEX_CAP, Walked};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -101,17 +101,7 @@ pub fn walk(root_dir: &Dir, root: &Path) -> Walked {
 }
 
 fn ignore_file(dir: &Dir, base: &Path, name: &str) -> Option<Gitignore> {
-    let mut options = CapOpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use cap_std::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
-    }
-    let mut file = dir.open_with(name, &options).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
+    let mut file = crate::list::open_regular_file(dir, Path::new(name)).ok()?;
     let mut bytes = Vec::new();
     file.by_ref()
         .take(1024 * 1024 + 1)

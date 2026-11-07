@@ -720,6 +720,7 @@ impl Mapper<'_> {
 pub const OWN_PATHS: &[(&str, &str)] = &[
     ("expanded_paths", "device_expanded_paths"),
     ("agent_permissions", "device_agent_permissions"),
+    ("add_project_folder", "device_add_project_folders"),
 ];
 
 /// The old owner's `own` value moves under `devices[old_owner_as]`, and the
