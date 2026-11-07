@@ -820,7 +820,11 @@ impl Holders {
             .panes
             .close_outdated(owner, &holder_pane(pane), previous, &current)
         {
-            Ok(_) => self.forget_screen(service, pane),
+            Ok(_) => {
+                self.known.remove(pane);
+                self.watches.forget(pane);
+                service.forget_replaced_holder(pane);
+            }
             Err(error) => {
                 service.control(TerminalControl::Closing {
                     pane: pane.to_owned(),

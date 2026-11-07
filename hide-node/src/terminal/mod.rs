@@ -619,6 +619,20 @@ impl Service {
         self.shared.lock().attached()
     }
 
+    /// Forgets a pane whose holder was replaced under the same id, as
+    /// [`TerminalControl::Forget`] does, except the core's sleep mark: the
+    /// core sends that only when the pane falls asleep or wakes, and the new
+    /// holder's shell takes no operator key before the agent's resume line.
+    pub(crate) fn forget_replaced_holder(&self, pane: &str) {
+        self.shared.run(|inner, _| {
+            let asleep = inner.panes.get(pane).is_some_and(|entry| entry.asleep);
+            inner.forget(pane.to_owned());
+            if asleep {
+                inner.panes.entry(pane.to_owned()).or_default().asleep = true;
+            }
+        });
+    }
+
     /// Ends every session it holds and starts none after, and returns once
     /// each session it opened has been released: its owner ended (the core
     /// whose role stopped for a move, in a process that goes on as a node;
@@ -1150,6 +1164,25 @@ impl Inner {
         });
     }
 
+    /// Ends the pane's session and drops everything kept of it.
+    fn forget(&mut self, pane: String) {
+        self.wake_clock = true;
+        self.requests.forget(&pane);
+        if let Some(mut entry) = self.panes.remove(&pane) {
+            self.retired.extend(entry.session.take());
+            for receipt in &entry.commands {
+                receipt.cancel("Pane was forgotten");
+            }
+            entry.hold.discard(&pane, "pane_gone");
+            if let Some(replay) = entry.replay.take() {
+                replay.discard(&pane, "pane_gone");
+            }
+        }
+        self.facts.remove(&pane);
+        self.watches.remove(&pane);
+        self.deliveries.push(Delivery::Forget { pane });
+    }
+
     fn control(&mut self, shared: &Arc<Shared>, control: TerminalControl) {
         let now = Instant::now();
         match control {
@@ -1187,23 +1220,7 @@ impl Inner {
                 }
             }
             TerminalControl::Release { pane, message } => self.release(&pane, message),
-            TerminalControl::Forget { pane } => {
-                self.wake_clock = true;
-                self.requests.forget(&pane);
-                if let Some(mut entry) = self.panes.remove(&pane) {
-                    self.retired.extend(entry.session.take());
-                    for receipt in &entry.commands {
-                        receipt.cancel("Pane was forgotten");
-                    }
-                    entry.hold.discard(&pane, "pane_gone");
-                    if let Some(replay) = entry.replay.take() {
-                        replay.discard(&pane, "pane_gone");
-                    }
-                }
-                self.facts.remove(&pane);
-                self.watches.remove(&pane);
-                self.deliveries.push(Delivery::Forget { pane });
-            }
+            TerminalControl::Forget { pane } => self.forget(pane),
             TerminalControl::Closing { pane, closing } => match self.panes.get_mut(&pane) {
                 Some(entry) => {
                     entry.closing = closing;

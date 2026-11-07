@@ -129,6 +129,12 @@ fn a_shell_on_another_builds_holder_is_replaced_under_its_id_and_a_kept_one_runs
         node.text(pane).contains("still-node")
     });
 
+    // The pane is a sleeping agent's: the core marked it once, as it fell
+    // asleep, and the node keeps the mark through the replacement.
+    node.service.control(TerminalControl::Asleep {
+        pane: pane.to_owned(),
+        asleep: true,
+    });
     let frames = node.screens.count(pane);
     let replacing = node.owner().issue(pane, &intent.digest).unwrap();
     let reserved = node
@@ -160,12 +166,23 @@ fn a_shell_on_another_builds_holder_is_replaced_under_its_id_and_a_kept_one_runs
     assert_eq!(node.holders().outdated(pane).unwrap(), None);
     let new = now.holder.unwrap();
     assert!(new.runs() && new != old);
-    // The new holder's screen reaches the same pane, and so does input.
+    // The new holder's screen reaches the same pane, and so does input once
+    // the agent wakes; a key typed while it sleeps reaches no shell.
+    node.type_into(pane, &print_node("asleep"));
+    node.service.control(TerminalControl::Asleep {
+        pane: pane.to_owned(),
+        asleep: false,
+    });
     node.type_into(pane, &print_node("after"));
     node.screens.wait_drawn_after(pane, frames, "after-node");
+    let text = node.text(pane);
     assert!(
-        !node.text(pane).contains("before-node"),
+        !text.contains("before-node"),
         "the replacement kept the old holder's screen"
+    );
+    assert!(
+        !text.contains("asleep-node"),
+        "a sleeping agent's new shell took an operator key: {text}"
     );
 
     // The next owner finds one running pane, never one that closed or ended.
