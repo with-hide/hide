@@ -3378,6 +3378,93 @@ mod tests {
         );
     }
 
+    /// An agent whose prompt hook takes nothing (not set up, or answering
+    /// nothing) records each bell line as a plain prompt and never gets the
+    /// letter. A recorded line leaves a letter to its next bell; once its
+    /// three are spent, it ends undelivered and its sender is told why,
+    /// instead of waiting for its deadline.
+    #[test]
+    fn a_spent_letter_whose_bell_lines_were_recorded_but_not_taken_tells_its_sender() {
+        use crate::delivery::typed::{RECORD_WAIT_MS, REREAD_WAIT_MS};
+        let bell = Bell::start(json!({}));
+        {
+            let mut guard = bell.runtime.lock().unwrap();
+            guard.install_delivery_client(bell.client.clone());
+            guard.install_worker_context(
+                Arc::downgrade(&bell.runtime),
+                crate::handle::ChangeNotifier::noop(),
+            );
+        }
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1);
+        let observed =
+            crate::runtime::delivery::tests::observed(&bell.runtime.lock().unwrap(), "recipient");
+        let line = bell.line().unwrap();
+        for _ in 0..2 {
+            bell.client
+                .submit(
+                    Effect::BellAttempt {
+                        id: bell.letter.clone(),
+                        observed: Box::new(observed.clone()),
+                        line: line.clone(),
+                    },
+                    Duration::from_secs(5),
+                )
+                .unwrap();
+            record(
+                &bell.client,
+                &bell.letter,
+                &observed,
+                Rang::Sent(Default::default()),
+            );
+        }
+        let letter = || {
+            let guard = bell.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == bell.letter)
+                .unwrap()
+                .clone()
+        };
+        // The agent's session records the last bell's line as its prompt.
+        let typed_at = letter().bell_typed_at_unix_ms.unwrap();
+        crate::runtime::typed_input::tests::record_request(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+            "codex",
+            &line,
+            typed_at + 1_000,
+        );
+        passes_after_the_turn(&bell, &mut doorbell, start);
+        let judged = start + RECORD_WAIT_MS + 1_000 + REREAD_WAIT_MS;
+        bell.runtime.lock().unwrap().drive_spent_bells(judged);
+        until(|| letter().state == State::Undelivered);
+        assert!(!letter().handed);
+        bell.runtime.lock().unwrap().drive_spent_bells(judged);
+        let intent = format!("letter-undelivered:{}", bell.letter);
+        until(|| {
+            input_notices(&bell)
+                .iter()
+                .any(|notice| notice.intent == intent)
+        });
+        let notes: Vec<_> = input_notices(&bell)
+            .into_iter()
+            .filter(|notice| notice.intent.contains(bell.letter.as_str()))
+            .collect();
+        assert_eq!(notes.len(), 1, "one letter for its last bell");
+        assert!(
+            notes[0].body.contains("hook_not_taken")
+                && notes[0].body.contains("Give the work to another agent")
+                && !notes[0].body.contains("hide pane read"),
+            "the sender is told the bell reached its agent and what to do: {}",
+            notes[0].body
+        );
+    }
+
     /// A letter whose three bells were typed and none recorded ends
     /// undelivered with one letter to its sender for its last bell: the
     /// unconfirmed-input notice of that bell is not sent beside it.
