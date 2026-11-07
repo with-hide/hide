@@ -11,7 +11,7 @@ import { agentsByPane } from "./paneAgents";
 import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -615,6 +615,7 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
   | { kind: "takeover" }
+  | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "attention"; node: N; attention: MissionAttention }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
   | { kind: "landing"; nodes: N[]; git: boolean };
@@ -635,6 +636,8 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   const items: TurnItem<N>[] = [];
   if (mission.decision) items.push({ kind: "decision" });
   else if (!mission.conductor.present) items.push({ kind: "takeover" });
+  // Letters the Conductor has not got stop the mission as surely as a decision (hide-private issue 678); the core counts only what the operator can lift.
+  if (mission.conductor_letters) items.push({ kind: "letters", letters: mission.conductor_letters });
   for (const node of orderedNodes(mission)) {
     const attention = openAttention(mission, node);
     if (attention?.to === "operator") items.push({ kind: "attention", node, attention });
@@ -648,6 +651,44 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
     if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
   }
   return items;
+}
+
+/** `Conductor에게 편지 N통 대기 · <what to do>`: the Conductor's held letters as 내 차례 and the Mission tool's row say them. */
+export function heldLettersText(letters: MissionHeldLetters, t: TFunction<"translation">): string {
+  return `${t("mission.letters.waiting", { count: letters.count })} · ${t(`mission.letters.reason.${letters.reason}`)}`;
+}
+
+/**
+ * Whether a node in progress is worked now, as its card and mark say it
+ * (hide-private issue 680): the core's `work`, only while the card reads in
+ * progress; null leaves the card as it was, the ring turning.
+ */
+export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork | null {
+  return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
+}
+
+/** A node's work in words: `일하는 중`, `기다리는 중 · 리뷰`, `일꾼 없음`. */
+export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
+  switch (work.state) {
+    case "working":
+      return t("mission.work.working");
+    case "no_worker":
+      return t("mission.work.noWorker");
+    case "waiting":
+      return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+  }
+}
+
+/** What a resting worker's node waits on, in one or two words. */
+function waitingOnWord(on: MissionWaitingOn, t: TFunction<"translation">): string {
+  switch (on.kind) {
+    case "attention":
+      return t(`mission.attention.to.${on.to}`);
+    case "nodes":
+      return on.keys.join(", ");
+    default:
+      return t(`mission.work.on.${on.kind}`);
+  }
 }
 
 /** A step's state on the map: finished, being worked, or only planned (the worker has not reached it). */

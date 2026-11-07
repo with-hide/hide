@@ -1089,3 +1089,50 @@ it("opens the map at 맞춤 and steps it with − and + between 40% and 200%, �
     expect([level(), canvas(), step("fit").getAttribute("aria-pressed")]).toEqual(["100%", "fit", "true"]);
   } finally { await map.unmount(); }
 });
+
+it("lights a device worker's Terminal and opens its pane there by the address its row has (hide-private issue 679)", async () => {
+  const pane = "remote:mini:pane:h15:p3";
+  const remote = [{ target_id: "mini", state: "connected", message: null, session: { workspaces: [], agents: [{ pane_id: pane, mark: "going", activity: "working" }], active_tab_ids: {}, focused_workspace_id: null, focused_checkout_id: null, focused_tab_id: null, focused_pane_id: null, pane_layouts: [] } }];
+  const nodes = [node("cpu", { status: "working", agent_id: "agent-27621", pane_id: pane, machine: "mini", work: { state: "working" } })];
+  const map = await mount({ items: [mission({ nodes })] }, remote);
+  try {
+    await act(async () => card(map, "cpu").click());
+    const terminal = map.q('[data-mission-detail="cpu"] [data-node-terminal]') as HTMLButtonElement;
+    expect(terminal.disabled).toBe(false);
+    await act(async () => terminal.click());
+    expect(map.events.find((event) => event.kind === "focus_pane")?.payload).toMatchObject({ pane_id: pane });
+  } finally { await map.unmount(); }
+});
+
+it("tells a node being worked from one whose worker rests and what it waits on, or has no worker (hide-private issue 680)", async () => {
+  const nodes = [
+    node("busy", { status: "working", work: { state: "working" } }),
+    node("rests", { status: "working", work: { state: "waiting", on: { kind: "review" } } }),
+    node("gone", { status: "working", work: { state: "no_worker" } }),
+    node("unseen", { status: "working" }),
+  ];
+  const map = await mount({ items: [mission({ nodes })] });
+  try {
+    const look = (key: string) => [card(map, key).querySelector("[data-node-work]")?.textContent ?? null, card(map, key).querySelector("[data-node-mark]")?.hasAttribute("data-node-mark-still"), card(map, key).querySelector("[data-node-mark]")?.getAttribute("aria-label")];
+    expect(look("busy")).toEqual([null, false, "Working"]);
+    expect(look("rests")).toEqual(["Waiting · review", true, "Waiting · review"]);
+    expect(look("gone")).toEqual(["No worker", true, "No worker"]);
+    // Hide cannot see the worker's row: the card stays as it was, in progress and turning.
+    expect(look("unseen")).toEqual([null, false, "In progress"]);
+    expect(card(map, "rests").getAttribute("aria-label")).toContain("Waiting · review");
+  } finally { await map.unmount(); }
+});
+
+it("says in 내 차례 how many letters the Conductor has not got and what to do, with its terminal, until they are delivered (hide-private issue 678)", async () => {
+  const held = mission({ nodes: [node("a", { status: "working" })], conductor_letters: { count: 3, reason: "draft", since_unix_ms: 1 } });
+  const map = await mount({ items: [held] });
+  try {
+    const item = map.q('[data-mission-turn-item="letters"]')!;
+    expect(item.getAttribute("data-mission-turn-reason")).toBe("draft");
+    expect(item.textContent).toContain("Letters waiting for the Conductor: 3 · unsent text in the Conductor's input: send or clear it");
+    await act(async () => item.querySelector<HTMLElement>("[data-mission-conversation]")!.click());
+    expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
+    await map.rerender({ ...held, conductor_letters: null });
+    expect(map.q("[data-mission-turn]")).toBeNull();
+  } finally { await map.unmount(); }
+});

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
+import { heldLettersText, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -630,5 +630,32 @@ describe("nodeSteps", () => {
     // A finished plan has no current step.
     const finished = nodeSteps(node("a", { plan: plan([step("a", "One", "done")], null, true) }));
     expect(finished).toMatchObject({ now: null, steps: [{ title: "One", tone: "done" }] });
+  });
+});
+
+describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
+  it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
+    for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
+    const states = contract.mission_node_work as string[];
+    expect(states).toEqual(["working", "waiting", "no_worker"]);
+    expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("No worker");
+    for (const kind of ["decision", "blocked", "start", "worker", "review", "verify", "ci", "merge", "conductor"] as const) {
+      expect(nodeWorkWords({ state: "waiting", on: { kind } }, t)).toMatch(/^Waiting · \S/);
+    }
+    expect(nodeWorkWords({ state: "waiting", on: { kind: "attention", to: "operator", reason: "worker_ended" } }, t)).toBe("Waiting · You");
+    expect(heldLettersText({ count: 2, reason: "draft", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 2 · unsent text in the Conductor's input: send or clear it");
+  });
+
+  it("puts a running mission's held Conductor letters in 내 차례 and says a node's work only while it is in progress", () => {
+    const letters = { count: 3, reason: "unreachable" as const, since_unix_ms: 1 };
+    expect(turnItems(mission("m", { conductor_letters: letters }), () => null)).toEqual([{ kind: "letters", letters }]);
+    expect(turnItems(mission("m", { conductor_letters: letters, status: "done" }), () => null)).toEqual([]);
+    expect(turnItems(mission("m"), () => null)).toEqual([]);
+    const waiting = { state: "waiting" as const, on: { kind: "review" as const } };
+    expect(nodeWork(mission("m"), node("n", { status: "working", work: waiting }))).toEqual(waiting);
+    expect(nodeWork(mission("m"), node("n", { status: "done", work: waiting }))).toBeNull();
+    expect(nodeWork(mission("m", { status: "cancelled" }), node("n", { status: "working", work: waiting }))).toBeNull();
+    expect(nodeWork(mission("m"), node("n", { status: "working" }))).toBeNull();
   });
 });

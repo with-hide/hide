@@ -41,6 +41,8 @@ import {
   neighbours,
   nodeLook,
   nodeSteps,
+  nodeWork,
+  nodeWorkWords,
   nodeResult,
   reportLine,
   shortCommit,
@@ -349,6 +351,9 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
+  // What its worker does now (hide-private issue 680): a resting or absent worker stops the ring and says so under the title; a working one needs no words.
+  const doing = nodeWork(mission, node);
+  const doingLine = doing && doing.state !== "working" ? nodeWorkWords(doing, t) : null;
   const worker = useNodeRun(node);
   const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
@@ -395,11 +400,16 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {/* A node that runs on another device wears that device's colour on its edge, the one the workspace's header band wears; a node here stays quiet. */}
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
       <span className="flex min-w-0 items-center gap-xs">
-        <MissionNodeMark look={look} label={word} />
+        <MissionNodeMark look={look} label={word} still={doing != null && doing.state !== "working"} />
         {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
         {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
         {hide ? <HideMark words={hide} /> : null}
       </span>
+      {doingLine ? (
+        <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
+          {doingLine}
+        </span>
+      ) : null}
       {work ? (
         <span className="flex min-w-0 flex-col gap-xxs" data-node-steps={work.source}>
           <ProgressCells tones={work.steps.map((step) => step.tone)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) flex-none" />
