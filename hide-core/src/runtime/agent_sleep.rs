@@ -627,6 +627,15 @@ impl Runtime {
         if self.pane_move_holds_pane(pane_id) {
             return false;
         }
+        // A reopen's worker ends and starts the pane's agent itself, through
+        // the sleep's own input; the pane sleeps once it is done, as a reopen
+        // never starts on a pane that sleeps (`request_pane_reopen`).
+        if matches!(
+            self.pane_reopens.get(pane_id),
+            Some(crate::model::PaneReopenSnapshot::Pending)
+        ) {
+            return false;
+        }
         let Some(context) = self.sleep_target(pane_id) else {
             return false;
         };

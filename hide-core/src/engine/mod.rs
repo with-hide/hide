@@ -395,6 +395,10 @@ pub(crate) trait Engine: Send + Sync {
     fn send_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Presses `keys` in a pane, in order.
     fn send_keys(&self, wait: Wait, pane: &str, keys: &[&str]) -> Answer<()>;
+    /// Presses `keys` in a pane as the sleep of its agent does, to end it:
+    /// the only keys, beside a wake's start, that a pane whose agent is
+    /// asleep takes.
+    fn send_sleep_keys(&self, wait: Wait, pane: &str, keys: &[&str]) -> Answer<()>;
     /// Types `text` into a pane and submits it.
     fn submit_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Presses one key in a pane.

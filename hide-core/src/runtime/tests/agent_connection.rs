@@ -398,6 +398,32 @@ fn reopen_runs_once_per_pane_and_a_refusal_leaves_the_pane_as_it_was() {
     assert_eq!(runtime.pane_reopens.len(), 0, "no entry outlives its need");
 }
 
+/// with-hide/hide-private#646: a reopen's worker ends and starts its pane's
+/// agent through the sleep's own input, which a sleeping pane takes, so the
+/// pane does not go to sleep while one runs, and does once it is done.
+#[test]
+fn a_pane_whose_reopen_runs_goes_to_sleep_only_once_it_is_done() {
+    let mut runtime = runtime();
+    with_live(&mut runtime);
+    kit_rows(&mut runtime, Some(true));
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    feed(&mut runtime, &[("w1:p1", "codex", false)]);
+    let asleep = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .contains_key("w1:p1")
+    };
+    assert!(reopen(&mut runtime, "w1:p1"));
+    runtime.request_agent_sleep("w1:p1");
+    assert!(!asleep(&runtime), "a reopen runs in the pane");
+    assert!(runtime.ingest_pane_reopen("w1:p1", Ok(())));
+    runtime.request_agent_sleep("w1:p1");
+    assert!(asleep(&runtime), "the reopen is done");
+}
+
 /// An agent that was ended and could not be started again has no row for the
 /// pane's chip to hang the failure on, so the failure is published once as
 /// the snapshot's error; a refusal that left the agent in place is not.

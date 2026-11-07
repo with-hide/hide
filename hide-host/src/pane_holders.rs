@@ -183,6 +183,9 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             .and_then(value),
         PaneCall::Proof { pane } => holders.proof(&pane).and_then(value),
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
+        PaneCall::SleeperInput { pane, input } => {
+            holders.sleeper_input(&pane, input).and_then(value)
+        }
         PaneCall::Letter {
             pane,
             text,

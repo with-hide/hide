@@ -16,15 +16,15 @@ use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
 use super::holder::{Holders, Renewal};
-use super::input::Typed;
+use super::input::{Typed, Typist};
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
     HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
-    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_LOST, RENEWAL_UNSETTLED, ScreenRules,
-    StyledRead, UNSUPPORTED_HOLDER,
+    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_BUSY, RENEWAL_LOST, RENEWAL_PANE_CLOSED,
+    RENEWAL_UNSETTLED, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -409,6 +409,14 @@ impl PaneHolders for LocalPanes {
                 code: code.to_owned(),
                 message,
             }),
+            Renewal::Closed(message) => Err(HolderError::Refused {
+                code: RENEWAL_PANE_CLOSED.to_owned(),
+                message,
+            }),
+            Renewal::Busy(message) => Err(HolderError::Refused {
+                code: RENEWAL_BUSY.to_owned(),
+                message,
+            }),
             Renewal::Lost(message) => Err(HolderError::Refused {
                 code: RENEWAL_LOST.to_owned(),
                 message,
@@ -529,7 +537,11 @@ impl PaneHolders for LocalPanes {
     }
 
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
-        self.service.type_input(pane, typed(input))
+        self.service.type_input(pane, typed(input), Typist::Engine)
+    }
+
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.service.type_input(pane, typed(input), Typist::Sleeper)
     }
 
     fn letter(

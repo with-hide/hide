@@ -1589,33 +1589,52 @@ pub fn measure_tree(pid: u32) -> io::Result<TreeMeasure> {
     })
 }
 
-/// Whether ending the terminal session `shell` leads would end no process
-/// but `shell` itself, judged by the set [`Session::end`] ends: on Unix every
-/// member of the session the shell leads and every process under one, so a
-/// job in the background, or one left behind when the process that started
-/// it exited, counts as the shell's foreground program does; on Windows the
-/// shell's descendants, a console host aside, since the job that the
-/// holder's end ends lists its members only to its holder (a gap,
-/// `docs/INSTALL.md`, What each system supports). A pane's shell that runs
-/// alone can be ended and started again without ending anything its
-/// operator started (with-hide/hide-private#646). A look at the process
-/// table that cannot be made is an error, never evidence that it runs alone.
-pub fn runs_alone(shell: u32) -> io::Result<bool> {
+/// A process as it was recorded: its pid and the start time
+/// [`start_time`] read for it then, so a later process that took the pid is
+/// never taken for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Recorded {
+    pub pid: u32,
+    pub started: u64,
+}
+
+/// Whether ending the terminal session of a pane, whose holder is `holder`
+/// and whose program is `shell`, would end no process but `shell` itself
+/// (with-hide/hide-private#646), judged by the set the holder's end ends
+/// ([`Session::end`]): on Unix every member of the session the shell leads,
+/// so a job in the background, or one left behind when the process that
+/// started it exited, counts as the shell's foreground program does; on
+/// Windows every process of the kill-on-close job the holder holds the shell
+/// in, a console host aside, read through a copy of the holder's own handle
+/// to it, since the job has no name and its handle is never inherited.
+///
+/// A holder or shell that is not the recorded process, a job that cannot be
+/// found or read, and a look at the process table that cannot be made are
+/// errors, never evidence that the shell runs alone. On Windows the copy of
+/// the job's handle is closed before this returns; a holder that ended
+/// meanwhile has its job, and what it holds, ended when that copy closes.
+pub fn runs_alone(holder: Recorded, shell: Recorded) -> io::Result<bool> {
     #[cfg(windows)]
     {
-        let walk = sys::Walk::new()?;
-        for child in walk.child_identities(shell)? {
-            let (child, _) = child?;
-            if !is_console_host(child) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        let members = sys::held_job_members(holder, shell)?;
+        Ok(members
+            .iter()
+            .all(|member| *member == shell.pid || is_console_host(*member)))
     }
     #[cfg(unix)]
     {
-        let session = Session::left_by(shell, start_time(shell)?)?;
-        Ok(session.members()?.iter().all(|member| *member == shell))
+        // The holder's end ends the session its shell leads, whichever
+        // holder holds it.
+        let _ = holder;
+        let session = Session::left_by(shell.pid, shell.started)?;
+        let members = session.members()?;
+        if !members.contains(&shell.pid) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} is not the recorded shell, or has ended", shell.pid),
+            ));
+        }
+        Ok(members.iter().all(|member| *member == shell.pid))
     }
 }
 
@@ -5640,32 +5659,10 @@ mod sys {
             (self.0).0.0.cast()
         }
 
-        /// The processes the job counts as running.
+        /// The processes the job counts as running, at most
+        /// [`SESSION_PIDS_CAP`] of them.
         pub(super) fn pids(&self) -> io::Result<Vec<u32>> {
-            #[repr(C)]
-            struct List {
-                assigned: u32,
-                listed: u32,
-                ids: [usize; SESSION_PIDS_CAP],
-            }
-            // SAFETY: an all-zero list is a valid value.
-            let mut list: Box<List> = Box::new(unsafe { std::mem::zeroed() });
-            // SAFETY: the job handle is open and `list` is valid for the
-            // size passed.
-            let queried = unsafe {
-                QueryInformationJobObject(
-                    (self.0).0.0,
-                    JobObjectBasicProcessIdList,
-                    (&mut *list as *mut List).cast(),
-                    std::mem::size_of::<List>() as u32,
-                    std::ptr::null_mut(),
-                )
-            };
-            if queried == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let listed = (list.listed as usize).min(SESSION_PIDS_CAP);
-            Ok(list.ids[..listed].iter().map(|id| *id as u32).collect())
+            job_pids((self.0).0.0).map(|(_, pids)| pids)
         }
 
         pub(super) fn end(&mut self, limit: Duration) -> io::Result<super::SessionEnd> {
@@ -5677,6 +5674,181 @@ mod sys {
                 Err(error) => Err(error),
             }
         }
+    }
+
+    /// The most handles of a holder read to find its job; a holder with
+    /// more is refused rather than read in part.
+    const HELD_HANDLES_CAP: usize = 65_536;
+
+    /// `ProcessHandleInformation`, which lists a process's handles
+    /// (Windows 8 and later).
+    const PROCESS_HANDLE_INFORMATION: u32 = 51;
+
+    /// One entry of `PROCESS_HANDLE_SNAPSHOT_INFORMATION`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct HandleEntry {
+        handle: HANDLE,
+        handle_count: usize,
+        pointer_count: usize,
+        granted_access: u32,
+        object_type_index: u32,
+        attributes: u32,
+        reserved: u32,
+    }
+
+    /// The members of every job `holder` holds `shell` in, read through a
+    /// copy of the holder's own handle to it ([`super::runs_alone`]). Each
+    /// process is opened and checked against its recorded start time first,
+    /// so a pid another process took is refused; a handle the holder closed
+    /// or reused meanwhile is no job holding the shell and is passed over.
+    /// No such job, or one whose list is longer than is read, is an error.
+    pub(super) fn held_job_members(
+        holder: super::Recorded,
+        shell: super::Recorded,
+    ) -> io::Result<Vec<u32>> {
+        use windows_sys::Win32::System::Threading::{
+            PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION,
+        };
+        let recorded = |process: &Owned, recorded: super::Recorded| -> io::Result<()> {
+            if started_at(process)? == recorded.started {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{} is not the recorded process", recorded.pid),
+                ))
+            }
+        };
+        let holding = open_live(holder.pid, PROCESS_QUERY_INFORMATION | PROCESS_DUP_HANDLE)?;
+        recorded(&holding, holder)?;
+        let program = open_live(shell.pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        recorded(&program, shell)?;
+        let query = crate::windows_process::nt_query()?;
+        let header = 2 * std::mem::size_of::<usize>();
+        let mut size = header + 64 * std::mem::size_of::<HandleEntry>();
+        let max = header + HELD_HANDLES_CAP * std::mem::size_of::<HandleEntry>();
+        let buffer = loop {
+            // usize words keep the entries aligned.
+            let mut buffer = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+            let mut needed = 0u32;
+            // SAFETY: the buffer is writable for the size passed, and the
+            // call writes `needed` only.
+            let status = unsafe {
+                query(
+                    holding.0,
+                    PROCESS_HANDLE_INFORMATION,
+                    buffer.as_mut_ptr().cast(),
+                    u32::try_from(buffer.len() * std::mem::size_of::<usize>()).unwrap_or(u32::MAX),
+                    &mut needed,
+                )
+            };
+            if status >= 0 {
+                break buffer;
+            }
+            // STATUS_INFO_LENGTH_MISMATCH: the table grew past the buffer.
+            if status != 0xc000_0004_u32 as i32 || size >= max {
+                return Err(io::Error::other(format!(
+                    "the handles of {} could not be read: status {status:#x}",
+                    holder.pid
+                )));
+            }
+            size = (needed as usize).max(size * 2).min(max);
+        };
+        let count = buffer[0];
+        if count > HELD_HANDLES_CAP
+            || header + count * std::mem::size_of::<HandleEntry>()
+                > buffer.len() * std::mem::size_of::<usize>()
+        {
+            return Err(io::Error::other(format!(
+                "{} holds {count} handles, more than are read",
+                holder.pid
+            )));
+        }
+        // SAFETY: the call wrote `count` entries after the two-word header,
+        // inside the buffer, as checked above; the buffer is usize-aligned.
+        let entries = unsafe {
+            std::slice::from_raw_parts(buffer.as_ptr().add(2).cast::<HandleEntry>(), count)
+        };
+        let mut members = Vec::new();
+        let mut found = false;
+        for entry in entries {
+            let mut copy: HANDLE = std::ptr::null_mut();
+            // SAFETY: both process handles are open; `copy` is writable. A
+            // handle that is no job, or no longer open, fails or is passed
+            // over below.
+            let copied = unsafe {
+                DuplicateHandle(
+                    holding.0,
+                    entry.handle,
+                    GetCurrentProcess(),
+                    &mut copy,
+                    JOB_OBJECT_QUERY,
+                    0,
+                    0,
+                )
+            };
+            if copied == 0 {
+                continue;
+            }
+            let copy = Owned(copy);
+            let mut holds = 0;
+            // SAFETY: both handles are open; a handle that is no job makes
+            // the call fail.
+            if unsafe { IsProcessInJob(program.0, copy.0, &mut holds) } == 0 || holds == 0 {
+                continue;
+            }
+            found = true;
+            let (running, pids) = job_pids(copy.0)?;
+            if running > pids.len() {
+                return Err(io::Error::other(format!(
+                    "a job of {} runs {running} processes, more than are read",
+                    holder.pid
+                )));
+            }
+            members.extend(pids);
+        }
+        if !found {
+            return Err(io::Error::other(format!(
+                "{} holds no job that holds {}",
+                holder.pid, shell.pid
+            )));
+        }
+        members.sort_unstable();
+        members.dedup();
+        Ok(members)
+    }
+
+    /// How many processes the job behind `job` counts as running, and the
+    /// first [`SESSION_PIDS_CAP`] of them.
+    fn job_pids(job: HANDLE) -> io::Result<(usize, Vec<u32>)> {
+        #[repr(C)]
+        struct List {
+            assigned: u32,
+            listed: u32,
+            ids: [usize; SESSION_PIDS_CAP],
+        }
+        // SAFETY: an all-zero list is a valid value.
+        let mut list: Box<List> = Box::new(unsafe { std::mem::zeroed() });
+        // SAFETY: the job handle is open and `list` is valid for the size
+        // passed.
+        let queried = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectBasicProcessIdList,
+                (&mut *list as *mut List).cast(),
+                std::mem::size_of::<List>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let listed = (list.listed as usize).min(SESSION_PIDS_CAP);
+        Ok((
+            list.assigned as usize,
+            list.ids[..listed].iter().map(|id| *id as u32).collect(),
+        ))
     }
 
     /// A Windows process leaves nothing to reap: closing its handle is all.

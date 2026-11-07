@@ -76,9 +76,11 @@ pub struct HolderReservation {
 
 /// What [`PaneHolders::renew`] found and did to a pane's holder
 /// (with-hide/hide-private#646), each answer one the pane can be used on:
-/// a holder runs it, and which one is said. An outcome after which no
-/// holder may run it, or nobody knows, is an error ([`RENEWAL_LOST`],
-/// [`RENEWAL_UNSETTLED`], or the node's answer lost on the way).
+/// a holder its record names runs it, and which one is said. An outcome
+/// after which no holder runs it, or nobody knows which, is an error
+/// ([`RENEWAL_PANE_CLOSED`], [`RENEWAL_BUSY`], [`RENEWAL_LOST`],
+/// [`RENEWAL_UNSETTLED`], or the node's answer lost on the way), and
+/// nothing is typed into the pane on it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "renewal", rename_all = "snake_case")]
 pub enum HolderRenewal {
@@ -93,11 +95,20 @@ pub enum HolderRenewal {
         /// The version folder the pane runs from now.
         to: String,
     },
-    /// The pane was not renewed and its earlier holder runs it as it did:
-    /// nothing of it was ended. `code` says why (`pane_busy` while anything
-    /// but its shell runs in it).
+    /// The pane was not renewed and the earlier holder its record names
+    /// runs it, untouched. `code` says why (`pane_busy` while anything but
+    /// its shell runs in it, `pane_awake` while its agent is not asleep).
     Kept { code: String, message: String },
 }
+
+/// The refusal [`PaneHolders::renew`] answers when the pane's record is
+/// closed or gone by the time its turn comes: nothing runs it to wake in.
+pub const RENEWAL_PANE_CLOSED: &str = "holder_renewal_pane_closed";
+
+/// The refusal [`PaneHolders::renew`] answers when another change of the
+/// pane's holder kept its turn past the renewal's wait: what runs the pane
+/// is not known to this call.
+pub const RENEWAL_BUSY: &str = "holder_renewal_busy";
 
 /// The refusal [`PaneHolders::renew`] answers when the earlier holder ended
 /// and the pane's new one did not start: no holder runs the pane, as a pane
@@ -488,6 +499,16 @@ pub trait PaneHolders: Send + Sync {
     /// screen was let go is attached again for it. It is the engine's
     /// typing, never reported as the operator's.
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError>;
+    /// [`PaneHolders::input`] as the sleep of the pane's agent types it: the
+    /// keys that end the agent and the line that wakes it, the only input a
+    /// pane whose agent is asleep takes. Any other input to such a pane is
+    /// refused `pane_asleep`, and what was waiting to be written when it
+    /// went to sleep is cancelled, so nothing typed for its agent reaches the
+    /// shell under it. A node that keeps no such distinction takes it as
+    /// [`PaneHolders::input`].
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.input(pane, input)
+    }
     /// Types a letter: `text`'s parts in order, at most
     /// `hide_holder_protocol::MAX_SUBMIT_PARTS`, then `submit` once `gap`
     /// has passed, as one submission, holding
@@ -586,6 +607,11 @@ pub enum PaneCall {
     },
     /// [`PaneHolders::input`]; answers nothing.
     Input {
+        pane: String,
+        input: PaneInput,
+    },
+    /// [`PaneHolders::sleeper_input`]; answers nothing.
+    SleeperInput {
         pane: String,
         input: PaneInput,
     },

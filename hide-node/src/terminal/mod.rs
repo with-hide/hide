@@ -190,7 +190,8 @@ struct Pane {
     current_generation: Option<u64>,
     session: Option<Session>,
     pending_spawn: Option<SpawnRequest>,
-    commands: Vec<command::Receipt>,
+    /// The core's input waiting on the writer, with who typed it.
+    commands: Vec<(command::Receipt, Typist)>,
     release_after_input: Option<String>,
     /// The PTY size last settled, which an attach asks for.
     size: Option<GridSize>,
@@ -340,6 +341,14 @@ pub struct Service {
     clock: Option<JoinHandle<()>>,
 }
 
+/// The refusal of input other than the sleep's own to a pane whose agent
+/// is asleep.
+pub(crate) const PANE_ASLEEP: &str = "pane_asleep";
+
+fn asleep_message(pane: &str) -> String {
+    format!("Pane {pane}'s agent is asleep; input was not sent")
+}
+
 fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -349,6 +358,50 @@ fn unix_ms() -> u64 {
 }
 
 impl Service {
+    /// Whether `pane`'s agent is asleep, as the core last told this node.
+    pub(crate) fn asleep(&self, pane: &str) -> bool {
+        self.shared
+            .run(|inner, _| inner.panes.get(pane).is_some_and(|entry| entry.asleep))
+    }
+
+    /// Waits until everything handed to `pane`'s session writer before this
+    /// call has been written to its holder, up to `within`. A write that
+    /// failed, or one still waiting when `within` passes, is an error: what
+    /// reached the holder is then not known. A pane with no session has no
+    /// writer and nothing waiting in one. Input held for the pane, for its
+    /// attach or behind a letter, is not waited for: a pane that is asleep
+    /// drops or refuses it when it is written.
+    pub(crate) fn writes_settled(&self, pane: &str, within: Duration) -> Result<(), String> {
+        let (done, settled) = std::sync::mpsc::channel();
+        let handed = self.shared.run(|inner, _| {
+            let Some(session) = inner
+                .panes
+                .get(pane)
+                .and_then(|entry| entry.session.as_ref())
+            else {
+                return Ok(false);
+            };
+            session
+                .after_writes(session::Written::new(move |written| {
+                    let _ = done.send(written);
+                }))
+                .map(|()| true)
+                .map_err(|refused| refused.message(pane))
+        })?;
+        if !handed {
+            return Ok(());
+        }
+        match settled.recv_timeout(within) {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+                "a write to pane {pane}'s holder failed or never reached it"
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                "the writes to pane {pane}'s holder were not done within {within:?}"
+            )),
+        }
+    }
+
     fn route_input(&self, target: KeyTarget, chunk: HeldChunk) {
         let now = Instant::now();
         self.shared
@@ -360,11 +413,15 @@ impl Service {
     /// is reported for it, and a letter's hold does not take it. A pane
     /// whose session was released, since its tab left the last shown, is
     /// attached again for it, and the input waits in the pane's hold as a
-    /// new pane's keys do (64 KiB, 3 s).
+    /// new pane's keys do (64 KiB, 3 s). While the pane is asleep only the
+    /// sleep's own input ([`Typist::Sleeper`]) is taken; any other is
+    /// refused here, to its caller, and one queued when the pane went to
+    /// sleep is cancelled ([`TerminalControl::Asleep`]).
     fn type_input(
         &self,
         pane: &str,
         input: Typed,
+        by: Typist,
     ) -> Result<(), hide_node_link::holders::HolderError> {
         if input.len() > hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES {
             return Err(command::refused(
@@ -380,6 +437,9 @@ impl Service {
                     "Pane input has no live terminal owner",
                 ));
             }
+            if by != Typist::Sleeper && inner.panes.get(pane).is_some_and(|entry| entry.asleep) {
+                return Err(command::refused(PANE_ASLEEP, &asleep_message(pane)));
+            }
             let (receipt, command) = command::Receipt::take(&inner.permits)?;
             if inner.panes.get(pane).is_some_and(|entry| {
                 entry.session.is_none() && !entry.closing && entry.lifecycle.state == "released"
@@ -391,14 +451,14 @@ impl Service {
                 .get_mut(pane)
                 .expect("checked above")
                 .commands
-                .push(receipt.clone());
+                .push((receipt.clone(), by));
             inner.route_input(
                 KeyTarget::Pane(pane.to_owned()),
                 HeldChunk {
                     typed_at: now,
                     typed_at_unix_ms: unix_ms(),
                     input,
-                    by: Typist::Engine,
+                    by,
                     permit: None,
                     command: Some(command),
                 },
@@ -416,7 +476,9 @@ impl Service {
                 self.receipt.cancel("Pane input caller ended");
                 self.service.shared.run(|inner, _| {
                     if let Some(entry) = inner.panes.get_mut(self.pane) {
-                        entry.commands.retain(|receipt| receipt != &self.receipt);
+                        entry
+                            .commands
+                            .retain(|(receipt, _)| receipt != &self.receipt);
                         entry.hold.discard_finished_commands();
                     }
                     inner.finish_input_release(self.pane);
@@ -467,6 +529,9 @@ impl Service {
                     "Pane input has no live terminal owner",
                 ));
             }
+            if inner.panes.get(pane).is_some_and(|entry| entry.asleep) {
+                return Err(command::refused(PANE_ASLEEP, &asleep_message(pane)));
+            }
             let work = command::Work::take(&inner.permits)?;
             inner
                 .panes
@@ -507,7 +572,7 @@ impl Service {
             gap,
             enter: part(submit)?,
         };
-        self.type_input(pane, Typed::Submit(Box::new(submission)))
+        self.type_input(pane, Typed::Submit(Box::new(submission)), Typist::Engine)
     }
 }
 
@@ -560,7 +625,7 @@ impl Inner {
             // its agent runs; the engine's own typing there (that agent's
             // start line) is what the request waits for, so it is never held
             // behind it.
-            KeyTarget::Pane(ref pane) if chunk.by != Typist::Engine => self
+            KeyTarget::Pane(ref pane) if !chunk.by.engine() => self
                 .requests
                 .holder(pane)
                 .map(KeyTarget::Request)
@@ -631,7 +696,7 @@ impl Service {
             inner.closed = true;
             inner.wake_clock = true;
             for (pane, session) in &mut inner.panes {
-                for receipt in &session.commands {
+                for (receipt, _) in &session.commands {
                     receipt.cancel("Terminal service closed");
                 }
                 session.hold.discard(pane, "service_closed");
@@ -1169,7 +1234,7 @@ impl Inner {
                     entry.size_from_holder = false;
                 }
                 if manual {
-                    for receipt in &entry.commands {
+                    for (receipt, _) in &entry.commands {
                         receipt.cancel("Terminal connection was replaced");
                     }
                     entry.hold.discard_finished_commands();
@@ -1192,7 +1257,7 @@ impl Inner {
                 self.requests.forget(&pane);
                 if let Some(mut entry) = self.panes.remove(&pane) {
                     self.retired.extend(entry.session.take());
-                    for receipt in &entry.commands {
+                    for (receipt, _) in &entry.commands {
                         receipt.cancel("Pane was forgotten");
                     }
                     entry.hold.discard(&pane, "pane_gone");
@@ -1209,7 +1274,7 @@ impl Inner {
                     entry.closing = closing;
                     if closing {
                         self.wake_clock = true;
-                        for receipt in &entry.commands {
+                        for (receipt, _) in &entry.commands {
                             receipt.cancel("Pane is closing");
                         }
                         entry.hold.discard_finished_commands();
@@ -1287,7 +1352,17 @@ impl Inner {
             TerminalControl::Asleep { pane, asleep } => match self.panes.get_mut(&pane) {
                 Some(entry) => {
                     entry.asleep = asleep;
-                    if !asleep {
+                    if asleep {
+                        // The core's input that has not reached the writer
+                        // yet is not the agent's any more, and the shell's
+                        // never: its caller is told. The sleep's own is kept.
+                        for (receipt, by) in &entry.commands {
+                            if *by != Typist::Sleeper {
+                                receipt.cancel(&asleep_message(&pane));
+                            }
+                        }
+                        entry.hold.discard_finished_commands();
+                    } else {
                         entry.asleep_reported = false;
                     }
                 }
@@ -1862,6 +1937,17 @@ impl Inner {
             );
             return;
         };
+        if entry.asleep && by != Typist::Sleeper {
+            // Bytes a screen answers its terminal with are no more for the
+            // shell under a sleeping agent than a key is, and the core's own
+            // engine input that waited (a hold, a letter's held keys) is
+            // refused to its caller; only the sleep's own typing, its end and
+            // its wake, goes through.
+            if let Some(command) = command {
+                command.refused(&asleep_message(pane));
+            }
+            return;
+        }
         if entry.closing {
             self.refuse(
                 pane,
@@ -1869,12 +1955,6 @@ impl Inner {
                 format!("Pane {pane} is closing; input was not sent"),
                 now,
             );
-            return;
-        }
-        if entry.asleep && by == Typist::Operator {
-            // Bytes a screen answers its terminal with are no more for the
-            // shell under a sleeping agent than a key is; the core's own
-            // engine typing its sleep and wake there goes through.
             return;
         }
         let result = match entry.session.as_ref() {

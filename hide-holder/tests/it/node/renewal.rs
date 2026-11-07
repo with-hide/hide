@@ -1,20 +1,23 @@
 //! A pane an earlier build's holder runs, brought to this build's holder
-//! under its own id when nothing but its shell runs in it
-//! (with-hide/hide-private#646), through the node calls the core's own engine
-//! makes over its link (`LinkPanes`, the same calls a device's node
+//! under its own id when its agent is asleep and nothing but its shell runs
+//! in it (with-hide/hide-private#646), through the node calls the core's own
+//! engine makes over its link (`LinkPanes`, the same calls a device's node
 //! answers): the shell is started again from this build's version folder,
 //! the earlier start's incarnation replaced, its screen attached again and
-//! its facts followed, the operator's keys typed meanwhile refused and said
-//! to be, and the pane neither closes nor runs twice; a pane already on this build is
-//! left alone; a pane whose shell runs anything, in its terminal or behind
-//! it, is kept on its holder until a later renewal finds it alone; and a
-//! renewal that ended the earlier holder and could not start the next one
-//! says no holder of it runs the pane.
+//! its facts followed, and the pane neither closes nor runs twice; a pane
+//! already on this build is left alone; a pane whose agent is awake, whose
+//! shell runs anything (in its terminal or behind it), or whose writes to
+//! its holder do not settle is kept on its holder untouched; a renewal that
+//! ended the earlier holder and could not start the next one says no holder
+//! of it runs the pane; and a close asked during a renewal ends the holder
+//! the renewal leaves.
 
 use super::ownership::Connection;
 use super::*;
 use hide_kit::panes::holder_pane;
-use hide_node_link::holders::{HolderRenewal, PaneInput, RENEWAL_LOST, RENEWAL_UNSETTLED};
+use hide_node_link::holders::{
+    HolderRenewal, PaneInput, RENEWAL_LOST, RENEWAL_PANE_CLOSED, RENEWAL_UNSETTLED,
+};
 
 const PANE: &str = "w1:p1";
 
@@ -76,6 +79,31 @@ fn answers(connection: &Connection, what: &str) {
     });
 }
 
+/// Tells the connection's node that `PANE`'s agent is asleep or awake, as
+/// the core does from its sleep record: asleep, the pane takes no input but
+/// the sleep's own.
+fn asleep(connection: &Connection, asleep: bool) {
+    connection.service.control(TerminalControl::Asleep {
+        pane: PANE.to_owned(),
+        asleep,
+    });
+}
+
+/// What the renewal judges by: the pane's holder and shell as its record
+/// names them.
+fn alone(folder: &Folder) -> bool {
+    let record = pane_record(folder);
+    let recorded = |identity: Identity| hide_platform::process::Recorded {
+        pid: identity.pid,
+        started: identity.started,
+    };
+    hide_platform::process::runs_alone(
+        recorded(record.holder.unwrap()),
+        recorded(record.program.unwrap()),
+    )
+    .unwrap()
+}
+
 #[test]
 fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one_is_left() {
     let folder = Folder::new();
@@ -89,9 +117,18 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
     next.linked.watch_facts(told.sink());
     answers(&next, "the earlier holder's shell answers");
 
-    // The operator types into the pane all through its renewal: a key the
-    // pane cannot take while its holder is judged and replaced is refused,
-    // and the refusal is said, never dropped unsaid.
+    // A pane whose agent is awake takes input, so it is never renewed.
+    let awake = next.linked.renew(&shell_start(&folder));
+    assert!(
+        matches!(&awake, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_awake"),
+        "{awake:?}"
+    );
+    assert_eq!(pane_record(&folder), before);
+
+    // Asleep, the operator's keys typed all through the renewal are the
+    // sleeping pane's, dropped as at any sleeping pane, and none is refused
+    // as at a closing one.
+    asleep(&next, true);
     let (done, typing) = channel::<()>();
     let service = &next.service;
     let renewed = thread::scope(|scope| {
@@ -108,35 +145,17 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
         renewed
     })
     .unwrap();
-    let errors: Vec<(String, String)> = next
+    let errors: Vec<String> = next
         .reports
         .told
         .lock()
         .unwrap()
         .iter()
-        .filter_map(|report| match report {
-            TerminalReport::Error { pane, kind, .. } if pane == PANE => {
-                Some((kind.clone(), format!("{report:?}")))
-            }
-            _ => None,
-        })
+        .filter(|report| matches!(report, TerminalReport::Error { pane, .. } if pane == PANE))
+        .map(|report| format!("{report:?}"))
         .collect();
-    assert!(
-        errors
-            .iter()
-            .any(|(kind, _)| kind == "terminal.close_pending"),
-        "keys typed during the renewal were refused unsaid: {errors:?}"
-    );
-    assert!(
-        errors
-            .iter()
-            .all(|(kind, _)| kind == "terminal.close_pending"),
-        "{errors:?}"
-    );
-    let clear_line: &[u8] = if cfg!(windows) { b"\x1b" } else { b"\x15" };
-    next.linked
-        .input(PANE, PaneInput::Bytes(clear_line.to_vec()))
-        .unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    asleep(&next, false);
     let after = pane_record(&folder);
     let current =
         hide_kit::holders::version_name(hide_holder_protocol::PROTOCOL_VERSION, &source()).unwrap();
@@ -239,7 +258,9 @@ fn a_renewal_that_cannot_happen_leaves_the_earlier_holder_running() {
                     .is_some_and(|foreground| foreground.group != processes.shell)
             })
     });
+    asleep(&next, true);
     let kept = next.linked.renew(&shell_start(&folder));
+    asleep(&next, false);
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_busy"),
         "{kept:?}"
@@ -265,8 +286,8 @@ fn a_shell_with_a_background_job_is_kept_until_a_later_renewal_finds_it_alone() 
     next.linked.recovered(HANG_LIMIT).unwrap();
     answers(&next, "the earlier holder's shell answers");
     let shell = next.linked.processes(PANE, HANG_LIMIT).unwrap().shell;
-    assert!(hide_platform::process::runs_alone(shell).unwrap());
-    let alone = hide_platform::process::descendants(shell).unwrap();
+    assert!(alone(&folder));
+    let before_job = hide_platform::process::descendants(shell).unwrap();
 
     let job: &[u8] = if cfg!(windows) {
         b"start /b ping -n 120 127.0.0.1 >nul\r"
@@ -276,16 +297,15 @@ fn a_shell_with_a_background_job_is_kept_until_a_later_renewal_finds_it_alone() 
     next.linked
         .input(PANE, PaneInput::Bytes(job.to_vec()))
         .unwrap();
-    wait_until("the job runs behind the prompt", || {
-        !hide_platform::process::runs_alone(shell).unwrap()
-    });
+    wait_until("the job runs behind the prompt", || !alone(&folder));
     let jobs: Vec<u32> = hide_platform::process::descendants(shell)
         .unwrap()
         .into_iter()
-        .filter(|pid| !alone.contains(pid))
+        .filter(|pid| !before_job.contains(pid))
         .collect();
     assert!(!jobs.is_empty());
 
+    asleep(&next, true);
     let kept = next.linked.renew(&shell_start(&folder));
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_busy"),
@@ -304,10 +324,9 @@ fn a_shell_with_a_background_job_is_kept_until_a_later_renewal_finds_it_alone() 
     for pid in jobs {
         hide_platform::process::kill_tree(pid).unwrap();
     }
-    wait_until("the shell runs alone again", || {
-        hide_platform::process::runs_alone(shell).unwrap()
-    });
+    wait_until("the shell runs alone again", || alone(&folder));
     let renewed = next.linked.renew(&shell_start(&folder));
+    asleep(&next, false);
     assert!(
         matches!(&renewed, Ok(HolderRenewal::Renewed { from, .. }) if *from == before.version_folder),
         "{renewed:?}"
@@ -332,6 +351,7 @@ fn a_renewal_whose_new_holder_does_not_start_says_no_holder_runs_the_pane() {
     broken.linked.recovered(HANG_LIMIT).unwrap();
     answers(&broken, "the earlier holder's shell answers");
 
+    asleep(&broken, true);
     let lost = broken.linked.renew(&shell_start(&folder));
     assert!(
         matches!(&lost, Err(HolderError::Refused { code, .. })
@@ -372,28 +392,101 @@ fn failing_build(folder: &Folder) -> hide_kit::holders::Source {
     }
 }
 
-/// A pane closed while its holder renews, and its end asked again once the
-/// renewal answered, as the core asks it of a pane closed meanwhile: however
-/// the close and the renewal met, no holder runs the pane afterwards.
+/// A close asked while the pane's holder renews waits for the renewal and
+/// ends the holder it left, so no holder runs a closed pane, whether or not
+/// the renewal's answer reached anyone; a renewal asked after the close
+/// finds the pane closed and says so, never that a holder runs it.
+#[cfg(unix)]
 #[test]
-fn a_pane_closed_while_its_holder_renews_is_left_with_no_holder() {
+fn a_close_during_a_renewal_ends_the_holder_the_renewal_leaves() {
     let folder = Folder::new();
     let before = started_by_earlier_build(&folder);
     let earlier_holder = before.holder.unwrap();
     let next = Connection::open(folder.home.path(), &folder.state);
     next.linked.recovered(HANG_LIMIT).unwrap();
     answers(&next, "the earlier holder's shell answers");
+    // A shell that ignores the hangup and the terminate makes its holder's
+    // end take until the kill, so the close comes while the renewal has
+    // the pane's turn.
+    next.linked
+        .input(PANE, PaneInput::Bytes(b"trap '' HUP TERM\r".to_vec()))
+        .unwrap();
+    answers(&next, "the shell set its traps");
+    asleep(&next, true);
 
-    thread::scope(|scope| {
+    let renewed = thread::scope(|scope| {
         let renewal = scope.spawn(|| next.linked.renew(&shell_start(&folder)));
-        let _ = next.linked.terminate(PANE);
-        let _ = renewal.join().unwrap();
+        wait_until("the renewal has the pane's turn", || {
+            next.holders.changing(PANE) || renewal.is_finished()
+        });
+        next.linked.terminate(PANE).unwrap();
+        renewal.join().unwrap()
     });
-    let _ = next.linked.terminate(PANE);
+    assert!(
+        matches!(&renewed, Ok(HolderRenewal::Renewed { .. })),
+        "{renewed:?}"
+    );
     wait_until("the earlier holder ends", || !earlier_holder.runs());
-    wait_until("no holder runs the pane", || {
-        record::read(&layout::pane_record(&folder.state, &holder_pane(PANE)))
-            .unwrap()
-            .is_none_or(|record| record.holder.is_none_or(|holder| !holder.runs()))
+    let closed = record::read(&layout::pane_record(&folder.state, &holder_pane(PANE))).unwrap();
+    assert!(
+        closed
+            .as_ref()
+            .is_none_or(|record| record.holder.is_none_or(|holder| !holder.runs())),
+        "no holder runs the closed pane: {closed:?}"
+    );
+    let after = next.linked.renew(&shell_start(&folder));
+    assert!(
+        matches!(&after, Err(HolderError::Refused { code, .. }) if code == RENEWAL_PANE_CLOSED),
+        "{after:?}"
+    );
+}
+
+/// The writes handed to the pane's holder before its agent slept are
+/// waited for before anything is judged; the core's input that comes
+/// beside them never reaches the asleep pane, and
+/// writes that do not settle leave the earlier holder untouched. The holder
+/// is stopped, so its connection stops taking what the node writes.
+#[cfg(unix)]
+#[test]
+fn a_renewal_waits_for_the_writes_before_it_and_keeps_a_pane_whose_writes_do_not_settle() {
+    let folder = Folder::new();
+    let before = started_by_earlier_build(&folder);
+    let earlier_holder = before.holder.unwrap();
+    let next = Connection::open(folder.home.path(), &folder.state);
+    next.linked.recovered(HANG_LIMIT).unwrap();
+    answers(&next, "the earlier holder's shell answers");
+    let pid = i32::try_from(earlier_holder.pid).unwrap();
+    // SAFETY: a signal to the test's own holder process.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+    struct Resume(i32);
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            // SAFETY: as above.
+            unsafe { libc::kill(self.0, libc::SIGCONT) };
+        }
+    }
+    let _resume = Resume(pid);
+    // More than the holder's connection buffers: the writer stops on it.
+    for _ in 0..4 {
+        next.service
+            .key(KeyTarget::Pane(PANE.to_owned()), vec![b' '; 32 * 1024], 0);
+    }
+    thread::scope(|scope| {
+        // The holder is stopped, so the input can never be written: it is
+        // either cancelled where it waits or refused at the asleep pane,
+        // and both are the caller's error.
+        let typed = scope.spawn(|| next.linked.input(PANE, PaneInput::Bytes(b"ls\r".to_vec())));
+        asleep(&next, true);
+        let cancelled = typed.join().unwrap();
+        assert!(cancelled.is_err(), "{cancelled:?}");
     });
+    let started = Instant::now();
+    let kept = next.linked.renew(&shell_start(&folder));
+    assert!(
+        matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_input_unsettled"),
+        "{kept:?}"
+    );
+    assert!(started.elapsed() >= Duration::from_secs(4), "it waited");
+    assert_eq!(pane_record(&folder), before);
+    assert!(earlier_holder.runs());
 }

@@ -263,10 +263,15 @@ fn a_dialed_devices_agent_sleeps_by_the_hours_and_wakes_into_the_same_conversati
             .engine
             .calls_of("send_keys")
             .iter()
-            .map(|call| (call["pane"].clone(), call["keys"].clone()))
+            .map(|call| (
+                call["pane"].clone(),
+                call["keys"].clone(),
+                call["sleep"].clone()
+            ))
             .collect::<Vec<_>>(),
-        [(json!(DEVICE_PANE), json!(["ctrl+c"]))],
-        "the device's engine pressed Claude Code's quit key in its own pane"
+        [(json!(DEVICE_PANE), json!(["ctrl+c"]), json!(true))],
+        "the device's engine pressed Claude Code's quit key in its own pane, as the \
+         sleep's own input, which the pane takes while it is asleep"
     );
     assert!(
         !device

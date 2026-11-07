@@ -689,6 +689,13 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("send_keys", json!({"pane": pane, "keys": keys}))
     }
 
+    fn send_sleep_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
+        self.ask(
+            "send_keys",
+            json!({"pane": pane, "keys": keys, "sleep": true}),
+        )
+    }
+
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.ask("submit_text", json!({"pane": pane, "text": text}))
     }

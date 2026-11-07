@@ -2298,7 +2298,11 @@ fn the_engines_start_line_is_not_held_behind_a_forks_request() {
     harness.key("w1:p1", b"typed early");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()))
+        .type_input(
+            "w1:p1",
+            Typed::Bytes(b"claude --resume s\r".to_vec()),
+            Typist::Engine,
+        )
         .unwrap();
     assert_eq!(input_bytes(&opened, 18), b"claude --resume s\r");
     harness.service.control(TerminalControl::RequestResolve {
@@ -2308,11 +2312,12 @@ fn the_engines_start_line_is_not_held_behind_a_forks_request() {
     assert_eq!(input_bytes(&opened, 11), b"typed early");
 }
 
-/// A sleeping agent's pane takes none of the operator's keys, but the core's
-/// own engine types the agent's quit key and its resume line there while the
-/// sleep record holds the pane asleep, and they are written.
+/// A sleeping agent's pane takes none of the operator's keys and none of
+/// the core's other input, which is refused to its caller, but the sleep's
+/// own typing (the agent's quit key, its resume line) reaches it while the
+/// sleep record holds the pane asleep.
 #[test]
-fn the_engines_typing_reaches_a_sleeping_pane_and_the_operators_keys_do_not() {
+fn only_the_sleeps_own_typing_reaches_a_sleeping_pane() {
     let harness = harness(RetryPolicy::Automatic);
     let opened = harness.controlling("w1:p1");
     harness.service.control(TerminalControl::Asleep {
@@ -2320,22 +2325,61 @@ fn the_engines_typing_reaches_a_sleeping_pane_and_the_operators_keys_do_not() {
         asleep: true,
     });
     harness.key("w1:p1", b"lost");
+    let refused = harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()), Typist::Engine)
+        .unwrap_err();
+    assert!(
+        matches!(&refused, hide_node_link::holders::HolderError::Refused { code, .. } if code == PANE_ASLEEP),
+        "{refused:?}"
+    );
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"\x03".to_vec()))
+        .type_input("w1:p1", Typed::Bytes(b"\x03".to_vec()), Typist::Sleeper)
         .unwrap();
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"claude --resume s\r".to_vec()))
+        .type_input(
+            "w1:p1",
+            Typed::Bytes(b"claude --resume s\r".to_vec()),
+            Typist::Sleeper,
+        )
         .unwrap();
     let typed = b"\x03claude --resume s\r";
     assert_eq!(input_bytes(&opened, typed.len()), typed);
+    assert!(harness.service.asleep("w1:p1"));
     harness.service.control(TerminalControl::Asleep {
         pane: "w1:p1".into(),
         asleep: false,
     });
     harness.key("w1:p1", b"kept");
     assert_eq!(opened.next_input(), b"kept");
+    harness
+        .service
+        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()), Typist::Engine)
+        .unwrap();
+    assert_eq!(opened.next_input(), b"ls\r");
+}
+
+/// Everything handed to a pane's writer before a renewal asks has been
+/// written once [`Service::writes_settled`] answers; a pane with no session
+/// has nothing waiting in a writer.
+#[test]
+fn the_writes_handed_before_are_written_once_they_are_settled() {
+    let harness = harness(RetryPolicy::Automatic);
+    assert_eq!(harness.service.writes_settled("w1:p9", WAIT), Ok(()));
+    let opened = harness.controlling("w1:p1");
+    harness.key("w1:p1", b"typed");
+    assert_eq!(harness.service.writes_settled("w1:p1", WAIT), Ok(()));
+    assert!(
+        opened
+            .writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, bytes)| bytes == b"typed"),
+        "the key was written before the answer"
+    );
 }
 
 /// The core's own engine typing a command is not the operator typing: no
@@ -2346,7 +2390,7 @@ fn the_engines_typing_is_not_reported_as_the_operators() {
     let opened = harness.controlling("w1:p1");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()))
+        .type_input("w1:p1", Typed::Bytes(b"ls\r".to_vec()), Typist::Engine)
         .unwrap();
     assert_eq!(opened.next_input(), b"ls\r");
     harness.key("w1:p1", b"x");
@@ -2377,7 +2421,7 @@ fn the_engines_typing_into_a_released_pane_attaches_it_and_is_written() {
     harness.state("w1:p1", "released");
     harness
         .service
-        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()))
+        .type_input("w1:p1", Typed::Bytes(b"resume\r".to_vec()), Typist::Engine)
         .unwrap();
     let again = harness.opened();
     assert_eq!(input_bytes(&again, b"resume\r".len()), b"resume\r");
@@ -2391,7 +2435,11 @@ fn named_keys_for_a_session_that_does_not_read_them_are_refused_with_why() {
     let opened = harness.controlling("w1:p1");
     harness
         .service
-        .type_input("w1:p1", Typed::Keys(vec![hide_holder_protocol::Key::Enter]))
+        .type_input(
+            "w1:p1",
+            Typed::Keys(vec![hide_holder_protocol::Key::Enter]),
+            Typist::Engine,
+        )
         .unwrap_err();
     let refused = harness.report_where(|report| matches!(report, TerminalReport::Error { .. }));
     assert!(

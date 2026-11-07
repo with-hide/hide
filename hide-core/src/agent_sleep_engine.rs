@@ -251,12 +251,12 @@ impl Quit {
                     },
                 );
             }
-            match engine.send_keys(Wait::Each(REQUEST_TIMEOUT), pane_id, &[self.key]) {
+            match engine.send_sleep_keys(Wait::Each(REQUEST_TIMEOUT), pane_id, &[self.key]) {
                 Ok(()) => {}
                 Err(EngineError::Request(message)) => return Err(EndError::Failed(message)),
                 Err(reason) => {
                     return Ok(unanswered(
-                        format!("pane.send_keys failed: {reason}"),
+                        format!("pane.send_sleep_keys failed: {reason}"),
                         presses,
                     ));
                 }

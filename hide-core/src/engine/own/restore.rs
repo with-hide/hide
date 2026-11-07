@@ -27,8 +27,7 @@
 //! again. An adopted pane whose saved agent is not running, its shell the
 //! terminal's foreground, is resumed the same way: the daemon that typed
 //! its resume ended before the line reached the shell, or the agent ended
-//! while no daemon ran. Its holder is renewed first when an earlier build
-//! started it (`OwnEngine::renew`, with-hide/hide-private#646).
+//! while no daemon ran.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -768,8 +767,6 @@ impl OwnEngine<'static> {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             };
-            // A pane the restore opened a tab for runs this build's holder.
-            let adopted = resume.new_tab.is_none();
             let opened;
             let resume = match &resume.new_tab {
                 None => resume,
@@ -797,21 +794,6 @@ impl OwnEngine<'static> {
                     }
                 },
             };
-            // An adopted pane may still run an earlier build's holder: its
-            // shell, alone in it, is brought to this build first, as a wake
-            // does (with-hide/hide-private#646); a restarted one already is.
-            // A refusal leaves no holder known to run the pane, and nothing
-            // is typed into it.
-            if adopted && let Err(error) = engine.renew(&resume.pane, None) {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "own_engine",
-                    "kind": "agent.resume_not_typed",
-                    "pane_id": resume.pane,
-                    "agent": resume.kind,
-                    "message": error.to_string(),
-                }));
-                continue;
-            }
             if resume.cut {
                 cut().insert(resume.pane.clone(), resume.kind.clone());
             }
@@ -959,6 +941,7 @@ impl OwnEngine<'static> {
             &resume.pane,
             PaneAgent::started(&resume.kind, resume.name.as_deref(), resume.session.clone()),
             &line,
+            false,
         )
         .map_err(|error| error.to_string())?;
         Ok(by_file)

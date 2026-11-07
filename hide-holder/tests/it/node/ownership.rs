@@ -9,6 +9,7 @@ use hide_node_link::{LinkError, NodeLink};
 
 pub(super) struct Connection {
     pub(super) local: Arc<hide_node::Local>,
+    pub(super) holders: Arc<Holders>,
     pub(super) linked: LinkPanes,
     pub(super) service: Arc<Service>,
     pub(super) reports: Arc<Reports>,
@@ -64,7 +65,7 @@ impl Connection {
         );
         let local = Arc::new(
             hide_node::Local::new(Some(home.to_owned())).with_panes(Arc::new(LocalPanes::new(
-                holders,
+                Arc::clone(&holders),
                 Arc::clone(&service),
                 PaneShell::Fixed(shell()),
             ))),
@@ -72,6 +73,7 @@ impl Connection {
         let linked = LinkPanes::new(local.clone(), Arc::new(|_| {}));
         Self {
             local,
+            holders,
             linked,
             service,
             screens,

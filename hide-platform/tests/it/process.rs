@@ -2205,57 +2205,116 @@ fn killing_by_pid_ends_the_process_and_its_descendants() {
     );
 }
 
+/// `pid` as it runs now, as a pane record names it.
+fn recorded(pid: u32) -> hide_platform::process::Recorded {
+    hide_platform::process::Recorded {
+        pid,
+        started: hide_platform::process::start_time(pid).unwrap(),
+    }
+}
+
 /// A pane's shell runs alone while ending its session would end nothing
 /// else (with-hide/hide-private#646). On Unix that is every process of the
 /// session it leads, one left there by a process that exited included,
-/// though it is no descendant of the shell any more.
+/// though it is no descendant of the shell any more; a pid that names
+/// another process than the one recorded is no answer at all.
 #[cfg(unix)]
 #[test]
 fn a_session_leader_runs_alone_until_its_session_holds_another_process() {
+    use hide_platform::process::{Recorded, runs_alone};
     let _serial = serial();
+    // The holder's end ends the shell's session whichever holder it is.
+    let holder = recorded(std::process::id());
     let mut alone = role_command("session_alone").spawn().unwrap();
-    let leader = ready_number(alone.stdout.take().unwrap());
-    assert!(hide_platform::process::runs_alone(leader).unwrap());
-    kill_tree(leader).unwrap();
+    let leader = recorded(ready_number(alone.stdout.take().unwrap()));
+    assert!(runs_alone(holder, leader).unwrap());
+    let taken = Recorded {
+        started: leader.started + 1,
+        ..leader
+    };
+    assert!(
+        runs_alone(holder, taken).is_err(),
+        "a pid another process took is not the recorded shell"
+    );
+    kill_tree(leader.pid).unwrap();
     alone.wait().unwrap();
 
     let mut with = role_command("session_with_orphan").spawn().unwrap();
     let orphan = ready_number(with.stdout.take().unwrap());
-    let leader = with.id();
+    let leader = recorded(with.id());
     assert!(
-        !hide_platform::process::descendants(leader)
+        !hide_platform::process::descendants(leader.pid)
             .unwrap()
             .contains(&orphan),
         "the orphan was handed to another parent"
     );
     assert!(
-        !hide_platform::process::runs_alone(leader).unwrap(),
+        !runs_alone(holder, leader).unwrap(),
         "a process left in the session is ended with it"
     );
     hide_platform::process::terminate(orphan).unwrap();
-    kill_tree(leader).unwrap();
+    kill_tree(leader.pid).unwrap();
     with.wait().unwrap();
 }
 
-/// On Windows a shell runs alone while no process but a console host runs
-/// under it.
+/// On Windows a shell runs alone while the kill-on-close job its holder
+/// holds it in runs nothing else: this process stands for the holder,
+/// holding the job of a [`hide_platform::process::Session`] as a holder
+/// does, its handle never inherited. A process in that job that is no
+/// descendant of the shell is ended with the job, so it counts; a holder
+/// that holds no job of the shell, and a pid another process took, are no
+/// answer at all.
 #[cfg(windows)]
 #[test]
-fn a_process_runs_alone_until_it_runs_another() {
+fn a_shell_runs_alone_until_the_job_its_holder_holds_runs_another_process() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+    use hide_platform::process::{Recorded, Session, SessionEnd, runs_alone};
     let _serial = serial();
-    let mut command = role_command("tree");
-    let mut child = command.spawn().unwrap();
-    let grandchild = ready_number(child.stdout.take().unwrap());
+    let holder = recorded(std::process::id());
+    let mut session = Session::new().unwrap();
+    let job = session.job();
+    let join = |child: &std::process::Child| {
+        // SAFETY: both handles are open for the call.
+        let joined = unsafe { AssignProcessToJobObject(job.cast(), child.as_raw_handle().cast()) };
+        assert_ne!(joined, 0, "{}", std::io::Error::last_os_error());
+    };
+    let mut shell = role_command("sleep").spawn().unwrap();
+    ready_number(shell.stdout.take().unwrap());
+    let outside = recorded(shell.id());
     assert!(
-        !hide_platform::process::runs_alone(child.id()).unwrap(),
-        "the root runs its child"
+        runs_alone(holder, outside).is_err(),
+        "a holder that holds no job of the shell cannot say"
     );
+    join(&shell);
+    session.adopt(shell.id()).unwrap();
+    let shell_recorded = recorded(shell.id());
+    assert!(runs_alone(holder, shell_recorded).unwrap());
     assert!(
-        hide_platform::process::runs_alone(grandchild).unwrap(),
-        "a program that runs nothing runs alone"
+        runs_alone(
+            holder,
+            Recorded {
+                started: shell_recorded.started + 1,
+                ..shell_recorded
+            }
+        )
+        .is_err(),
+        "a pid another process took is not the recorded shell"
     );
-    kill_tree(child.id()).unwrap();
-    child.wait().unwrap();
+    let mut beside = role_command("sleep").spawn().unwrap();
+    ready_number(beside.stdout.take().unwrap());
+    join(&beside);
+    assert!(
+        !runs_alone(holder, shell_recorded).unwrap(),
+        "a process of the job that is no descendant of the shell ends with it"
+    );
+    assert_eq!(
+        session.end(Duration::from_secs(10)).unwrap(),
+        SessionEnd::Ended
+    );
+    shell.wait().unwrap();
+    beside.wait().unwrap();
 }
 
 #[test]

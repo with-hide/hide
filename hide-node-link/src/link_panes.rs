@@ -413,6 +413,16 @@ impl PaneHolders for LinkPanes {
         )
     }
 
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.done(
+            PaneCall::SleeperInput {
+                pane: pane.to_owned(),
+                input,
+            },
+            ASK_WAIT,
+        )
+    }
+
     fn letter(
         &self,
         pane: &str,
