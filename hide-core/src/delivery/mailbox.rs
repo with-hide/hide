@@ -243,6 +243,7 @@ pub(crate) fn send(
         bell_route: Default::default(),
         input_noticed: 0,
         input_noticed_at_unix_ms: 0,
+        bell_failure: None,
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
         intake_from: ledger
@@ -1103,15 +1104,21 @@ fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
     let letters = shares
         .into_iter()
         .flat_map(|share| share.shown)
-        .chain(ledger.letters.iter().filter(|letter| {
+        .cloned()
+        .collect();
+    let returned = ledger
+        .letters
+        .iter()
+        .filter(|letter| {
             letter.sender.same_identity(actor)
                 && !letter.recipient.same_identity(actor)
                 && letter.state == State::Undelivered
-        }))
+        })
         .cloned()
         .collect();
     Inbox {
         letters,
+        returned,
         folded,
         ack_command,
     }
@@ -1383,8 +1390,12 @@ mod tests {
             "capacity"
         );
         assert_eq!(ledger.letters[0].id, letter.id);
+        // Its sender gets it back apart from the letters it received.
         let inbox = apply(&mut ledger, &a, None, &Command::Inbox { bundle: true }, 20).unwrap();
-        assert_eq!(inbox["letters"][0]["state"], "undelivered");
+        assert_eq!(inbox["letters"], json!([]));
+        assert_eq!(inbox["returned"][0]["id"], letter.id.as_str());
+        assert_eq!(inbox["returned"][0]["state"], "undelivered");
+        assert_eq!(inbox["returned"][0]["recipient"]["pane_id"], "b");
     }
 
     #[test]
@@ -1909,7 +1920,7 @@ mod tests {
         pull_for(&mut ledger, &recipient, LINE);
         assert!(ledger.letters[0].handed);
         let failed = std::collections::BTreeMap::from([(id, "wake_failed".to_owned())]);
-        assert!(ledger.fail_woken(&failed, 100));
+        assert!(ledger.fail_undeliverable(&failed, 100));
         assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 

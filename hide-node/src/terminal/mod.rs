@@ -2659,11 +2659,10 @@ impl Inner {
         {
             return;
         }
-        let message = entry
-            .lifecycle
-            .message
-            .clone()
-            .unwrap_or_else(|| format!("Pane {pane} is attached only while Hide types into it"));
+        let message =
+            entry.lifecycle.message.clone().unwrap_or_else(|| {
+                format!("Pane {pane} is attached only while Hide types into it")
+            });
         entry.release_after_input.get_or_insert(message);
         self.request_control(shared, pane, now);
     }

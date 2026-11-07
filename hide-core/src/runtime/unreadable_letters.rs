@@ -124,6 +124,7 @@ impl Runtime {
             intent: "session-unreadable",
             component: "delivery",
             unsent: "delivery.unreadable_note_unsent",
+            now: false,
         };
         self.unreadable_letters.noting = self.send_hide_notes(kind, notes, |runtime| {
             runtime.unreadable_letters.noting = false;

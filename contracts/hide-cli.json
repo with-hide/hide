@@ -1144,6 +1144,28 @@
                         }
                     ]
                 },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works).",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
                     "properties": {
@@ -1210,6 +1232,17 @@
                             "format": "uint8",
                             "minimum": 0.0,
                             "type": "integer"
+                        },
+                        "bell_failure": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/BellFailure"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                         },
                         "bell_line": {
                             "default": null,
@@ -1488,7 +1521,14 @@
                     "type": "array"
                 },
                 "letters": {
-                    "description": "The letters shown in full, grouped by sender, then the caller's own letters that went undelivered.",
+                    "description": "The letters shown in full, grouped by sender.",
+                    "items": {
+                        "$ref": "#/definitions/Letter"
+                    },
+                    "type": "array"
+                },
+                "returned": {
+                    "description": "The caller's own letters that went undelivered, returned to it: each names the recipient that did not get it, and `bell_failure` why its last bell failed when one did.",
                     "items": {
                         "$ref": "#/definitions/Letter"
                     },
@@ -1497,6 +1537,7 @@
             },
             "required": [
                 "letters",
+                "returned",
                 "folded"
             ],
             "title": "Inbox",
@@ -1579,6 +1620,28 @@
                             "type": "string"
                         }
                     ]
+                },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works).",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
                 },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
@@ -1696,6 +1759,17 @@
                     "format": "uint8",
                     "minimum": 0.0,
                     "type": "integer"
+                },
+                "bell_failure": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/BellFailure"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                 },
                 "bell_line": {
                     "default": null,
@@ -5274,7 +5348,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:68f6a1d841fa83702eccaff1061353868b85b19192c1c309ede9459e09d76c0c",
+    "digest": "sha256:37ded906730a2b5397e5c591f865c64f99c673ec4b4494ead20c1f8b02dc3a3c",
     "envelopes": {
         "agent": {
             "answer": "value",

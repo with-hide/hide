@@ -19,7 +19,7 @@ use crate::runtime::delivery::{Observation, ProjectedTurn};
 use crate::runtime::mission_events::SendFailure;
 
 use super::ledger::{Ledger, Letter, State};
-use super::worker::{Client, Effect, now};
+use super::worker::{Client, Effect, Rang, now};
 
 const QUIET_MS: u64 = 30_000;
 /// How long a recipient works on without a rest, counted from the later of
@@ -601,19 +601,30 @@ impl Doorbell {
                     };
                     crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.failed",
                         "letter_id":letter.id,"pane_id":pane,"code":code,"maybe_typed":typed}));
-                    record(client, &letter.id, &observed, Rang::Failed);
-                    // A failed prompt may still have typed the bell, so it
-                    // waits for the pane to move rather than for a timer
-                    // that could type it twice. A failure before the prompt
-                    // typed nothing, and a pane at rest has no reason to
-                    // move, so it is tried again on the timer; each try
-                    // spends one of the letter's three bells
-                    // (with-hide/hide-private#307).
-                    let retry_at = if typed {
-                        u64::MAX
+                    record(
+                        client,
+                        &letter.id,
+                        &observed,
+                        Rang::Failed {
+                            code,
+                            maybe_typed: typed,
+                        },
+                    );
+                    // A failure before the prompt typed nothing, and a pane
+                    // at rest has no reason to move, so it is tried again on
+                    // the timer (with-hide/hide-private#307). One after it
+                    // may have typed the bell: the agent's own record takes
+                    // the letter within the record wait it gives any typed
+                    // input (`typed::RECORD_WAIT_MS`), and the try after it
+                    // reads the composer for the line first (`deliver`), so
+                    // a resting pane that never moves neither waits for the
+                    // deadline nor is typed into twice (with-hide/hide#2180).
+                    // Each try spends one of the letter's three bells.
+                    let retry_at = now.saturating_add(if typed {
+                        super::typed::RECORD_WAIT_MS
                     } else {
-                        now.saturating_add(delay)
-                    };
+                        delay
+                    });
                     self.tried.insert(
                         letter.id.clone(),
                         Tried {
@@ -1187,22 +1198,12 @@ fn defer(client: &Client, letter: &Letter, reason: &str) {
     }
 }
 
-/// What one bell did, for the store.
-#[derive(Clone, Copy)]
-enum Rang {
-    Sent(super::typed::SendRoute),
-    Failed,
-}
-
 fn record(client: &Client, id: &str, observed: &Observation, rang: Rang) {
     if let Err(code) = client.submit(
         Effect::Bell {
             id: id.to_owned(),
             recipient: observed.actor.clone(),
-            route: match rang {
-                Rang::Sent(route) => Some(route),
-                Rang::Failed => None,
-            },
+            rang,
         },
         Duration::from_secs(5),
     ) {
@@ -1326,6 +1327,11 @@ fn deliver(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
+    if let Some(held) = held_line(letter)
+        && let Some(outcome) = after_lost(owner, client, engine, letter, observed, held, stop)?
+    {
+        return Ok(outcome);
+    }
     if let Err(unclear) =
         clear_to_type(engine, observed, letter.forced).map_err(SendFailure::NotTyped)?
     {
@@ -1336,12 +1342,49 @@ fn deliver(
         }
         return Ok(Outcome::Held(unclear.hold()));
     }
-    let id = &letter.id;
     // The ladder's route is decided before a bell is spent.
     let target = owner
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .input_target(observed);
+    if let Some(held) = reserve(owner, client, engine, letter, observed, line, stop)? {
+        return Ok(held);
+    }
+    // The line is the one the reservation saved, so the prompt hook of the
+    // turn it opens is recognized by it (`mailbox::rang`).
+    // The engine owns submission for each input reader, including Windows paste
+    // bursts, as Herdr's `agent.prompt` did (herdrdev/herdr#3187). Raw pane
+    // input bypasses that contract.
+    // The message the bell writes into the conversation is the letter's,
+    // never the operator's request (PRD session-record-goal-flow D-19): the
+    // label reads it as a letter from `sender` by this record, as it reads
+    // an operator's message by a submit.
+    {
+        let mut guard = owner
+            .lock()
+            .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?;
+        guard.record_bell(&observed.actor.pane_id, line, (sender, kind));
+        guard.note_hide_typing(&observed.actor.pane_id);
+    }
+    // Arrival is not intake. Only a flushed prompt-hook confirmation clears
+    // it, even where the agent's own way in took the line.
+    sent(super::ladder::deliver(engine, &target, line))
+}
+
+/// Spends one of `letter`'s bells on `line`, saved before anything is typed,
+/// then checks again that the engine reports the agent the verdict was read
+/// for and that the letter still waits for this bell. `Some` is how the
+/// attempt ends before typing: held, or stopped.
+fn reserve(
+    owner: &Mutex<Runtime>,
+    client: &Client,
+    engine: &dyn Engine,
+    letter: &Letter,
+    observed: &Observation,
+    line: &str,
+    stop: &AtomicBool,
+) -> Result<Option<Outcome>, SendFailure> {
+    let id = &letter.id;
     let reservation = client
         .submit(
             Effect::BellAttempt {
@@ -1366,40 +1409,86 @@ fn deliver(
     // The durable save may wait. Reinspect the native owner afterwards
     // instead of treating the pre-save answer as current evidence.
     if stop.load(Ordering::Acquire) {
-        return Ok(Outcome::Stopped);
+        return Ok(Some(Outcome::Stopped));
     }
     if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
-        return Ok(Outcome::Held(reason));
+        return Ok(Some(Outcome::Held(reason)));
     }
     if stop.load(Ordering::Acquire) {
-        return Ok(Outcome::Stopped);
+        return Ok(Some(Outcome::Stopped));
     }
     if let Err(reason) = owner
         .lock()
         .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .delivery_bell_current(id, observed, Some(attempt))
     {
-        return Ok(Outcome::Held(reason));
+        return Ok(Some(Outcome::Held(reason)));
     }
-    // The line is the one the reservation saved, so the prompt hook of the
-    // turn it opens is recognized by it (`mailbox::rang`).
-    // The engine owns submission for each input reader, including Windows paste
-    // bursts, as Herdr's `agent.prompt` did (herdrdev/herdr#3187). Raw pane
-    // input bypasses that contract.
-    // The message the bell writes into the conversation is the letter's,
-    // never the operator's request (PRD session-record-goal-flow D-19): the
-    // label reads it as a letter from `sender` by this record, as it reads
-    // an operator's message by a submit.
-    {
-        let mut guard = owner
-            .lock()
-            .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?;
-        guard.record_bell(&observed.actor.pane_id, line, (sender, kind));
-        guard.note_hide_typing(&observed.actor.pane_id);
+    Ok(None)
+}
+
+/// The line of `letter`'s last bell when that bell failed after the engine
+/// was asked to type it, so the line may be in the agent's composer.
+fn held_line(letter: &Letter) -> Option<&str> {
+    letter
+        .bell_failure
+        .as_ref()
+        .filter(|failure| failure.maybe_typed)
+        .and(letter.bell_line.as_deref())
+}
+
+/// The try after a bell whose answer was lost and that the agent did not
+/// record within the record wait. The composer decides it, read off the lock:
+/// showing that line and nothing else, the line was typed and its Enter lost,
+/// so the line gets its Enter and is not typed again; empty, the line never
+/// arrived or was dropped, and the bell is rung as any other; anything else,
+/// the operator's words among it, is never typed into or submitted, and the
+/// letter holds as on a draft. A screen that cannot be read holds it too.
+/// The Enter spends a bell, reserved first, as a typing does. `None` is
+/// the empty composer: the caller rings.
+fn after_lost(
+    owner: &Mutex<Runtime>,
+    client: &Client,
+    engine: &dyn Engine,
+    letter: &Letter,
+    observed: &Observation,
+    held: &str,
+    stop: &AtomicBool,
+) -> Result<Option<Outcome>, SendFailure> {
+    if let Err(reason) = native_current(engine, observed).map_err(SendFailure::NotTyped)? {
+        return Ok(Some(Outcome::Held(reason)));
     }
-    // Arrival is not intake. Only a flushed prompt-hook confirmation clears
-    // it, even where the agent's own way in took the line.
-    sent(super::ladder::deliver(engine, &target, line))
+    let shows = super::composer::shows(engine, &observed.raw_pane_id, &observed.actor.kind, held);
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"doorbell.composer_after_lost",
+        "letter_id":letter.id,"pane_id":observed.actor.pane_id,
+        "shows":match shows {
+            Ok(super::composer::Shows::Typed) => "bell",
+            Ok(super::composer::Shows::Empty) => "empty",
+            Ok(super::composer::Shows::Other) => "other",
+            Err(code) => code,
+        }})
+    );
+    match shows {
+        Ok(super::composer::Shows::Empty) => return Ok(None),
+        Ok(super::composer::Shows::Other) => return Ok(Some(Outcome::Held(Hold::Draft))),
+        Err(_) => return Ok(Some(Outcome::Held(Hold::ComposerUnread))),
+        Ok(super::composer::Shows::Typed) => {}
+    }
+    let target = owner
+        .lock()
+        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
+        .input_target(observed);
+    if let Some(held) = reserve(owner, client, engine, letter, observed, held, stop)? {
+        return Ok(Some(held));
+    }
+    owner
+        .lock()
+        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
+        .note_hide_typing(&observed.actor.pane_id);
+    crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.entered",
+        "letter_id":letter.id,"pane_id":observed.actor.pane_id}));
+    sent(super::ladder::press_enter(engine, &target)).map(Some)
 }
 
 /// A ladder's answer as one attempt's outcome: a lost answer may have
@@ -2770,62 +2859,212 @@ mod tests {
         assert!(answer.unconfirmed);
     }
 
-    /// A submission the engine refused before writing (`agent_blocked`, which it
-    /// answers "without sending input") typed nothing, so its timer rings
-    /// the bell again.
+    /// A submission the engine refused typed nothing, whichever refusal it
+    /// was: the agent's (`agent_blocked`) or a node's for a device pane it
+    /// had no session for (`pane_input_unavailable`,
+    /// with-hide/hide-private#677), so its timer rings the bell again and
+    /// the refusal is kept on the letter.
     #[test]
     fn a_prompt_refused_before_typing_is_rung_again_by_its_timer() {
-        let bell = Bell::with_submission_error(json!({}), Some("agent_blocked"));
-        let mut doorbell = Doorbell::default();
-        let at = now();
-        let records = bell.pass(&mut doorbell, at);
-        let failed = records
-            .iter()
-            .find(|record| record["kind"] == "doorbell.failed")
-            .unwrap_or_else(|| panic!("{records:?}"));
-        assert_eq!(failed["code"], "engine_refused");
-        assert_eq!(failed["maybe_typed"], false);
-        assert_eq!(bell.typed().len(), 1);
-        bell.pass(&mut doorbell, at + RETRY_FIRST_MS);
-        assert_eq!(bell.typed().len(), 2, "the timer rang again");
+        for code in [
+            "agent_blocked",
+            "pane_input_unavailable",
+            "pane_input_cancelled",
+            "node_busy",
+        ] {
+            let bell = Bell::with_submission_error(json!({}), Some(code));
+            let mut doorbell = Doorbell::default();
+            let at = now();
+            let records = bell.pass(&mut doorbell, at);
+            let failed = records
+                .iter()
+                .find(|record| record["kind"] == "doorbell.failed")
+                .unwrap_or_else(|| panic!("{code}: {records:?}"));
+            assert_eq!(failed["code"], "engine_refused", "{code}");
+            assert_eq!(failed["maybe_typed"], false, "{code}");
+            assert_eq!(bell.typed().len(), 1);
+            bell.pass(&mut doorbell, at + RETRY_FIRST_MS);
+            assert_eq!(bell.typed().len(), 2, "{code}: the timer rang again");
+        }
     }
 
     /// A failed submission may have written input before its answer was
-    /// lost. The engine's submission timeout is not intake, and may not make a
-    /// timer type the same bell twice.
+    /// lost (with-hide/hide#2180). No timer types it again before the record
+    /// wait passed, and the try after it reads the composer first: the bell's
+    /// line alone there gets its Enter and is not typed again; an empty
+    /// composer is rung again; the operator's words there are never typed
+    /// into or submitted, and the letter holds as on a draft.
     #[test]
-    fn a_timed_out_prompt_stays_pending_until_the_pane_moves() {
-        let bell = Bell::with_submission_error(json!({}), Some("timeout"));
-        let mut doorbell = Doorbell::default();
-        let at = now();
-        let records = bell.pass(&mut doorbell, at);
-        assert!(
-            records
+    fn a_bell_whose_answer_was_lost_is_decided_by_the_composer_after_the_record_wait() {
+        let line_shown = |line: &str| format!("\x1b[0m\x1b[1m› \x1b[0m{line}\r\n\r\n  footer\r\n");
+        for shown in ["bell", "empty", "other"] {
+            let bell = Bell::with_submission_error(json!({}), Some("timeout"));
+            let mut doorbell = Doorbell::default();
+            let at = now();
+            let records = bell.pass(&mut doorbell, at);
+            let failed = records
                 .iter()
-                .any(|record| record["kind"] == "doorbell.failed"),
-            "{records:?}"
-        );
-        assert_eq!(bell.typed().len(), 1);
-        {
-            let guard = bell.runtime.lock().unwrap();
-            let ledger = guard.delivery_state().unwrap();
-            let letter = ledger
-                .letters
+                .find(|record| record["kind"] == "doorbell.failed")
+                .unwrap_or_else(|| panic!("{records:?}"));
+            assert_eq!(failed["maybe_typed"], true);
+            assert_eq!(bell.typed().len(), 1);
+            {
+                let guard = bell.runtime.lock().unwrap();
+                let ledger = guard.delivery_state().unwrap();
+                let letter = ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == bell.letter)
+                    .unwrap();
+                assert_eq!(letter.state, State::Pending);
+                assert!(!letter.bell_sent);
+                let failure = letter.bell_failure.as_ref().expect("the failure is kept");
+                assert_eq!(failure.code, "herdr_call_failed");
+                assert!(failure.maybe_typed);
+            }
+            *bell.screen.lock().unwrap() = match shown {
+                "bell" => line_shown(&bell.line().unwrap()),
+                "empty" => CODEX_EMPTY.into(),
+                _ => CODEX_DRAFT.into(),
+            };
+            let reads = bell.reads();
+            bell.pass(
+                &mut doorbell,
+                at + crate::delivery::typed::RECORD_WAIT_MS - 1,
+            );
+            assert_eq!(
+                bell.reads(),
+                reads,
+                "{shown}: nothing before the record wait"
+            );
+            assert_eq!(bell.typed().len(), 1, "{shown}");
+            let records = bell.pass(&mut doorbell, at + crate::delivery::typed::RECORD_WAIT_MS);
+            let read = records
                 .iter()
-                .find(|letter| letter.id == bell.letter)
-                .unwrap();
-            assert_eq!(letter.state, State::Pending);
-            assert!(!letter.bell_sent);
-            assert_eq!(letter.bell_errors, 1);
-            assert_eq!(letter.attempts(), 1);
+                .find(|record| record["kind"] == "doorbell.composer_after_lost")
+                .unwrap_or_else(|| panic!("{shown}: {records:?}"));
+            assert_eq!(read["shows"], shown);
+            let entered = bell.fake.calls_of("send_keys");
+            match shown {
+                "bell" => {
+                    assert_eq!(bell.typed().len(), 1, "the line is not typed again");
+                    assert_eq!(entered.len(), 1);
+                    assert!(entered[0].to_string().contains("Enter"), "{entered:?}");
+                    assert_eq!(bell.attempts(), 2, "the Enter spends a bell");
+                }
+                "empty" => {
+                    assert_eq!(bell.typed().len(), 2, "rung again");
+                    assert!(entered.is_empty());
+                    assert_eq!(bell.attempts(), 2);
+                }
+                _ => {
+                    assert_eq!(held(&records), ["draft"]);
+                    assert_eq!(
+                        bell.typed().len(),
+                        1,
+                        "the operator's words are not typed into"
+                    );
+                    assert!(entered.is_empty(), "nor submitted");
+                    assert_eq!(bell.attempts(), 1);
+                }
+            }
         }
-        assert!(bell.pass(&mut doorbell, at + 2 * RETRY_LIMIT_MS).is_empty());
-        assert_eq!(
-            bell.typed().len(),
-            1,
-            "a timer must not retry an uncertain submission"
-        );
-        assert_eq!(bell.attempts(), 1);
+    }
+
+    /// with-hide/hide#2180: a letter whose three bells are spent and none
+    /// taken ends undelivered at once, not at its deadline, and its sender
+    /// gets one letter from Hide's own `hide:input` naming the recipient, its
+    /// pane, why and what to do now; whether a device's node refused each
+    /// bell before typing it (with-hide/hide-private#677) or each answer was
+    /// lost and the resting agent recorded none of them.
+    #[test]
+    fn a_letter_whose_bells_are_spent_ends_undelivered_and_tells_its_sender_at_once() {
+        for (error, reason) in [
+            ("pane_input_unavailable", "engine_refused"),
+            ("timeout", "herdr_call_failed"),
+        ] {
+            let bell = Bell::with_submission_error(json!({}), Some(error));
+            {
+                let mut guard = bell.runtime.lock().unwrap();
+                guard.install_delivery_client(bell.client.clone());
+                guard.install_worker_context(
+                    Arc::downgrade(&bell.runtime),
+                    crate::handle::ChangeNotifier::noop(),
+                );
+            }
+            let mut doorbell = Doorbell::default();
+            let start = now();
+            let mut at = start;
+            for _ in 0..3 {
+                bell.pass(&mut doorbell, at);
+                at += RETRY_LIMIT_MS;
+            }
+            assert_eq!(bell.typed().len(), 3, "{error}");
+            assert_eq!(bell.attempts(), 3, "{error}");
+            bell.pass(&mut doorbell, at);
+            assert_eq!(bell.typed().len(), 3, "{error}: a spent letter is not rung");
+            crate::runtime::delivery::tests::observe_turn_ended(
+                &mut bell.runtime.lock().unwrap(),
+                "recipient",
+                start + 10,
+            );
+            let letter = || {
+                let guard = bell.runtime.lock().unwrap();
+                let ledger = guard.delivery_state().unwrap();
+                ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == bell.letter)
+                    .unwrap()
+                    .clone()
+            };
+            let undelivered = |bell: &Bell| -> Vec<Letter> {
+                let intent = format!("letter-undelivered:{}", bell.letter);
+                input_notices(bell)
+                    .into_iter()
+                    .filter(|notice| notice.intent == intent)
+                    .collect()
+            };
+            assert_eq!(letter().state, State::Pending, "{error}");
+            bell.runtime.lock().unwrap().drive_spent_bells(at);
+            // The store's next pass ends it.
+            until(|| letter().state == State::Undelivered);
+            assert_eq!(
+                letter().bell_failure.map(|failure| failure.code),
+                Some(reason.to_owned()),
+                "{error}"
+            );
+            bell.runtime.lock().unwrap().drive_spent_bells(at);
+            until(|| !undelivered(&bell).is_empty());
+            let note = &undelivered(&bell)[0];
+            assert_eq!(note.recipient.pane_id, "sender");
+            assert_eq!(note.kind, "progress");
+            assert!(
+                note.immediate,
+                "it reaches a working sender at its next gap"
+            );
+            for part in [
+                "recipient did not get your report letter",
+                &bell.letter,
+                reason,
+                "hide pane read recipient",
+                "send the letter again with a new --intent",
+            ] {
+                assert!(note.body.contains(part), "{error}: {part}: {}", note.body);
+            }
+            bell.runtime.lock().unwrap().drive_spent_bells(at + 1_000);
+            assert_eq!(undelivered(&bell).len(), 1, "{error}: told once");
+        }
+    }
+
+    /// Waits for the delivery store's own pass, which runs on its thread.
+    #[allow(clippy::disallowed_methods)] // a polling helper, bounded by a deadline
+    fn until(ready: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready() {
+            assert!(std::time::Instant::now() < deadline, "timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// B3, B4: while the recipient's session waits for the operator to

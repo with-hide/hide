@@ -134,6 +134,22 @@ pub struct Letter {
     /// When that notice was sent, 0 for none.
     #[serde(default)]
     pub input_noticed_at_unix_ms: u64,
+    /// Why the letter's last bell failed, while no bell typed after it went
+    /// through; absent otherwise. Its sender reads the cause here, and the
+    /// doorbell reads whether the line may be in the agent's input. An older
+    /// build drops the field at its next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bell_failure: Option<BellFailure>,
+}
+
+/// A bell that failed: the doorbell's code for it, and whether the engine
+/// had been asked to type the line, so it may be in the agent's input
+/// (`docs/delivery.md`, Letters while the agent works).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BellFailure {
+    pub code: String,
+    pub maybe_typed: bool,
+    pub at_unix_ms: u64,
 }
 
 /// How long one machine other than this core's own has been reachable, which
@@ -422,6 +438,10 @@ impl Ledger {
                 })
                 || letter.bell_attempts.is_some_and(|attempts| attempts > 3)
                 || letter
+                    .bell_failure
+                    .as_ref()
+                    .is_some_and(|failure| !super::valid_key(&failure.code))
+                || letter
                     .bell_line
                     .as_deref()
                     .is_some_and(|line| !super::bell::valid_line(line))
@@ -568,11 +588,12 @@ impl Ledger {
         changed
     }
 
-    /// Ends the wait of each pending letter in `failed`, whose recipient's
-    /// wake failed (PRD mission-worker-sleep D-16): it is undelivered and its
-    /// sender waits for no answer. The reason goes to the sender in Hide's
-    /// own letter, not into this one.
-    pub fn fail_woken(&mut self, failed: &BTreeMap<String, String>, now: u64) -> bool {
+    /// Ends the wait of each pending letter in `failed`, which cannot be
+    /// delivered now: its recipient's wake failed (PRD mission-worker-sleep
+    /// D-16), or its bells are spent and none was taken. It is undelivered
+    /// and its sender waits for no answer. The reason goes to the sender in
+    /// Hide's own letter, not into this one.
+    pub fn fail_undeliverable(&mut self, failed: &BTreeMap<String, String>, now: u64) -> bool {
         let mut changed = false;
         for letter in &mut self.letters {
             if letter.state != State::Pending || !failed.contains_key(&letter.id) {
@@ -1107,7 +1128,7 @@ mod tests {
     fn a_failed_wake_leaves_its_letter_undelivered() {
         let mut ledger = letter_to("local", 0);
         let id = ledger.letters[0].id.clone();
-        assert!(ledger.fail_woken(&[(id, "agent_wake.not_started".into())].into(), 5));
+        assert!(ledger.fail_undeliverable(&[(id, "agent_wake.not_started".into())].into(), 5));
         let letter = &ledger.letters[0];
         assert_eq!(letter.state, State::Undelivered);
         assert!(!letter.waiting_answer);

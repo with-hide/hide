@@ -547,7 +547,7 @@ impl Runtime {
     /// there, else a read of its session file. Without one an unconfirmed
     /// input is not judged lost (`typed::HOOKS_NOT_CONNECTED`,
     /// `typed::SESSION_UNREAD`).
-    fn input_source(&self, kind: &str, pane_id: &str) -> Result<(), &'static str> {
+    pub(super) fn input_source(&self, kind: &str, pane_id: &str) -> Result<(), &'static str> {
         let hooked =
             hide_agent_adapter::adapter(kind).is_some_and(|row| row.key.prompt_hook_records());
         if hooked {
@@ -611,7 +611,7 @@ impl Runtime {
     /// next bell, whose prompt hook prints the body, still rings. An older
     /// message with the same line, such as an earlier letter's from the same
     /// sender, is not this bell's.
-    fn bell_line_recorded(&self, letter: &crate::delivery::ledger::Letter) -> bool {
+    pub(super) fn bell_line_recorded(&self, letter: &crate::delivery::ledger::Letter) -> bool {
         let (Some(line), Some(typed_at)) =
             (letter.bell_line.as_deref(), letter.bell_typed_at_unix_ms)
         else {

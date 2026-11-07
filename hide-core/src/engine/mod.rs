@@ -52,7 +52,9 @@ pub enum EngineError {
     /// a connection that closed unanswered. The engine may have done what was
     /// asked, so a caller that made a change reconciles before it asks again.
     Unanswered(String),
-    /// The engine answered with a refusal, under its stable code.
+    /// The engine answered with a refusal, under its stable code. A refusal
+    /// is made before the engine does what was asked: an input it refuses,
+    /// its own or its node's, typed nothing (`delivery::ladder`).
     Refused { code: String, message: String },
     /// The engine's answer could not be read as an answer at all.
     Malformed(String),
@@ -439,7 +441,9 @@ pub(crate) trait Engine: Send + Sync {
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.
     fn delivery_agent(&self, wait: Wait, target: &str) -> Answer<DeliveryAgent>;
-    /// Types `text` into the agent's input and submits it.
+    /// Types `text` into the agent's input and submits it. A refusal typed
+    /// nothing; an answer that never came may follow a submission that
+    /// arrived.
     fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()>;
 
     // Worktrees.

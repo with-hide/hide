@@ -1,0 +1,254 @@
+//! Letters no bell can bring any more (`docs/delivery.md`, Input an agent
+//! did not take): their three bells are spent and none was taken, so waiting
+//! for the 60-minute deadline would only keep the sender waiting on a letter
+//! that cannot arrive (with-hide/hide#2180). Such a letter ends undelivered
+//! at once, as one whose recipient's wake failed does, and its sender gets
+//! one letter from `hide:input` naming the recipient, its pane, why and what
+//! to do now.
+//!
+//! A bell is not taken when it typed nothing, or when the agent rested the
+//! record wait (`typed::RECORD_WAIT_MS`) since the last bell that was or may
+//! have been typed and recorded none of them. An agent whose record Hide
+//! cannot hear (hooks not connected) is never judged here: its sender was
+//! already told the input cannot be confirmed, and the letter waits for
+//! `hide inbox` as before.
+//!
+//! What is owed is memory: the store ends the letter on its next pass
+//! (`Runtime::delivery_undeliverable`), and the note's intent,
+//! `letter-undelivered:<letter>`, makes a note a restart sends again the
+//! same letter. Bounded by the open letters.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use serde_json::json;
+
+use super::Runtime;
+use super::hide_notes::{Note, NoteKind};
+use crate::delivery::ledger::{Letter, State};
+use crate::delivery::typed::{self, Standing, TypedInput};
+
+/// The bells one letter has (`Ledger::reserve_bell`).
+const BELLS: u8 = 3;
+
+#[derive(Default)]
+pub(in crate::runtime) struct SpentBells {
+    /// Letters judged undeliverable, with why and the pane they were rung
+    /// in, until the store ended them and their sender was told.
+    failed: BTreeMap<String, Spent>,
+    /// A thread is telling senders; it is the only one.
+    noting: bool,
+}
+
+struct Spent {
+    reason: String,
+    pane: String,
+    noted: bool,
+}
+
+impl Runtime {
+    /// The letters that cannot be delivered now, with why, for the delivery
+    /// store's pass: those a failed wake leaves and those no bell can bring.
+    pub(crate) fn delivery_undeliverable(&self) -> BTreeMap<String, String> {
+        let mut failed = self.delivery_wake_failures();
+        for (id, spent) in &self.spent_bells.failed {
+            failed
+                .entry(id.clone())
+                .or_insert_with(|| spent.reason.clone());
+        }
+        failed
+    }
+
+    /// Judges the pending letters whose bells are spent, and tells each
+    /// sender whose letter the store ended undelivered. Run by the
+    /// coordinator's tick; memory only.
+    pub(crate) fn drive_spent_bells(&mut self, now: u64) {
+        if self.effects_held() {
+            return;
+        }
+        let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {
+            return;
+        };
+        self.spent_bells.failed.retain(|id, spent| {
+            ledger
+                .letters
+                .iter()
+                .find(|letter| &letter.id == id)
+                .is_some_and(|letter| {
+                    letter.state == State::Pending
+                        || (letter.state == State::Undelivered && !spent.noted)
+                })
+        });
+        for letter in &ledger.letters {
+            if self.spent_bells.failed.contains_key(&letter.id) {
+                continue;
+            }
+            let Some(reason) = self.spent_bell(letter, now) else {
+                continue;
+            };
+            crate::diagnostic!(json!({
+                "component": "delivery", "kind": "doorbell.spent",
+                "letter_id": letter.id, "pane_id": letter.recipient.pane_id, "reason": reason,
+            }));
+            self.spent_bells.failed.insert(
+                letter.id.clone(),
+                Spent {
+                    reason,
+                    pane: letter.recipient.pane_id.clone(),
+                    noted: false,
+                },
+            );
+        }
+        self.note_spent_bells(&ledger);
+    }
+
+    /// Why no bell can bring `letter` any more, or `None` while one can,
+    /// one may still be taken, or its record cannot be heard.
+    fn spent_bell(&self, letter: &Letter, now: u64) -> Option<String> {
+        // A letter an earlier build counted no bells for has an unknown total
+        // (`Letter::attempts`), and its bells may have been typed.
+        let spent = letter
+            .bell_attempts
+            .is_some_and(|attempts| attempts >= BELLS);
+        if letter.state != State::Pending || letter.handed || !spent {
+            return None;
+        }
+        let observation = self
+            .delivery_observations
+            .get(&letter.recipient.pane_id)
+            .filter(|observation| observation.actor.same_identity(&letter.recipient))?;
+        let failure = letter.bell_failure.as_ref();
+        // The last bell that was, or may have been, typed.
+        let typed_at = letter
+            .bell_typed_at_unix_ms
+            .into_iter()
+            .chain(
+                failure
+                    .filter(|failure| failure.maybe_typed)
+                    .map(|failure| failure.at_unix_ms),
+            )
+            .max();
+        let Some(typed_at) = typed_at else {
+            // No bell was typed: each failed or was held before typing.
+            return Some(
+                failure.map_or_else(|| NOT_TYPED.to_owned(), |failure| failure.code.clone()),
+            );
+        };
+        let reason =
+            failure.map_or_else(|| NOT_RECORDED.to_owned(), |failure| failure.code.clone());
+        if self
+            .input_source(&letter.recipient.kind, &observation.actor.pane_id)
+            .is_err()
+            || self.bell_line_recorded(letter)
+        {
+            return None;
+        }
+        let input = TypedInput {
+            attempts: BELLS,
+            typed_at_unix_ms: typed_at,
+            ..TypedInput::default()
+        };
+        matches!(
+            typed::standing(&input, Some(observation), now),
+            Standing::Unconfirmed { .. }
+        )
+        .then_some(reason)
+    }
+
+    /// Tells each sender whose letter the store ended undelivered here who
+    /// did not get it and why, once. A sender that is Hide's or the
+    /// operator's own reads no letters.
+    fn note_spent_bells(&mut self, ledger: &crate::delivery::ledger::Ledger) {
+        if self.spent_bells.noting {
+            return;
+        }
+        let mut notes = Vec::new();
+        let due = self
+            .spent_bells
+            .failed
+            .iter_mut()
+            .filter(|(_, spent)| !spent.noted)
+            .filter_map(|(id, spent)| {
+                let letter = ledger.letters.iter().find(|letter| &letter.id == id)?;
+                (letter.state == State::Undelivered).then(|| {
+                    spent.noted = true;
+                    (spent.reason.clone(), spent.pane.clone(), letter)
+                })
+            })
+            .collect::<Vec<_>>();
+        for (reason, pane, letter) in due {
+            if letter.sender.code_owned() {
+                continue;
+            }
+            let target = self
+                .delivery_observations
+                .get(&letter.sender.pane_id)
+                .filter(|observation| observation.actor.same_identity(&letter.sender))
+                .cloned()
+                .or_else(|| {
+                    self.asleep_route(&letter.sender).map(|_| {
+                        super::agent_sleep::letters::asleep_observation(letter.sender.clone())
+                    })
+                });
+            let Some(target) = target else {
+                crate::diagnostic!(json!({
+                    "component": "delivery", "kind": "doorbell.spent_note_unsent",
+                    "letter_id": letter.id, "code": "sender_unavailable",
+                }));
+                continue;
+            };
+            notes.push(Note {
+                body: note_body(
+                    &letter.recipient.name,
+                    &pane,
+                    &letter.kind,
+                    &letter.id,
+                    &reason,
+                ),
+                letter: letter.id.clone(),
+                target,
+            });
+        }
+        if notes.is_empty() {
+            return;
+        }
+        let kind = NoteKind {
+            role: typed::INPUT_ROLE,
+            thread: "hide-spent-bell-notes",
+            intent: "letter-undelivered",
+            component: "delivery",
+            unsent: "doorbell.spent_note_unsent",
+            now: true,
+        };
+        self.spent_bells.noting = self.send_hide_notes(kind, notes, |runtime| {
+            runtime.spent_bells.noting = false;
+        });
+    }
+}
+
+/// The reason of a letter whose bells were typed and none recorded.
+const NOT_RECORDED: &str = "not_recorded";
+/// The reason of a letter none of whose bells was typed, with no failure
+/// recorded: each was held after its reservation.
+const NOT_TYPED: &str = "not_typed";
+
+/// What Hide tells a sender whose letter no bell can bring: who, in which
+/// pane, why in plain words with the doorbell's code (`delivery::doorbell`,
+/// `delivery::ladder`), and what to do now.
+fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str) -> String {
+    let why = match reason {
+        NOT_RECORDED => "Hide typed its bell and the agent recorded none of them",
+        "engine_refused" => "its pane refused the typing",
+        "engine_unreachable" => "its machine could not be reached to type it",
+        "herdr_call_failed" => "Hide lost the answer to its typing, and the agent recorded none",
+        "herdr_format" => "the answer to its typing could not be read, and the agent recorded none",
+        "herdr_parameters" => "the bell could not be put into the engine's terms",
+        "doorbell_reservation_failed" | "doorbell_reservation_format" => {
+            "the delivery store did not save its bell"
+        }
+        _ => "Hide could not type its bell",
+    };
+    format!(
+        "{recipient} did not get your {kind} letter {letter}: {why} ({reason}), and its {BELLS} bells are spent, so Hide does not ring it again.\nRead its screen with `hide pane read {pane}`; once it shows its input box, send the letter again with a new --intent, or give the work to another agent."
+    )
+}
