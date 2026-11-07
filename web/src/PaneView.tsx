@@ -423,14 +423,11 @@ export const PaneView = memo(function PaneView({
         )}
         {/* The fork mark stays at every width: an icon alone, and a side fork is what makes a narrow pane. */}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
-        {agentKind ? (
-          // What the pane did, which the session record also holds, gives way below the tight breakpoint; the ask and the letters after it stay, since the operator acts on them here.
-          <span className="contents pane-head-tight:hidden">
-            <PanePrChip paneId={paneId} actions={actions} />
-            <PaneWorkChip paneId={paneId} actions={actions} />
-            <PaneViews paneId={paneId} name={title} actions={actions} />
-          </span>
-        ) : null}
+        {/* The PR mark gives way below the tight breakpoint, since the session record also holds it; the work chip stays, its mark and count alone, since a Conductor's pane opens its map from it. */}
+        {agentKind ? <span className="contents pane-head-tight:hidden"><PanePrChip paneId={paneId} actions={actions} /></span> : null}
+        {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
+        {/* The views chip gives way below the tight breakpoint too: the View area already shows what it lists. The ask and the letters after it stay, since the operator acts on them here. */}
+        {agentKind ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={title} actions={actions} /></span> : null}
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
