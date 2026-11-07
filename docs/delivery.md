@@ -73,6 +73,17 @@ Retry the same intent after an interrupted call: the same sender identity and in
 Use a new intent for a new letter.
 The envelope identifies the sender and letter kind; it is not a session-level authority or anti-forgery proof.
 The current first-line format is `Hide letter <id> from <name> (<agent>) [<kind>]`, with independent writer and transcript-reader examples in [delivery-envelope.json](../contracts/delivery-envelope.json).
+
+### Who may read a letter
+
+`hide request show <id>` answers a letter's sender and its recipient, and every other caller is refused `letter_unavailable`, as for a letter that does not exist.
+The one other reader is the worker of a mission node, who may read a letter written by a checker bound to a line of that same node (its reviewer or verifier) to the mission's Conductor.
+Without it a review written to the Conductor reached the worker only as the Conductor's copy of it (with-hide/hide-private#656).
+The core works the pairs out under its lock from the mission book at each call (`MissionBook::checkers_read_by`, `Runtime::node_checker_exchanges`): the reader is the node's own `agent_id`, the writer a checker of one of that node's lines, the recipient the Conductor of the same mission.
+It hands them to the store as data (`Authority::also_reads`), and the store alone decides the read (`mailbox::show`), so what a read answers is the same for every reader.
+A worker of another node, a worker of another mission, a worker its node no longer binds, a checker reading the worker's letters, a checker reading another checker's, a checker's letter to anyone but the Conductor, and an agent in no mission read nothing they did not read before.
+The grant is a read and nothing else: taking the letter in, cancelling it and answering it stay with its sender and recipient (`mailbox::authorized`), and a worker that tries is refused `letter_unavailable` as before.
+`hide-core/src/runtime/tests/mission_letters.rs` holds the boundary.
 `<name>` is the sender's [wire name](#names-on-the-wire-and-on-screen), and so are the names of a letter's and a watch's endpoints in every answer.
 A batch keeps the first letter's sender attribution in the request view; neither later headers nor older delivery formats select a sender.
 

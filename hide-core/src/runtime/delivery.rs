@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::Ledger;
+use crate::delivery::mailbox::Exchange;
 use crate::delivery::worker::{Authority, Client, Prepared, PreparedHuman};
 use crate::delivery::{Actor, Command};
 use crate::labels::overlay::LabelOverlay;
@@ -1596,11 +1597,13 @@ impl Runtime {
             }
             _ => None,
         };
+        let also_reads = self.node_checker_exchanges(&actor, &command);
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: caller.to_owned(),
                 context,
+                also_reads,
             },
             actor,
             target,
@@ -1616,6 +1619,42 @@ impl Runtime {
             Some(answer) => prepared.answered(answer),
             None => prepared,
         })
+    }
+
+    /// What a `Show` may read beyond its caller's own letters: when the
+    /// caller works a mission node, the letters that node's checkers (its
+    /// reviewer or verifier) wrote to the mission's Conductor
+    /// (docs/delivery.md, Who may read a letter). Only the pairs are worked
+    /// out here, from the mission book and the registrations; the store
+    /// decides the read (`mailbox::show`). A checker that has since ended
+    /// still counts, because its letters were written, but only a worker
+    /// that runs reads them.
+    fn node_checker_exchanges(&self, reader: &Actor, command: &Command) -> Vec<Exchange> {
+        let Command::Show { .. } = command else {
+            return Vec::new();
+        };
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return Vec::new();
+        };
+        let Some(worker) = ledger
+            .agents
+            .iter()
+            .rev()
+            .find(|record| record.actor.same_identity(reader) && !record.ended)
+        else {
+            return Vec::new();
+        };
+        self.missions
+            .book
+            .checkers_read_by(&worker.id)
+            .filter_map(|(checker, conductor)| {
+                let checker = ledger.agents.iter().find(|record| record.id == checker)?;
+                Some(Exchange {
+                    from: checker.actor.clone(),
+                    to: conductor.clone(),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {
@@ -1901,6 +1940,7 @@ impl Runtime {
             Authority {
                 caller: actor.pane_id.clone(),
                 context,
+                also_reads: Vec::new(),
             },
             actor,
             Some(target),
@@ -1926,6 +1966,7 @@ impl Runtime {
             Authority {
                 caller: actor.pane_id.clone(),
                 context,
+                also_reads: Vec::new(),
             },
             actor,
         ))
@@ -2195,6 +2236,7 @@ impl Runtime {
             Authority {
                 caller: pane.into(),
                 context,
+                also_reads: Vec::new(),
             },
             actor,
         ))
@@ -2458,6 +2500,7 @@ pub(crate) mod tests {
                 checkout_id: "checkout".into(),
                 checkout_path: "/checkouts/fixture".into(),
             },
+            also_reads: Vec::new(),
         }
     }
 
