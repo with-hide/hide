@@ -201,7 +201,7 @@ function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageK
  */
 export type NodeTone = "done" | "working" | "hold" | "waiting" | "cancelled" | "dropped";
 
-export function nodeTone(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status" | "blocked" | "attention">): NodeTone {
+export function nodeTone(mission: Pick<Mission, "status">, node: MissionNodeBrief): NodeTone {
   if (node.status === "dropped") return "dropped";
   if (mission.status === "cancelled" && node.status !== "done") return "cancelled";
   if (openAttention(mission, node)) return "hold";
@@ -283,7 +283,7 @@ export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly
  * causes, the same worker `내 차례` lists), or the working step the open
  * decision stopped. Null for a step nobody has to look at.
  */
-export type HoldReason = { kind: "attention"; attention: MissionAttention } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
+export type HoldReason = { kind: "attention"; attention: Omit<MissionAttention, "choices"> } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
 
 /** What `holdReason` reads of a mission: its state, and the decision with the node it stopped. */
 export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node"> | null; conductor_letters?: MissionHeldLetters | null };
@@ -608,7 +608,7 @@ export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
   | { kind: "takeover" }
   | { kind: "letters"; letters: MissionHeldLetters }
-  | { kind: "attention"; node: N; attention: MissionAttention }
+  | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
   | { kind: "landing"; nodes: N[]; git: boolean };
 
@@ -820,7 +820,7 @@ export function attentionReasonText(reason: MissionAttentionReason, pr: number |
  * none for a dropped node or in a cancelled mission, whose work stays as it
  * was left.
  */
-export function openAttention(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status" | "attention">): MissionAttention | null {
+export function openAttention<A extends Omit<MissionAttention, "choices">>(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status"> & { attention: A | null }): A | null {
   return mission.status === "cancelled" || node.status === "dropped" ? null : node.attention;
 }
 

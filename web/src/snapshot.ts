@@ -1599,7 +1599,8 @@ export type Mission = {
  * What the mission rules both screens share read of a node (`missionEntry`, `turnItems`, `missionCells`): the desktop's `MissionNode` and the
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "attention" | "landing" | "agent_runtime">;
+/** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters"> & {
   conductor: Pick<Mission["conductor"], "present">;

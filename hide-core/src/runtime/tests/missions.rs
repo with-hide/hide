@@ -6195,7 +6195,15 @@ fn the_operators_done_skips_the_open_lines_as_their_decision_and_tells_the_condu
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
     // The view offers this raise's choices, and one it does not offer is
     // refused on the standing raise too (with-hide/hide#2227).
-    let present = runtime.conductor_present(&runtime.missions.book.get("mission-1").unwrap().conductor.actor);
+    let present = runtime.conductor_present(
+        &runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .conductor
+            .actor,
+    );
     assert_eq!(
         node_view(&runtime, "fix").attention.unwrap().choices,
         AttentionReason::MergedUnproven.choices(present)

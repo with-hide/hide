@@ -280,7 +280,11 @@ impl AttentionReason {
             Self::ConductorFailed => &[Resume, Drop],
         };
         let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
-        leave.then_some(Leave).into_iter().chain(own.iter().copied()).collect()
+        leave
+            .then_some(Leave)
+            .into_iter()
+            .chain(own.iter().copied())
+            .collect()
     }
 
     pub fn as_str(self) -> &'static str {
@@ -2959,7 +2963,10 @@ pub(crate) mod tests {
         assert_eq!(AttentionReason::WorkerEnded.choices(false), [Drop]);
         assert_eq!(AttentionReason::MergedUnproven.choices(true), [Leave, Done]);
         assert_eq!(AttentionReason::UnplannedPr.choices(false), [Leave, Attach]);
-        assert_eq!(AttentionReason::ConductorFailed.choices(true), [Resume, Drop]);
+        assert_eq!(
+            AttentionReason::ConductorFailed.choices(true),
+            [Resume, Drop]
+        );
     }
     use super::*;
 
