@@ -434,6 +434,12 @@ impl Runtime {
 
     /// Chooses a checkout in the UI. An empty remote checkout creates no PTY.
     pub(super) fn choose_agent_workspace(&mut self, key: &WorkspaceKey) -> bool {
+        let (changed, read) = self.change_look(|runtime| runtime.choose_agent_workspace_steps(key));
+        changed || read
+    }
+
+    /// The steps of `choose_agent_workspace`, which runs them as one selection (`look.rs`).
+    fn choose_agent_workspace_steps(&mut self, key: &WorkspaceKey) -> bool {
         let Some((workspace, checkout)) = self.agent_workspace_ids(key) else {
             self.set_error(
                 "agent_group.workspace_unavailable",
@@ -943,8 +949,16 @@ impl Runtime {
     /// that device's front adds one pass over its session's checkouts. The
     /// Agent tab bookmark pass adds a comparison of the shown tabs and area
     /// fronts against what it saw last, in a few small vectors and with no
-    /// write.
-    pub(super) fn sync_workspace_view(&mut self) {
+    /// write. The pass is one selection (`look.rs`): the look it leaves is
+    /// compared once with the look the rows were read with, and the rows are
+    /// read again only when it moved; true when that changed a row.
+    pub(super) fn sync_workspace_view(&mut self) -> bool {
+        let ((), read) = self.change_look(Self::settle_workspace_view);
+        read
+    }
+
+    /// The view pass itself (`sync_workspace_view`).
+    fn settle_workspace_view(&mut self) {
         // The recent list follows the front checkout wherever the layout
         // store exists or not, and writes only when the front moved.
         self.track_recent_checkouts();

@@ -82,6 +82,11 @@ impl Runtime {
     /// Makes a registered device the one in front: its checkouts, panes and
     /// files are what the shell shows next.
     pub(super) fn bring_device_forward(&mut self, device_id: String) {
+        self.change_look(|runtime| runtime.bring_device_forward_steps(device_id));
+    }
+
+    /// The steps of `bring_device_forward`, which runs them as one selection (`look.rs`).
+    fn bring_device_forward_steps(&mut self, device_id: String) {
         if !self
             .snapshot
             .navigator
@@ -97,7 +102,7 @@ impl Runtime {
             return;
         }
         let local = device_id == self.node.as_str();
-        self.snapshot.navigator.focused_device_id = Some(device_id);
+        self.set_front_device(Some(device_id));
         self.yield_surface_to_terminal();
         if local {
             self.return_keyboard_to_local_pane();
@@ -109,12 +114,7 @@ impl Runtime {
 
     /// Whether `device_id` is already the device in front.
     pub(super) fn device_in_front(&self, device_id: &str) -> bool {
-        self.snapshot
-            .navigator
-            .focused_device_id
-            .as_deref()
-            .unwrap_or(self.node.as_str())
-            == device_id
+        self.look.front().unwrap_or(self.node.as_str()) == device_id
     }
 
     /// Connects every device the persisted registrations name. Called once,
@@ -386,8 +386,8 @@ impl Runtime {
             }
         }
         self.reconcile_remote_terminal_panes(device_id, &HashSet::new(), &HashSet::new());
-        if self.snapshot.navigator.focused_device_id.as_deref() == Some(device_id) {
-            self.snapshot.navigator.focused_device_id = Some(self.node.as_str().to_owned());
+        if self.look.front() == Some(device_id) {
+            self.set_front_device(Some(self.node.as_str().to_owned()));
             self.snapshot.ui_state.focused_device_id = None;
             self.return_keyboard_to_local_pane();
             self.sync_recent_closed_snapshot();
@@ -466,11 +466,16 @@ impl Runtime {
             );
             return true;
         }
-        let focused_device = self.snapshot.navigator.focused_device_id.clone();
+        let focused_device = self.look.front().map(str::to_owned);
         let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
-        self.disconnect_remote_device(device_id, Retiring::Retried);
-        self.snapshot.navigator.focused_device_id = focused_device;
-        self.snapshot.ui_state.focused_device_id = persisted_focus;
+        // One selection: the device in front stays there while its link is
+        // dialed again, so the local front the disconnect passes through is
+        // never read as a look (`look.rs`).
+        self.change_look(|runtime| {
+            runtime.disconnect_remote_device(device_id, Retiring::Retried);
+            runtime.set_front_device(focused_device);
+            runtime.snapshot.ui_state.focused_device_id = persisted_focus;
+        });
         self.push_diagnostic(
             "device.retry",
             format!("Reconnecting SSH device {device_id}"),
