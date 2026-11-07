@@ -302,6 +302,13 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
   const flow = await startFlow(page);
   try {
     const { engine, sent, lastSent } = flow;
+    // The fixture agent writes back what it reads, so the modes typed into it
+    // reach its terminal as its own output: the program now tracks the mouse
+    // in SGR form, and its holder says so. Typed first, since a key into a
+    // pane takes the keyboard there.
+    const agentPane = engine.panes[1];
+    await withControl(flow.daemon, async (control) => sendKeys(control, agentPane, "\x1b[?1000h\x1b[?1006h"));
+    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneView(id)?.mouse ?? null, agentPane), { timeout: 10_000 }).toBe(true);
     // The new pane runs the fixture shell. A wheel over it is one
     // terminal_scroll per batch and the core's viewport follows (B19).
     const shellPane = page.locator('[data-pane-view][data-focused="true"]');
@@ -335,7 +342,6 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
     // them with the SGR report the program asked for, and that report is the
     // only thing the PTY gets: the shim logs every byte it reads, and no key
     // event went out, so xterm wrote no mouse report of its own.
-    const agentPane = engine.panes[1];
     // The cell comes from xterm's screen element, exactly cols by rows; the
     // host around it is larger by the fit's remainder, and a cell read from
     // the host drifts toward the far edge (the delta is printed so a run
@@ -348,11 +354,6 @@ test("a wheel over a shell pane is one terminal_scroll per batch, and a click is
       `cell grid: host ${agentHost.width}x${agentHost.height}, screen ${agentScreen.width}x${agentScreen.height}, ${agentGrid.cols}x${agentGrid.rows}; ` +
         `the last row's centre read from the host is row ${lastRowFromHost}`,
     );
-    // The fixture agent writes back what it reads, so the modes typed into it
-    // reach its terminal as its own output: the program now tracks the mouse
-    // in SGR form, and its holder says so.
-    await withControl(flow.daemon, async (control) => sendKeys(control, agentPane, "\x1b[?1000h\x1b[?1006h"));
-    await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneView(id)?.mouse ?? null, agentPane), { timeout: 10_000 }).toBe(true);
     const cell = { column: 4, row: 2 };
     const focusBefore = sent.get("focus_pane") ?? 0;
     const keysBeforeClick = sent.get("key") ?? 0;
