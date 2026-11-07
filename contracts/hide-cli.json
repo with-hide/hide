@@ -292,6 +292,307 @@
             ],
             "type": "object"
         },
+        "agent_end": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "Actor": {
+                    "properties": {
+                        "device_id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "pane_id": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "pane_id",
+                        "name",
+                        "kind",
+                        "device_id",
+                        "session"
+                    ],
+                    "type": "object"
+                },
+                "Connection": {
+                    "enum": [
+                        "connected",
+                        "disconnected"
+                    ],
+                    "type": "string"
+                },
+                "ConversationEnd": {
+                    "description": "The conversation of an ended registration.",
+                    "oneOf": [
+                        {
+                            "description": "Kept under \ubcf4\uad00\ub428, where \uc774\uc5b4\uac00\uae30 resumes it.",
+                            "enum": [
+                                "archived"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Not kept: the archive already holds as many sessions as it keeps.",
+                            "enum": [
+                                "archive_full"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Nothing was archived: the pane stayed, was gone, or showed no conversation Hide knows.",
+                            "enum": [
+                                "none"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "Names": {
+                    "properties": {
+                        "tab": {
+                            "$ref": "#/definitions/Outcome"
+                        },
+                        "workspace": {
+                            "$ref": "#/definitions/Outcome"
+                        }
+                    },
+                    "required": [
+                        "workspace",
+                        "tab"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "enum": [
+                        "pending",
+                        "applied",
+                        "preserved",
+                        "failed"
+                    ],
+                    "type": "string"
+                },
+                "PaneEnd": {
+                    "description": "The pane of an ended registration.",
+                    "oneOf": [
+                        {
+                            "description": "Closed: its holder, shell, agent and everything under them ended.",
+                            "enum": [
+                                "closed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Left open, as `--keep-pane` asked.",
+                            "enum": [
+                                "kept"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "No pane of the registration runs: it closed before, or its id now names another terminal.",
+                            "enum": [
+                                "gone"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Another conversation runs in the pane now, so it was left open.",
+                            "enum": [
+                                "other_agent"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "Runtime": {
+                    "enum": [
+                        "running",
+                        "asleep",
+                        "ended"
+                    ],
+                    "type": "string"
+                },
+                "Watch": {
+                    "properties": {
+                        "activity_failures": {
+                            "format": "uint32",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "first_warning_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "generation": {
+                            "default": 0,
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "last_activity_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "last_state_change_seq": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "last_status": {
+                            "type": "string"
+                        },
+                        "parent": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "status_changed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "target": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "warning_count": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "parent",
+                        "target",
+                        "last_activity_at_unix_ms",
+                        "first_warning_at_unix_ms",
+                        "warning_count",
+                        "activity_failures",
+                        "last_status",
+                        "last_state_change_seq",
+                        "status_changed_at_unix_ms",
+                        "generation"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide agent end`: the registration as it ended, what became of the pane its agent ran in, and of the conversation that ran there.",
+            "properties": {
+                "connection": {
+                    "$ref": "#/definitions/Connection"
+                },
+                "conversation": {
+                    "$ref": "#/definitions/ConversationEnd"
+                },
+                "hostScope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "instance": {
+                    "type": "string"
+                },
+                "machine": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "names": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Names"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Naming has its own receipt; it never changes successful spawn identity."
+                },
+                "origin": {
+                    "description": "The spawner, independently of responsibility; null for ordinary roots.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "pane": {
+                    "type": "string"
+                },
+                "parent": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "project": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "registered": {
+                    "type": "boolean"
+                },
+                "runtime": {
+                    "$ref": "#/definitions/Runtime"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "watch": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Watch"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The watch on this agent, if one is running."
+                }
+            },
+            "required": [
+                "pane",
+                "conversation",
+                "id",
+                "name",
+                "machine",
+                "hostScope",
+                "session",
+                "instance",
+                "parent",
+                "origin",
+                "project",
+                "runtime",
+                "connection",
+                "registered",
+                "watch"
+            ],
+            "title": "AgentEnd",
+            "type": "object"
+        },
         "agent_list": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -3059,7 +3360,7 @@
         },
         {
             "answers": [
-                "agent"
+                "agent_end"
             ],
             "arguments": [
                 {
@@ -3080,11 +3381,24 @@
                     }
                 },
                 {
+                    "name": "--keep-pane",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
                     "value": null
                 }
+            ],
+            "refusals": [
+                "agent_unavailable",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "machine_unavailable",
+                "pane_close_failed"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3341,6 +3655,7 @@
                 "intent_conflict",
                 "invalid_launch_choice",
                 "shell_starting",
+                "holder_cap",
                 "pane_busy",
                 "agent_not_started",
                 "worktree_unconfirmed",
@@ -5274,7 +5589,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:68f6a1d841fa83702eccaff1061353868b85b19192c1c309ede9459e09d76c0c",
+    "digest": "sha256:c1af17eaf2affa948135f8a8a33326a55bf7027285bd9e375665c520466803c7",
     "envelopes": {
         "agent": {
             "answer": "value",
