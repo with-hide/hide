@@ -85,7 +85,9 @@ pub enum ArchivePhase {
     /// Hide restarted while saving or closing; nothing is repeated until
     /// the operator checks its status (B34).
     CloseUnknown,
-    /// Every pane closed: the root is under `보관됨`.
+    /// Every pane closed: the root is under `보관됨`. A conversation
+    /// `hide agent end` kept is archived as its pane closes, and its member
+    /// closes once the pane left its machine's listing.
     Archived,
 }
 
@@ -184,6 +186,8 @@ pub struct ArchivedMember {
     #[serde(default)]
     pub parent: Option<String>,
     pub depth: u8,
+    /// Its pane is gone from its machine's listing; only a closed member
+    /// resumes, and a live row of its conversation then is its resume.
     #[serde(default)]
     pub closed: bool,
     pub resume: Resume,
@@ -354,8 +358,8 @@ impl SessionArchive {
 
     /// Admits a new record, or refuses before anything closes when it would
     /// take the archive past its cap; nothing is evicted (B12).
-    pub fn admit(&mut self, id: ArchiveId, record: ArchiveRecord) -> Result<(), &'static str> {
-        record.validate()?;
+    pub fn admit(&mut self, id: ArchiveId, record: ArchiveRecord) -> Result<(), AdmitRefusal> {
+        record.validate().map_err(AdmitRefusal::Fault)?;
         let others = self
             .records
             .iter()
@@ -363,7 +367,7 @@ impl SessionArchive {
             .map(|(_, record)| record.held().count())
             .sum::<usize>();
         if others + record.members.len() > MAX_ARCHIVED_SESSIONS {
-            return Err(ARCHIVE_FULL);
+            return Err(AdmitRefusal::Full);
         }
         self.records.insert(id, record);
         Ok(())
@@ -415,6 +419,17 @@ impl SessionArchive {
         });
         *self != before
     }
+}
+
+/// Why the archive did not take a record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdmitRefusal {
+    /// It would hold more than [`MAX_ARCHIVED_SESSIONS`] sessions, which
+    /// only deleting archived sessions cures.
+    Full,
+    /// Hide could not form the record (its shape or its identity): a fault
+    /// of Hide's, never the operator's.
+    Fault(&'static str),
 }
 
 /// The refusal that only deleting archived sessions cures (B12).
@@ -647,7 +662,7 @@ mod tests {
         let two = vec![fixture_member("x", None), fixture_member("y", Some("x"))];
         assert_eq!(
             archive.admit(id(2), fixture_record(two, 2)),
-            Err(ARCHIVE_FULL)
+            Err(AdmitRefusal::Full)
         );
         assert_eq!(archive.count(), MAX_ARCHIVED_SESSIONS - 1);
         archive

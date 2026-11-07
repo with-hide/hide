@@ -1887,14 +1887,9 @@ impl Runtime {
         );
         // The time that moves a checkout under Inactive reaches device
         // sessions too, through the fold their derive uses.
-        let nodes: BTreeSet<String> = self
-            .node_sessions()
-            .map(|(node, _)| node.to_owned())
-            .collect();
         let now = unix_milliseconds();
         let window = self.snapshot.navigator.focused_checkout_id.clone();
         for remote in &mut self.snapshot.status.remote {
-            let node = nodes.contains(&remote.target_id);
             if let Some(session) = &mut remote.session {
                 let agents = session
                     .agents
@@ -1914,7 +1909,6 @@ impl Runtime {
                         &self.snapshot.navigator.sleeping_sessions,
                         &self.snapshot.ui_state,
                         focused.as_deref(),
-                        node,
                         now,
                     );
                     changed |= workspace.session_folds != before.0

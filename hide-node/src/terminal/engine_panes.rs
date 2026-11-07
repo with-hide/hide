@@ -596,7 +596,7 @@ fn typed(input: PaneInput) -> Typed {
 fn start_refusal(refusal: StartRefusal) -> HolderError {
     let code = match &refusal {
         StartRefusal::InvalidPane(_) => "invalid_pane",
-        StartRefusal::Cap { .. } => "holder_cap",
+        StartRefusal::Cap { .. } => hide_node_link::holders::HOLDER_CAP_REFUSAL,
         StartRefusal::Conflict(_) => "pane_conflict",
         StartRefusal::RecordUnreadable(_) => "record_unreadable",
         StartRefusal::OtherOwner(_) => "other_owner",
