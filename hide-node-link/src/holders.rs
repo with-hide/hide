@@ -15,6 +15,11 @@ pub use hide_agent_hooks::pane::HIDE_PANE_ID as PANE_ID_VARIABLE;
 
 use serde::{Deserialize, Serialize};
 
+/// The code a node refuses a pane's start with while its state folder holds
+/// the most pane holders it keeps (`hide_kit::panes::HOLDER_CAP`); the core
+/// answers a spawn refused this way with the same code.
+pub const HOLDER_CAP_REFUSAL: &str = "holder_cap";
+
 /// One pane to start, under the id the core chose for it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderStart {

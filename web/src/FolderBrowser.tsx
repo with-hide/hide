@@ -8,7 +8,8 @@
 // Tab completion, and takes a pasted absolute or Windows path, which the node
 // places against its home; a path outside home is not listed and is added
 // through Add a project's one question. The same list picks a parent folder
-// for Clone from URL and Create new project (`mode` `pick`).
+// for Clone from URL and Create new project (`mode` `pick`), opening on the
+// parent those views show and leaving the folder the core keeps alone.
 
 import { ArrowLeftIcon, ChevronRightIcon, FileIcon, FolderIcon, GitBranchIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -53,7 +54,7 @@ export type FolderBrowserProps = {
   mode: "add" | "pick";
   /** The folder the list opens in: `~`, `~/...` or the machine's own absolute path. */
   start: string;
-  /** The folder the core remembers for this machine; a list that shows another tells the core. */
+  /** The folder the core remembers for this machine; an `add` list that shows another tells the core. */
   remembered: string | null;
   registrations: readonly WorkspaceRegistration[];
   /** The machine's connection is down (PRD device-add-project B31). */
@@ -106,7 +107,8 @@ export function FolderBrowser(props: FolderBrowserProps) {
       const typed = asked.via === "typed" ? typedPlace(text, drives, windows) : null;
       if (typed?.kind === "path") setText(`${answer.listing.label}/`);
       if (typed?.kind === "folder" && typed.folder !== answer.listing.label) setText(`${answer.listing.label}/${typed.filter}`);
-      if (told.current !== answer.listing.path) {
+      // Only the list that adds a project keeps its folder; a parent being picked is no project's folder.
+      if (mode === "add" && told.current !== answer.listing.path) {
         told.current = answer.listing.path;
         actions.setAddProjectFolder(device, answer.listing.path);
       }
