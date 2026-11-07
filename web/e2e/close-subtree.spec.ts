@@ -149,12 +149,13 @@ test("the close sheet counts and brightens what needs the operator, stays live w
     // The root's chevron opens its children in place (agent-hierarchy-screens B10), each with its own mark.
     const chevron = page.locator(`nav[data-sidebar] [data-pane="${target}"] [data-tree-chevron="${target}"]`).first();
     await chevron.click();
-    // A delegated child draws only in progress or quiet (status-marks B24); its state word is on the mark.
+    // A delegated child draws only in progress or quiet (status-marks B24): its own question waits on its parent,
+    // so it draws the waiting ring, and its state word is on the mark.
     for (const [pane, status] of [[working, "working"], [asking, "question"]]) {
       await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"] [data-agent-status]`).first()).toHaveAttribute("data-agent-status", status, { timeout: 30_000 });
     }
     await expect(page.locator(`nav[data-sidebar] [data-pane="${working}"] [data-mark]`).first()).toHaveAttribute("data-mark", "going");
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${asking}"] [data-mark]`).first()).toHaveAttribute("data-mark", "quiet");
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${asking}"] [data-mark]`).first()).toHaveAttribute("data-mark", "waiting");
     for (const pane of [finished, quiet]) {
       await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"] [data-agent-status]`).first()).not.toHaveAttribute("data-agent-status", "unknown", { timeout: 30_000 });
     }
