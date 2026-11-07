@@ -389,32 +389,34 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// How the pane's node starts `kind`'s program now, asked before every
-/// start of the spawn: what the start names and whether the brief can ride
-/// it. It only ever lets a start name a file or carry its brief: a program
-/// the node does not find (on Windows a `.ps1` alone, which the pane's
-/// PowerShell still runs), a node that could not be asked, or no node at all
-/// leave the start as it was, by the program's name with its brief typed. A
-/// device's start was refused already when its node did not find the
-/// program (`check_target`).
+/// The program the engine starts `kind` by (the definition's first
+/// executable, `start_prompt::program_of`) and how the pane's node starts it
+/// now, asked before every start of the spawn: what the start names and
+/// whether the brief can ride it. It only ever lets a start name a file or
+/// carry its brief: a program the node does not find (on Windows a `.ps1`
+/// alone, which the pane's PowerShell still runs), a node that could not be
+/// asked, or no node at all leave the start as it was, by the program's name
+/// with its brief typed. A device's start was refused already when its node
+/// did not find the program (`check_target`).
 fn start_form(
     node: Option<&dyn crate::node_access::NodeLink>,
+    engine: &dyn crate::engine::Engine,
     kind: &str,
     spawn: &str,
-) -> Option<StartForm> {
-    let node = node?;
-    crate::start_prompt::start_form(
-        node,
-        hide_agent_adapter::canonical_kind(kind),
-        TARGET_CHECK_TIMEOUT,
-    )
-    .unwrap_or_else(|error| {
-        crate::diagnostic!(json!({
-            "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
-            "agent_kind": kind, "cause": error.to_string(),
-        }));
-        None
-    })
+) -> (String, Option<StartForm>) {
+    let program = crate::start_prompt::program_of(engine, kind);
+    let Some(node) = node else {
+        return (program, None);
+    };
+    let form = crate::start_prompt::start_form(node, &program, TARGET_CHECK_TIMEOUT)
+        .unwrap_or_else(|error| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
+                "agent_kind": kind, "program": program, "cause": error.to_string(),
+            }));
+            None
+        });
+    (program, form)
 }
 
 /// The words a fresh start of `kind` adds to carry `brief` as its launch
@@ -838,7 +840,7 @@ fn check_target(
 ) -> Result<(), String> {
     use crate::node_access::{LinkError, call_as};
     use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
-    let link = client
+    let (link, engine) = client
         .runtime
         .upgrade()
         .ok_or("delivery_unavailable")?
@@ -882,7 +884,8 @@ fn check_target(
     match call_as::<Option<StartForm>>(
         link.as_ref(),
         Call::AgentInstalled {
-            name: hide_agent_adapter::canonical_kind(kind).to_owned(),
+            // The device's own engine says what the agent is started by.
+            name: crate::start_prompt::program_of(engine.as_ref(), kind),
         },
         TARGET_CHECK_TIMEOUT,
     ) {
@@ -1472,7 +1475,7 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
-            let form = start_form(node.as_deref(), kind, &reserved.id);
+            let (program, form) = start_form(node.as_deref(), engine.as_ref(), kind, &reserved.id);
             let mut start_args = with_permission(kind, &permissions, start_args);
             // A fresh start carries the brief as its prompt argument where
             // the agent holds that through its own start screens
@@ -1515,9 +1518,8 @@ fn spawn(
                 kind,
                 start_args,
                 codex_daemon,
-                form.as_ref().and_then(|form| {
-                    crate::engine::StartProgram::of(hide_agent_adapter::canonical_kind(kind), form)
-                }),
+                form.as_ref()
+                    .and_then(|form| crate::engine::StartProgram::of(&program, form)),
             )
             .inspect_err(|code| {
                 // A pane a start of this spawn was typed into keeps it: the
@@ -2439,6 +2441,45 @@ mod tests {
     /// A spawn's answer time that ends no wait in these tests.
     fn far() -> Instant {
         Instant::now() + super::super::SPAWN_ANSWER_WAIT
+    }
+
+    /// Issue 666: a spawn's start asks its node about the program its
+    /// definition starts the agent by, and names that program in the file it
+    /// carries, not the agent's kind. Kiro's kind is `kiro` and its first
+    /// executable `kiro-cli`; the node looks the name up on its `PATH`.
+    #[test]
+    fn a_spawns_start_asks_its_node_about_the_definitions_first_executable_not_the_kind() {
+        struct Asked(std::sync::Mutex<Vec<String>>);
+        impl crate::node_access::NodeLink for Asked {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                let hide_node_link::protocol::Call::AgentInstalled { name } = call else {
+                    panic!("the node was asked {call:?}");
+                };
+                self.0.lock().unwrap().push(name);
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    json!({"direct": {"program": "C:\\npm\\kiro-cli.js", "leading": []}}),
+                ))
+            }
+        }
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let engine = fake.engine();
+        let node = Asked(std::sync::Mutex::default());
+        let (program, form) = start_form(Some(&node), engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!(program, "kiro-cli");
+        assert_eq!(*node.0.lock().unwrap(), ["kiro-cli"]);
+        // The file the node named stands for the word the start line begins
+        // with, which is the program and not the kind.
+        let file = crate::engine::StartProgram::of(&program, &form.expect("the node named a file"))
+            .expect("a direct start names a file");
+        assert_eq!(file.name, "kiro-cli");
+        assert_eq!(file.program, "C:\\npm\\kiro-cli.js");
+        // No node leaves the start by the program's name.
+        let (program, form) = start_form(None, engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!((program.as_str(), form), ("kiro-cli", None));
     }
 
     /// A `worktree.create` whose answer never came may still finish in
