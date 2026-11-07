@@ -1244,6 +1244,16 @@ async fn screen_loop(
                                 }
                                 spawn_device_listing(&state, event, device_frames_tx.clone(), slot.flatten());
                             }
+                            Ok(ClientAction::NodeAsk(event)) => {
+                                let slot = relay.as_ref().map(RelayScreen::slot);
+                                if matches!(slot, Some(None)) {
+                                    if socket.send(relay_busy()).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -2260,6 +2270,10 @@ enum ClientAction {
     CoreMove(Value),
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
+    /// Add a project's question for a machine's node: a folder under its
+    /// home (`home_folder_list`), or where a clone or a new project would
+    /// land on a device (`clone_target`, `project_target`).
+    NodeAsk(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2274,8 +2288,9 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 11] = [
+const DEVICE_FILE_EVENTS: [&str; 12] = [
     "create_workspace",
+    "clone_repository",
     "file_list",
     "file_open",
     "reveal_path",
@@ -2320,6 +2335,10 @@ fn handle_client_text(
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
     match event.get("kind").and_then(Value::as_str) {
+        Some("home_folder_list") => return Ok(ClientAction::NodeAsk(event)),
+        Some("project_target" | "clone_target") if event_device(&state.boundary, &event).is_some() => {
+            return Ok(ClientAction::NodeAsk(event));
+        }
         Some("project_target") => {
             return Ok(ClientAction::Replies(vec![Message::Text(
                 project_target(&state.boundary, &event).to_string().into(),
@@ -2775,6 +2794,134 @@ fn device_listing(
         Err(LinkError::Unknown(message)) => unavailable("unknown", None, message),
         Err(LinkError::Refused(error)) => {
             unavailable("refused", Some(error.code.as_str()), error.message)
+        }
+    }
+}
+
+/// Asks a machine's node Add a project's question on a blocking task and
+/// hands the answer to the client's socket loop; a client gone by then drops
+/// it. The answer is never forwarded to the core and changes nothing on disk.
+fn spawn_node_ask(
+    state: &AppState,
+    event: Value,
+    frames: tokio::sync::mpsc::Sender<String>,
+    slot: Option<crate::relay::RelaySlot>,
+) {
+    let core = Arc::clone(&state.core);
+    let boundary = Arc::clone(&state.boundary);
+    tokio::spawn(async move {
+        let _slot = slot;
+        let frame = tokio::task::spawn_blocking(move || node_ask(&core, &boundary, &event))
+            .await
+            .unwrap_or_else(|error| {
+                json!({"type": "error", "payload": {}, "message": format!("node ask failed: {error}")})
+            });
+        let _ = frames.send(frame.to_string()).await;
+    });
+}
+
+/// How long a node may take to list a folder or judge a new folder's place.
+const NODE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Add a project's question for a machine's node, answered as the frame the
+/// dialog reads (PRD device-add-project D-03, D-07, D-08):
+///
+/// - `home_folder_list` {device_id, path}: one folder under that machine's
+///   home (`Call::HomeList`), this machine's included, answered as a
+///   `home_folder_list` frame carrying `listing` or `reason`;
+/// - a device's `clone_target` and `project_target`: where the clone or new
+///   project would land under that device's home (`Call::NewFolderTarget`),
+///   answered in the same frames this machine's `$HOME` line answers with.
+///
+/// `reason` is a code the dialog words: the node's refusal (`outside_home`,
+/// `not_found`, `not_a_directory`, `invalid_path`, `already_exists`,
+/// `unreadable`), or `disconnected` when the machine cannot be asked; the
+/// node's sentence goes to the log.
+fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
+    use hide_core::node_access::LinkError;
+    let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
+    let device = Some(payload_str(event, "device_id"))
+        .filter(|device| !boundary.names_this_node(Some(device)))
+        .unwrap_or_else(|| boundary.node().as_str().to_owned());
+    let reason = |error: LinkError| -> &'static str {
+        let (code, message) = match &error {
+            LinkError::Refused(refused) => (Some(refused.code), refused.message.clone()),
+            other => (None, other.to_string()),
+        };
+        eprintln!(
+            "{}",
+            json!({
+                "component": "hided", "kind": "add_project.node_refused", "event": kind,
+                "device": device, "code": code.map(|code| code.as_str()), "message": message,
+            })
+        );
+        match code {
+            Some(hide_node_link::ErrorCode::OutsideRoot) => "outside_home",
+            Some(hide_node_link::ErrorCode::NotFound) => "not_found",
+            Some(hide_node_link::ErrorCode::NotADirectory) => "not_a_directory",
+            Some(hide_node_link::ErrorCode::InvalidPath) => "invalid_path",
+            Some(hide_node_link::ErrorCode::AlreadyExists) => "already_exists",
+            Some(_) => "unreadable",
+            None if matches!(error, LinkError::Busy) => "busy",
+            None => "disconnected",
+        }
+    };
+    let link = core.node_link(&device);
+    match kind {
+        "home_folder_list" => {
+            let request = payload_str(event, "path");
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                hide_core::node_access::call_as::<hide_node_link::browse::HomeListing>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::HomeList { path: request.clone() },
+                    NODE_ASK_TIMEOUT,
+                )
+            });
+            let (listing, refused) = match answer {
+                Ok(listing) => (Some(listing), None),
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "home_folder_list", "payload": {
+                "device_id": device, "request": request, "listing": listing, "reason": refused,
+            }})
+        }
+        _ => {
+            let parent = payload_str(event, "parent");
+            let name = payload_str(event, "name");
+            let project = kind == "project_target";
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                hide_core::node_access::call_as::<hide_node_link::browse::NewFolderTarget>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::NewFolderTarget {
+                        parent: parent.clone(),
+                        name: name.clone(),
+                        kind: if project {
+                            hide_node_link::browse::NewFolderKind::Project
+                        } else {
+                            hide_node_link::browse::NewFolderKind::Clone
+                        },
+                    },
+                    NODE_ASK_TIMEOUT,
+                )
+            });
+            let (target, refused) = match answer {
+                Ok(target) => (Some(target), None),
+                Err(error) => (None, Some(reason(error))),
+            };
+            let path = target.as_ref().and_then(|target| target.path.clone());
+            if project {
+                json!({"type": "project_target", "payload": {
+                    "device_id": device, "parent": parent, "name": name,
+                    "parent_path": target.as_ref().map(|target| target.parent.clone()),
+                    "parent_label": target.as_ref().map(|target| target.parent_label.clone()),
+                    "path": path, "leftover": target.as_ref().is_some_and(|target| target.leftover),
+                    "reason": refused,
+                }})
+            } else {
+                json!({"type": "clone_target", "payload": {
+                    "device_id": device, "parent": parent, "name": name, "path": path, "reason": refused,
+                }})
+            }
         }
     }
 }
@@ -4276,6 +4423,7 @@ fn clone_target(boundary: &Boundary, event: &Value) -> Value {
     json!({
         "type": "clone_target",
         "payload": {
+            "device_id": boundary.node().as_str(),
             "parent": parent,
             "name": name,
             "path": answer.as_ref().ok().map(|real| hide_platform::path::to_wire_lossy(&real.join(&name))),
@@ -4307,7 +4455,7 @@ fn project_target(boundary: &Boundary, event: &Value) -> Value {
     let parent = payload_str(event, "parent");
     let name = payload_str(event, "name");
     let mut payload = json!({
-        "parent": parent, "name": name,
+        "device_id": boundary.node().as_str(), "parent": parent, "name": name,
         "parent_path": null, "parent_label": null, "path": null, "leftover": false, "reason": null,
     });
     let real_parent = match boundary.resolve_dir(&parent) {

@@ -146,7 +146,7 @@
       "additionalProperties": false,
       "required": ["type", "payload"],
       "properties": {
-        "type": { "type": "string", "enum": ["daemon", "snapshot", "delta", "terminal", "error", "directory_list", "directory_unavailable", "path_refused", "project_target", "file_bytes_error", "directory_changed", "file_index_result", "attachment_refused", "open_external_result", "clone_target", "core_move", "core_link", "agent_notice", "browser_comment", "window_call"] },
+        "type": { "type": "string", "enum": ["daemon", "snapshot", "delta", "terminal", "error", "directory_list", "directory_unavailable", "path_refused", "project_target", "file_bytes_error", "directory_changed", "file_index_result", "attachment_refused", "open_external_result", "clone_target", "home_folder_list", "core_move", "core_link", "agent_notice", "browser_comment", "window_call"] },
         "payload": {
           "type": "object",
           "properties": {
@@ -1042,10 +1042,68 @@
       "additionalProperties": false,
       "required": ["parent", "name", "path", "reason"],
       "properties": {
+        "device_id": { "type": "string", "description": "The machine asked about: this machine's node id for the $HOME line, or the device whose node answered." },
         "parent": { "type": "string" },
         "name": { "type": "string" },
         "path": { "type": ["string", "null"] },
-        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "type": "null" }] }
+        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
+      }
+    },
+    "nodeAskReason": {
+      "description": "Why a machine's node could not answer Add a project's question (`home_folder_list`, or a device's `clone_target` or `project_target`) beyond a path refusal: unreadable when the folder exists but could not be read, disconnected when the machine cannot be asked now, busy when its node is at its request limit; the node's sentence goes to the log as `add_project.node_refused`.",
+      "type": "string",
+      "enum": ["unreadable", "disconnected", "busy"]
+    },
+    "homeFolderList": {
+      "description": "A client `home_folder_list` event {device_id, path} asks for one folder under a machine's home for Add a project's folder list (PRD device-add-project D-03, D-08). device_id empty or this machine's node id asks this machine; any other id asks that device. path is `~`, `~/...` or an absolute path in either spelling (a Windows device takes `C:\\Users\\me\\work` and `C:/Users/me/work`). hided asks that machine's node (`Call::HomeList`) on a blocking task and answers a home_folder_list frame; it never forwards the event, and nothing changes on disk. The node opens the folder from a handle on its own home, so a path that is not home or below it, or leads out of it through a link, is refused as outside_home, and a link out of home is not a row. A device's `clone_target` and `project_target` {device_id, parent, name} are answered the same way by that device's node (`Call::NewFolderTarget`), in the clone_target and project_target frames this machine's $HOME line answers with, and a `clone_repository` {url, device_id, parent, name} naming a device reaches the core untouched, whose clone worker has that device's node judge the parent again before Git runs there. A `create_workspace` with `new_folder` naming a device reaches the core untouched too, which has that device's node judge and make the folder and its repository and registers it there.",
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "homeFolderListResult": {
+      "description": "Payload of a home_folder_list frame: the machine and the path as asked (request), and either the listing or the reason. A listing names the folder's real path in the wire spelling (path), the same folder as `~` spells it (label), the machine's home (home), at most 500 children with hidden names (a leading dot, macOS's hidden flag, Windows' hidden or system attribute) left out, folders first and then the Explorer's natural order, and truncated when there were more. A child folder that is a Git repository's root carries repository true and its branch (absent when HEAD is detached); any other child folder carries repositories, how many of its own children are repositories, when there are any and it has at most 200 children and the answer has read fewer than 4000 children for these counts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "request", "listing", "reason"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "request": { "type": "string" },
+        "listing": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "label", "home", "entries", "truncated"],
+              "properties": {
+                "path": { "type": "string" },
+                "label": { "type": "string" },
+                "home": { "type": "string" },
+                "truncated": { "type": "boolean" },
+                "entries": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "is_directory"],
+                    "properties": {
+                      "name": { "type": "string" },
+                      "is_directory": { "type": "boolean" },
+                      "repository": { "type": "boolean" },
+                      "branch": { "type": "string" },
+                      "repositories": { "type": "integer", "minimum": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
       }
     },
     "openExternal": {
@@ -1103,7 +1161,7 @@
       }
     },
     "projectTarget": {
-      "description": "A client `project_target` event asks where Add a project's Create new project would make a folder: {parent, name}. hided answers it on the $HOME line with a project_target frame and never forwards it; it reads the parent and the one name under it and changes nothing on disk. The create itself is a `create_workspace` with `new_folder: true` and `initialize_git: true` whose `path` is the parent and the name joined by `/`: hided checks the parent on the $HOME line (home itself is allowed, since the new folder is under it) and the name as one folder name, refuses anything already standing at the target except an empty folder or one holding only `.git` and `.DS_Store` (what an earlier attempt that failed after making its folder leaves, so a retry continues into it) as already_exists, and forwards the canonical target; the core makes the folder at that literal path before canonicalizing it, so a symlink planted at the name is refused rather than followed, runs `git init` in it, and registers it. A `new_folder` create that names an SSH device is refused by the core.",
+      "description": "A client `project_target` event asks where Add a project's Create new project would make a folder: {parent, name}. hided answers it on the $HOME line with a project_target frame and never forwards it; it reads the parent and the one name under it and changes nothing on disk. With `device_id` naming a device it is that device's node's question instead (see homeFolderList). The create itself is a `create_workspace` with `new_folder: true` and `initialize_git: true` whose `path` is the parent and the name joined by `/`: hided checks the parent on the $HOME line (home itself is allowed, since the new folder is under it) and the name as one folder name, refuses anything already standing at the target except an empty folder or one holding only `.git` and `.DS_Store` (what an earlier attempt that failed after making its folder leaves, so a retry continues into it) as already_exists, and forwards the canonical target; the core makes the folder at that literal path before canonicalizing it, so a symlink planted at the name is refused rather than followed, runs `git init` in it, and registers it. A `new_folder` create that names a device is judged and made by that device's node against its own home, and registered there (see homeFolderList).",
       "type": "object",
       "required": ["parent", "name"],
       "properties": {
@@ -1117,13 +1175,14 @@
       "additionalProperties": false,
       "required": ["parent", "name", "parent_path", "parent_label", "path", "leftover", "reason"],
       "properties": {
+        "device_id": { "type": "string" },
         "parent": { "type": "string" },
         "name": { "type": "string" },
         "parent_path": { "type": ["string", "null"] },
         "parent_label": { "type": ["string", "null"] },
         "path": { "type": ["string", "null"] },
         "leftover": { "type": "boolean" },
-        "reason": { "oneOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "type": "null" }] }
+        "reason": { "oneOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
       }
     },
     "fileIndex": {
