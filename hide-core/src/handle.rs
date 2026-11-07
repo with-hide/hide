@@ -793,7 +793,9 @@ impl Core {
 
     /// What the agent hook in `caller`'s pane on `device` reported
     /// (`HookCommand::Status`). A short admission that records it in memory;
-    /// the coordinator it wakes publishes what changed.
+    /// the coordinator it wakes publishes what changed. A report the hook
+    /// made before the newest one the pane applied, which a slow request can
+    /// bring after a replay, changes nothing.
     pub fn hook_status(
         &self,
         device: &str,
@@ -805,8 +807,9 @@ impl Core {
 
     /// A report `device`'s node replayed from its outbox for `caller`'s
     /// pane after the hook ran (`hide_agent_hooks::outbox`): applied as
-    /// [`Core::hook_status`] applies one, only when the hook made it after
-    /// the session's last applied report. Answers whether it was applied.
+    /// [`Core::hook_status`] applies one, under the same order: only when
+    /// the hook made it after the newest report the pane applied, live or
+    /// replayed. Answers whether it was applied.
     pub fn hook_replay(
         &self,
         device: &str,
@@ -828,12 +831,15 @@ impl Core {
         }
         let target = {
             let mut runtime = lock_recover(&self.runtime);
-            if replayed {
-                if !runtime.ingest_hook_replay(device, caller, report)? {
-                    return Ok(false);
-                }
+            let applied = if replayed {
+                runtime.ingest_hook_replay(device, caller, report)?
             } else {
-                runtime.ingest_hook_status(device, caller, report)?;
+                runtime.ingest_hook_status(device, caller, report)?
+            };
+            // A report older than the pane's newest names no session the
+            // engine should keep for it.
+            if !applied {
+                return Ok(false);
             }
             runtime.hook_session_target(device, caller, report)
         };

@@ -41,19 +41,21 @@ impl Runtime {
         Some((engine, pane.to_owned()))
     }
 
-    /// Records what the hook in `caller`'s pane on `device` reported.
+    /// Records what the hook in `caller`'s pane on `device` reported, unless
+    /// the hook made it before the newest report the pane applied
+    /// (`HookFacts::record`); answers whether it was applied.
     pub(crate) fn ingest_hook_status(
         &mut self,
         device: &str,
         caller: &str,
         report: &HookStatusReport,
-    ) -> Result<(), &'static str> {
-        self.ingest_hook(device, caller, report, false).map(|_| ())
+    ) -> Result<bool, &'static str> {
+        self.ingest_hook(device, caller, report, false)
     }
 
     /// Records a report `device`'s node replayed from its outbox for
-    /// `caller`'s pane, when it is newer than the session's last
-    /// (`HookFacts::replay`); answers whether it was applied.
+    /// `caller`'s pane, when the hook made it after the newest report the
+    /// pane applied (`HookFacts::replay`); answers whether it was applied.
     pub(crate) fn ingest_hook_replay(
         &mut self,
         device: &str,
@@ -70,6 +72,12 @@ impl Runtime {
         report: &HookStatusReport,
         replayed: bool,
     ) -> Result<bool, &'static str> {
+        // A machine's hooks speak for that machine's panes: a caller id that
+        // names another device is no pane `device` may report on, whatever
+        // carried it (a node's replayed outbox names its panes itself).
+        if crate::address::device_of(caller).is_some_and(|named| named != device) {
+            return Err("hook_pane_foreign");
+        }
         let local = device == self.node.as_str();
         let pane = crate::address::named_pane_id(self.node.as_str(), device, caller);
         let recorded = {

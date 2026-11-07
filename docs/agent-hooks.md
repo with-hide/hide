@@ -366,10 +366,15 @@ The hook keeps it in `hook-outbox.json` in the state folder its requests go to (
 The file is replaced whole under its own lock (`hook-outbox.lock`), holds at most 512 reports, and one more drops the oldest and counts it; a file that does not read back is set aside as `hook-outbox.damaged.json` and the outbox starts again, saying so to the core.
 A report is metadata only (runtime, session, turn, counts, open approvals): no prompt, path or letter waits there.
 
-The node that serves the state folder's panes sends the reports up its link when it starts, which is the link coming back, and at each five-second sweep after, oldest first, at most 32 or 16 KiB a batch (`NodeEvent::QueuedReports`), only its own installation's and those naming none; the core's daemon does the same for this machine's from its bootstrap's sweep.
-The core applies each report as the hook's own would have been (`Core::hook_replay`), but only when the hook made it after the last report the core applied for that session; it answers `ProofAnswer::Replayed`, and only then does the node remove the batch, so a link lost before the answer sends the same reports again and the core changes nothing the second time.
-A live report is the session's present and always applies; a replayed one older than it, or as old, changes nothing, so a queued report never undoes a later one.
-When the hook made the session's last applied report is kept with the session's facts and saved whenever they are, so after a core restart a replay is measured against the last one saved.
+The node that serves the state folder's panes sends the reports up its link when it starts, which is the link coming back, and at each five-second sweep after, oldest first, at most 32 or 16 KiB a batch (`NodeEvent::QueuedReports`), only its own installation's and those naming none; the core's daemon does the same for this machine's from its bootstrap's sweep, one sweep at a time.
+One drain runs on an outbox at a time, whichever node or daemon starts it: it holds `hook-outbox.drain.lock` from its first read to its last removal, so no report goes twice and no drop is counted twice, and a hook adding a report never waits for it.
+The core applies each report as the hook's own would have been (`Core::hook_replay`) and answers `ProofAnswer::Replayed`, and only then does the node remove the batch, so a link lost before the answer sends the same reports again; a core that stopped answering leaves the batch where it is.
+A device's reports speak for that device's panes only: a pane id scoped to another device is refused (`hook_pane_foreign`), live or replayed.
+
+Every report of a pane, live or replayed, follows one order: it applies only when the hook made it after the newest report the pane applied, of any of its sessions (`HookFacts::record`).
+So a report sent twice applies once, a live request the hook gave up on and also queued counts once, and an older report, a replay of an earlier session or a slow live one, changes neither the session's facts nor the session the engine keeps for the pane.
+The order is the clock of the machine the pane runs on; a live report of a hook that stamps no time applies as it arrives, and a replay without one never applies.
+The pane's newest report time is saved with its facts whenever it moves, so after a core restart a replay is measured against the last one applied.
 Each batch is one `agent_hooks` `outbox.replayed` line in hided's diagnostic log with the device and how many were applied, ignored and dropped at the limit; a set-aside file is `outbox.damaged` for this machine and a node's `pane.refused` with the reason `outbox_damaged`, a failure to keep a report the hook's `outbox.failed` line in the hooks' log, and nothing reaches the screen (design principle 13).
 
 ## Native questions

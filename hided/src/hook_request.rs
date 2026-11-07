@@ -144,16 +144,19 @@ pub(crate) fn answer(
 /// delivery ledger would take.
 /// Applies the status reports a machine's hooks queued while its core did
 /// not answer them (`hide_agent_hooks::outbox`), in their order: each one
-/// whose session the core holds nothing newer for changes what it keeps,
-/// as the hook's own report would have (`Core::hook_replay`). The counts,
-/// with what the outbox dropped at its limit, go to the diagnostic log;
-/// nothing reaches the screen (design principle 13).
+/// the hook made after the newest report its pane applied changes what the
+/// core keeps, as the hook's own report would have (`Core::hook_replay`),
+/// and one naming a pane of another device than `device` is refused there.
+/// The counts, with what the outbox dropped at its limit, go to the
+/// diagnostic log; nothing reaches the screen (design principle 13). A core
+/// that stopped answering ends the replay with `hook_status_unavailable`, and
+/// the batch stays with its outbox.
 pub(crate) fn replay(
     core: &CoreHandle,
     device: &str,
     reports: &[QueuedReport],
     dropped: u64,
-) -> ProofAnswer {
+) -> Result<ProofAnswer, &'static str> {
     let (mut applied, mut ignored, mut refusal) = (0, 0, None);
     for queued in reports {
         let pane = &queued.pane_id;
@@ -164,6 +167,7 @@ pub(crate) fn replay(
         match valid.then(|| core.hook_replay(device, pane, queued.report.clone())) {
             Some(Ok(true)) => applied += 1,
             Some(Ok(false)) => ignored += 1,
+            Some(Err(UNAVAILABLE)) => return Err(UNAVAILABLE),
             Some(Err(reason)) => {
                 ignored += 1;
                 refusal = Some(reason);
@@ -183,12 +187,17 @@ pub(crate) fn replay(
         "dropped": dropped,
         "refusal": refusal,
     }));
-    ProofAnswer::Replayed { applied, ignored }
+    Ok(ProofAnswer::Replayed { applied, ignored })
 }
+
+/// What `CoreHandle` answers once the core no longer takes reports.
+const UNAVAILABLE: &str = "hook_status_unavailable";
 
 /// Applies what this machine's hooks queued while this daemon did not
 /// answer them (a restart, an update), oldest first, the way a node's
-/// replay is applied; the bootstrap's sweep calls it.
+/// replay is applied; the bootstrap's sweep calls it, one at a time
+/// (`pane_auth::serve`), and [`outbox::drain`] keeps any other drain of the
+/// same outbox out while it runs.
 pub(crate) fn replay_own(state_dir: &Path, core: &CoreHandle) {
     if !outbox::waiting(state_dir) {
         return;
@@ -200,8 +209,7 @@ pub(crate) fn replay_own(state_dir: &Path, core: &CoreHandle) {
                 "component": "agent_hooks", "kind": "outbox.damaged", "device": device,
             }));
         }
-        replay(core, &device, &batch.reports, batch.dropped);
-        true
+        replay(core, &device, &batch.reports, batch.dropped).is_ok()
     });
     if let Err(error) = drained {
         hide_core::diagnostic!(json!({

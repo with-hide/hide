@@ -11,9 +11,9 @@
 //! node that serves that state folder's panes takes the file's reports up
 //! its link once the link stands, and the daemon of a core takes its own
 //! machine's ([`take`]); each removes what the core answered for
-//! ([`remove`]). A report the core already holds something newer for, of the
-//! same session, changes nothing there, so a report sent twice, or after a
-//! later one, is counted once and never undoes the later one.
+//! ([`remove`]). A report made at or before the newest one its pane applied
+//! changes nothing there, so a report sent twice, or after a later one, is
+//! counted once and never undoes the later one.
 //!
 //! The file holds at most [`LIMIT`] reports: one more drops the oldest and
 //! counts it, and the count goes with the next batch, which the core logs.
@@ -187,11 +187,21 @@ pub fn waiting(state_dir: &Path) -> bool {
 /// a time, oldest first, and removes each batch `send` says the core
 /// answered for; a batch it did not take stays, with everything after it,
 /// for the next try. Answers how many reports went.
+///
+/// One drain runs on an outbox at a time, whichever node or daemon starts
+/// it: it holds the drain lock from its first [`take`] to its last
+/// [`remove`], so no report goes twice and no drop is counted twice. A drain
+/// that finds the lock held sends nothing and leaves the reports to the one
+/// holding it; a hook's [`push`] takes only the file's own lock, so it never
+/// waits for a drain.
 pub fn drain(
     state_dir: &Path,
     own: Option<&str>,
     mut send: impl FnMut(&Batch) -> bool,
 ) -> io::Result<usize> {
+    let Some(_draining) = drain_lock(state_dir)? else {
+        return Ok(0);
+    };
     let mut sent = 0;
     // Each round removes a report or the count, so the file empties within
     // this many rounds; a file another writer keeps filling waits for the
@@ -253,6 +263,16 @@ fn lock(state_dir: &Path) -> io::Result<fs::lock::Lock> {
     match fs::lock::lock_file(file, fs::lock::Mode::Exclusive, LOCK_WAIT, &|| false)? {
         fs::lock::Waited::Locked(lock) => Ok(lock),
         _ => Err(io::Error::new(io::ErrorKind::TimedOut, "hook outbox busy")),
+    }
+}
+
+/// The drain lock, tried once: `None` while another drain holds it.
+fn drain_lock(state_dir: &Path) -> io::Result<Option<fs::lock::Lock>> {
+    private::create_dir_all(state_dir)?;
+    let file = private::open_own_file(&state_dir.join("hook-outbox.drain.lock"), true)?;
+    match fs::lock::lock_file(file, fs::lock::Mode::Exclusive, Duration::ZERO, &|| false)? {
+        fs::lock::Waited::Locked(lock) => Ok(Some(lock)),
+        fs::lock::Waited::TimedOut | fs::lock::Waited::Cancelled => Ok(None),
     }
 }
 
@@ -379,5 +399,35 @@ mod tests {
         let expected: Vec<String> = (5 + BATCH..LIMIT + 5).map(|n| format!("r-{n}")).collect();
         assert_eq!(seen, expected);
         assert!(!waiting(state.path()), "an empty outbox leaves no file");
+    }
+
+    /// A second drain while one runs (a sweep that came while the core was
+    /// slow to answer, or the node and the daemon of one state folder) sends
+    /// nothing: every report goes once and the drops are counted once.
+    #[test]
+    fn one_drain_at_a_time_sends_each_report_once_and_counts_the_drops_once() {
+        let state = tempfile::tempdir().unwrap();
+        for n in 0..LIMIT + 3 {
+            push(state.path(), queued(n, None)).unwrap();
+        }
+        let (mut sent, mut dropped, mut second) = (Vec::new(), 0, Vec::new());
+        drain(state.path(), None, |batch| {
+            second.push(
+                drain(state.path(), None, |_| {
+                    panic!("a second drain sent a batch")
+                })
+                .unwrap(),
+            );
+            sent.extend(batch.reports.iter().map(|queued| queued.id.clone()));
+            dropped += batch.dropped;
+            true
+        })
+        .unwrap();
+        assert_eq!(second, vec![0; LIMIT / BATCH]);
+        assert_eq!((sent.len(), dropped), (LIMIT, 3));
+        assert!(!waiting(state.path()));
+        // Once it ends, the next drain runs.
+        push(state.path(), queued(LIMIT + 3, None)).unwrap();
+        assert_eq!(drain(state.path(), None, |_| true).unwrap(), 1);
     }
 }

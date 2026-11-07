@@ -172,7 +172,11 @@ impl NodePanes {
         let link = link.clone();
         self.runtime.spawn_blocking(move || {
             let _permit = permit;
-            let answer = crate::hook_request::replay(&state.core, &node, &reports, dropped);
+            let answer = crate::hook_request::replay(&state.core, &node, &reports, dropped)
+                .unwrap_or_else(|reason| {
+                    record_refusal(&node, None, reason, "core");
+                    refused(reason)
+                });
             send_reply(&node, &link, Call::PaneProofAnswer { request, answer });
         });
     }

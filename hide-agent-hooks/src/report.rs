@@ -65,10 +65,10 @@ pub struct HookStatusReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Vec<String>>,
     /// When the hook made the report, in microseconds of its machine's
-    /// clock, which [`report`] stamps: a report replayed from the outbox
-    /// is applied only when it is newer than the session's last, so one
-    /// sent twice changes the core once and an older one never undoes a
-    /// later one. Absent from a hook older than the outbox.
+    /// clock, which [`report`] stamps: a report, live or replayed from the
+    /// outbox, is applied only when it is newer than the newest its pane
+    /// applied, so one sent twice changes the core once and an older one
+    /// never undoes a later one. Absent from a hook older than the outbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_unix_us: Option<u64>,
 }

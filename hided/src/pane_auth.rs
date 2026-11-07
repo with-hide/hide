@@ -1083,16 +1083,24 @@ pub async fn serve(
     }
     let limit = Arc::new(Semaphore::new(MAX_BOOTSTRAPS));
     let mut sweep = tokio::time::interval(Duration::from_secs(5));
+    // One sweep at a time: a tick while the last one still runs (a core slow
+    // to answer) starts nothing. The one that runs ends within the daemon's
+    // exit (`EXIT_WITHIN`), and its outbox replay stops at the first report
+    // a stopped core no longer takes, leaving the rest in the outbox.
+    let mut sweeping: Option<tokio::task::JoinHandle<()>> = None;
     loop {
         let arrival = tokio::select! {
             arrival = arrivals.recv() => arrival,
             _ = sweep.tick() => {
+                if sweeping.as_ref().is_some_and(|task| !task.is_finished()) {
+                    continue;
+                }
                 let registry = Arc::clone(&registry);
                 let core = Arc::clone(&core);
-                tokio::task::spawn_blocking(move || {
+                sweeping = Some(tokio::task::spawn_blocking(move || {
                     registry.sweep(&core);
                     crate::hook_request::replay_own(&registry.state_dir, &core);
-                });
+                }));
                 continue;
             }
             () = shutdown.ended() => break,

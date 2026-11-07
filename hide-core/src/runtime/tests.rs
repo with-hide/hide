@@ -72,6 +72,8 @@ mod herdr_import;
 mod hide_ai_devices;
 #[path = "tests/home.rs"]
 mod home;
+#[path = "tests/hook_order.rs"]
+mod hook_order;
 #[path = "tests/inbound.rs"]
 mod inbound;
 #[path = "tests/issues.rs"]
