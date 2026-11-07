@@ -647,17 +647,29 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
     expect(heldLettersText({ count: 2, reason: "draft", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 2 · unsent text in the Conductor's input: send or clear it");
   });
 
-  it("folds a worker raised for its held letter into the Conductor's letters line, and keeps a worker raised for anything else", () => {
+  it("folds a worker raised for its held letter into the Conductor's letters line, in 내 차례 and the summary's 확인 필요 alike, and keeps any other cause in both", () => {
     const letters = { count: 2, reason: "draft" as const, since_unix_ms: 1 };
     const nodes = [node("api", { status: "working", pane_id: "p2" })];
     const raisedFor = (cause: EscalationCause) => () => ({ cause, line: null });
-    // One cause, one line: the letters line already says what to do.
+    // Both screens read one rule (`shownEscalation`): what 내 차례 lists for the worker, and whether the summary holds its node.
+    const shown = (cause: EscalationCause, withLetters: boolean) => {
+      const m = mission("m", { nodes, ...(withLetters ? { conductor_letters: letters } : {}) });
+      const turn = turnItems(m, raisedFor(cause)).some((item) => item.kind === "worker_blocked");
+      const held = holdReason(m, nodes[0]!, raisedFor(cause)) !== null;
+      const groups = summaryGroups(m, raisedFor(cause));
+      expect(groups.attention.length > 0, `${cause}: summary group`).toBe(held);
+      expect(groups.working.length > 0, `${cause}: a folded worker reads as working`).toBe(!held);
+      expect(turn, `${cause}: 내 차례 and 확인 필요 agree`).toBe(held);
+      return turn;
+    };
     for (const cause of ["draft", "parent_blocked", "bell_exhausted", "undelivered"] as const) {
+      expect(shown(cause, true), cause).toBe(false);
       expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters"]);
-      // Without the letters line the worker's own item still says it.
-      expect(turnItems(mission("m", { nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["worker_blocked"]);
+      // Without the letters line the worker's own item still says it, on both.
+      expect(shown(cause, false), cause).toBe(true);
     }
     for (const cause of ["child_blocked", "observer_unconfirmed", "input_unconfirmed"] as const) {
+      expect(shown(cause, true), cause).toBe(true);
       expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters", "worker_blocked"]);
     }
   });
