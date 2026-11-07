@@ -100,6 +100,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   It adds no review and no screenshot by default.
 - A review or a verify is a checker on the node, not a node of its own: `checks` lists at most one `review` and one `verify`, each with one to five agents in `by` (worker objects) and, for several, `rule` `all` (the default) or `majority` (`mission_checkers_invalid` otherwise).
   Each adds the line `review` or `verify`, which passes only when the checker recorded it, never the node's worker; a checker the node's worker is refused (`mission_checker_is_worker`).
+  Only the checkers bound to the line decide it: a slot of `by` that no agent took holds nothing open, and a line with none bound stays open.
+  A checker's answer is for the head it reviewed (`--commit <sha>`, else the node's pull request head as Hide last read it); when answers stand on different heads, the newest answer's head decides, so a review of the next head replaces the failure of the head before.
   Which nodes get one, and how many, follows the mission's verification strength (below).
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.

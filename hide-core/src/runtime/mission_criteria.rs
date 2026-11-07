@@ -379,8 +379,12 @@ impl Runtime {
                     .position(|checker| self.registration_is(checker.agent_id.as_deref(), actor))
                     .ok_or("mission_criterion_not_yours")?;
                 let agent_id = line.checkers[slot].agent_id.clone();
+                // The head the answer is for: the commit the checker named,
+                // else the node's pull request head as the last read has it.
+                let head = commit
+                    .or_else(|| pull_head(row, self.mission_pulls(mission)).map(str::to_owned));
                 let target = &mut next.criteria[at];
-                let changed = target.record_checker(slot, pass, evidence, summary, now)?;
+                let changed = target.record_checker(slot, pass, (evidence, summary, head), now)?;
                 if changed {
                     target.by = Some(by(Role::Checker, agent_id));
                 }

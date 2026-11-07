@@ -142,6 +142,11 @@ pub struct Checker {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_unix_ms: Option<u64>,
+    /// The head the answer was given on: the commit the checker named, else
+    /// the node's pull request head when it answered. A later answer on
+    /// another head replaces this one in the line's verdict (`Criterion::settle`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
     /// The bound checker's pane and its machine, as the ledger names them
     /// now (B29): the view fills them, the book never keeps them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,23 +319,43 @@ impl Criterion {
 
     /// A review's or verification's state from its checkers and its rule,
     /// or skipped by the Conductor (B6).
+    ///
+    /// Only the checkers that were bound count: a slot the plan asked for and
+    /// nobody took is no answer the line waits for. Of those, an answer given
+    /// on another head than the newest answer's is an older review of
+    /// older work, and the newest head's answers decide; two answers are
+    /// compared by head only when both name one.
     fn settle(&mut self) {
         if self.skip.is_some() {
             self.state = CriterionState::Skipped;
             return;
         }
-        let total = self.checkers.len();
-        let passed = self
-            .checkers
+        let bound = || {
+            self.checkers
+                .iter()
+                .filter(|checker| checker.agent_id.is_some())
+        };
+        let newest = bound()
+            .filter(|checker| checker.state != CriterionState::Open)
+            .max_by_key(|checker| checker.at_unix_ms)
+            .and_then(|checker| checker.commit.as_deref());
+        let current: Vec<&Checker> = bound()
+            .filter(|checker| match (newest, checker.commit.as_deref()) {
+                (Some(newest), Some(commit)) => same_commit(newest, commit),
+                _ => true,
+            })
+            .collect();
+        let total = current.len();
+        let passed = current
             .iter()
             .filter(|checker| checker.state == CriterionState::Pass)
             .count();
-        let failed = self
-            .checkers
+        let failed = current
             .iter()
             .filter(|checker| checker.state == CriterionState::Fail)
             .count();
         self.state = match self.rule.unwrap_or_default() {
+            _ if total == 0 => CriterionState::Open,
             Rule::All if failed > 0 => CriterionState::Fail,
             Rule::All if passed == total => CriterionState::Pass,
             Rule::Majority if passed * 2 > total => CriterionState::Pass,
@@ -431,8 +456,7 @@ impl Criterion {
         &mut self,
         slot: usize,
         pass: bool,
-        evidence: Option<String>,
-        summary: Option<String>,
+        (evidence, summary, commit): (Option<String>, Option<String>, Option<String>),
         now: u64,
     ) -> Result<bool, String> {
         let checker = self
@@ -444,12 +468,17 @@ impl Criterion {
         } else {
             CriterionState::Fail
         };
-        if checker.state == state && checker.evidence == evidence && checker.summary == summary {
+        if checker.state == state
+            && checker.evidence == evidence
+            && checker.summary == summary
+            && checker.commit == commit
+        {
             return Ok(false);
         }
         checker.state = state;
         checker.evidence = evidence;
         checker.summary = summary;
+        checker.commit = commit;
         checker.at_unix_ms = Some(now);
         self.settle();
         self.count_failures(!pass);
@@ -632,6 +661,7 @@ pub(crate) fn plan_lines(
                         evidence: None,
                         summary: None,
                         at_unix_ms: None,
+                        commit: None,
                         pane_id: None,
                         machine: None,
                     })
@@ -723,6 +753,16 @@ mod tests {
         }
     }
 
+    /// The line with every slot its plan asked for taken by an agent, as the
+    /// Conductor's bindings leave it.
+    fn bound(mut line: Criterion) -> Criterion {
+        for (at, checker) in line.checkers.iter_mut().enumerate() {
+            checker.agent_id = Some(format!("agent-{}", at + 10));
+        }
+        line.settle();
+        line
+    }
+
     fn worker(agent: &str) -> Worker {
         Worker {
             agent: agent.into(),
@@ -812,16 +852,22 @@ mod tests {
         );
         let keys: Vec<&str> = lines.iter().map(|line| line.key.as_str()).collect();
         assert_eq!(keys, ["c1", "check", "review"]);
-        let mut review = lines[2].clone();
+        let mut review = bound(lines[2].clone());
         assert_eq!(
             review.record(true, None, None, None, false, by(Role::Worker)),
             Err("mission_criterion_not_yours".into())
         );
-        review.record_checker(0, true, None, None, 2).unwrap();
+        review
+            .record_checker(0, true, (None, None, None), 2)
+            .unwrap();
         assert_eq!(review.state, CriterionState::Open);
-        review.record_checker(1, false, None, None, 2).unwrap();
+        review
+            .record_checker(1, false, (None, None, None), 2)
+            .unwrap();
         assert_eq!(review.state, CriterionState::Open);
-        review.record_checker(2, true, None, None, 2).unwrap();
+        review
+            .record_checker(2, true, (None, None, None), 2)
+            .unwrap();
         assert_eq!(review.state, CriterionState::Pass);
         let mut all = review.clone();
         all.rule = Some(Rule::All);
@@ -831,6 +877,84 @@ mod tests {
         let again = plan_lines(&[review], &["works".into()], &[input], false, true);
         assert_eq!(again[1].checkers[0].state, CriterionState::Pass);
         assert_eq!(again[1].state, CriterionState::Pass);
+    }
+
+    /// with-hide/hide-private#655: a slot nobody took is no answer the line
+    /// waits for, and a line with no slot taken waits for the first.
+    #[test]
+    fn a_review_waits_on_no_slot_that_nobody_took() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker("codex"), worker("claude"), worker("opencode")],
+        };
+        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+        let mut review = lines[1].clone();
+        assert_eq!(review.state, CriterionState::Open);
+        review.checkers[0].agent_id = Some("agent-10".into());
+        review.checkers[1].agent_id = Some("agent-11".into());
+        review
+            .record_checker(0, true, (None, None, None), 1)
+            .unwrap();
+        assert_eq!(
+            review.state,
+            CriterionState::Open,
+            "agent-11 has not answered"
+        );
+        review
+            .record_checker(1, true, (None, None, None), 2)
+            .unwrap();
+        assert_eq!(review.state, CriterionState::Pass);
+    }
+
+    /// with-hide/hide-private#655: of answers on different heads the newest
+    /// answer's head decides; answers that name no head are all current.
+    #[test]
+    fn a_review_is_decided_by_the_newest_head_answered() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker("codex"), worker("claude")],
+        };
+        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+        let mut review = bound(lines[1].clone());
+        let on = |head: &str| (Some("it ran".to_owned()), None, Some(head.to_owned()));
+        review
+            .record_checker(0, false, on("a1b2c3d4e5f6"), 1)
+            .unwrap();
+        assert_eq!(review.state, CriterionState::Fail);
+        review
+            .record_checker(1, true, on("b2c3d4e5f6a1"), 2)
+            .unwrap();
+        assert_eq!(
+            review.state,
+            CriterionState::Pass,
+            "the first answer is of an older head"
+        );
+        assert_eq!(review.fails_in_a_row, 0, "the line reads passed");
+        // An answer given later decides, whatever head it names; the same
+        // answer sent again is no new answer.
+        assert!(
+            !review
+                .record_checker(1, true, on("b2c3d4e5f6a1"), 3)
+                .unwrap()
+        );
+        let again = (
+            Some("again".to_owned()),
+            None,
+            Some("a1b2c3d4e5f6".to_owned()),
+        );
+        review.record_checker(0, false, again, 4).unwrap();
+        assert_eq!(review.state, CriterionState::Fail);
+        // With no head named by anyone, every answer counts.
+        let mut unnamed = bound(lines[1].clone());
+        unnamed
+            .record_checker(0, false, (None, None, None), 1)
+            .unwrap();
+        unnamed
+            .record_checker(1, true, (None, None, None), 2)
+            .unwrap();
+        assert_eq!(unnamed.state, CriterionState::Fail);
     }
 
     /// with-hide/hide-private#552: each failure recorded on the review line
@@ -844,11 +968,11 @@ mod tests {
             by: vec![worker("codex"), worker("claude")],
         };
         let lines = plan_lines(&[], &["works".into()], &[input], false, true);
-        let mut review = lines[1].clone();
+        let mut review = bound(lines[1].clone());
         assert_eq!(review.fails_in_a_row, 0);
         let fail = |review: &mut Criterion, slot: usize, why: &str, at: u64| {
             review
-                .record_checker(slot, false, Some(why.into()), None, at)
+                .record_checker(slot, false, (Some(why.into()), None, None), at)
                 .unwrap()
         };
         assert!(fail(&mut review, 0, "round 1", 1));
@@ -857,14 +981,18 @@ mod tests {
         assert!(!fail(&mut review, 0, "round 1", 2));
         assert_eq!(review.fails_in_a_row, 1);
         // One checker passing leaves the line failed, and the count stands.
-        review.record_checker(1, true, None, None, 3).unwrap();
+        review
+            .record_checker(1, true, (None, None, None), 3)
+            .unwrap();
         assert_eq!(
             (review.state, review.fails_in_a_row),
             (CriterionState::Fail, 1)
         );
         fail(&mut review, 0, "round 2", 4);
         assert_eq!(review.fails_in_a_row, 2);
-        review.record_checker(0, true, None, None, 5).unwrap();
+        review
+            .record_checker(0, true, (None, None, None), 5)
+            .unwrap();
         assert_eq!(
             (review.state, review.fails_in_a_row),
             (CriterionState::Pass, 0)
@@ -897,9 +1025,10 @@ mod tests {
             )
         };
         let mut lines = plan(&[]);
+        lines[1] = bound(lines[1].clone());
         for round in ["round 1", "round 2"] {
             lines[1]
-                .record_checker(0, false, Some(round.into()), None, 1)
+                .record_checker(0, false, (Some(round.into()), None, None), 1)
                 .unwrap();
         }
         assert_eq!(lines[1].fails_in_a_row, 2);
@@ -921,16 +1050,20 @@ mod tests {
             by: vec![worker("codex"), worker("claude"), worker("opencode")],
         };
         let lines = plan_lines(&[], &["works".into()], &[input], false, true);
-        let mut passed = lines[1].clone();
-        passed.record_checker(0, true, None, None, 1).unwrap();
-        passed.record_checker(1, true, None, None, 2).unwrap();
-        let mut skipped = lines[1].clone();
+        let mut passed = bound(lines[1].clone());
+        passed
+            .record_checker(0, true, (None, None, None), 1)
+            .unwrap();
+        passed
+            .record_checker(1, true, (None, None, None), 2)
+            .unwrap();
+        let mut skipped = bound(lines[1].clone());
         skipped.skip("operator".into(), None, by(Role::Conductor));
         for review in [&mut passed, &mut skipped] {
             let settled = review.state;
             for round in ["late 1", "late 2"] {
                 review
-                    .record_checker(2, false, Some(round.into()), None, 3)
+                    .record_checker(2, false, (Some(round.into()), None, None), 3)
                     .unwrap();
             }
             assert_eq!((review.state, review.fails_in_a_row), (settled, 0));
