@@ -47,6 +47,7 @@ use crate::support::{
 };
 
 pub(crate) mod ownership;
+mod replace;
 mod rules_recovery;
 mod transport_ownership;
 

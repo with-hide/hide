@@ -166,6 +166,12 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             .and_then(value),
         PaneCall::Cancel { intent, request } => holders.cancel(&intent, request).and_then(value),
         PaneCall::Retire { request } => holders.retire(request).and_then(value),
+        PaneCall::Outdated { pane } => holders.outdated(&pane).and_then(value),
+        PaneCall::Replace {
+            start,
+            previous,
+            request,
+        } => holders.replace(&start, previous, request).and_then(value),
         PaneCall::ShellLaunch => value(holders.shell_launch()),
         PaneCall::Terminate { pane } => holders.terminate(&pane).and_then(value),
         PaneCall::Read { pane, lines } => holders.read(&pane, lines).and_then(text),

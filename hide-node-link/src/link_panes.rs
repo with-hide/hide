@@ -305,6 +305,32 @@ impl PaneHolders for LinkPanes {
         )
     }
 
+    fn outdated(&self, pane: &str) -> Result<Option<u64>, HolderError> {
+        self.answer(
+            PaneCall::Outdated {
+                pane: pane.to_owned(),
+            },
+            ASK_WAIT,
+        )
+    }
+
+    fn replace(
+        &self,
+        start: &HolderStart,
+        previous: u64,
+        request: HolderRequest,
+    ) -> Result<HolderReservation, HolderError> {
+        // The old holder's end bounds it, as a terminate's does.
+        self.answer(
+            PaneCall::Replace {
+                start: start.clone(),
+                previous,
+                request,
+            },
+            END_WAIT,
+        )
+    }
+
     fn shell_launch(&self) -> Option<ShellLaunch> {
         // The trait answers no failure here: a node that cannot say how its
         // shells start is told apart in the log, and the start goes on as

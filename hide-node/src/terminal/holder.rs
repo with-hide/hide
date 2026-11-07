@@ -511,6 +511,30 @@ impl SessionWriter for HolderWriter {
     }
 }
 
+/// Why [`Holders::replace`] did not reserve a replacement.
+#[derive(Debug)]
+pub enum ReplaceRefusal {
+    /// Nothing changed: the pane's holder runs on as it was.
+    Kept(CloseError),
+    /// The holder was asked to end and its end was not confirmed; the pane's
+    /// record stays closing for the next reconcile.
+    NotEnded(CloseError),
+    /// The holder ended and its replacement could not be reserved.
+    NotReserved(StartRefusal),
+}
+
+impl std::fmt::Display for ReplaceRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Kept(why) => write!(f, "the holder was kept: {why}"),
+            Self::NotEnded(why) => write!(f, "the holder's end was not confirmed: {why}"),
+            Self::NotReserved(why) => {
+                write!(f, "the holder ended and its replacement was not reserved: {why}")
+            }
+        }
+    }
+}
+
 /// What a node's start found of its holders and did about them.
 #[derive(Debug, Default)]
 pub struct Recovered {
@@ -749,6 +773,67 @@ impl Holders {
                 )))
             }
         }
+    }
+
+    /// The incarnation of the pane's running holder when it runs from a
+    /// version folder other than this build's holder's (the folder name is
+    /// the hash of the holder's files, so any other build differs); `None`
+    /// when it runs this build's.
+    pub fn outdated(&self, pane: &str) -> Result<Option<u64>, CloseError> {
+        let current = self.current_folder()?;
+        self.panes.outdated(&holder_pane(pane), &current)
+    }
+
+    fn current_folder(&self) -> Result<String, CloseError> {
+        self.panes
+            .current_folder(&self.source)
+            .map_err(|error| CloseError::Failed(format!("the holder's files could not be read: {error}")))
+    }
+
+    /// Replaces the pane's holder of start `previous`, which runs from
+    /// another build's version folder, with this build's under the same id:
+    /// ends that holder (its pane holds a shell and nothing else, which is
+    /// the caller's to know) and reserves the replacement, which consumes
+    /// `previous` as a restart does, so the pane keeps its id and nothing
+    /// refuses the start as a conflict or an earlier start still running.
+    /// Refused [`ReplaceRefusal::Kept`] with the holder untouched when the
+    /// pane is not that running start or already runs this build's holder;
+    /// the caller starts the reservation with `start_reserved`.
+    pub fn replace(
+        &self,
+        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
+        service: &Service,
+        intent: &HolderIntent,
+        previous: u64,
+    ) -> Result<HolderReservation, ReplaceRefusal> {
+        let current = self.current_folder().map_err(ReplaceRefusal::Kept)?;
+        let pane = &intent.pane;
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: true,
+        });
+        match self
+            .panes
+            .close_outdated(owner, &holder_pane(pane), previous, &current)
+        {
+            Ok(_) => self.forget_screen(service, pane),
+            Err(error) => {
+                service.control(TerminalControl::Closing {
+                    pane: pane.to_owned(),
+                    closing: false,
+                });
+                return Err(match error {
+                    error @ (CloseError::Kept(_)
+                    | CloseError::NoRecord
+                    | CloseError::OtherOwner
+                    | CloseError::RecordUnreadable(_)) => ReplaceRefusal::Kept(error),
+                    error => ReplaceRefusal::NotEnded(error),
+                });
+            }
+        }
+        self.reserve(guard, intent, Some(previous))
+            .map_err(ReplaceRefusal::NotReserved)
     }
 
     pub fn cancel(

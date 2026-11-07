@@ -438,11 +438,13 @@ pub(crate) fn start_agent(
             };
         }
     };
+    let correlation = format!("hide-core:agent-sleep:{}:wake", request.pane_id);
+    let shell = replace_outdated_holder(engine, node, &request.pane_id, &correlation);
     match crate::agent_start::start_at_shell_reusing_name(
         engine,
         Some(node),
-        &format!("hide-core:agent-sleep:{}:wake", request.pane_id),
-        crate::agent_start::ShellStart::Plain,
+        &correlation,
+        shell,
         &start,
         crate::agent_start::START_ANSWER_WAIT,
         &|| Ok(()),
@@ -485,6 +487,46 @@ pub(crate) fn start_agent(
             reason: WAKE_NOT_READY.to_owned(),
             detail: error.to_string(),
         },
+    }
+}
+
+/// Moves the sleeping pane onto the holder of the build its node runs now
+/// when it runs another build's (with-hide/hide-private#646), once the
+/// pane's engine has finished its restore, and answers how the shell the
+/// resume is typed into says it is ready: a new holder's shell is Hide's
+/// integrated one, which marks its first prompt, as a restored pane's is.
+/// A holder kept as it was, for any reason, is woken as before; a
+/// replacement that ended the old holder and could not start the new one
+/// leaves the pane marked, and the start that follows fails on it.
+fn replace_outdated_holder(
+    engine: &dyn Engine,
+    node: &dyn NodeLink,
+    pane: &str,
+    correlation: &str,
+) -> crate::agent_start::ShellStart {
+    use crate::agent_start::ShellStart;
+    if engine
+        .wait_restored(crate::agent_start::SHELL_WAIT)
+        .is_err()
+    {
+        // The start's own restore wait reports it.
+        return ShellStart::Plain;
+    }
+    match engine.replace_outdated_holder(Wait::Each(crate::agent_start::START_ANSWER_WAIT), pane) {
+        Ok(true) => ShellStart::of_tab(
+            true,
+            crate::agent_start::shell_launch(Some(node), correlation).as_ref(),
+        ),
+        Ok(false) => ShellStart::Plain,
+        Err(error) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_sleep",
+                "kind": "agent_sleep.holder_not_replaced",
+                "pane_id": pane,
+                "message": error.to_string(),
+            }));
+            ShellStart::Plain
+        }
     }
 }
 

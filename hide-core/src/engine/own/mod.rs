@@ -46,6 +46,7 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 mod agents;
 mod creation;
 pub(crate) mod herdr_session;
+mod holder_replace;
 mod ids;
 pub(crate) mod layout;
 mod restore;
@@ -2067,6 +2068,10 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn wait_restored(&self, within: std::time::Duration) -> Answer<()> {
         self.restored_within(within)
+    }
+
+    fn replace_outdated_holder(&self, _wait: Wait, pane: &str) -> Answer<bool> {
+        self.replace_outdated(pane)
     }
 
     fn pane_processes(&self, _wait: Wait, pane: &str) -> Answer<PaneProcessGroup> {
