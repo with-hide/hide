@@ -637,7 +637,7 @@ const ko: Catalog<typeof missionsEnglish> = {
   "mission.letters.reason.approval": "Conductor가 승인을 기다림",
   "mission.letters.reason.draft": "Conductor 입력창에 보내지 않은 글: 보내거나 지우기",
   "mission.letters.reason.unanswered": "알림 세 번에 답 없음: Conductor에게 편지를 읽으라고 알리기",
-  "mission.work.working": "일하는 중",
+  "mission.work.working": "작업 중",
   "mission.work.waiting": "기다리는 중 · {{on}}",
   "mission.work.noWorker": "일꾼 없음",
   "mission.work.on.decision": "운영자 판단",

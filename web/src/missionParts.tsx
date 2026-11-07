@@ -91,7 +91,7 @@ export function lookWord(look: NodeLook, t: TFunction<"translation">): string {
 /**
  * A node mark's hover and accessible name (PRD mission-node-simple B1): its
  * look's word, for a node in progress what its worker does now as the core
- * reads it (`work`: 일하는 중, 기다리는 중 · <what>, 일꾼 없음), and a sleeping
+ * reads it (`work`: 작업 중, 기다리는 중 · <what>, 일꾼 없음), and a sleeping
  * worker's sleep beside it, since the mark itself has no fourth shape.
  */
 export function markWord(node: MissionNode, look: NodeLook, t: TFunction<"translation">): string {

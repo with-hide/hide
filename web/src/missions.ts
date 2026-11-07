@@ -678,7 +678,7 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `일하는 중`, `기다리는 중 · 리뷰`, `일꾼 없음`. */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 없음`. */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
