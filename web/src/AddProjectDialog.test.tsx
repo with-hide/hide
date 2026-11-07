@@ -336,7 +336,7 @@ it("opens the parent list of Clone and Create on the location the view shows, an
   const { events, unmount } = await mount(state(null, "ubuntu"));
   const shown = { listing: { path: "/home/me", label: "~", home: "/home/me", truncated: false, entries: [{ name: "app", is_directory: true }] } };
 
-  // The one project on this device lives in /home/me, so that is the location both views fill in.
+  // The one project on this device lives in its home folder, so that is the location both views fill in.
   await act(async () => find('[data-add-project-way="clone"]')!.click());
   expect((find("[data-clone-parent]") as HTMLInputElement).value).toBe("/home/me");
   await act(async () => find("[data-clone-browse]")!.click());
