@@ -1273,7 +1273,9 @@ impl Inner {
                     .get(&pane)
                     .and_then(|entry| entry.session.as_ref())
                 {
-                    Some(session) => session.mouse(mouse).map_err(|refused| refused.message(&pane)),
+                    Some(session) => session
+                        .mouse(mouse)
+                        .map_err(|refused| refused.message(&pane)),
                     _ => Err(format!(
                         "Pane {pane} has no terminal control session for a pointer event"
                     )),
