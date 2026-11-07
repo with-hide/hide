@@ -33,6 +33,10 @@ pub(crate) struct Observation {
     /// Keep identity and input clocks while a read is delayed, but admit no bell.
     pub telemetry_stale: bool,
     pub state_change_seq: Option<u64>,
+    /// The engine connection `status` and `state_change_seq` were read on
+    /// (`agent_state::ReadConnection::mark`), which a sequence is compared
+    /// within (`delivery::watch::StateRead`).
+    pub engine: Option<String>,
     pub status_changed_at_unix_ms: u64,
     /// The last input hide routed to this pane: a key, a paste, a phone
     /// write or an agent-find key.
@@ -197,6 +201,15 @@ impl Observation {
                 .max(self.released_input_at_unix_ms)
     }
 
+    /// The engine's reading of the agent this observation holds.
+    pub(crate) fn read(&self) -> crate::delivery::watch::StateRead<'_> {
+        crate::delivery::watch::StateRead {
+            engine: self.engine.as_deref(),
+            status: &self.status,
+            seq: self.state_change_seq,
+        }
+    }
+
     /// A draft a person may be writing: an unsent draft
     /// ([`Observation::unsent_draft`]) whose newest input is not what a
     /// `hide pane send` wrote. The one rule a pane send is held by.
@@ -233,6 +246,7 @@ impl Runtime {
         let mut present = HashSet::new();
         let mut excess = false;
         let mut unreadable_moved = false;
+        let engine = self.read_mark(device);
         for agent in &payload.agents {
             let (Some(pane), Some(name), Some(kind), Some(status)) = (
                 agent.pane_id.as_deref(),
@@ -291,10 +305,13 @@ impl Runtime {
             // The ledger's watches are read only for an agent whose last
             // observation does not already say when its state began: a
             // resting pass looks no agent up in them.
+            let read = crate::delivery::watch::StateRead {
+                engine: engine.as_deref(),
+                status,
+                seq: agent.state_change_seq,
+            };
             let changed_at = previous
-                .filter(|old| {
-                    old.status == status && old.state_change_seq == agent.state_change_seq
-                })
+                .filter(|old| !read.moved_from(&old.read()))
                 .map(|old| old.status_changed_at_unix_ms)
                 .or_else(|| {
                     self.delivery_ledger
@@ -303,8 +320,7 @@ impl Runtime {
                         .and_then(|ledger| {
                             ledger.watches.iter().find(|watch| {
                                 watch.target.same_identity(&actor)
-                                    && watch.last_status == status
-                                    && watch.last_state_change_seq == agent.state_change_seq
+                                    && !read.moved_from(&watch.last_read())
                             })
                         })
                         .map(|watch| watch.status_changed_at_unix_ms)
@@ -356,6 +372,7 @@ impl Runtime {
                 status: status.to_owned(),
                 telemetry_stale: agent.telemetry_stale,
                 state_change_seq: agent.state_change_seq,
+                engine: engine.clone(),
                 status_changed_at_unix_ms: changed_at,
                 // A pane hide has not seen before has no key it knows of, so
                 // every clock starts at this observation: a 30 second grace,
