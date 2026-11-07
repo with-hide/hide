@@ -35,6 +35,8 @@ type Asked = { request: string; via: Via; after: number };
 
 /** The refusals that say the folder asked for is not there, which a remembered start folder falls back to home for. */
 const GONE = new Set(["not_found", "not_a_directory", "outside_home", "invalid_path"]);
+/** A typed folder the machine names nowhere: the list stays and the field says so (PRD device-add-project B11). */
+const NO_SUCH_FOLDER = new Set(["not_found", "not_a_directory", "invalid_path"]);
 
 export type FolderBrowserProps = {
   actions: Actions;
@@ -100,7 +102,10 @@ export function FolderBrowser(props: FolderBrowserProps) {
     if (answer.listing) {
       setShown(answer);
       setSelected(null);
-      if (asked.via === "typed" && typedPlace(text, drives, windows).kind === "path") setText(`${answer.listing.label}/`);
+      // The field shows the folder as the machine names it, a link's real place included, and keeps what follows it.
+      const typed = asked.via === "typed" ? typedPlace(text, drives, windows) : null;
+      if (typed?.kind === "path") setText(`${answer.listing.label}/`);
+      if (typed?.kind === "folder" && typed.folder !== answer.listing.label) setText(`${answer.listing.label}/${typed.filter}`);
       if (told.current !== answer.listing.path) {
         told.current = answer.listing.path;
         actions.setAddProjectFolder(device, answer.listing.path);
@@ -114,14 +119,22 @@ export function FolderBrowser(props: FolderBrowserProps) {
   const place = typedPlace(text, drives, windows);
   // A typed folder or path moves the list once typing settles.
   const typedRequest = typedPlaceRequest(place);
+  // The list follows the field when it shows the folder the field names, by the ask that brought it or the label it answered with.
+  const following = typedRequest !== null && shown !== null && (typedRequest === shown.request || typedRequest === shown.listing?.label);
   useEffect(() => {
-    if (typedRequest === null || typedRequest === shown?.listing?.label || typedRequest === asked.request) return;
+    // A field that names the folder shown again, or nothing, drops a typed ask it no longer makes: the list is the shown one.
+    if ((typedRequest === null || following) && asked.via === "typed" && shown !== null && asked.request !== shown.request) {
+      setAsked({ request: shown.request, via: "typed", after: shown.seq - 1 });
+    }
+    // An ask for this folder still on its way is waited for; one that failed is asked again.
+    const waiting = typedRequest === asked.request && (answer === null || answer.listing !== null);
+    if (typedRequest === null || following || waiting) return;
     const timer = window.setTimeout(() => ask(typedRequest, "typed"), TYPED_ASK_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [typedRequest]);
 
   const listing = shown?.listing ?? null;
-  const filter = place.kind === "filter" ? place.text : place.kind === "folder" && typedRequest === listing?.label ? place.filter : "";
+  const filter = place.kind === "filter" ? place.text : place.kind === "folder" && following ? place.filter : "";
   const items = useMemo(() => filterEntries(listing?.entries ?? [], filter), [listing, filter]);
   // A typed name that is a child's whole name chooses it, so `~/projects/app` names app, not projects.
   const named = selected ?? items.find((entry) => entry.name === filter.trim())?.name ?? null;
@@ -130,9 +143,11 @@ export function FolderBrowser(props: FolderBrowserProps) {
 
   const typedRefusal = asked.via === "typed" && answer?.reason ? answer.reason : null;
   const outside = typedRefusal === "outside_home" && place.kind === "path" && place.path === asked.request ? place.path : null;
+  // A typed folder named nowhere keeps the list under its hint; every other answer without a listing is the list's own failure.
+  const noSuchFolder = typedRefusal !== null && NO_SUCH_FOLDER.has(typedRefusal);
   const disconnected = offline || answer?.reason === "disconnected";
-  const loading = !disconnected && asked.via !== "typed" && !answer && shown?.request !== asked.request;
-  const failed = !disconnected && asked.via !== "typed" && answer?.reason && !answer.listing ? answer.reason : null;
+  const loading = !disconnected && !answer && shown?.request !== asked.request;
+  const failed = !disconnected && answer?.reason && !answer.listing && !noSuchFolder && outside === null ? answer.reason : null;
 
   const enter = (label: string) => {
     setText("");
@@ -152,7 +167,7 @@ export function FolderBrowser(props: FolderBrowserProps) {
     return { path, label, problem: null, note: null };
   })();
   // A typed folder the list does not show yet, still settling or named nowhere, is not what Add would take.
-  const settling = typedRequest !== null && typedRequest !== listing?.label && outside === null;
+  const settling = typedRequest !== null && !following && outside === null;
   const ready = target !== null && target.problem === null && !disconnected && !busy && !(loading || failed) && !settling;
 
   const submit = () => {
@@ -181,7 +196,7 @@ export function FolderBrowser(props: FolderBrowserProps) {
   const hint =
     outside !== null
       ? target?.note
-      : typedRefusal === "not_found" || typedRefusal === "not_a_directory" || typedRefusal === "invalid_path"
+      : noSuchFolder
         ? t("addProject.browse.noSuchFolder")
         : null;
 
