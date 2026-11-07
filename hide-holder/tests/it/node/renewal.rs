@@ -15,9 +15,9 @@
 use super::ownership::Connection;
 use super::*;
 use hide_kit::panes::holder_pane;
-use hide_node_link::holders::{
-    HolderRenewal, PaneInput, RENEWAL_LOST, RENEWAL_PANE_CLOSED, RENEWAL_UNSETTLED,
-};
+#[cfg(unix)]
+use hide_node_link::holders::RENEWAL_PANE_CLOSED;
+use hide_node_link::holders::{HolderRenewal, PaneInput, RENEWAL_LOST, RENEWAL_UNSETTLED};
 
 const PANE: &str = "w1:p1";
 

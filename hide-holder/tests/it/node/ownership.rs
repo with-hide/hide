@@ -9,6 +9,8 @@ use hide_node_link::{LinkError, NodeLink};
 
 pub(super) struct Connection {
     pub(super) local: Arc<hide_node::Local>,
+    /// Read only by the renewal test whose shell traps POSIX signals.
+    #[cfg(unix)]
     pub(super) holders: Arc<Holders>,
     pub(super) linked: LinkPanes,
     pub(super) service: Arc<Service>,
@@ -73,6 +75,7 @@ impl Connection {
         let linked = LinkPanes::new(local.clone(), Arc::new(|_| {}));
         Self {
             local,
+            #[cfg(unix)]
             holders,
             linked,
             service,
