@@ -645,21 +645,30 @@ impl Runtime {
             })
     }
 
+    /// The label worker's facts on the row of `pane_id`: the navigator's row
+    /// for a pane of the core's own node, and the device's session row for
+    /// a device's pane, which that session names by the id its own engine
+    /// gives it (`remote:mini:pane:h1:p1` is `h1:p1` of `mini`). Matching
+    /// the scoped id against the device's rows found none, so every device
+    /// recipient's record read as empty.
     fn row_facts_of(&self, pane_id: &str) -> Option<&crate::request_view::RowFacts> {
-        self.snapshot
-            .navigator
-            .agents
-            .iter()
-            .chain(
-                self.snapshot
-                    .status
-                    .remote
-                    .iter()
-                    .filter_map(|remote| remote.session.as_ref())
-                    .flat_map(|session| session.agents.iter()),
-            )
-            .find(|agent| agent.pane_id == pane_id)
-            .and_then(|agent| agent.row_facts.as_ref())
+        let row = match crate::address::PaneAddress::parse(pane_id).ok()? {
+            crate::address::PaneAddress::Node(pane) => self
+                .snapshot
+                .navigator
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane),
+            crate::address::PaneAddress::Device { device, pane } => self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .find(|remote| remote.target_id == device)
+                .and_then(|remote| remote.session.as_ref())
+                .and_then(|session| session.agents.iter().find(|agent| agent.pane_id == pane)),
+        };
+        row.and_then(|agent| agent.row_facts.as_ref())
     }
 
     /// The observed pane of the registration `parent` names, the agent told
@@ -1103,6 +1112,17 @@ pub(crate) mod tests {
         text: &str,
         at: u64,
     ) {
+        let row = requested_row(pane, kind, text, at);
+        runtime.snapshot.navigator.agents.push(row);
+    }
+
+    /// An agent row whose session records `text` as a request at `at`.
+    fn requested_row(
+        pane: &str,
+        kind: &str,
+        text: &str,
+        at: u64,
+    ) -> crate::model::SidebarAgentSnapshot {
         let mut row = crate::sidebar::project_agents(
             serde_json::from_value(json!({"agents": [
                 {"pane_id": pane, "agent": kind, "agent_status": "idle", "state_change_seq": 2}
@@ -1123,7 +1143,59 @@ pub(crate) mod tests {
             }),
             ..Default::default()
         });
-        runtime.snapshot.navigator.agents.push(row);
+        row
+    }
+
+    /// A device's recipient is found on the device's own session row, by
+    /// the id the device's engine gives its pane, and a pane of this machine
+    /// with the same engine id is not that row.
+    #[test]
+    fn a_device_agent_s_record_is_read_from_the_device_s_row() {
+        let (_folder, mut runtime, _) = spawned(false, 1_000_000);
+        runtime
+            .snapshot
+            .status
+            .remote
+            .push(crate::model::RemoteStatusSnapshot {
+                target_id: "mini".into(),
+                state: "connected".into(),
+                message: None,
+                session: Some(crate::model::RemoteSessionSnapshot {
+                    workspaces: Vec::new(),
+                    agents: vec![requested_row("h1:p1", "claude", "ping", 1_001_000)],
+                    active_tab_ids: Default::default(),
+                    focused_workspace_id: None,
+                    focused_checkout_id: None,
+                    focused_tab_id: None,
+                    focused_pane_id: None,
+                    pane_layouts: Vec::new(),
+                    pane_hook_tokens: Default::default(),
+                    issue_tokens: Default::default(),
+                    issue_links: Default::default(),
+                }),
+                files: crate::model::RemoteFileListSnapshot::idle(),
+                catalog: Default::default(),
+                unreachable_since_unix_ms: None,
+            });
+        let request = |pane: &str| {
+            runtime
+                .row_facts_of(pane)
+                .and_then(|facts| facts.other_request.as_ref())
+                .map(|request| request.text.clone())
+        };
+        assert_eq!(
+            request(&crate::address::scoped_pane_id("mini", "h1:p1")).as_deref(),
+            Some("ping")
+        );
+        assert_eq!(
+            request("h1:p1"),
+            None,
+            "this machine's h1:p1 is another pane"
+        );
+        assert_eq!(
+            request(&crate::address::scoped_pane_id("other", "h1:p1")),
+            None
+        );
     }
 
     pub(crate) fn input_of(runtime: &Runtime, spawn: &str) -> TypedInput {
@@ -1315,8 +1387,9 @@ pub(crate) mod tests {
         assert_eq!(notice.intent, format!("input-unconfirmed:{spawn}:3"));
         assert!(
             notice.body.starts_with(
-                "worker did not get its brief: Hide tried 3 times and the agent recorded \
-                 none of them, so Hide does not type it again.\nRead its screen with \
+                "worker did not get its brief: Hide tried 3 times and found none of them \
+                 in the agent's session record, or could not read that record, so Hide does \
+                 not type it again.\nRead its screen with \
                  `hide pane read child`;"
             ),
             "{}",

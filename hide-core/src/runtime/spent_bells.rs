@@ -267,17 +267,25 @@ const NOT_TAKEN: &str = "hook_not_taken";
 /// `delivery::ladder`), and what to do now.
 fn note_body(recipient: &str, pane: &str, kind: &str, letter: &str, reason: &str) -> String {
     let why = match reason {
-        NOT_RECORDED => "Hide typed its bell and the agent recorded none of them",
+        // Hide knows only what it read: an empty record and one it could
+        // not read look the same from here.
+        NOT_RECORDED => {
+            "Hide typed its bells and found none of them in the agent's session record, or could not read that record"
+        }
         NOT_TAKEN => {
             "its bell reached the agent, but Hide's prompt hook there did not hand it the letter"
         }
         "engine_refused" => "its pane refused the typing",
         "engine_unreachable" => "its machine could not be reached to type it",
-        "herdr_call_failed" => "Hide lost the answer to its typing, and the agent recorded none",
-        crate::delivery::doorbell::INTERRUPTED => {
-            "Hide stopped while typing its last bell, and the agent recorded none"
+        "herdr_call_failed" => {
+            "Hide lost the answer to its typing and found none of it in the agent's session record, or could not read that record"
         }
-        "herdr_format" => "the answer to its typing could not be read, and the agent recorded none",
+        crate::delivery::doorbell::INTERRUPTED => {
+            "Hide stopped while typing its last bell and found none of it in the agent's session record, or could not read that record"
+        }
+        "herdr_format" => {
+            "the answer to its typing could not be read, and Hide found none of it in the agent's session record, or could not read that record"
+        }
         "herdr_parameters" => "the bell could not be put into the engine's terms",
         "doorbell_reservation_failed" | "doorbell_reservation_format" => {
             "the delivery store did not save its bell"
