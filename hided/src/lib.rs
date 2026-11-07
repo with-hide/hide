@@ -54,6 +54,7 @@ pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
 pub mod relay;
+pub mod role;
 pub mod screen_event;
 pub mod screen_sign_in;
 pub mod seat;

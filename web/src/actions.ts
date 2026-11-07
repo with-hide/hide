@@ -1426,7 +1426,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     herdrImport(action: "move" | "import" | "look" | "continue", device?: string) {
       dispatch({ schema_version: 2, kind: "herdr_import", payload: device === undefined ? { action } : { action, device } });
     },
-    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
+    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },
     listMachineProfiles() {
@@ -3388,28 +3388,41 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation } });
     },
 
-    /** Asks hided whether a clone could land at `parent/name`; answered as a `clone_target` frame. */
-    checkCloneTarget(parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "clone_target", payload: { parent, name } });
+    /**
+     * Asks whether a clone could land at `parent/name` on `deviceId`: hided's `$HOME` line answers for
+     * the core's machine, the device's node for a device; answered as a `clone_target` frame.
+     */
+    checkCloneTarget(parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "clone_target", payload: { ...deviceField(deviceId, localDeviceId(rest())), parent, name } });
     },
 
-    /** Clones `url` into `parent/name` on this machine; the core reports it as `repository_clone`. */
-    cloneRepository(url: string, parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "clone_repository", payload: { url, parent, name } });
+    /** Clones `url` into `parent/name` on `deviceId`; the core reports it as `repository_clone`. */
+    cloneRepository(url: string, parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "clone_repository", payload: { ...deviceField(deviceId, localDeviceId(rest())), url, parent, name } });
+    },
+
+    /** One folder under `deviceId`'s home for Add a project's folder list, answered as a `home_folder_list` frame. */
+    listHomeFolder(deviceId: string, path: string) {
+      dispatch({ schema_version: 2, kind: "home_folder_list", payload: { device_id: deviceId, path } });
+    },
+
+    /** The core remembers the folder the list last showed on each machine (PRD device-add-project D-04). */
+    setAddProjectFolder(deviceId: string, path: string) {
+      dispatch({ schema_version: 2, kind: "add_project_folder_set", payload: { device_id: deviceId, path } });
     },
 
     cancelRepositoryClone(id: number) {
       dispatch({ schema_version: 2, kind: "cancel_repository_clone", payload: { id } });
     },
 
-    /** Asks hided where Create new project would make `name` in `parent`; answered as a `project_target` frame. */
-    probeProjectTarget(parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "project_target", payload: { parent, name } });
+    /** Asks where Create new project would make `name` in `parent` on `deviceId`; answered as a `project_target` frame. */
+    probeProjectTarget(parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "project_target", payload: { ...deviceField(deviceId, localDeviceId(rest())), parent, name } });
     },
 
-    /** Makes `path` as a new folder with its own Git repository, then registers it; on the core's machine only, whichever window asks. */
-    createProject(path: string, label: string) {
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { path, label, initialize_git: true, new_folder: true } });
+    /** Makes `path` as a new folder with its own Git repository on `deviceId`, then registers it there. */
+    createProject(path: string, label: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: true, new_folder: true } });
     },
 
     /** Removes a registration after its panes close (D-10); the folder is never touched. */

@@ -120,8 +120,8 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toHaveCount(0);
 
-    // A device's folders are not this Mac's to browse: its Host gets a ~/ field,
-    // and what the device path answers (here: no connection) stays in the dialog.
+    // A device that is not connected is listed but cannot be chosen: its node can neither list, clone
+    // nor create (PRD device-add-project B31); its folder list is web/e2e's and the web tests'.
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
     await sendEvent(page, { origin: new URL(page.url()).origin, token: state.token }, "register_device", {
       label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
@@ -129,18 +129,13 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await page.keyboard.press(chord("new_workspace", "electron"));
     await dialog.locator("[data-add-project-host]").click();
     // A device that never connected keeps the id its alias makes.
-    await page.locator('[data-host-option="hide-e2e-no-such-host-invalid"]').click();
-    await expect(dialog).toHaveAttribute("data-add-project", "hide-e2e-no-such-host-invalid");
-    await expect(browse).toHaveCount(0);
-    const field = dialog.getByLabel("Folder on Offline box");
-    await expect(field).toBeFocused();
-    await expect(field).toHaveValue("~/");
-    await field.fill("~/projects/app");
-    await field.press("Enter");
-    await expect(alert).toHaveAttribute("data-registration-reason", "workspace.create_unavailable");
-    await expect(alert).toHaveAttribute("data-registration-path", "~/projects/app");
-    await expect(alert).toContainText("This device is not connected");
+    const offline = page.locator('[data-host-option="hide-e2e-no-such-host-invalid"]');
+    await expect(offline).toHaveAttribute("data-host-offline", "true");
+    await expect(offline).toHaveAttribute("data-disabled", "");
+    await expect(offline).toContainText("Offline box · Not connected");
     await captureWindow(app, page, "add-project-device");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveAttribute("data-add-project", nodeOf(run.env));
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
   } finally {

@@ -10,6 +10,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_definitions;
 pub(crate) use agent_definitions::settle_and_hand_off;
+mod add_project;
 mod agent_groups;
 mod agent_hook_status;
 mod agent_permission;
