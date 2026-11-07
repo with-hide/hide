@@ -1,7 +1,4 @@
 {
-  "web/src/AddProjectDialog.tsx": {
-    "button": 2
-  },
   "web/src/AgentGroupControls.tsx": {
     "button": 1
   },
@@ -25,9 +22,6 @@
   },
   "web/src/CheckoutGitHeader.tsx": {
     "button": 2
-  },
-  "web/src/CreateProjectView.tsx": {
-    "button": 1
   },
   "web/src/DiskCleanupSheet.tsx": {
     "button": 1
