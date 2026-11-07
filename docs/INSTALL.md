@@ -128,6 +128,7 @@ The new app starts its own daemon at its next launch and brings that Herdr's sav
 ### What each system supports
 
 Every agent Hide supports and every feature works on macOS, Windows and Linux: that is the bar, and a feature is not finished until it meets it on all three.
+The same holds on a pane of a connected device: a feature is checked there too, and what a device's pane does differently is said in the column of the device's system.
 This table is the one record of where each system stands.
 A cell that is not supported says why and what would change it, and a pull request that changes what a system does updates its row in the same change.
 The behavior itself is owned by the guide each row links to.

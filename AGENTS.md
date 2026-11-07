@@ -32,8 +32,9 @@ Agent labels are made by the core, in `hide-core/src/labels/`; see `docs/task-id
 ## Every Agent And Feature On Every System
 
 Every agent Hide supports and every feature works on macOS, Windows and Linux; design and deliver the Windows and Linux forms with the macOS one, not after it.
+It works the same on a pane of a connected device as on one of this machine, so design and check a feature's device form with it too: a pane's screen, input, selection and clipboard cross the device link, and what reaches the program, or leaves it, on the device is not what reaches the operator's machine.
 A system-specific difference is written once in its layer (`hide-platform` for the Rust side, `desktop/src/main/` for the desktop host) and proved on that system's CI lane, not assumed from macOS.
-A gap is allowed only as a cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it, changed in the same pull request as the behavior.
+A gap, on a system or on a device, is allowed only as a cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it, changed in the same pull request as the behavior.
 
 ## Explaining To The Operator
 
