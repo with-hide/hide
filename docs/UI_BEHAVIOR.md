@@ -714,6 +714,7 @@ Folded, it wears its descendant mark, the turn mark and N for raised descendants
 The core still computes the working mark; no surface draws it.
 Opened, its children follow most urgent first, joined to it by rails, and a child with children has its own chevron; grandchildren are one step further in, and a grandchild with children opens the tree popover from its chevron.
 A child that works on another device than its parent follows the parent the same way: the parent's row opens it, and it is the parent's tree that draws it, since the child's own device lists no line for a worktree only delegated children work in (`session_folds.child_only`).
+Opening a pane on another device from a child row or chip, a band's Open or a relationship step brings that device to the front, and opening a pane of this machine while a device is in front brings this machine back (`openPaneEvent`).
 Past five siblings the rest wait behind `N개 더`, which opens them in place.
 A tree row is one line with no branch line; a child on another device names that device on a second line, dimmed with `연결 안 됨` and not openable while it is not connected, and a child working in another worktree is not drawn again under that worktree.
 A worktree whose unresolved agents are all delegated children has no checkout line, no purpose line and no fold, because the children are reached from the root that owns them.
