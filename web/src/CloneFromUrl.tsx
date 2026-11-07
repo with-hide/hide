@@ -42,10 +42,11 @@ type Following = { id: number } | { after: number; at: number; path: string };
 
 /**
  * `device` is the machine the clone runs on and `hostLabel` its name;
- * `pickParent` opens that machine's folder picker and answers the folder, or
- * null when it was cancelled or the dialog's own list took over.
+ * `pickParent` opens that machine's folder picker at the parent the field
+ * shows and answers the folder, or null when it was cancelled or the dialog's
+ * own list took over.
  */
-export function CloneFromUrl({ actions, device, hostLabel, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; device: string; hostLabel: string; registrations: readonly WorkspaceRegistration[]; pickParent: () => Promise<string | null>; onBack: () => void; draft?: { url?: string; parent?: string }; onDraft?: (draft: { url?: string; parent?: string }) => void }) {
+export function CloneFromUrl({ actions, device, hostLabel, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; device: string; hostLabel: string; registrations: readonly WorkspaceRegistration[]; pickParent: (from: string) => Promise<string | null>; onBack: () => void; draft?: { url?: string; parent?: string }; onDraft?: (draft: { url?: string; parent?: string }) => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const slot = useShellStore((s) => s.rest?.repository_clone ?? null);
   const target = useShellStore((s) => s.cloneTarget);
@@ -99,7 +100,7 @@ export function CloneFromUrl({ actions, device, hostLabel, registrations, pickPa
   };
 
   const browse = async () => {
-    const folder = await pickParent();
+    const folder = await pickParent(parentPath);
     if (folder !== null) chooseParent(folder);
   };
 

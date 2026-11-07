@@ -68,7 +68,7 @@ const OTHER_WAYS: readonly OtherWay[] = [
 const ADD_DEVICE = "__add_device__";
 
 /** The folder list over the dialog: adding a folder, or picking the parent of a clone or a new project. */
-type Browsing = { mode: "add" } | { mode: "pick"; for: OtherWay["id"] };
+type Browsing = { mode: "add" } | { mode: "pick"; for: OtherWay["id"]; start: string };
 
 /**
  * The ways to add a project, inside a dialog that holds them: Add a project's
@@ -153,10 +153,14 @@ export function AddProjectViews({
     if (folder !== null) add(trimFolder(folder));
   };
 
-  /** A parent folder for Clone or Create: the system's folder window, or the dialog's own list on another machine. */
-  const pickParent = async (forWay: OtherWay["id"]): Promise<string | null> => {
+  /**
+   * A parent folder for Clone or Create: the system's folder window, or the
+   * dialog's own list on another machine, which opens on `from`, the location
+   * the view shows and would use.
+   */
+  const pickParent = async (forWay: OtherWay["id"], from: string): Promise<string | null> => {
     if (!ways.native) {
-      setBrowsing({ mode: "pick", for: forWay });
+      setBrowsing({ mode: "pick", for: forWay, start: from });
       return null;
     }
     const folder = await actions.pickFolder();
@@ -185,7 +189,7 @@ export function AddProjectViews({
         drives={drives}
         windows={windows}
         mode={browsing.mode}
-        start={browsing.mode === "pick" ? form.parent || "~" : (rememberedFolder(uiState, host.id, node) ?? "~")}
+        start={browsing.mode === "pick" ? browsing.start : (rememberedFolder(uiState, host.id, node) ?? "~")}
         remembered={rememberedFolder(uiState, host.id, node)}
         registrations={registrations}
         offline={offline}
@@ -204,9 +208,9 @@ export function AddProjectViews({
   return (
       <>
         {view === "create" ? (
-          <CreateProjectView actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("create")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
+          <CreateProjectView actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={(from) => pickParent("create", from)} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : view === "clone" ? (
-          <CloneFromUrl actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={() => pickParent("clone")} onBack={() => open("add")} draft={form} onDraft={saveForm} />
+          <CloneFromUrl actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} pickParent={(from) => pickParent("clone", from)} onBack={() => open("add")} draft={form} onDraft={saveForm} />
         ) : (
           <>
             <DialogHeader>
