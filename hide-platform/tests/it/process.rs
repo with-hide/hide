@@ -2505,6 +2505,40 @@ fn a_pid_that_does_not_exist_is_not_found() {
     assert_eq!(measure_tree(pid).unwrap_err().kind(), ErrorKind::NotFound);
 }
 
+/// A pid above `i32::MAX` fits no Unix `pid_t` and is never one Windows
+/// hands out, so every read answers it as a process that has ended, as it
+/// answers a pid nothing holds.
+#[test]
+fn a_pid_the_system_cannot_hold_reads_as_ended() {
+    for pid in [i32::MAX as u32 + 1, u32::MAX - 1, u32::MAX] {
+        assert!(!is_alive(pid), "pid {pid}");
+        for (read, error) in [
+            ("start_time", start_time(pid).map(drop)),
+            ("parent_of", parent_of(pid).map(drop)),
+            ("cpu_time", cpu_time(pid).map(drop)),
+            ("name_of", name_of(pid).map(drop)),
+            ("argv_of", argv_of(pid).map(drop)),
+            (
+                "line_input",
+                hide_platform::process::line_input(pid).map(drop),
+            ),
+            ("measure_tree", measure_tree(pid).map(drop)),
+            #[cfg(unix)]
+            ("cwd_of", cwd_of(pid).map(drop)),
+            #[cfg(unix)]
+            ("image_of", image_of(pid).map(drop)),
+        ] {
+            assert_eq!(
+                error.unwrap_err().kind(),
+                ErrorKind::NotFound,
+                "{read} of pid {pid}"
+            );
+        }
+        assert!(descendants(pid).unwrap().is_empty(), "pid {pid}");
+        assert!(!descends_from(pid, std::process::id()), "pid {pid}");
+    }
+}
+
 #[test]
 fn the_working_directory_is_the_kernels_answer_or_unsupported() {
     let _serial = serial();
