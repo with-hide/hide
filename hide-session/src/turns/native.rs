@@ -170,8 +170,25 @@ fn replied_marks(body: &str) -> Mark {
     Ok((!marks.is_empty()).then_some(TurnMark::Tools(marks)))
 }
 
+/// Claude Code writes a `system` record of subtype `turn_duration`, with
+/// `isSidechain` false, as a turn ends, after its Stop hooks ran. In the
+/// 2.1.319 sessions of one Mac (2026-11-08: 130 files, 1376 turns) each
+/// turn had at most one, after the last Stop hook summary when the agent
+/// went on after the first, and none was written after a later prompt;
+/// that is what was seen there, not a promise Claude Code makes. Only that
+/// form is read. It names no turn and no reason: it also follows some
+/// interruptions of a tool call, which stay interruptions (`TurnTracker`),
+/// and a turn a compaction, a queued prompt or a closed session cut short
+/// has none, so a turn without it is not guessed complete.
+const CLAUDE_TURN_END: &str = "turn_duration";
+
 pub(crate) fn claude(item: &Value) -> Mark {
     let role = item.get("type").and_then(Value::as_str);
+    if role == Some("system") {
+        let end = item.get("subtype").and_then(Value::as_str) == Some(CLAUDE_TURN_END)
+            && item.get("isSidechain").and_then(Value::as_bool) == Some(false);
+        return Ok(end.then_some(TurnMark::Completed { turn: None }));
+    }
     let Some(blocks) = item.pointer("/message/content").and_then(Value::as_array) else {
         return Ok(None);
     };

@@ -9,6 +9,7 @@
 //! `cap-std`.
 
 pub mod atomic;
+pub mod held;
 pub mod holders;
 pub mod identity;
 pub mod in_use;
@@ -24,6 +25,42 @@ pub use std::os::fd::AsFd as Handle;
 /// A borrowed open file or folder.
 #[cfg(windows)]
 pub use std::os::windows::io::AsHandle as Handle;
+
+/// Whether the system's own file browser hides the entry at `path`: a name
+/// that starts with `.` on every system, the hidden flag on macOS (`chflags
+/// hidden`, which `~/Library` carries), and the hidden or system attribute
+/// on Windows (`AppData`, the `Application Data` junctions). It reads the
+/// entry itself, not a link's target, and an entry that cannot be read is
+/// not hidden: only the name is known about it then.
+pub fn hidden(path: &std::path::Path) -> bool {
+    if path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.starts_with('.'))
+    {
+        return true;
+    }
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| hidden_by_system(&metadata))
+}
+
+#[cfg(target_os = "macos")]
+fn hidden_by_system(metadata: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    // UF_HIDDEN in <sys/stat.h>.
+    metadata.st_flags() & 0x8000 != 0
+}
+
+#[cfg(windows)]
+fn hidden_by_system(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    // FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM.
+    metadata.file_attributes() & (0x2 | 0x4) != 0
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn hidden_by_system(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
 
 /// Opens the folder `path` as a handle, which is what a lock, an exchange or a
 /// durable rename of its entries takes. Windows opens a folder only when
