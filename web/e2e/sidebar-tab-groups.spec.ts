@@ -1,4 +1,11 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Page } from "@playwright/test";
+// Throwaway probe (with-hide/hide-private#476, #187, #140, #534, #518): this spec's flaky test only, registered 20 times.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const test = Object.assign((title: string, ...rest: any[]) => {
+  if (title !== "2-1-2 tab segments align every tab's guide and line, and an unnamed single agent's tab keeps its guide alone") return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (let run = 1; run <= 20; run++) (base as any)(`${title} #${run}`, ...rest);
+}, { describe: base.describe, use: base.use, step: base.step, setTimeout: base.setTimeout });
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";

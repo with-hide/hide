@@ -1,5 +1,12 @@
 // Pane-header move B1-B10/B18/B21: production UI and real isolated PTYs.
-import { expect, test } from "@playwright/test";
+import { expect, test as base } from "@playwright/test";
+// Throwaway probe (with-hide/hide-private#476, #187, #140, #534, #518): this spec's flaky test only, registered 20 times.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const test = Object.assign((title: string, ...rest: any[]) => {
+  if (title !== "a tab drop and the keyboard move menu keep the same terminal in a new tab") return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (let run = 1; run <= 20; run++) (base as any)(`${title} #${run}`, ...rest);
+}, { describe: base.describe, use: base.use, step: base.step, setTimeout: base.setTimeout });
 import { beginDrag, expectDirection, paneView, selectMarker, startMove, tabNow, tabTitle } from "./pane-move-fixture";
 import { sessionIn } from "./fixture-agents";
 import { screenshot } from "./wire";

@@ -1,5 +1,12 @@
 // B1-B7/B14: real cold restoration and one Hide-triggered terminal split.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
+// Throwaway probe (with-hide/hide-private#476, #187, #140, #534, #518): this spec's flaky test only, registered 20 times.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const test = Object.assign((title: string, ...rest: any[]) => {
+  if (title !== "Opening a new terminal and splitting it keeps one tab and both terminal identities") return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (let run = 1; run <= 20; run++) (base as any)(`${title} #${run}`, ...rest);
+}, { describe: base.describe, use: base.use, step: base.step, setTimeout: base.setTimeout });
 import path from "node:path";
 import { paneCommandLine } from "./pane-fixture";
 import { waitForTerminal } from "./group-start-helper";

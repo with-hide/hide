@@ -1,4 +1,11 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test as base, type Locator, type Page } from "@playwright/test";
+// Throwaway probe (with-hide/hide-private#476, #187, #140, #534, #518): this spec's flaky test only, registered 20 times.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const test = Object.assign((title: string, ...rest: any[]) => {
+  if (title !== "New tab and Reopen use the requested area and Rename works in either bar") return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (let run = 1; run <= 20; run++) (base as any)(`${title} #${run}`, ...rest);
+}, { describe: base.describe, use: base.use, step: base.step, setTimeout: base.setTimeout });
 import fs from "node:fs";
 import path from "node:path";
 import { printLinesCommand } from "./pane-fixture";
