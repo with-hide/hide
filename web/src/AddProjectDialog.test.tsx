@@ -331,6 +331,31 @@ it("keeps the keyboard in Clone from URL's parent field while a parent is typed"
   await unmount();
 });
 
+it("opens the parent list of Clone and Create on the location the view shows, and leaves the remembered folder alone (PRD device-add-project D-04, D-07)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state(null, "ubuntu"));
+  const shown = { listing: { path: "/home/me", label: "~", home: "/home/me", truncated: false, entries: [{ name: "app", is_directory: true }] } };
+
+  // The one project on this device lives in /home/me, so that is the location both views fill in.
+  await act(async () => find('[data-add-project-way="clone"]')!.click());
+  expect((find("[data-clone-parent]") as HTMLInputElement).value).toBe("/home/me");
+  await act(async () => find("[data-clone-browse]")!.click());
+  expect(lists(events)).toEqual([{ device_id: "ubuntu", path: "/home/me" }]);
+  await answerList("ubuntu", "/home/me", shown);
+  await act(async () => find("[data-folder-browser-back]")!.click());
+
+  await act(async () => find("[data-add-project-back]")!.click());
+  await act(async () => find('[data-add-project-way="create"]')!.click());
+  expect(find("[data-create-project-location]")?.getAttribute("data-create-project-location")).toBe("/home/me");
+  await act(async () => find("[data-create-project-location]")!.click());
+  expect(lists(events).at(-1)).toEqual({ device_id: "ubuntu", path: "/home/me" });
+  await answerList("ubuntu", "/home/me", shown);
+
+  // Looking at a parent is not opening a folder to add: the core's remembered folder stays as it was.
+  expect(events.filter((event) => event.kind === "add_project_folder_set")).toEqual([]);
+  await unmount();
+});
+
 it("asks the same question when a device's node answers that a typed folder is outside its home (PRD wsl-device B15)", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
   const { events, unmount } = await mount(state("/mnt", "ubuntu"));

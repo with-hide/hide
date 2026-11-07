@@ -23,10 +23,11 @@ import { useInterfaceTranslation } from "./i18n/client";
 
 /**
  * `device` is the machine the project is made on and `hostLabel` its name;
- * `pickParent` opens that machine's folder picker and answers the folder, or
- * null when it was cancelled or the dialog's own list took over.
+ * `pickParent` opens that machine's folder picker at the parent the location
+ * shows and answers the folder, or null when it was cancelled or the dialog's
+ * own list took over.
  */
-export function CreateProjectView({ actions, device, hostLabel, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; device: string; hostLabel: string; registrations: readonly WorkspaceRegistration[]; pickParent: () => Promise<string | null>; onBack: () => void; draft?: { name?: string; parent?: string }; onDraft?: (draft: { name?: string; parent?: string }) => void }) {
+export function CreateProjectView({ actions, device, hostLabel, registrations, pickParent, onBack, draft, onDraft }: { actions: Actions; device: string; hostLabel: string; registrations: readonly WorkspaceRegistration[]; pickParent: (from: string) => Promise<string | null>; onBack: () => void; draft?: { name?: string; parent?: string }; onDraft?: (draft: { name?: string; parent?: string }) => void }) {
   const { t } = useInterfaceTranslation();
   const [parent, setParent] = useState(() => draft?.parent || defaultProjectParent(registrations, device));
   const [typed, setTyped] = useState(draft?.name ?? "");
@@ -61,7 +62,7 @@ export function CreateProjectView({ actions, device, hostLabel, registrations, p
 
   const choose = async () => {
     if (pending) return;
-    const folder = await pickParent();
+    const folder = await pickParent(parent);
     // A cancelled pick keeps the folder that was there.
     if (folder !== null) { setParent(folder); onDraft?.({ parent: folder }); }
   };
