@@ -712,6 +712,7 @@ A root with direct children has a chevron at its left and starts folded; the ope
 Folded, it wears its descendant mark, the turn mark and N for raised descendants, and nothing when its descendants are working, asking it, idle or done: a parent waiting on a working child already shows its ring and that child's line, and a child's ask that is not raised already turns the parent unread (PRD session-record-redesign D-04).
 The core still computes the working mark; no surface draws it.
 Opened, its children follow most urgent first, joined to it by rails, and a child with children has its own chevron; grandchildren are one step further in, and a grandchild with children opens the tree popover from its chevron.
+A child that works on another device than its parent follows the parent the same way: the parent's row opens it whenever its device answers, and it is the parent's tree that draws it, since the child's own device lists no line for a worktree only delegated children work in (`session_folds.child_only`). A child whose device is not connected is not drawn.
 Past five siblings the rest wait behind `N개 더`, which opens them in place.
 A tree row is one line with no branch line; a child on another device names that device on a second line, dimmed with `연결 안 됨` and not openable while it is not connected, and a child working in another worktree is not drawn again under that worktree.
 A worktree whose unresolved agents are all delegated children has no checkout line, no purpose line and no fold, because the children are reached from the root that owns them.
@@ -1701,8 +1702,9 @@ Projects and their checkouts sort by the latest authoritative agent activity tim
 Inside a project the primary checkout comes first whatever its activity, because it is the one checkout that never folds, and the rest follow in that activity order.
 Activity orders projects inside one device group and never across two.
 A project's secondary checkouts that are merged (as the Overview says) or whose pull request closed, and those inactive for seven days, move behind a trailing `Inactive N` disclosure, while its primary checkout and every checkout with live work, local changes, unpushed commits, or current focus remain visible.
+Merged work settles a feature worktree and never the primary checkout, which is where the next work starts: only seven days without activity make a primary checkout inactive.
 A project of a node that dials the core lists every worktree that node reports, one with no pane open included, and folds them by these same rules; a device the core dials shows only the checkouts its session opens.
-When every checkout in a project is inactive, the project itself moves behind the device's `Inactive projects N` disclosure.
+When every checkout in a project is inactive and nothing in the project was touched for seven days, an agent finishing in a merged worktree included, the project itself moves behind the device's `Inactive projects N` disclosure; a project whose pull requests all merged but that an agent used within the week stays in the list, and a checkout with an unknown activity time never folds it.
 A project with no agent row in any checkout, no named tab the operator kept, and that is not pinned, not the front project and not inactive, moves behind `No agents N` after the active projects, where opening it draws the same project rows; an agent started there brings the project back to the active list on the next snapshot (D-01).
 Its fold is the core's per device (`no_agents/<device>`), so it survives a reconnect and a relaunch.
 All three folds default closed and remember their expansion independently.
