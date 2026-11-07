@@ -1031,7 +1031,8 @@ mod tests {
     }
 
     /// A registration keeps the shape stores were written in: a dialed
-    /// device by its alias, a node that dials in by its flag, a WSL
+    /// device by its alias and how far it is named (none for one an earlier
+    /// build added under its alias's id), a node that dials in by its flag, a WSL
     /// distribution by its name. One that names more than one or none is
     /// dropped alone and the rest of the store loads, which is also how a
     /// build from before WSL devices reads a WSL record (it knows neither
@@ -1048,13 +1049,19 @@ mod tests {
         .unwrap();
         let mut persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "host_consent": null});
+        let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "host_consent": null, "naming": "named"});
+        // A device added by this build, not yet connected.
+        let pending = serde_json::json!({"id": "new-host", "label": "new", "ssh_alias": "new-host", "host_consent": null, "naming": "pending"});
+        // One an earlier build added under its alias's id: no naming field.
+        let legacy = serde_json::json!({"id": "old-host", "label": "old", "ssh_alias": "old-host", "host_consent": null});
         let inbound = serde_json::json!({"id": "laptop", "label": "MacBook", "ssh_alias": null, "host_consent": null, "inbound": true});
         let wsl = serde_json::json!({"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null, "wsl_distro": "Ubuntu"});
         // What a build from before WSL devices reads of the same record.
         let wsl_as_an_older_build_reads_it = serde_json::json!({"id": "wsl-old", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null});
         persisted["device_registrations"] = serde_json::json!([
             dialed,
+            pending,
+            legacy,
             inbound,
             wsl,
             {"id": "both", "label": "both", "ssh_alias": "both-host", "inbound": true},
@@ -1079,7 +1086,22 @@ mod tests {
                 (
                     "studio",
                     crate::model::LinkOrigin::Dialed {
-                        ssh_alias: "studio-host".to_owned()
+                        ssh_alias: "studio-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Named
+                    }
+                ),
+                (
+                    "new-host",
+                    crate::model::LinkOrigin::Dialed {
+                        ssh_alias: "new-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Pending
+                    }
+                ),
+                (
+                    "old-host",
+                    crate::model::LinkOrigin::Dialed {
+                        ssh_alias: "old-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Legacy
                     }
                 ),
                 ("laptop", crate::model::LinkOrigin::Inbound),
@@ -1093,7 +1115,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(&state.device_registrations).unwrap(),
-            serde_json::json!([dialed, inbound, wsl])
+            serde_json::json!([dialed, pending, legacy, inbound, wsl])
         );
     }
 

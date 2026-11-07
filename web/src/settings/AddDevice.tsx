@@ -15,7 +15,6 @@ import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Disclosure, Group, Note, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { deviceIdFor } from "../settings";
 import type { Device } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
@@ -30,7 +29,9 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   const [alias, setAlias] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
-  const [submitted, setSubmitted] = useState<{ id: string | null; distro: string | null; at: number } | null>(null);
+  // The core gives a new device its id (its machine's own, once it first
+  // connects), so the dialog waits for the alias or distribution it added.
+  const [submitted, setSubmitted] = useState<{ alias: string | null; distro: string | null; at: number } | null>(null);
   const error = useRefusalSince(submitted?.at ?? null, ["device."]);
   const choices = hostChoices(hosts?.hosts ?? []);
   const distributions = wslChoices(hosts?.wsl ?? []);
@@ -43,7 +44,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   const chosen = alias !== null && pickable.includes(alias) ? alias : null;
   const distro = chosen === null ? null : chosenDistro(chosen);
   const distribution = distributions.find((choice) => choice.value === chosen) ?? null;
-  const added = submitted ? devices.some((device) => (submitted.distro !== null ? device.wsl_distro === submitted.distro : device.id === submitted.id)) : false;
+  const added = submitted ? devices.some((device) => (submitted.distro !== null ? device.wsl_distro === submitted.distro : device.ssh_alias === submitted.alias)) : false;
   const pending = submitted !== null && !added && error === null;
   const blocked = pending || chosen === null || (distro === null && !name.trim());
   const choose = (next: string) => {
@@ -57,13 +58,12 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   const submit = () => {
     if (blocked || chosen === null) return;
     if (distro !== null) {
-      setSubmitted({ id: null, distro, at: Date.now() });
+      setSubmitted({ alias: null, distro, at: Date.now() });
       actions.registerWslDevice(distro);
       return;
     }
-    const id = deviceIdFor(chosen, devices.map((device) => device.id));
-    setSubmitted({ id, distro: null, at: Date.now() });
-    actions.registerDevice(id, name.trim(), chosen, { hostConsent: true });
+    setSubmitted({ alias: chosen, distro: null, at: Date.now() });
+    actions.registerDevice(name.trim(), chosen, { hostConsent: true });
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
   const reading = hosts === undefined || ((hosts.state === "idle" || hosts.state === "loading") && hosts.hosts.length === 0 && distributions.length === 0);

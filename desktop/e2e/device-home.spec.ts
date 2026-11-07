@@ -112,7 +112,8 @@ async function startDeviceHomeRun() {
   fs.copyFileSync(process.env.HIDE_E2E_SSH_KNOWN_HOSTS!, path.join(ssh, "known_hosts"));
   fs.writeFileSync(path.join(ssh, "config"), [
     "Host isolated-device", "  HostName 127.0.0.1", `  Port ${process.env.HIDE_E2E_SSH_PORT}`,
-    `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none", "",
+    `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none",
+    `  SetEnv HIDE_MACHINE_ID=${DEVICE}`, "",
   ].join("\n"), { mode: 0o600 });
   proveDeviceHome(run.env, "isolated-device", fs.realpathSync(deviceHome));
   const build = stageBuild(run.root);
@@ -151,7 +152,7 @@ test("a device's Home is made on its first start, the rail follows registration,
 
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
     await sendFrame(page, state, { kind: "register_device", payload: {
-      id: DEVICE, label: DEVICE_LABEL, ssh_alias: "isolated-device", host_consent: true,
+      label: DEVICE_LABEL, ssh_alias: "isolated-device", host_consent: true,
     } });
 
     // B1: the device's tile joins the rail with This Mac still in front and the same screen.

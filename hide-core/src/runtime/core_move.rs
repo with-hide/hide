@@ -154,7 +154,7 @@ impl Runtime {
         let registration: &DeviceRegistration = self
             .device_registration(device)
             .ok_or(MoveSourceRefusal::UnknownDevice)?;
-        let LinkOrigin::Dialed { ssh_alias } = &registration.origin else {
+        let LinkOrigin::Dialed { ssh_alias, .. } = &registration.origin else {
             return Err(MoveSourceRefusal::NotDialed);
         };
         let connected = self

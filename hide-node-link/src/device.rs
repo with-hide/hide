@@ -775,6 +775,10 @@ pub enum EstablishError {
     },
     Install(String),
     Helper(String),
+    /// The machine the device's node reports is not the one its
+    /// registration names, or cannot name it (`DeviceNaming`): nothing was
+    /// opened on the link, and retrying reaches the same machine.
+    MachineName(String),
 }
 
 impl fmt::Display for EstablishError {
@@ -791,7 +795,8 @@ impl fmt::Display for EstablishError {
             Self::Stopped(reason)
             | Self::Unsupported(reason)
             | Self::Install(reason)
-            | Self::Helper(reason) => formatter.write_str(reason),
+            | Self::Helper(reason)
+            | Self::MachineName(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),
         }
     }

@@ -8,7 +8,7 @@ use hide_core::device_command::DeviceCommand;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--json]\nhide device remove <device id> [--json]\nhide device retry <device id> [--wait] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--json]\nhide device remove <device id or ssh alias> [--json]\nhide device retry <device id or ssh alias> [--wait] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -80,8 +80,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     let answer = (|| {
         let mut value = ask(env, &cli.command)?;
-        if let (true, DeviceCommand::Retry { device_id }) = (cli.wait, &cli.command) {
-            value["device"] = outcome(env, device_id, value["device"].clone())?;
+        if let (true, DeviceCommand::Retry { .. }) = (cli.wait, &cli.command) {
+            value["device"] = outcome(env, value["device"].clone())?;
         }
         Ok(value)
     })();
@@ -147,8 +147,13 @@ fn ask(env: &Env, command: &DeviceCommand) -> Result<Value, Refused> {
 /// Reads the device until its attempt has an outcome: connected, the
 /// operator's turn or failed (PRD system-ssh-device-link B30).
 #[allow(clippy::disallowed_methods)] // polls a state the core changes on its own worker, bounded by WAIT_BOUND
-fn outcome(env: &Env, device_id: &str, mut device: Value) -> Result<Value, Refused> {
+/// A device added by an alias takes its machine's id on its first
+/// connection, so it is followed by its alias as well as its id.
+fn outcome(env: &Env, mut device: Value) -> Result<Value, Refused> {
     let deadline = Instant::now() + WAIT_BOUND;
+    let id = device["id"].clone();
+    let alias = device["ssh_alias"].clone();
+    let same = |row: &&Value| row["id"] == id || (alias.is_string() && row["ssh_alias"] == alias);
     while device["state"] == "connecting" {
         if Instant::now() >= deadline {
             return Err(Refused::WaitedOut(device));
@@ -157,7 +162,7 @@ fn outcome(env: &Env, device_id: &str, mut device: Value) -> Result<Value, Refus
         let list = ask(env, &DeviceCommand::List)?;
         device = list["devices"]
             .as_array()
-            .and_then(|devices| devices.iter().find(|device| device["id"] == device_id))
+            .and_then(|devices| devices.iter().find(same))
             .cloned()
             // Removed while the attempt ran.
             .ok_or_else(|| Refused::Answer {

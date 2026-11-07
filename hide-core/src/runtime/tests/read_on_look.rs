@@ -29,6 +29,7 @@ fn origins() -> [LinkOrigin; 2] {
         LinkOrigin::Inbound,
         LinkOrigin::Dialed {
             ssh_alias: DEVICE.into(),
+            naming: crate::model::DeviceNaming::Named,
         },
     ]
 }
@@ -884,6 +885,7 @@ fn retrying_the_device_in_front_keeps_it_there_and_reads_nothing() {
     let (mut runtime, _views) = device(
         LinkOrigin::Dialed {
             ssh_alias: DEVICE.into(),
+            naming: crate::model::DeviceNaming::Named,
         },
         true,
     );

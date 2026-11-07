@@ -4764,6 +4764,7 @@ mod tests {
             crate::model::LinkOrigin::Inbound,
             crate::model::LinkOrigin::Dialed {
                 ssh_alias: "fixture-host".to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
         ] {
             let fixture = Fixture::new();

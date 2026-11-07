@@ -32,6 +32,7 @@ mod desk;
 mod detail;
 mod device_analytics;
 mod device_catalog;
+mod device_names;
 mod device_sign_in;
 mod devices;
 mod disk_sweep;
@@ -1206,6 +1207,17 @@ pub struct Runtime {
     /// device row.
     machine_name: Option<String>,
     device_machine_ids: HashMap<String, String>,
+    /// Devices renamed to their machine ids whose core state is not saved
+    /// yet, each with the naming round that renamed it; each connects once a
+    /// save that took the state at or after that round holds it
+    /// (`device_names`).
+    device_names_saving: BTreeMap<String, u64>,
+    /// The last naming round: it only ever grows, so a save taken before a
+    /// device was renamed again never stands for the new name.
+    device_naming_round: u64,
+    /// Legacy devices whose consent took their machine id on this run: the
+    /// next start names them (`device_names`).
+    device_machine_bound: HashSet<String>,
     unresolved_machine_lineage: HashSet<String>,
     file_roots: Option<crate::files::FileRoots>,
     state_path: PathBuf,
@@ -2333,6 +2345,9 @@ impl Runtime {
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),
             device_machine_ids: HashMap::new(),
+            device_names_saving: BTreeMap::new(),
+            device_naming_round: 0,
+            device_machine_bound: HashSet::new(),
             unresolved_machine_lineage: HashSet::new(),
             file_roots: None,
             state_path,

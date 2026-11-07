@@ -458,27 +458,6 @@ export function canRetryDevice(device: Device, remote: RemoteStatus | undefined)
 }
 
 /**
- * The id a new device registers under: the alias folded to the core's id
- * shape, with a numeric suffix when an existing device already holds it.
- * `local`, the id the core's own machine had before it was named by its
- * node id, is refused by the core and never offered.
- */
-export function deviceIdFor(alias: string, existing: readonly string[]): string {
-  const base =
-    alias
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "device";
-  const taken = new Set(existing);
-  if (!taken.has(base) && base !== "local") return base;
-  for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-}
-
-/**
  * What removing a device takes from Hide: its registered projects and its
  * open file tabs; and the drafts it leaves, which stay in this browser to
  * export or discard (PRD S5.5 B26). Nothing on the device is counted, because

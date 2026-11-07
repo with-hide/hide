@@ -1486,11 +1486,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "agent_definitions_read", payload: {} });
     },
 
-    registerDevice(id: string, label: string, alias: string, options: { hostConsent: boolean }) {
+    /** Adds an SSH device; the core gives it its id, its machine's own once it first connects. */
+    registerDevice(label: string, alias: string, options: { hostConsent: boolean }) {
       dispatch({
         schema_version: 2,
         kind: "register_device",
-        payload: { id, label, ssh_alias: alias, host_consent: options.hostConsent },
+        payload: { label, ssh_alias: alias, host_consent: options.hostConsent },
       });
     },
 

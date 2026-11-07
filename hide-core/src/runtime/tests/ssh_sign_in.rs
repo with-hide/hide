@@ -154,6 +154,7 @@ fn ssh_runtime() -> (Arc<Mutex<Runtime>>, Arc<Asked>) {
             label: "Mini".to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: DEVICE.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: Some(consent),
         });
@@ -536,6 +537,7 @@ fn ended_attempts_leave_no_slot_for_their_devices() {
                     label: id.to_owned(),
                     origin: crate::model::LinkOrigin::Dialed {
                         ssh_alias: id.to_owned(),
+                        naming: crate::model::DeviceNaming::Named,
                     },
                     host_consent: Some(consent),
                 });

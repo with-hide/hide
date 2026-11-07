@@ -1873,7 +1873,6 @@ fn view_authority_a_catalog_rebuild_keeps_the_visible_tab() {
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
         "payload": {
-            "id": "device-rebuild",
             "label": "Rebuild",
             "ssh_alias": "rebuild-host"
         }

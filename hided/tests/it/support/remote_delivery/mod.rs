@@ -741,7 +741,7 @@ impl Fixture {
         // The device reports a checkout by its real path, which the journey
         // compares with the one it made, and `/tmp` is a link on macOS.
         let device_root = ipc.path().canonicalize()?.join("r");
-        let remote_env = Environment::new(&device_root, Some(&device_state))?;
+        let mut remote_env = Environment::new(&device_root, Some(&device_state))?;
         // The device installs shipped executables, which carry no debug
         // data. Stage this candidate's code with the same property: hashing
         // and uploading a CI debug image can exhaust helper setup's bound.
@@ -781,6 +781,11 @@ impl Fixture {
             successful(command)?;
         }
         fs::create_dir_all(local_env.home.join(".ssh"))?;
+        // The device is another machine than the core's: its node and the
+        // probe read this as its machine id, which names the device once it
+        // first connects, so it is added by its alias and connects as
+        // `DEVICE`.
+        remote_env.set(hide_platform::host::MACHINE_ID_VARIABLE, DEVICE);
         let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
         fs::write(
             local_env.home.join(".ssh/config"),
@@ -963,7 +968,10 @@ impl Fixture {
             ),
             Err(error) => format!("snapshot unreadable: {error:#}"),
         };
-        screen.event("register_device", json!({"id":DEVICE,"label":"Remote fixture","ssh_alias":"delivery-fixture","host_consent":true}))?;
+        screen.event(
+            "register_device",
+            json!({"label":"Remote fixture","ssh_alias":"delivery-fixture","host_consent":true}),
+        )?;
         wait_for("connected private SSH device", || {
             let snapshot = screen.snapshot()?;
             Ok(snapshot

@@ -370,6 +370,7 @@ fn a_dialed_device_shows_agent_groups_but_refuses_a_second_area() {
     let (mut runtime, requests, _views) = device_in_front(
         crate::model::LinkOrigin::Dialed {
             ssh_alias: NODE.to_owned(),
+            naming: crate::model::DeviceNaming::Named,
         },
         &t.main,
     );
@@ -413,6 +414,7 @@ fn choosing_an_ended_delegated_tab_on_a_device_brings_it_forward() {
     let (mut runtime, _requests, _views) = device_in_front(
         crate::model::LinkOrigin::Dialed {
             ssh_alias: NODE.to_owned(),
+            naming: crate::model::DeviceNaming::Named,
         },
         &t.main,
     );

@@ -312,9 +312,10 @@ pub(super) struct WorkspacePinSetPayload {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RegisterDevicePayload {
-    /// Empty for a WSL distribution, whose id and name the core gives it.
-    #[serde(default)]
-    pub(super) id: String,
+    /// The core gives the id: an SSH device is named by its machine's own
+    /// id once its first connection reports it (`DeviceNaming`), a WSL
+    /// distribution by the PC and its name. An `id` an earlier shell sends is
+    /// read past.
     #[serde(default)]
     pub(super) label: String,
     #[serde(default)]

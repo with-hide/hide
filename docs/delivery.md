@@ -939,7 +939,7 @@ The engine's rename has no compare-and-set, so a user rename between the final r
 Completed intent replay returns the durable receipt without contacting the engine, including while a device is offline.
 
 `--machine <device id>` starts the child on a connected device instead of the caller's own; it works with delegation and handoff alike.
-The id is the `device_id` that `hide workspace info` shows and the `machine` that `hide agent list` shows for agents there; a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
+The id is the `device_id` that `hide workspace info` shows and the `machine` that `hide agent list` shows for agents there, which is the device's machine id ([ARCHITECTURE.md](ARCHITECTURE.md#a-devices-id)); the SSH alias the device was added with names it too and is read as its id, an alias two devices share is refused with `machine_unknown` and their ids, a device label is not accepted, and the caller's own id is the same as leaving the flag out, so a spawn without `--machine` is exactly the spawn above.
 `--repo` and `--path` are then paths on that device.
 A spawn records the machine of its child only when that is not the caller's own, and the ledger refuses a child whose machine is not the spawn's.
 A core move therefore reads the field against the caller's machine after the move (`node_migration::reown`): a spawn that names none stays so, a machine the move renames takes its new id, and one that is now the caller's own is dropped.

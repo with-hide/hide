@@ -35,7 +35,12 @@ async function mount(sshHosts: SshHosts | undefined, devices: Device[] = []) {
     root.render(<AddDevice actions={actions} devices={devices} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" />);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
-  return { events, q, container, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
+  const rerender = async (next: Device[]) => {
+    await act(async () => {
+      root.render(<AddDevice actions={actions} devices={next} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" />);
+    });
+  };
+  return { events, q, container, rerender, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
@@ -57,8 +62,19 @@ it("lists each Host with its address, and fills the name and adds only the alias
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
-  expect(register[0]?.payload).toMatchObject({ id: "lab", label: "lab", ssh_alias: "lab", host_consent: true });
-  expect(register[0]?.payload).not.toHaveProperty("herdr_socket_path");
+  // The core gives the device its id: the shell sends none.
+  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true });
+  await unmount();
+});
+
+it("waits for the device its alias added, under whatever id the core gives it", async () => {
+  const { q, rerender, unmount } = await mount(hosts([host("lab")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Adding…");
+  // Its first connection names it by its machine's id, not by the alias.
+  await rerender([{ id: "4c1d2e3f-0a1b-4c2d-8e3f-5a6b7c8d9e0f", ssh_alias: "lab" } as Device]);
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
   await unmount();
 });
 

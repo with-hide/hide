@@ -124,11 +124,12 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     // nor create (PRD device-add-project B31); its folder list is web/e2e's and the web tests'.
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
     await sendEvent(page, { origin: new URL(page.url()).origin, token: state.token }, "register_device", {
-      id: "ssh-none", label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
+      label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
     });
     await page.keyboard.press(chord("new_workspace", "electron"));
     await dialog.locator("[data-add-project-host]").click();
-    const offline = page.locator('[data-host-option="ssh-none"]');
+    // A device that never connected keeps the id its alias makes.
+    const offline = page.locator('[data-host-option="hide-e2e-no-such-host-invalid"]');
     await expect(offline).toHaveAttribute("data-host-offline", "true");
     await expect(offline).toHaveAttribute("data-disabled", "");
     await expect(offline).toContainText("Offline box · Not connected");
