@@ -129,8 +129,9 @@ pub(super) struct Pane {
     /// reboot, finds it again; it goes when an agent shows in the pane, by a
     /// start, its hook or its foreground, and with the pane.
     pub(super) resting: Option<PaneAgent>,
-    /// The latest hook report that arrived before foreground detection.
-    /// Never saved; a pane owns at most one and drops it when it ends.
+    /// The latest hook report that arrived while the shell held the
+    /// terminal, for the agent whose program shows next. Never saved; a pane
+    /// owns at most one and drops it when it ends.
     pending_session: Option<(String, String)>,
     /// What its holder last said of it.
     pub(super) live: PaneLive,
@@ -1739,6 +1740,22 @@ impl Topology {
     ) -> Result<agents::Applied, EngineError> {
         let mut seq = self.agent_seq;
         let held = self.pane_mut(pane)?;
+        // A hook's report that waited while the shell held the terminal is
+        // the record of the agent a program now runs ([`agents::program_may_run`]);
+        // a program a definition names as another agent replaces it below,
+        // and one of the same kind keeps its session.
+        let reported = if held.agent.is_none()
+            && agents::program_may_run(facts)
+            && let Some((kind, session)) = held.pending_session.take()
+        {
+            held.agent = Some(PaneAgent {
+                session: Some(session),
+                ..PaneAgent::shown(&kind)
+            });
+            true
+        } else {
+            false
+        };
         let mut applied = agents::apply(
             catalog,
             &mut held.cwd,
@@ -1748,6 +1765,7 @@ impl Topology {
             &mut seq,
             Instant::now(),
         );
+        applied.changed |= reported;
         // An agent the pane's foreground shows is the pane's agent now.
         if held.agent.is_some() {
             held.resting = None;
@@ -1886,21 +1904,34 @@ impl Topology {
         true
     }
 
-    /// A hook cannot claim another kind of agent. Before detection, keep
-    /// only its latest report until the pane's foreground identifies it.
+    /// The session the `kind` agent's own hook reported from `pane`: the
+    /// session of the agent the pane runs, never of another kind's. With no
+    /// agent known in the pane it is the record of the program that holds
+    /// the terminal, laid on with the pane's last facts as a report that
+    /// waited for its program is ([`Self::apply_facts`]); while the shell
+    /// holds the terminal only its latest report waits.
     pub(super) fn hook_session(
         &mut self,
         pane: &str,
         kind: &str,
         session: &str,
-    ) -> Result<bool, EngineError> {
+        catalog: &Catalog,
+    ) -> Result<agents::Applied, EngineError> {
         let held = self.pane_mut(pane)?;
         match held.agent.as_ref() {
-            Some(agent) if agent.kind == kind => self.set_agent_session(pane, kind, session),
-            Some(_) => Ok(false),
+            Some(agent) if agent.kind == kind => Ok(agents::Applied {
+                changed: self.set_agent_session(pane, kind, session)?,
+                ..agents::Applied::default()
+            }),
+            Some(_) => Ok(agents::Applied::default()),
             None => {
                 held.pending_session = Some((kind.to_owned(), session.to_owned()));
-                Ok(false)
+                let facts = held.live.facts.clone();
+                if held.live.heard && agents::program_may_run(&facts) {
+                    self.apply_facts(pane, &facts, catalog)
+                } else {
+                    Ok(agents::Applied::default())
+                }
             }
         }
     }

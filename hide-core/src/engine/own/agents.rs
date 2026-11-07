@@ -387,6 +387,20 @@ impl PaneAgent {
         }
     }
 
+    /// An agent of `kind` the pane shows running: a program a definition
+    /// names in its foreground, or one whose own integration reported its
+    /// session from the pane ([`program_may_run`]).
+    pub(super) fn shown(kind: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            live: Live {
+                shown: true,
+                ..Live::default()
+            },
+            ..Self::default()
+        }
+    }
+
     /// Marks the agent's program shown; whether that changed anything.
     fn show(&mut self) -> bool {
         let changed = !self.live.shown;
@@ -581,6 +595,19 @@ pub(super) struct Applied {
     pub(super) settled_unread: Option<String>,
 }
 
+/// Whether `facts` leave room for an agent the pane's foreground does not
+/// name: a program other than the pane's own holds its terminal, or the
+/// system could not say what does. An agent's own integration reporting its
+/// session from the pane then speaks for that program, as the start of an
+/// agent the engine typed does (with-hide/hide-private#696): an agent typed
+/// into the shell is otherwise known only by its program's name, which a
+/// wrapper, an unreadable argument list (a native Claude Code's process is
+/// named by its version) or an unread terminal leaves unknown. While the
+/// shell holds the terminal no program of its runs there yet.
+pub(super) fn program_may_run(facts: &PaneFacts) -> bool {
+    facts.foreground.is_some() || facts.foreground_unread
+}
+
 /// Lays `facts` on a pane whose folder is `cwd` and whose agent is `agent`:
 /// the folder it reports, the agent its foreground runs, and the state its
 /// screen shows, as of `now`. `seq` is the engine's count of state changes.
@@ -629,14 +656,7 @@ pub(super) fn apply(
         // Another agent's program: the operator typed it, or the start that
         // was typed ran something else.
         (_, _, Some(definition)) => {
-            *agent = Some(PaneAgent {
-                kind: definition.id.clone(),
-                live: Live {
-                    shown: true,
-                    ..Live::default()
-                },
-                ..PaneAgent::default()
-            });
+            *agent = Some(PaneAgent::shown(&definition.id));
             applied.changed = true;
         }
         // Nothing is in the foreground but the shell: an agent that showed
