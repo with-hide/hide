@@ -124,12 +124,13 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     // and what the device path answers (here: no connection) stays in the dialog.
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
     await sendEvent(page, { origin: new URL(page.url()).origin, token: state.token }, "register_device", {
-      id: "ssh-none", label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
+      label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
     });
     await page.keyboard.press(chord("new_workspace", "electron"));
     await dialog.locator("[data-add-project-host]").click();
-    await page.locator('[data-host-option="ssh-none"]').click();
-    await expect(dialog).toHaveAttribute("data-add-project", "ssh-none");
+    // A device that never connected keeps the id its alias makes.
+    await page.locator('[data-host-option="hide-e2e-no-such-host-invalid"]').click();
+    await expect(dialog).toHaveAttribute("data-add-project", "hide-e2e-no-such-host-invalid");
     await expect(browse).toHaveCount(0);
     const field = dialog.getByLabel("Folder on Offline box");
     await expect(field).toBeFocused();
