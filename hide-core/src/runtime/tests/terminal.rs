@@ -413,6 +413,7 @@ fn a_device_pane_is_searched_on_its_own_engine() {
                 label: "Mini".to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: "mini".to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });

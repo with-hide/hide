@@ -157,6 +157,11 @@ pub(super) struct CreateWorkspacePayload {
     /// device's helper judges its own with it (`Call::Registrable`).
     #[serde(default)]
     pub(super) confirmed_outside_home: Option<String>,
+    /// The id the sender reads this add's refusal by
+    /// (`LastErrorSnapshot::request_id`): Add a project's importable list
+    /// adds row after row and tells each row's answer from the others'.
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -312,9 +317,10 @@ pub(super) struct WorkspacePinSetPayload {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RegisterDevicePayload {
-    /// Empty for a WSL distribution, whose id and name the core gives it.
-    #[serde(default)]
-    pub(super) id: String,
+    /// The core gives the id: an SSH device is named by its machine's own
+    /// id once its first connection reports it (`DeviceNaming`), a WSL
+    /// distribution by the PC and its name. An `id` an earlier shell sends is
+    /// read past.
     #[serde(default)]
     pub(super) label: String,
     #[serde(default)]
@@ -2479,6 +2485,15 @@ impl Runtime {
             ),
             Event::CancelRepositoryClone(payload) => self.cancel_repository_clone(payload.id),
             Event::CreateWorkspace(payload) => {
+                if let Some(request_id) = payload.request_id.as_deref() {
+                    let device = payload
+                        .device_id
+                        .clone()
+                        .unwrap_or_else(|| self.node.as_str().to_owned());
+                    if !self.await_add(request_id, &device, &payload.path) {
+                        return true;
+                    }
+                }
                 if let Some(device) = payload
                     .device_id
                     .clone()
@@ -2887,11 +2902,11 @@ impl Runtime {
                 self.select_terminal_pane(next_pane_id.clone());
                 self.sync_active_tab_projection();
                 // The operator chose this tab, so its pane now holds Hide's
-                // keyboard and the read record follows it. Leaving the record
-                // on the pane of the tab just left kept marking that pane read
-                // while nobody was looking at it.
-                self.operator_focused_pane_id = next_pane_id;
-                self.refresh_pane_read_state();
+                // keyboard and the read record follows it once the event is
+                // done (`follow_operator_look`). Leaving the record on the
+                // pane of the tab just left kept marking that pane read while
+                // nobody was looking at it.
+                self.set_operator_focus(next_pane_id);
                 self.yield_surface_to_terminal();
                 self.persist_current_ui_state();
                 if payload.focus_device && !self.device_in_front(self.node.as_str()) {
@@ -3149,10 +3164,8 @@ impl Runtime {
                 // landing on this machine (PRD S5 B19). A shell that routes
                 // remote splits sends `remote_control` instead.
                 if let Some(device_id) = self
-                    .snapshot
-                    .navigator
-                    .focused_device_id
-                    .as_deref()
+                    .look
+                    .front()
                     .filter(|device_id| *device_id != self.node.as_str())
                 {
                     self.set_error(
@@ -3568,8 +3581,7 @@ impl Runtime {
                 self.snapshot.navigator.root_path = Some(checkout.path);
                 self.sync_changes_root_path();
                 self.select_terminal_pane(pane_id);
-                self.operator_focused_pane_id = None;
-                self.refresh_pane_read_state();
+                self.set_operator_focus(None);
                 self.persist_current_ui_state();
                 true
             }

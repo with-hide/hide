@@ -337,13 +337,18 @@ use crate::error::HostError;
 /// project would land under that home, so both run on any device (PRD
 /// device-add-project D-01, D-07); a helper on 79 would refuse both, so it
 /// upgrades.
-/// 81: a node renews a pane's holder from this build's version folder
+/// 82: `importable_projects` answers the projects worth adding on the node,
+/// from its agents' sessions and Paseo's and Herdr's lists, for Add a
+/// project on any device (PRD device-add-project D-09); a helper on 81
+/// would refuse it, so it upgrades (81 is taken by an open change).
+/// 83 (81 was held for this change while 82 landed first): a node renews a
+/// pane's holder from this build's version folder
 /// (`holders::PaneCall::Renew`, with-hide/hide-private#646), which the core
 /// asks before it wakes an agent in the pane, and takes only the sleep's own
 /// input (`holders::PaneCall::SleeperInput`) into a pane whose agent is
 /// asleep; a helper on an earlier protocol would refuse both calls, so it
 /// upgrades.
-pub const PROTOCOL_VERSION: u32 = 81;
+pub const PROTOCOL_VERSION: u32 = 83;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -631,6 +636,16 @@ pub enum Call {
     /// repository carries its branch and a folder its repository count.
     HomeList {
         path: String,
+    },
+    /// The projects worth adding on this host (`importable::ImportableProjects`):
+    /// the folders its agents worked in and the projects Paseo and Herdr keep,
+    /// each as the root a registration would add under home, newest within
+    /// thirty days first, at most twenty, leaving out every root `exclude`
+    /// names (the core's registrations here, at most
+    /// `importable::EXCLUDE_CAP`). It only reads.
+    ImportableProjects {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<String>,
     },
     /// Where a clone (`kind` `clone`) or a new project (`project`) named
     /// `name` would land in `parent`, home or a folder under it, judged
@@ -1306,6 +1321,7 @@ impl Call {
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
             | Self::HomeList { .. }
+            | Self::ImportableProjects { .. }
             | Self::NewFolderTarget { .. }
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }

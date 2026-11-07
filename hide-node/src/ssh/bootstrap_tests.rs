@@ -115,7 +115,9 @@ fn mode(path: &Path) -> u32 {
 }
 
 /// B22: the probe answers the account, its home and its platform, past
-/// whatever a login file printed first.
+/// whatever a login file printed first, and the machine id this machine's
+/// own node reads, which names the device (`DeviceNaming`): the probe read
+/// before the install and the node's Hello after it must be one id.
 #[test]
 fn the_probe_reads_the_account_past_a_login_greeting() {
     let device = Device::new();
@@ -125,6 +127,7 @@ fn the_probe_reads_the_account_past_a_login_greeting() {
     assert_eq!(Path::new(&facts.home), device.home());
     assert_eq!(facts.os, std::env::consts::OS);
     assert_eq!(facts.arch, std::env::consts::ARCH);
+    assert_eq!(facts.machine_id, hide_platform::host::machine_id().unwrap());
 }
 
 /// The one remote command starts the script in every POSIX login shell an

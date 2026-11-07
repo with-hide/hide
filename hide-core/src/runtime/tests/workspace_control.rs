@@ -1752,6 +1752,7 @@ fn hide_memory_refuses_a_disconnected_or_unknown_caller_and_a_changed_checkout()
             label: "studio".into(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "studio-host".into(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });

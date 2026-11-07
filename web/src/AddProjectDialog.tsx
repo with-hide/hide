@@ -17,6 +17,7 @@ import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost,
 import { CloneFromUrl, cloneRunning } from "./CloneFromUrl";
 import { CreateProjectView } from "./CreateProjectView";
 import { FolderBrowser } from "./FolderBrowser";
+import { ImportableProjects } from "./ImportableProjects";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Kbd } from "./components/ui/kbd";
 import { RowButton } from "./components/ui/row-button";
@@ -307,6 +308,7 @@ export function AddProjectViews({
                   </RowButton>
                 ))}
               </div>
+              <ImportableProjects actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} offline={offline} busy={pending} />
             </DialogBody>
           </>
         )}

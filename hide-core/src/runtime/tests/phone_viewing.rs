@@ -49,7 +49,7 @@ fn a_phone_that_opens_a_finished_agent_reads_it_without_moving_the_desktop() {
             .contains_key("session"),
         "the read is the desktop's own record, kept across a restart"
     );
-    assert_eq!(runtime.operator_focused_pane_id, None, "no desktop focus");
+    assert_eq!(runtime.look.focus(), None, "no desktop focus");
     assert_eq!(runtime.snapshot.focused.pane_id, focused);
 
     // The same list again is the same look and publishes nothing.

@@ -83,7 +83,7 @@ pub use conversation_cursor::{
 
 pub use catalog::{
     ProjectSession, ProjectSessions, SESSION_DISCOVERY_LIMIT, SessionAvailability, SessionCatalog,
-    SessionCatalogError, SessionFilter, SessionStoreRefusal,
+    SessionCatalogError, SessionFilter, SessionStoreRefusal, WorkedFolder, WorkedFolders,
 };
 
 /// Number of recent day directories used when the engine has not reported a Codex
@@ -259,7 +259,7 @@ pub fn inside_session_root(
 /// The local agent session formats supported by Hide. Claude Code and Codex
 /// keep a JSONL file per session; OpenCode keeps every session in one SQLite
 /// database, which only the session adapter reads (`label_transcript`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Agent {
     Codex,

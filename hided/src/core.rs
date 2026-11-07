@@ -183,6 +183,10 @@ enum Command {
     WorkspaceRemoteRoutes {
         reply: Sender<Vec<hide_core::WorkspaceRemoteRoute>>,
     },
+    RegisteredPaths {
+        device_id: String,
+        reply: Sender<Vec<String>>,
+    },
     DeviceEngine {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
@@ -901,6 +905,20 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped device-channel reply".to_owned())?
     }
 
+    /// The paths of the projects registered on `device_id`; see
+    /// `Core::registered_paths`.
+    pub fn registered_paths(&self, device_id: &str) -> Result<Vec<String>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::RegisteredPaths {
+                device_id: device_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped registered-paths reply".to_owned())
+    }
+
     pub fn workspace_remote_routes(&self) -> Result<Vec<hide_core::WorkspaceRemoteRoute>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -1589,6 +1607,9 @@ fn owner_loop(
             }
             Command::DeviceChannel { device_id, reply } => {
                 let _ = reply.send(core.node_link(&device_id));
+            }
+            Command::RegisteredPaths { device_id, reply } => {
+                let _ = reply.send(core.registered_paths(&device_id));
             }
             Command::WorkspaceRemoteRoutes { reply } => {
                 let _ = reply.send(core.workspace_remote_routes());

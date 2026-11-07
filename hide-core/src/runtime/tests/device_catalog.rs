@@ -493,7 +493,7 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
     device.hold();
     {
         let mut runtime = shared.lock().unwrap();
-        runtime.snapshot.navigator.focused_device_id = Some(TARGET.to_owned());
+        runtime.set_front_device(Some(TARGET.to_owned()));
         runtime.ingest_remote_session(TARGET, Ok(raw));
         runtime.sync_workspace_view();
         let held = &runtime.snapshot.ui_state.recent_checkouts;
@@ -716,7 +716,7 @@ fn a_reconnected_device_keeps_its_panes_in_their_checkouts_until_its_helper_answ
         TARGET,
         generation,
         Ok(hosts::HostReady::Dialed(Box::new(
-            super::device_kit::established(device.clone(), None),
+            super::device_kit::established_on(TARGET, device.clone(), None),
         ))),
     );
     // The new connection's helper has not answered: nothing moved.
@@ -752,6 +752,7 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
             label: "Mini".to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });
@@ -817,6 +818,7 @@ fn catalog_device_runtime(workspaces: Vec<WorkspaceSnapshot>) -> (Runtime, tempf
             label: "Mini".to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });
@@ -892,7 +894,7 @@ fn a_retried_device_rereads_its_worktrees_when_its_helper_is_up_before_its_sessi
         TARGET,
         generation,
         Ok(hosts::HostReady::Dialed(Box::new(
-            super::device_kit::established(CatalogDevice::new(), None),
+            super::device_kit::established_on(TARGET, CatalogDevice::new(), None),
         ))),
     );
     runtime.ingest_remote_session(TARGET, Ok(session(workspaces)));
@@ -1830,6 +1832,7 @@ fn removing_a_device_forgets_its_projects_tabs_and_folders_and_keeps_this_machin
             label: "Mini".to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });
@@ -2359,6 +2362,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             label: TARGET.to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: TARGET.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: Some(consent),
         });

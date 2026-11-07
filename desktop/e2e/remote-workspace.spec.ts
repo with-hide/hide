@@ -139,7 +139,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
   run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "remote-bin");
   // Two aliases for the one isolated server: a second device registers under
   // the second, with its own pane fixture, id and connections.
-  writeSshConfig(run.env.HOME!, ["isolated-workspace", "isolated-workspace-2"]);
+  writeSshConfig(run.env.HOME!, { "isolated-workspace": "ssh-e2e", "isolated-workspace-2": "ssh-e2e-2" });
   const deviceAccount = deviceHome();
   const bridge = deviceBridges(deviceAccount);
   proveDeviceHome(run.env, "isolated-workspace", deviceAccount);
@@ -206,7 +206,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
         ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
         ws.onmessage = () => {
           ws.send(JSON.stringify({ schema_version: 2, kind: "register_device", payload: {
-            id: "ssh-e2e", label: "SSH fixture", ssh_alias: "isolated-workspace",
+            label: "SSH fixture", ssh_alias: "isolated-workspace",
             host_consent: true,
           } }));
           clearTimeout(timer);
@@ -297,7 +297,7 @@ test("remote pane CLI reaches its own Workspace over SSH and leaves the local Wo
     const secondCheckout = fs.realpathSync(path.join(second.root, "fixture"));
     const firstCheckout = fs.realpathSync(path.join(remote.root, "fixture"));
     await sendFrame(page, state, { kind: "register_device", payload: {
-      id: "ssh-e2e-2", label: "SSH fixture 2", ssh_alias: "isolated-workspace-2",
+      label: "SSH fixture 2", ssh_alias: "isolated-workspace-2",
       host_consent: true,
     } });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(2);
