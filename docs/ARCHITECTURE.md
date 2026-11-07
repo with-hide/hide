@@ -65,8 +65,9 @@ One request every 30 seconds is retained only for the front target, with one nod
 The pump joins both admitted readers outside Runtime's mutex on shutdown; a superseded read may finish within that bound and its answer is discarded, with no additional job queued for each intermediate selection.
 Five seconds without a successful Git observation marks retained data stale; CI ages at 90 seconds and a disconnected shell also labels retained state stale locally.
 
-The read axis's look is compared after every announced change by the core's read settle (`hide-core/src/read_settle.rs`): the change notifier raises its one pending mark, and its one thread, started by `Core::create` and stopped and joined when the core drops, takes the runtime lock once to run `Runtime::follow_operator_look`.
-It exists because a worker can move the operator's look after its own change and announce outside the lock, so no entry list stays complete; `docs/status-model.md`, Hide owns the read axis, owns the rule and its regression tests.
+The read axis's look has one owner, `hide-core/src/runtime/look.rs`: its three inputs, the focus pane the operator chose, the device in front and the agents phones have open, are written only through its setters, and `Runtime::change_look` is the one boundary a selection completes at.
+The look is compared once at the outermost selection's end, under the lock that selection already holds, so a worker that moves the look after its own change has it read in that change, with no thread, timer or list of entries to keep.
+`navigator.focused_device_id` is the front's projection on the wire, written with it and never read for a decision; `docs/status-model.md`, Hide owns the read axis, owns the rule and its regression tests.
 
 Choose the authority, publication need and durability of a value separately before adding a field, store or worker.
 `Mutex<Runtime>` serializes Hide's accepted domain and UI transitions; it is not the place to perform the reads, writes or analyses that produce them.

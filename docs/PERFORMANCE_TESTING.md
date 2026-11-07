@@ -268,13 +268,12 @@ The holder keeps one cached program and sends at most 64 arguments within 8 KiB;
 The existing process-table snapshot scales with the machine's process count and has no row cap; this change adds no process table or resident cache.
 The argv contract, real-holder busy-shell refusal and `agent-start-platform.spec.ts` own the regression checks; CPU and latency parity remain unmeasured.
 
-The core's read settle (`hide-core/src/read_settle.rs`) is one thread the core owns, woken by the existing change notifier, with no timer.
-Every announcement raises one pending mark (a short private mutex, never the runtime lock); the thread takes the mark, takes the runtime lock once, compares the operator's look (`Runtime::follow_operator_look`: this machine's focus, at most 16 phone agents, and per connected device its focus filtered by the tabs its window shows) and lets the lock go.
-Only a moved look reads rows again, once, and only a read that changed rows announces; the next pass finds the look unchanged and announces nothing, so one announcement costs at most two passes and announcements during a pass coalesce into one more.
-Its cadence is the announcement burst, the same cadence a window's snapshot pull already takes the lock at; with no window the pull is skipped and this short pass is what remains.
-Terminal output never reaches the core (a node's terminal service carries it between the pane and the screen); a terminal report that announces, such as a burst of typed keys, costs one pass.
-It does no I/O, subprocess or serialization, and holds no queue beyond the one mark; dropping the core stops the thread and joins it outside the runtime lock.
-Regression owners are the `read_on_look.rs` tests whose worker moves the look and announces with no window; no latency or CPU parity was measured.
+The read axis's look adds no thread, timer or queue: it is compared where a selection completes (`Runtime::change_look`), under the lock that selection already holds.
+Each outermost selection costs one comparison of the operator's look (this machine's focus, at most 16 phone agents, and per connected device its focus filtered by the tabs its window shows); a selection inside another adds a depth count and no comparison.
+Only a moved look reads rows again, once, over the rows already published; that read is separate from the read a session makes of its own rows as it arrives and from what is recomputed for other reasons (checks, plans, Desk, lineage), which this neither adds nor removes.
+Terminal input and a document's keystrokes are no selection and skip the comparison; terminal output never reaches the core.
+A reconnect that keeps a device in front is one selection that reads nothing, though its comparison still runs.
+It does no I/O, subprocess or serialization; regression owners are the `read_on_look.rs` tests, and no latency or CPU parity was measured.
 
 Every change adding resident work or touching a high-frequency path must explain its cost in the PR's Review section, even when it claims no performance improvement.
 This is a review requirement, not a new CI benchmark or permission to change runtime behavior through documentation.

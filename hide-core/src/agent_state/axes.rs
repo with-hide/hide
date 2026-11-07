@@ -962,7 +962,7 @@ pub fn prune_completions(
 ///
 /// This is the whole read authority. `looked_at` holds the panes the operator
 /// chose to look at: the desktop's focus pane and every agent a phone has open
-/// (`Runtime::phone_viewed_pane_ids`), never the pane the engine happens to
+/// (`LookInputs::phones` in `runtime/look.rs`), never the pane the engine happens to
 /// report focused. A tab-scoped seen would mark every pane in a tab seen the
 /// moment the tab is focused, so nothing here reads the engine's `done` or
 /// `idle` or a token's `_new` suffix to decide it. Running it twice over the

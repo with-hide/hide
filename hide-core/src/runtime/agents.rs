@@ -327,6 +327,19 @@ impl Runtime {
         terminal_intent: bool,
         report: FailureReport,
     ) -> bool {
+        let (changed, read) = self.change_look(|runtime| {
+            runtime.request_remote_control_inner_steps(payload, terminal_intent, report)
+        });
+        changed || read
+    }
+
+    /// The steps of `request_remote_control_inner`, which runs them as one selection (`look.rs`).
+    fn request_remote_control_inner_steps(
+        &mut self,
+        payload: RemoteControlPayload,
+        terminal_intent: bool,
+        report: FailureReport,
+    ) -> bool {
         let target_id = payload.target_id;
         let request_id = payload.request_id;
         let focus_device = payload.focus_device;
@@ -1329,7 +1342,7 @@ impl Runtime {
         scope: ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) -> bool {
-        let look = self.local_look();
+        let look = self.reading_local_look();
         let looked_at = look.iter().map(String::as_str).collect::<Vec<_>>();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut changes = Vec::new();
@@ -1393,24 +1406,60 @@ impl Runtime {
 
     /// The panes the operator is looking at on one server: `focus`, that
     /// server's focus pane as the operator chose it, and every agent a phone
-    /// has open (`phone_viewed_pane_ids`). These are the panes the read axis
+    /// has open (`look.rs`). These are the panes the read axis
     /// reads as of now (`agent_state::apply_read_state`).
-    fn looked_at(&self, focus: Option<String>) -> Vec<String> {
+    fn looked_at(&self, focus: Option<&str>) -> Vec<String> {
         focus
             .into_iter()
-            .chain(self.phone_viewed_pane_ids.iter().cloned())
+            .map(str::to_owned)
+            .chain(self.look.phones().iter().cloned())
             .collect()
     }
 
     /// This machine's look: the focus pane the operator chose and a phone's.
     fn local_look(&self) -> Vec<String> {
-        self.looked_at(self.operator_focused_pane_id.clone())
+        self.looked_at(self.look.focus())
     }
 
     /// A device's look: its own focus, as `remote_read_focus` filters it,
     /// and a phone's.
     fn device_look(&self, target_id: &str, session: &RemoteSessionSnapshot) -> Vec<String> {
-        self.looked_at(self.remote_read_focus(target_id, session))
+        self.looked_at(self.remote_read_focus(target_id, session).as_deref())
+    }
+
+    /// The look this machine's rows are read with now. While a selection is
+    /// under way (`look.rs`) it is the look the last completed one left, so
+    /// a session that arrives meanwhile reads what the operator still looks
+    /// at, a new turn there included, and no value the selection passes
+    /// through; otherwise it is the look now.
+    fn reading_local_look(&self) -> Vec<String> {
+        if self.look.selecting() {
+            self.read_look.local.clone()
+        } else {
+            self.local_look()
+        }
+    }
+
+    /// The same for one device's rows.
+    fn reading_device_look(&self, target_id: &str, session: &RemoteSessionSnapshot) -> Vec<String> {
+        if self.look.selecting() {
+            self.read_look
+                .devices
+                .get(target_id)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.device_look(target_id, session)
+        }
+    }
+
+    /// The same for every machine's rows.
+    fn reading_look(&self) -> OperatorLook {
+        if self.look.selecting() {
+            self.read_look.clone()
+        } else {
+            self.operator_look()
+        }
     }
 
     /// The operator's look now on every machine whose rows are published.
@@ -1420,7 +1469,7 @@ impl Runtime {
     /// is looked at until it answers again; the session a device has just
     /// answered with is read with its look as it arrives
     /// (`apply_remote_read_state`).
-    fn operator_look(&self) -> OperatorLook {
+    pub(super) fn operator_look(&self) -> OperatorLook {
         OperatorLook {
             local: self.local_look(),
             devices: self
@@ -1439,28 +1488,6 @@ impl Runtime {
                 })
                 .collect(),
         }
-    }
-
-    /// Reads every row again when the operator's look has moved from the
-    /// look the rows were last read with, and does nothing otherwise.
-    ///
-    /// This is the one place a moved look is read, whatever moved it (a
-    /// pane or tab chosen on this machine, a device brought forward or
-    /// left, the tab a device's window shows, a device's own keyboard, a
-    /// phone). It runs after every announced change on the core's read
-    /// settle (`crate::read_settle`), whichever entry made it, and inside
-    /// the change itself, under the same lock, for an event's dispatch
-    /// (`dispatch_json`), a device's session (`ingest_remote_session`), this
-    /// machine's engine session (`ingest_session_with_focus_check`), and the
-    /// pass that settles the front Workspace and the tab a device's window
-    /// shows (`sync_workspace_view`). A device's own keyboard that already
-    /// rests on a pane sends nothing new, so the read cannot wait for the
-    /// device's next session (with-hide/hide-private#685).
-    pub(crate) fn follow_operator_look(&mut self) -> bool {
-        if self.operator_look() == self.read_look {
-            return false;
-        }
-        self.refresh_read_state_everywhere()
     }
 
     /// The focus a device's own server reports, counted as the operator's
@@ -1500,7 +1527,7 @@ impl Runtime {
     pub(super) fn refresh_read_state_everywhere(&mut self) -> bool {
         // Read before the rows are taken out below: which of a device's tabs
         // its window shows is asked of its published session.
-        let look = self.operator_look();
+        let look = self.reading_look();
         let mut changed = self.refresh_pane_read_state();
         let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
         let mut remotes = std::mem::take(&mut self.snapshot.status.remote);
@@ -1552,17 +1579,16 @@ impl Runtime {
             return false;
         }
         let viewed = pane_ids.into_iter().collect::<BTreeSet<_>>();
-        if viewed == self.phone_viewed_pane_ids {
+        if &viewed == self.look.phones() {
             return false;
         }
         crate::diagnostic!(serde_json::json!({
             "component": "runtime", "kind": "pane.phone_viewing",
             "pane_ids": viewed,
         }));
-        self.phone_viewed_pane_ids = viewed;
-        // The phone's look moved; the dispatch that carried it reads every
-        // row as of the new look (`follow_operator_look`).
-        false
+        // The phone's look moved; it is read when the selection that carried
+        // it completes (`look.rs`).
+        self.set_phone_look(viewed)
     }
 
     /// Applies the read axis to one remote target's agent rows.
@@ -1580,7 +1606,7 @@ impl Runtime {
         target_id: &str,
         session: &mut RemoteSessionSnapshot,
     ) -> bool {
-        let look = self.device_look(target_id, session);
+        let look = self.reading_device_look(target_id, session);
         let live_pane_ids = session
             .workspaces
             .iter()
@@ -3007,6 +3033,18 @@ impl Runtime {
         tab_id: Option<&str>,
         pane_id: &str,
     ) -> bool {
+        let (changed, read) = self
+            .change_look(|runtime| runtime.ingest_fork_pane_steps(source_pane_id, tab_id, pane_id));
+        changed || read
+    }
+
+    /// The steps of `ingest_fork_pane`, which runs them as one selection (`look.rs`).
+    fn ingest_fork_pane_steps(
+        &mut self,
+        source_pane_id: &str,
+        tab_id: Option<&str>,
+        pane_id: &str,
+    ) -> bool {
         let Some(pending) = self.forks_in_flight.get_mut(source_pane_id) else {
             return false;
         };
@@ -3206,6 +3244,19 @@ impl Runtime {
     }
 
     pub fn ingest_fork_result(
+        &mut self,
+        parent_pane_id: &str,
+        result: Result<String, String>,
+        elapsed_ms: u128,
+    ) -> bool {
+        let (changed, read) = self.change_look(|runtime| {
+            runtime.ingest_fork_result_steps(parent_pane_id, result, elapsed_ms)
+        });
+        changed || read
+    }
+
+    /// The steps of `ingest_fork_result`, which runs them as one selection (`look.rs`).
+    fn ingest_fork_result_steps(
         &mut self,
         parent_pane_id: &str,
         result: Result<String, String>,

@@ -493,7 +493,7 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
     device.hold();
     {
         let mut runtime = shared.lock().unwrap();
-        runtime.snapshot.navigator.focused_device_id = Some(TARGET.to_owned());
+        runtime.set_front_device(Some(TARGET.to_owned()));
         runtime.ingest_remote_session(TARGET, Ok(raw));
         runtime.sync_workspace_view();
         let held = &runtime.snapshot.ui_state.recent_checkouts;

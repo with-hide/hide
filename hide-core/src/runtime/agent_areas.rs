@@ -258,7 +258,7 @@ impl Runtime {
             }
             if selected_waiting {
                 self.select_terminal_pane(pane);
-                self.operator_focused_pane_id = None;
+                self.set_operator_focus(None);
             }
         }
     }
@@ -718,6 +718,11 @@ impl Runtime {
 
     /// Applies the selected group's active canvas without creating a pane.
     pub(super) fn show_agent_workspace_tab(&mut self, key: &WorkspaceKey, live: Option<String>) {
+        self.change_look(|runtime| runtime.show_agent_workspace_tab_steps(key, live));
+    }
+
+    /// The steps of `show_agent_workspace_tab`, which runs them as one selection (`look.rs`).
+    fn show_agent_workspace_tab_steps(&mut self, key: &WorkspaceKey, live: Option<String>) {
         if !self.choose_agent_workspace(key) {
             return;
         }
@@ -758,7 +763,7 @@ impl Runtime {
             checkout.active_tab_id = None;
         }
         self.select_terminal_pane(None);
-        self.operator_focused_pane_id = None;
+        self.set_operator_focus(None);
     }
 
     /// An explicit real-agent navigation reveals its owning group. Session

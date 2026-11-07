@@ -2242,7 +2242,7 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     let terminals = record_terminals(&mut runtime);
     let pane_id = PANE;
     let session = session_with_pane();
-    runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+    runtime.set_front_device(Some(DEVICE.to_owned()));
     let attaches = |terminals: &RecordedTerminals| {
         terminals
             .take()
@@ -2409,7 +2409,7 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
         ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
-    runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+    runtime.set_front_device(Some(DEVICE.to_owned()));
     report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
     let notice = |runtime: &Runtime| {
         runtime.snapshot.terminal.headers[PANE]

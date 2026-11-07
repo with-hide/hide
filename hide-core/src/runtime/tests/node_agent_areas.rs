@@ -224,7 +224,7 @@ fn device_in_front(
         Weak::new(),
         ChangeNotifier::noop(),
     ));
-    runtime.snapshot.navigator.focused_device_id = Some(NODE.to_owned());
+    runtime.set_front_device(Some(NODE.to_owned()));
     runtime.ingest_remote_session(NODE, Ok(focused_on(path, &["t1", "t2"], "t1")));
     runtime.sync_workspace_view();
     (runtime, requests, views)
