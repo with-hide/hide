@@ -1326,7 +1326,8 @@ export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean };
+/** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[] };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */

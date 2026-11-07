@@ -429,6 +429,8 @@ pub struct AttentionView {
     /// on a node not dropped. The one rule the count and the list read
     /// (`publish_mission_asks`), never worked out again by the screen.
     pub item: bool,
+    /// The operator's choices for it, in order (`AttentionReason::choices`).
+    pub choices: Vec<crate::missions::OperatorAction>,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -750,9 +752,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 }
                 Some(crate::missions::OperatorAction::Drop) => "dropped it from the mission",
                 Some(crate::missions::OperatorAction::Attach) => "attached the pull request to it",
-                Some(crate::missions::OperatorAction::Leave) => {
-                    "left it to you: judge what it needs"
-                }
+                Some(crate::missions::OperatorAction::Leave) => match wake.reason {
+                    Some(crate::missions::AttentionReason::UnplannedPr) => {
+                        "left the pull request outside the nodes"
+                    }
+                    _ => "left it to you: judge what it needs",
+                },
                 Some(crate::missions::OperatorAction::Resume) => "set it to work again",
                 None => "settled it",
             };
@@ -2917,6 +2922,7 @@ impl Runtime {
     ) -> MissionView {
         let github = self.github_project_on(&mission.device_id, &mission.project);
         let blocked = mission.blocked();
+        let conductor_present = self.conductor_present(&mission.conductor.actor);
         let nodes = mission
             .nodes
             .iter()
@@ -3033,6 +3039,7 @@ impl Runtime {
                                 && !on_row
                                 && mission.status.asks()
                                 && node.status != NodeStatus::Dropped,
+                            choices: attention.reason.choices(conductor_present),
                         }
                     }),
                     hide: node.hide.clone(),
@@ -3074,7 +3081,7 @@ impl Runtime {
                 name: mission.conductor.actor.name.clone(),
                 agent_kind: mission.conductor.actor.kind.clone(),
                 session: mission.conductor.session.clone(),
-                present: self.conductor_present(&mission.conductor.actor),
+                present: conductor_present,
                 takes_answers: crate::delivery::doorbell::bell_target(
                     &mission.conductor.actor.kind,
                 ),

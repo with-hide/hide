@@ -41,6 +41,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | A floating panel with controls | `Popover` | |
 | A modal task | `Dialog` | `DialogHeader`, `DialogBody`, `DialogFooter`. |
 | Confirming an irreversible effect | `AlertDialog` | Prefer an undo (design principle 6); confirm only what cannot be undone. |
+| Guarding a destructive choice that can be undone, in a row of choices | The same `Button`, pressed twice | The first press turns it into its confirm word (`제외 확인`) in the `destructive` variant in place, a press elsewhere puts it back, and only the second press sends; no layer opens (`AttentionChoices`, `components/mission-attention.tsx`). |
 | A side or large panel | `Sheet` | |
 | A searchable command or item list | `Command` | `CommandDialog` for the palette form. |
 | A short label or count | `Badge` | `secondary` by default; `outline`, `default`, `destructive`. |

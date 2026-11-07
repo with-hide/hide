@@ -6181,7 +6181,7 @@ fn operator_chose(runtime: &mut Runtime, node: &str, action: &str) {
 #[test]
 fn the_operators_done_skips_the_open_lines_as_their_decision_and_tells_the_conductor() {
     use crate::mission_criteria::{CriterionState, Role};
-    use crate::missions::{OperatorAction, WakeEvent};
+    use crate::missions::{AttentionReason, OperatorAction, WakeEvent};
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let now = crate::runtime::unix_milliseconds();
@@ -6193,6 +6193,16 @@ fn the_operators_done_skips_the_open_lines_as_their_decision_and_tells_the_condu
     .unwrap();
     runtime.mission_attention_event(stale);
     assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    // The view offers this raise's choices, and one it does not offer is
+    // refused on the standing raise too (with-hide/hide#2227).
+    let present = runtime.conductor_present(&runtime.missions.book.get("mission-1").unwrap().conductor.actor);
+    assert_eq!(
+        node_view(&runtime, "fix").attention.unwrap().choices,
+        AttentionReason::MergedUnproven.choices(present)
+    );
+    operator_chose(&mut runtime, "fix", "attach");
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    assert!(node_view(&runtime, "fix").attention.is_some());
     operator_chose(&mut runtime, "fix", "done");
     let fix = node_view(&runtime, "fix");
     assert_eq!(fix.status, NodeStatus::Done);
