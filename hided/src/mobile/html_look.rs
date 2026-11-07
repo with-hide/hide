@@ -380,7 +380,7 @@ mod tests {
 <script src='app.js'></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <img src="img/hero.png?v=2#top" alt="">
-<img srcset="img/a.png 1x, img/a@2x.png 2x">
+<img srcset="img/a.png 1x, img/a-2x.png 2x">
 <video poster="../shared/poster.jpg"></video>
 <a href="other.html">next</a>
 <a href="#top">top</a>
@@ -395,7 +395,7 @@ mod tests {
                 "design/app.js",
                 "design/img/hero.png",
                 "design/img/a.png",
-                "design/img/a@2x.png",
+                "design/img/a-2x.png",
                 "shared/poster.jpg",
                 "design/img/bg.webp",
             ]
