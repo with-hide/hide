@@ -4,7 +4,9 @@ It drives a released core the way the operator and agents do: through the
 shell's /ws (`agent_journey.daemon`) and through the release's own `hide` CLI
 typed into stand-in agents (`agent.py`), on this machine and on the dialed
 device `mini`. Each step stores what a later build has to rename when the
-device takes its machine id. A step the release refuses is recorded with its
+device takes its machine id, or what it reads back about an agent: its
+launch, sleep and archive records, the project settings, and the device
+kit's record and hooks. A step the release refuses is recorded with its
 answer and the run goes on; a step the rest depends on stops the run.
 
 It writes what each step did to the report path it is given (JSON).
@@ -25,6 +27,9 @@ from agent_journey.daemon import Daemon  # noqa: E402
 from agent_live_check.processes import ProcessError  # noqa: E402
 
 HIDE = "/opt/hide/hide"
+CORE_ID = "c0de0000000000000000000000000001"
+# Claude Code's adapter id in the kit, which its switch names.
+KIT_CLAUDE = "claude-code"
 HOME = Path.home()
 STATE = HOME / ".hide/state"
 # The ssh alias the core dials. A release before device naming registers the
@@ -250,15 +255,28 @@ class Scenario:
         time.sleep(2)
         return pane
 
+    def kit_agent(self, rest):
+        """Claude Code's row in the device's kit report, once it has one."""
+        device = next((row for row in (rest.get("navigator") or {}).get("devices") or [] if row.get("id") == self.device), None)
+        return next((row for row in ((device or {}).get("kit") or {}).get("agents") or [] if row.get("id") == KIT_CLAUDE), None)
+
     def claude_on(self):
         """Claude Code switched on for the device, as its row's switch does,
-        once the device's kit has applied: a later release starts no agent
-        there until it is. The answer shows only in the kit's own report, so
-        the spawns below are what prove it."""
-        time.sleep(10)
-        self.send("kit_agent_set", {"device_id": self.device, "agent": "claude", "enabled": True})
-        time.sleep(15)
-        return "asked"
+        once the device's kit has reported: a switch sent before the report
+        changes nothing, and a later release starts no agent there while it
+        is off. It leaves the device's kit record with the choice and
+        Claude's settings.json with Hide's hooks beside the operator's.
+        The core runs outside a desktop package, whose kit installs nothing
+        (`kit.unavailable`, standalone), so only the device has a kit."""
+        row = self.wait(self.kit_agent, "the device kit's Claude Code row", 120)
+        if row.get("availability") != "available":
+            raise Stop(f"Claude Code is {row.get('availability')} on the device")
+        if not row.get("enabled"):
+            self.send("kit_agent_set", {"device_id": self.device, "agent": KIT_CLAUDE, "enabled": True})
+            row = self.wait(lambda rest: (lambda now: now if now and now.get("enabled") and (now.get("hook") or {}).get("state")
+                                          == "installed" else None)(self.kit_agent(rest)), "Claude Code on with its hook", 120)
+        return {"enabled": row.get("enabled"), "hook": (row.get("hook") or {}).get("state"),
+                "skill": (row.get("skill") or {}).get("state")}
 
     def agents_up(self):
         core = self.first_pane(False, str(CORE_REPO))
@@ -368,10 +386,86 @@ class Scenario:
                   "the Remains item in the slot")
         return checkout["id"]
 
+    def project_settings(self):
+        """Project settings saved for a core and a device project, as the
+        Project settings sheet saves them: the record a project default
+        profile is added to. The base branch is set on the core only: a
+        device's is refused until its branch list has been read."""
+        for device, root, name, patch in (
+                (CORE_ID, str(CORE_REPO), "Core project", {"base_branch": {"mode": "branch", "branch": "main"}}),
+                (self.device, DEVICE_REPO, "Device project", {})):
+            seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+            self.send("project_settings_set", {
+                "device_id": device, "root": root, "request_id": self.rid("settings"),
+                "patch": {"name": name, "new_work": "worktree", "auto_fetch": False, **patch}})
+
+            def saved(rest):
+                error = (rest.get("status") or {}).get("last_error") or {}
+                if error != seen and "project_settings" in str(error.get("kind")):
+                    raise Stop(f"{name} was refused: {error}")
+                return any(workspace.get("path") == root and name in json.dumps(workspace) for workspace in self.workspaces(rest))
+            self.wait(saved, f"{name} saved")
+        return "core-proj and dev-proj named, new work in a worktree, no background fetch; core-proj based on main"
+
+    def workspaces(self, rest):
+        return ((rest.get("navigator") or {}).get("workspaces") or []) + (self.device_session(rest).get("workspaces") or [])
+
+    def start_from_panel(self, name, device):
+        """One agent started from the start panel with a model, on the core
+        or the device; its launch choice is stored (`pane_launches`)."""
+        path = DEVICE_REPO if device else str(CORE_REPO)
+        before = {row["id"] for tab in self.tabs(self.daemon.snapshot(), device, path) for row in tab["panes"]}
+        self.send("agent_start_in_checkout", {"checkout_path": path, "provider": "claude", "model": "sonnet",
+                                              "request_id": self.rid("start"), **({"device_id": self.device} if device else {})})
+
+        def started(rest):
+            panes = {row["id"] for tab in self.tabs(rest, device, path) for row in tab["panes"]} - before
+            return next((row for row in self.agent_rows(rest) if row.get("pane_id") in panes and row.get("session_id")), None)
+        row = self.wait(started, f"{name}'s session on its row", 120)
+        self.agents[name] = {"pane": row["pane_id"], "session": row["session_id"], "device": device, "seen": 0}
+        return row["pane_id"]
+
+    def start_panel(self):
+        """Agents started from the start panel on the core and the device,
+        left running: the launch record a later build adds the profile to."""
+        return {"core": self.start_from_panel("core-started", False),
+                "device": self.start_from_panel("dev-started", True)}
+
+    def archive(self):
+        """The start-panel agent's session archived (세션 보관): the
+        archive record a later build resumes with the agent's profile. An
+        archive is refused until Hide knows the agent's conversation, which
+        its first turn gives it."""
+        name = "core-archived"
+        self.start_from_panel(name, False)
+        pane, session = self.agents[name]["pane"], self.agents[name]["session"]
+        self.type(pane, "Say hello")
+        last = None
+        for _ in range(12):
+            time.sleep(5)
+            seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+            self.send("archive_session", {"pane_id": pane, "confirmed": True})
+
+            def answered(rest):
+                if session in json.dumps((rest.get("navigator") or {}).get("archived_sessions") or []):
+                    return "archived"
+                error = (rest.get("status") or {}).get("last_error") or {}
+                if error != seen and "archive" in str(error.get("kind")):
+                    return error
+                return None
+            answer = self.wait(answered, "the archive's answer", 60)
+            if answer == "archived":
+                return f"{pane} archived"
+            last = answer
+            if answer.get("kind") != "archive.session_unknown":
+                break
+        raise Stop(f"the archive was refused: {last}")
+
     def main(self):
         try:
             self.step("projects and device", self.projects, required=True)
             self.step("Claude Code on for the device", self.claude_on)
+            self.step("project settings for a core and a device project", self.project_settings)
             self.step("agents", self.agents_up, required=True)
             self.step("views opened from two device sessions and the core", self.views)
             self.step("device pane move", self.pane_move)
@@ -381,6 +475,8 @@ class Scenario:
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)
+            self.step("agent started from the start panel", self.start_panel)
+            self.step("archived session", self.archive)
             # Let the core write what it holds in memory before it stops.
             time.sleep(5)
         except Stop:

@@ -18,7 +18,33 @@
   "expanded_inactive_checkout_project_paths": [],
   "expanded_inactive_project_device_ids": [],
   "project_base_branches": {},
-  "project_settings": {},
+  "project_settings": {
+    "project:18f7e5888507b9d0926f036e91aa00e25375492fae1b63e8255f54274c8c9eaa": {
+      "version": 1,
+      "device_id": "mini",
+      "root": "/home/remote/dev-proj",
+      "name": "Device project",
+      "repository": null,
+      "issue_source": null,
+      "new_work": "worktree",
+      "base_branch": null,
+      "auto_fetch": false
+    },
+    "project:899659c6245f19ce6d8633a4a1603637deaf6b50bc6e739e12edd7f8d50b590e": {
+      "version": 1,
+      "device_id": "c0de0000000000000000000000000001",
+      "root": "/home/me/core-proj",
+      "name": "Core project",
+      "repository": null,
+      "issue_source": null,
+      "new_work": "worktree",
+      "base_branch": {
+        "mode": "branch",
+        "branch": "main"
+      },
+      "auto_fetch": false
+    }
+  },
   "expanded_agent_pane_ids": [],
   "sessions_expanded_agent_pane_ids": [],
   "sidebar_lens": "projects",
@@ -44,12 +70,12 @@
     "project_places": [],
     "session_places": []
   },
-  "selected_path": "/home/remote/dev-proj/notes.md",
-  "selected_pane_id": "h1:p1",
+  "selected_path": "/home/me/core-proj/README.md",
+  "selected_pane_id": "h1:p2",
   "shortcut_bindings": {},
   "shortcut_bindings_imported": false,
   "browser_shortcut_bindings": {},
-  "focused_device_id": "mini",
+  "focused_device_id": "c0de0000000000000000000000000001",
   "focused_checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
   "workspace_registrations": [
     {
@@ -78,7 +104,7 @@
         "contract": 4,
         "helper_root": "~/.hide/host-helper",
         "cli_dir": "~/.local/bin",
-        "granted_at_unix_ms": 1794122448795,
+        "granted_at_unix_ms": 1794152709020,
         "identity": {
           "user": "remote",
           "hostname": "device",
@@ -137,73 +163,118 @@
   "pane_read_records": {
     "h1:p1": {
       "state_change_seq": 1,
-      "session_id": "0ee62aec-8955-4fe9-ab06-381608e582fc",
+      "session_id": "12610a5d-895e-4a87-ad94-e159b7b4d435",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1ba07fde8-22-1",
+      "server": "1a1bbd5b9f0-24-1",
+      "unread": false
+    },
+    "h1:p2": {
+      "state_change_seq": 2,
+      "session_id": "29bc9d12-6d79-444a-ba0a-0803ffe8cc0d",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": false,
+      "descendant_signals": [],
+      "server": "1a1bbd5b9f0-24-1",
       "unread": false
     },
     "remote:mini:pane:h1:p1": {
       "state_change_seq": 1,
-      "session_id": "22e9a234-dc91-4be2-96c3-b0f0f33e36f5",
+      "session_id": "4b5cbdfa-036e-438c-a713-9302963dc049",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1ba080304-22-2",
+      "server": "1a1bbd5bf0c-24-2",
       "unread": false
     },
     "remote:mini:pane:h1:p2": {
       "state_change_seq": 2,
-      "session_id": "e3222a33-e053-4e76-b8f4-8694c3db6568",
+      "session_id": "16d21c1c-bdc9-4871-9e09-54268f92fee4",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1ba080304-22-2",
+      "server": "1a1bbd5bf0c-24-2",
+      "unread": false
+    },
+    "remote:mini:pane:h1:p5": {
+      "state_change_seq": 5,
+      "session_id": "8615404c-13e1-4026-8448-92b5c02816cd",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": false,
+      "descendant_signals": [],
+      "server": "1a1bbd60636-24-3",
       "unread": false
     }
   },
   "pane_completions": {
     "h1:p1": {
-      "session": "841d8d39bcdb81d7a63f45cfb6d8144d54facedc0c0fa5cbfbe698754c8ecc78",
-      "server": "1a1ba07fde8-22-1",
+      "session": "670b7b7057de39592a12eb9e6a4589fb5b4fb51e4abbc4b4c53e3b03830d0ab5",
+      "server": "1a1bbd5b9f0-24-1",
       "state_change_seq": 1
     },
     "remote:mini:pane:h1:p1": {
-      "session": "23619d7b821b678cad453d266463fb3f2971db64d7e9d0b6204d96afc632a1fa",
-      "server": "1a1ba080304-22-2",
+      "session": "067f3e9ee08e5efb427112bb8a7019b9f909368a8e9df6fff76dc55ca4f161b0",
+      "server": "1a1bbd5bf0c-24-2",
       "state_change_seq": 1
     },
     "remote:mini:pane:h1:p2": {
-      "session": "8237c93f4e4b62ce3ff78b96025ffaa48bb2cc8f23a68a4aed7342ae5b4faf8a",
-      "server": "1a1ba080304-22-2",
+      "session": "86ae0a16ffd86cd81927cfea73c35673567a79bd62d2664c76933b330e10566f",
+      "server": "1a1bbd5bf0c-24-2",
       "state_change_seq": 2
     }
   },
-  "pane_launches": {},
+  "pane_launches": {
+    "h1:p2": {
+      "kind": "claude",
+      "name": "hide-claude-h1-p2",
+      "choice": {
+        "model": "sonnet"
+      },
+      "session": "29bc9d12-6d79-444a-ba0a-0803ffe8cc0d"
+    },
+    "remote:mini:pane:h1:p5": {
+      "kind": "claude",
+      "name": "hide-claude-h1-p5",
+      "choice": {
+        "model": "sonnet"
+      },
+      "session": "8615404c-13e1-4026-8448-92b5c02816cd"
+    }
+  },
   "request_verbs": {
     "h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794122603624
+      "since_unix_ms": 1794152847173
+    },
+    "h1:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794152834314
     },
     "remote:mini:pane:h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794122595946
+      "since_unix_ms": 1794152833005
     },
     "remote:mini:pane:h1:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794122486447
+      "since_unix_ms": 1794152721841
     },
     "remote:mini:pane:h1:p4": {
       "verb": "idle",
-      "since_unix_ms": 1794122558043
+      "since_unix_ms": 1794152794821
+    },
+    "remote:mini:pane:h1:p5": {
+      "verb": "idle",
+      "since_unix_ms": 1794152834483
     },
     "remote:mini:pane:h2:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794122516417
+      "since_unix_ms": 1794152752936
     }
   },
   "pane_terminal_sizes": {},
@@ -224,36 +295,80 @@
     "warn_quiet_minutes": 90
   },
   "agent_start": {
-    "kind": null,
-    "models": {}
+    "kind": "claude",
+    "models": {
+      "claude": "sonnet"
+    }
   },
   "agent_sleep": {
     "stamps": {
       "h1:p1": {
-        "changed_at_unix_ms": 1794122513213,
-        "seen_at_unix_ms": 1794122508620,
+        "changed_at_unix_ms": 1794152749688,
+        "seen_at_unix_ms": 0,
         "state": {
           "demand": "none",
           "activity": "stopped",
           "completed": true
+        }
+      },
+      "h1:p2": {
+        "changed_at_unix_ms": 1794152834330,
+        "seen_at_unix_ms": 1794152840697,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
         }
       }
     },
     "records": {},
     "dormant": {}
   },
-  "session_archive": {},
+  "session_archive": {
+    "archive-18e61c80b54c2acf-1": {
+      "phase": "archived",
+      "revision": 2,
+      "archived_at_unix_ms": 1794152840676,
+      "project_root": "/home/me/core-proj",
+      "project_label": "Core project",
+      "members": [
+        {
+          "machine": "c0de0000000000000000000000000001",
+          "pane_id": "h1:p3",
+          "kind": "claude",
+          "native_session_id": "ea6dc887-d451-476b-813c-12cc4f34a9f0",
+          "source_reference": {
+            "kind": "id",
+            "value": "ea6dc887-d451-476b-813c-12cc4f34a9f0"
+          },
+          "cwd": "/home/me/core-proj",
+          "checkout_path": "/home/me/core-proj",
+          "title": "Claude",
+          "last_line": null,
+          "pulls": [],
+          "registration": null,
+          "parent": null,
+          "depth": 0,
+          "closed": true,
+          "resume": {
+            "state": "idle"
+          }
+        }
+      ],
+      "reason": null
+    }
+  },
   "recent_checkouts": [
-    {
-      "device_id": "mini",
-      "checkout_id": "remote:mini:checkout:897417db50259158",
-      "project_name": "dev-proj",
-      "branch": "main"
-    },
     {
       "device_id": "c0de0000000000000000000000000001",
       "checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
-      "project_name": "core-proj",
+      "project_name": "Core project",
+      "branch": "main"
+    },
+    {
+      "device_id": "mini",
+      "checkout_id": "remote:mini:checkout:897417db50259158",
+      "project_name": "Device project",
       "branch": "main"
     }
   ],
