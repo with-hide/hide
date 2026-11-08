@@ -22,7 +22,7 @@ esac
 name=gh_${version}_${asset}
 mkdir -p "$out"
 archive=$out/$name
-curl -LsSf -o "$archive" "https://github.com/cli/cli/releases/download/v$version/$name"
+bash "$(dirname "${BASH_SOURCE[0]}")/download.sh" "https://github.com/cli/cli/releases/download/v$version/$name" "$archive"
 if command -v sha256sum >/dev/null; then
     actual=$(sha256sum "$archive" | cut -d' ' -f1)
 else

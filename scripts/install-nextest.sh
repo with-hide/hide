@@ -21,7 +21,10 @@ esac
 bin=${CARGO_HOME:-$HOME/.cargo}/bin
 if command -v cygpath >/dev/null; then bin=$(cygpath -u "$bin"); fi
 mkdir -p "$bin"
-curl -LsSf "https://get.nexte.st/$version/$platform" | tar zxf - -C "$bin"
+archive=$(mktemp)
+trap 'rm -f "$archive"' EXIT
+bash "$(dirname "${BASH_SOURCE[0]}")/download.sh" "https://get.nexte.st/$version/$platform" "$archive"
+tar zxf "$archive" -C "$bin"
 # The release must be the one pinned above, whatever an image already carried.
 "$bin/cargo-nextest" nextest --version | grep -F -- "$version" >/dev/null || {
     printf 'cargo-nextest is not %s\n' "$version" >&2
