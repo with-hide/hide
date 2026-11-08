@@ -206,6 +206,7 @@ pub(crate) const MAX_MARKS: usize = 256;
 
 /// A spawn Desk asked for while every place was taken.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredJob", into = "StoredJob")]
 pub(crate) struct QueuedJob {
     pub intent: String,
     /// The spawn as Desk asked it, run as `hide:desk` when a place frees.
@@ -213,8 +214,61 @@ pub(crate) struct QueuedJob {
     pub queued_at_ms: u64,
     pub state: QueuedState,
     /// The code its start failed with.
-    #[serde(default)]
     pub code: Option<String>,
+}
+
+/// A [`QueuedJob`] as Desk's store keeps it: the profile its spawn names
+/// (`Command::Spawn::profile`) beside the spawn rather than in it. Desk
+/// before profiles (1.2.4) reads a spawn that names no field it does not
+/// know, and a store it cannot read starts Desk empty and is written over;
+/// it reads past a field beside the spawn and starts the job with the only
+/// profile it has.
+#[derive(Serialize, Deserialize)]
+struct StoredJob {
+    intent: String,
+    command: crate::coordination::Command,
+    queued_at_ms: u64,
+    state: QueuedState,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+}
+
+impl From<QueuedJob> for StoredJob {
+    fn from(job: QueuedJob) -> Self {
+        let mut command = job.command;
+        let profile = match &mut command {
+            crate::coordination::Command::Spawn { profile, .. } => profile.take(),
+            _ => None,
+        };
+        Self {
+            intent: job.intent,
+            command,
+            queued_at_ms: job.queued_at_ms,
+            state: job.state,
+            code: job.code,
+            profile,
+        }
+    }
+}
+
+impl From<StoredJob> for QueuedJob {
+    fn from(stored: StoredJob) -> Self {
+        let mut command = stored.command;
+        if let crate::coordination::Command::Spawn { profile, .. } = &mut command
+            && profile.is_none()
+        {
+            *profile = stored.profile;
+        }
+        Self {
+            intent: stored.intent,
+            command,
+            queued_at_ms: stored.queued_at_ms,
+            state: stored.state,
+            code: stored.code,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -388,6 +442,78 @@ mod tests {
         });
         let carried = conversation.carried().unwrap();
         assert_eq!(carried, "Operator: what runs now?\nCodex: two sessions");
+    }
+
+    /// A queued spawn that names a profile is stored so that Desk 1.2.4
+    /// still reads the store: its spawn refuses a field it does not know
+    /// (`deny_unknown_fields`), and a store it cannot read starts Desk empty
+    /// (with-hide/hide#2281 review). `Released` is that release's spawn as
+    /// its reader takes it, kept as it shipped.
+    #[test]
+    fn a_queued_spawn_with_a_profile_is_stored_as_desk_1_2_4_reads_it() {
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+        enum Released {
+            Spawn {
+                parent: Option<String>,
+                machine: Option<String>,
+                name: String,
+                intent: String,
+                kind: String,
+                repo: String,
+                branch: String,
+                path: Option<String>,
+                args: Vec<String>,
+                #[serde(default)]
+                launch: serde_json::Value,
+                #[serde(default)]
+                task: serde_json::Value,
+                #[serde(default)]
+                brief: Option<String>,
+                #[serde(default)]
+                beside: bool,
+                #[serde(default)]
+                plan_node: Option<String>,
+            },
+        }
+        let spawn = |profile: Option<&str>| crate::coordination::Command::Spawn {
+            parent: None,
+            machine: None,
+            name: "worker".into(),
+            intent: "desk:1".into(),
+            kind: "codex".into(),
+            repo: "/r".into(),
+            branch: "main".into(),
+            path: None,
+            args: Vec::new(),
+            launch: Default::default(),
+            task: None,
+            brief: Some("go".into()),
+            beside: false,
+            mission: None,
+            plan_node: None,
+            plan: None,
+            profile: profile.map(str::to_owned),
+        };
+        let job = QueuedJob {
+            intent: "desk:1".into(),
+            command: spawn(Some("work")),
+            queued_at_ms: 1,
+            state: QueuedState::Waiting,
+            code: None,
+        };
+        let mut stored = Stored::default();
+        stored.queue.push(job.clone());
+
+        let written: serde_json::Value = serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
+        let command = written["queue"][0]["command"].clone();
+        assert!(
+            serde_json::from_value::<Released>(command).is_ok(),
+            "{written}"
+        );
+        assert_eq!(written["queue"][0]["profile"], "work");
+        assert_eq!(decode(&encode(&stored).unwrap()).unwrap().queue, [job]);
     }
 
     #[test]
