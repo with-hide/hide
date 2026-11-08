@@ -1461,6 +1461,7 @@ The seven agents' accounts (Cursor is retired and keeps none):
 `NodeEnv` is what the node captured: the account's home, the agent variables that node honours, and its system.
 The default account sets no account variable: a place follows the node's own value of a variable when the caller handed one in (a relative value is refused as `NodeVariable`), and the definition's default otherwise.
 Claude Code depends on this: naming `~/.claude` in `CLAUDE_CONFIG_DIR` is another login.
+For omp, whose variable holds a name, the node's `OMP_PROFILE` is the account the default reads: its places are `~/.omp/profiles/<name>/agent`, as omp itself reads them, and a value that is not one path part is refused as `NodeVariable`.
 Another account sets each variable from the account as stored: `~` is expanded once, when the profile is added, and a final separator is kept, because Claude keys its keychain item by the exact spelling.
 It refuses an empty account, a folder that is not absolute on the node's system (Windows' `C:x` and `\x` forms included), the default folder itself (use the default profile), a name that is not one path part, an account for an agent of `by = "none"`, and a profile variable that is the account's, a forbidden one, `HOME`, `USERPROFILE` or `HIDE_*`, repeated, not a name, longer than 256 bytes, or whose value holds a NUL or exceeds 32 KiB; a profile adds at most 64 variables.
 Windows compares variable names regardless of case.
@@ -1478,9 +1479,9 @@ A built-in agent's account is asked through its adapter (`AgentAdapter::resolve`
 | `hide-session`, `hide-host`, `hide-ai`, `hide-desk`, `hide-core` | read sessions, sign-ins and usage at the account's places; an agent's own module handles what only that agent does there | compute a place |
 
 Today every agent runs in its default account, as before profiles: installs ask the default account of a node that honours no variable (`AgentAdapter::account_in`), so hooks, plugins, skills and folder trust go to each agent's default folders whatever the launching shell exported, and the readers that followed a variable before still do, by handing it in: Codex's sign-in for usage, Hide AI and Desk follows `CODEX_HOME`, and OpenCode's database follows the node's `XDG_DATA_HOME`.
-Each session reader's root is the default account's `sessions` place (`hide_session::session_root`).
+Each session reader's root is the default account's `sessions` place (`hide_session::session_root`); agy's module keeps only what lies inside it and beside it, the transcript's form and the index's name.
 
-`scripts/check-agent-folders.sh` keeps it that way: production Rust that names an agent's account folder (`.claude`, `.codex`, `.pi/agent`, `.omp`, `.grok`, agy's `.gemini` folders, OpenCode's folders and database) outside that agent's own modules and the files it lists with a reason fails `verify`.
+`scripts/check-agent-folders.sh` keeps it that way: production Rust that names an agent's account folder (`.claude`, `.codex`, `.pi/agent`, `.omp`, `.grok`, agy's `.gemini` folders, OpenCode's folders and database) outside that agent's own modules and the files it lists with a reason fails `verify`, whether one literal names it or a `.join("…")` chain or an array of literals builds it.
 `hide-agent-adapter/tests/it/account.rs` holds `resolve`'s contract for the seven agents: the default account, an account of its own, and the inputs refused, with the expected places written by hand from the agents' own documentation and source, on the macOS, Linux and Windows lanes.
 
 Decided in #2271.
