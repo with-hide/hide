@@ -12,7 +12,7 @@
 use std::ffi::OsStr;
 use std::io::Read;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -186,6 +186,8 @@ fn a_profiles_program_runs_in_place_of_the_agents_with_its_leading_words() {
 #[cfg(unix)]
 #[test]
 fn a_read_of_the_start_sees_the_executor_until_its_ready_is_answered_and_the_program_after() {
+    use std::sync::mpsc::{Receiver, Sender};
+
     use hide_agent_hooks::hook_request::{ExecSeen, executor_process, seen_executor};
     use hide_platform::process::{argv_of, start_time};
 
