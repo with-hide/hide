@@ -128,7 +128,7 @@ const DRAWINGS: Record<PracticePreviewKind, () => ReactElement> = {
   ),
 };
 
-/** The chapter's picture; `playing` runs its move, and a still one shows the move's middle. */
+/** The chapter's picture; `playing` runs its move, and a still one holds the move's middle. */
 export function PracticePreview({ kind, playing, large = false }: { kind: PracticePreviewKind; playing: boolean; large?: boolean }) {
   const Drawing = DRAWINGS[kind];
   return (

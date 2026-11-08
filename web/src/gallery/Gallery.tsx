@@ -127,6 +127,8 @@ const renderers: Renderers = {
     "Text Hover": () => <Button variant="text" size="inline" className="text-caption" data-gallery-state="hover">Show 3 more</Button>,
     "Text Link": () => <Button variant="text-link" size="inline" className="text-caption">Open the session</Button>,
     "Text Link Hover": () => <Button variant="text-link" size="inline" className="text-caption" data-gallery-state="hover">Open the session</Button>,
+    "Practice": () => <Button variant="practice">Start</Button>,
+    "Practice Hover": () => <Button variant="practice" data-gallery-state="hover">Start</Button>,
     "Small": () => <Button size="sm">Retry</Button>,
     "Large": () => <Button size="lg">Register project</Button>,
     "Icon": () => (

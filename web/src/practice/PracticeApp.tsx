@@ -158,9 +158,9 @@ function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
 }
 
 /**
- * The chapter list: a card per chapter with the move it teaches playing on the
- * one chosen, and pressing a card opens what the chapter has the learner do
- * before it starts.
+ * The chapter list: a card per chapter with the move it teaches playing on
+ * it, and pressing a card opens what the chapter has the learner do before it
+ * starts. The cards hold still while that is open.
  */
 export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: HubProps) {
   const { t } = useInterfaceTranslation();
@@ -220,7 +220,7 @@ export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: H
                   onFocus={() => setChosen(at)}
                   onClick={() => setOpened(at)}
                 >
-                  <PracticePreview kind={row.chapter.preview} playing={at === chosen && opened === null} />
+                  <PracticePreview kind={row.chapter.preview} playing={opened === null} />
                   <span className="ph-meta">
                     <span className="ph-top">
                       <small>{t("practice.chapter", { number: row.chapter.number })}</small>
@@ -289,7 +289,7 @@ function ChapterDetail({ row, operator, onPlay, returnTo }: { row: HubRow; opera
       </div>
       <DialogFooter className="ph-foot">
         {status === "paused" ? <Button variant="text" onClick={() => onPlay(true)} data-practice-from-start>{t("practice.fromStart")}</Button> : null}
-        <Button ref={go} variant="secondary" onClick={() => onPlay(false)} data-practice-play>
+        <Button ref={go} variant="practice" onClick={() => onPlay(false)} data-practice-play>
           {status === "paused" ? t("practice.continue") : status === "done" ? t("practice.replay") : t("practice.start")}
         </Button>
       </DialogFooter>
