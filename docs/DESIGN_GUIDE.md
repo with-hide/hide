@@ -84,6 +84,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 - Radius: `rounded-xs` to `rounded-xl`.
 - Text color by weight: `text-foreground`, then `text-subtle-foreground`, then `text-muted-foreground`.
 - Surfaces: `bg-background`, `bg-card`, `bg-secondary`, `bg-accent` (hover), `bg-popover`.
+- A modal (`Dialog`, `AlertDialog`, `Sheet`) draws on `bg-dialog`, darker than `bg-popover`, so a menu, select or tooltip opened inside it stands above it; the modal sets `--secondary` and `--accent` to `--dialog-raised` for its subtree, so a secondary button or a hovered row stays distinct from that surface without a modal-only class.
 - Dimming and disabled use the opacity tokens (`opacity-(--opacity-disabled)`, `--opacity-dimmed`), never a raw number.
 
 ## Screen rules
