@@ -1,0 +1,57 @@
+{
+ "tag": "v1.2.4",
+ "commit": "9eab22c12f2a803d51a7cf0224b88764bc46de99",
+ "core_node": "c0de0000000000000000000000000001",
+ "device": {
+  "alias": "mini",
+  "machine_id": "de510000000000000000000000000002"
+ },
+ "steps": [
+  {
+   "step": "projects and device",
+   "ok": true
+  },
+  {
+   "step": "Claude Code on for the device",
+   "ok": true
+  },
+  {
+   "step": "agents",
+   "ok": true
+  },
+  {
+   "step": "views opened from two device sessions and the core",
+   "ok": true
+  },
+  {
+   "step": "device pane move",
+   "ok": true
+  },
+  {
+   "step": "letters to and from a device agent",
+   "ok": true
+  },
+  {
+   "step": "project memory cards",
+   "ok": true
+  },
+  {
+   "step": "plan step spawned from a device session",
+   "ok": false,
+   "why": "Stop: `hide agent spawn --parent here --plan-node review --name dev-plan-child --kind claude --repo /home/remote/dev-proj --branch plan-child --brief 'Review notes.md and report'` answered rc=2 {\"ok\":false,\"error\":{\"code\":\"agent_hook_off\",\"message\":\"The agent is switched off for that machine; ask th"
+  },
+  {
+   "step": "mission conducted on the device with its worker there",
+   "ok": false,
+   "why": "Stop: `hide agent spawn --parent here --intent mission-1:look --name dev-worker --kind claude --repo /home/remote/dev-proj --branch main --path /home/remote/dev-proj --brief 'Read notes.md and report'` answered rc=2 {\"ok\":false,\"error\":{\"code\":\"agent_hook_off\",\"message\":\"The agent is switched off fo"
+  },
+  {
+   "step": "remains item in the detail slot",
+   "ok": true
+  },
+  {
+   "step": "sleeping device agent",
+   "ok": true
+  }
+ ]
+}
