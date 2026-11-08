@@ -179,6 +179,9 @@ pub(super) struct Resume {
     /// Set when its own pane runs another command: it resumes in a new tab
     /// opened for it (PRD engine-bundle-4-herdr-removal D-8, B15).
     new_tab: Option<NewTab>,
+    /// The profile its pane's launch record keeps, which the resume runs it
+    /// with (PRD agent-profiles D-27); `None` for the built-in default.
+    profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// Where a conversation an import gave back resumes when its pane runs
@@ -195,8 +198,9 @@ pub(super) struct NewTab {
 /// while an adopted pane runs it (`running`, by [`conversation`]). A resume
 /// carries the model and effort Hide started the agent with when the pane's
 /// launch record in `launches` describes the saved agent (PRD
-/// engine-bundle-4-herdr-removal D-24); an agent with no such record resumes
-/// on its CLI's defaults.
+/// engine-bundle-4-herdr-removal D-24), and the profile it ran with (PRD
+/// agent-profiles D-27); an agent with no such record resumes on its CLI's
+/// defaults and the built-in default profile.
 fn plans(
     catalog: &Catalog,
     launches: &BTreeMap<String, PaneLaunch>,
@@ -253,6 +257,8 @@ fn plans(
                             argv,
                             cut: false,
                             new_tab: None,
+                            profile: described(launches, restart, agent)
+                                .and_then(|launch| launch.profile.clone()),
                         }),
                     },
                 }
@@ -299,14 +305,7 @@ fn with_launch_choice(
     restart: &Restart,
     agent: &PaneAgent,
 ) -> Result<Vec<String>, String> {
-    let Some(launch) = launches.get(&restart.pane).filter(|launch| {
-        launch_describes(
-            launch,
-            &agent.kind,
-            agent.name.as_deref(),
-            agent.session.as_deref(),
-        )
-    }) else {
+    let Some(launch) = described(launches, restart, agent) else {
         return Ok(argv);
     };
     argv.extend(
@@ -314,6 +313,23 @@ fn with_launch_choice(
             .map_err(|why| format!("its saved model and effort do not fit it ({why})"))?,
     );
     Ok(argv)
+}
+
+/// The launch record of `restart`'s pane when it describes `agent`
+/// (`launch_describes`, the rule a pane's row reads the record by).
+fn described<'a>(
+    launches: &'a BTreeMap<String, PaneLaunch>,
+    restart: &Restart,
+    agent: &PaneAgent,
+) -> Option<&'a PaneLaunch> {
+    launches.get(&restart.pane).filter(|launch| {
+        launch_describes(
+            launch,
+            &agent.kind,
+            agent.name.as_deref(),
+            agent.session.as_deref(),
+        )
+    })
 }
 
 /// Which conversation an agent holds, as far as a resume can tell: its
@@ -1064,6 +1080,14 @@ impl OwnEngine<'static> {
         let argv = agents::named_by_file(resume.argv.clone(), file.as_ref().ok());
         let by_name = (argv.first() == resume.argv.first())
             .then(|| file.as_ref().err().copied().unwrap_or(ByName::AsNamed));
+        // A profile its machine no longer has, or refuses now, resumes
+        // nothing: the pane stays a shell and says why (D-27, B20).
+        let argv = crate::launch::resolve(
+            node,
+            &crate::launch::Request::recorded(&resume.kind, resume.profile.as_ref()),
+        )
+        .map_err(|refusal| refusal.detail)?
+        .line(argv);
         // The longest of the shells' lines, as a start is bounded.
         let longest =
             shell_line::longest(|shell| shell_line::resume_command(&argv, &resume.shown, shell))
