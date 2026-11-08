@@ -7,7 +7,7 @@ use hide_session::{Agent, usage};
 fn usage_node_reads_native_metadata_and_resumes_without_conversation_content() {
     let home = tempfile::tempdir().unwrap();
     let env = Env::standalone(Some(home.path().to_owned()));
-    let root = home.path().join(hide_session::CLAUDE_SESSIONS);
+    let root = home.path().join(".claude/projects");
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("native.jsonl");
     std::fs::write(&path, concat!(

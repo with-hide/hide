@@ -729,13 +729,12 @@ mod grok {
     const TRUSTED: &str = "trusted";
     const DECIDED_AT: &str = "decided_at";
 
-    /// In Grok's own folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), beside Hide's hook file.
+    /// Grok's folder trust in its default account (`AccountPath::FolderTrust`),
+    /// beside Hide's hook file.
     pub(super) fn settings_path(home: &Path) -> PathBuf {
         hide_agent_adapter::AgentId::Grok
             .adapter()
-            .install_home(home)
-            .join("trusted_folders.toml")
+            .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
     }
 
     /// Grok's lock on its trust file, held until dropped.
@@ -1053,13 +1052,12 @@ mod pi {
     use super::lock_folder::LockFolder;
     use super::*;
 
-    /// In Pi's own folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), beside its settings.
+    /// Pi's folder trust in its default account (`AccountPath::FolderTrust`),
+    /// beside its settings.
     pub(super) fn settings_path(home: &Path) -> PathBuf {
         hide_agent_adapter::AgentId::Pi
             .adapter()
-            .install_home(home)
-            .join("trust.json")
+            .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
     }
 
     fn lock(settings: &Path) -> Result<LockFolder, InstallFailure> {

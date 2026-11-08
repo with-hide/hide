@@ -87,7 +87,7 @@ pub(crate) fn checked_path(
     home: &Path,
     path: &Path,
 ) -> std::result::Result<PathBuf, crate::RootRefusal> {
-    let checked = crate::native_file::checked_path_under(home, SESSIONS, path)?;
+    let checked = crate::native_file::checked_path_under(home, Path::new(SESSIONS), path)?;
     let root = hide_platform::fs::identity::canonical(&home.join(SESSIONS))
         .map_err(|_| crate::RootRefusal::Outside)?;
     let relative = checked
@@ -166,7 +166,7 @@ fn with_index<T>(
 ) -> std::result::Result<T, ReadRefusal> {
     crate::sqlite::with_read(
         home,
-        FOLDER,
+        Path::new(FOLDER),
         &home.join(FOLDER).join(DATABASE),
         &REASONS,
         SQL_STEPS,
@@ -209,7 +209,7 @@ pub(crate) struct IndexBusy;
 pub(crate) fn checkout(home: &Path, id: &str) -> std::result::Result<Option<PathBuf>, IndexBusy> {
     let found = crate::sqlite::with_read(
         home,
-        FOLDER,
+        Path::new(FOLDER),
         &home.join(FOLDER).join(DATABASE),
         &REASONS,
         SQL_STEPS,

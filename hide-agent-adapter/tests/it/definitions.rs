@@ -498,3 +498,95 @@ fn each_unusable_file_is_left_out_alone_with_one_line_naming_it() {
     }
     assert_eq!(MAX_USER_FILES, 64);
 }
+
+/// `[account]` is checked like every field (PRD agent-profiles D-12): each
+/// place named, `false` for none, only skills shared, variables declared,
+/// and a copy or a built-in's screen file never moves an account.
+#[test]
+fn an_account_rule_names_every_place_and_only_its_own_variables() {
+    let head = "schema = 1\nid = \"acct\"\nname = \"A\"\nexecutables = [\"acct\"]\nhooks = \"none\"\n";
+    let all = |state: &str, skills: &str| {
+        format!(
+            "[account]\nby = \"folder\"\n[account.vars]\nACCT_HOME = {{ default = \"~/.acct\", profile = \"{{account}}\" }}\n[account.paths]\nhooks = false\nhook_trust = false\nplugins = false\nskills = {skills}\nfolder_trust = false\nsessions = \"{{ACCT_HOME}}/sessions\"\nlogin = false\nstate = {state}\nusage = false\n"
+        )
+    };
+    let good = all("\"{ACCT_HOME}\"", "\"shared\"");
+    let catalog = Catalog::read(vec![text("acct.toml", &format!("{head}{good}"))]);
+    assert!(catalog.rejected.is_empty(), "{:?}", catalog.rejected);
+    let cases: Vec<(String, &str)> = vec![
+        (
+            good.replace("usage = false\n", ""),
+            "not a definition file",
+        ),
+        (
+            format!("{good}unknown = false\n"),
+            "not a definition file",
+        ),
+        (all("\"shared\"", "false"), "account.paths.state cannot be shared"),
+        (all("true", "false"), "account.paths.state is a place, or false for none"),
+        (
+            all("\"{OTHER_HOME}/x\"", "false"),
+            "names {OTHER_HOME}, which .vars does not",
+        ),
+        (all("\"~/../x\"", "false"), "holds a folder name that is not plain"),
+        (all("\"/abs\"", "false"), "does not start at ~"),
+        (
+            all("\"{account}/x\"", "false"),
+            "only a folder account's profile has",
+        ),
+        (
+            good.replace("ACCT_HOME = ", "HIDE_HOME = ")
+                .replace("{ACCT_HOME}", "{HIDE_HOME}"),
+            "is not an agent's own variable name",
+        ),
+        (
+            good.replace("by = \"folder\"", "by = \"none\""),
+            "by = \"none\" says why in reason",
+        ),
+        (
+            format!("{good}[account.forbid]\nvars = [\"ACCT_HOME\"]\n"),
+            "is not a variable name apart from .vars",
+        ),
+    ];
+    for (account, reason) in cases {
+        let catalog = Catalog::read(vec![text("acct.toml", &format!("{head}{account}"))]);
+        assert_eq!(catalog.rejected.len(), 1, "{account}");
+        assert!(
+            catalog.rejected[0].reason.contains(reason),
+            "{} does not say {reason}",
+            catalog.rejected[0].reason
+        );
+    }
+    let copy = Catalog::read(vec![text(
+        "mycodex.toml",
+        &format!(
+            "schema = 1\nid = \"mycodex\"\nname = \"M\"\nbased_on = \"codex\"\nexecutables = [\"mycodex\"]\n{good}"
+        ),
+    )]);
+    assert!(
+        copy.rejected[0]
+            .reason
+            .contains("account comes from based_on codex"),
+        "{:?}",
+        copy.rejected
+    );
+    let plain_copy = Catalog::read(vec![text(
+        "mycodex.toml",
+        "schema = 1\nid = \"mycodex\"\nname = \"M\"\nbased_on = \"codex\"\nexecutables = [\"mycodex\"]\n",
+    )]);
+    let mine = plain_copy
+        .definitions
+        .iter()
+        .find(|definition| definition.id == "mycodex")
+        .unwrap();
+    assert_eq!(mine.account, builtin("codex").unwrap().account);
+    let screen = Catalog::read(vec![text(
+        "codex.toml",
+        &format!("schema = 1\nid = \"codex\"\n{good}"),
+    )]);
+    assert!(
+        screen.rejected[0].reason.contains("not account"),
+        "{:?}",
+        screen.rejected
+    );
+}

@@ -28,7 +28,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use hide_agent_adapter::{AgentId, HomeScope};
+use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile, resolve};
 
 /// Desk's Codex configuration. Commands run with Desk's own `PATH`, not the
 /// login shell's or a snapshot of it, so the `hide` Desk put first is the
@@ -82,11 +82,19 @@ pub fn operator_sign_in(
     home: &Path,
     codex_home: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, String> {
-    AgentId::Codex
-        .adapter()
-        .home(Some(home), codex_home, HomeScope::Read)
-        .map(|folder| folder.join("auth.json"))
-        .map_err(|unresolved| unresolved.to_string())
+    let codex = AgentId::Codex.adapter();
+    let mut node = NodeEnv::new(Some(home.to_path_buf()));
+    for var in codex.definition().account.iter().flat_map(|rule| &rule.vars) {
+        node = node.with_variable(&var.name, codex_home.map(std::ffi::OsStr::to_os_string));
+    }
+    resolve(codex.definition(), &Profile::builtin_default(codex.id), &node)
+        .map(|account| {
+            account
+                .path(AccountPath::Login)
+                .expect("Codex declares its sign-in")
+                .to_path_buf()
+        })
+        .map_err(|refusal| refusal.to_string())
 }
 
 /// The link Desk makes before Codex starts, `(target, link)`: Desk's home's

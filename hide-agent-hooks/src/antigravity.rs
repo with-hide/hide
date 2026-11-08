@@ -112,7 +112,7 @@ pub fn valid_conversation(id: &str) -> bool {
 
 /// agy's own folder of conversations, under the account's home.
 pub fn app_data(home: &Path) -> PathBuf {
-    hide_agent_adapter::antigravity_app_data(home)
+    home.join(hide_session::antigravity::FOLDER)
 }
 
 /// The transcript agy writes for `conversation`. The path is built from the

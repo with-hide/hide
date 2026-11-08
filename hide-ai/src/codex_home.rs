@@ -210,24 +210,25 @@ fn home_unavailable(stage: &str, kind: std::io::ErrorKind) -> AiError {
 }
 
 /// The directory the user's real `auth.json` lives in: Codex's own folder as
-/// the operator runs it (`CODEX_HOME`, or `~/.codex`), from the one resolver
-/// of agent folders. A relative `CODEX_HOME` leaves the home unavailable
-/// rather than linking a path Codex would read against another folder.
+/// the operator runs it (`CODEX_HOME`, or `~/.codex`), the default account
+/// as this process's variables move it (`hide_agent_adapter::resolve`). A
+/// relative `CODEX_HOME` leaves the home unavailable rather than linking a
+/// path Codex would read against another folder.
 fn source_codex_dir() -> Result<PathBuf, std::io::ErrorKind> {
+    use hide_agent_adapter::{AccountPath, NodeEnv, Profile, Refusal, resolve};
     let codex = hide_agent_adapter::AgentId::Codex.adapter();
-    let account_home = hide_platform::host::home_dir().ok();
-    let value = codex.home_variable.and_then(hide_platform::host::variable);
-    codex
-        .home(
-            account_home.as_deref(),
-            value.as_deref(),
-            hide_agent_adapter::HomeScope::Read,
-        )
-        .map_err(|unresolved| match unresolved {
-            hide_agent_adapter::HomeUnresolved::NoAccountHome => std::io::ErrorKind::NotFound,
-            hide_agent_adapter::HomeUnresolved::InvalidOverride { .. } => {
-                std::io::ErrorKind::InvalidInput
-            }
+    let node = NodeEnv::new(hide_platform::host::home_dir().ok())
+        .with_account_variables(codex.definition(), hide_platform::host::variable);
+    resolve(codex.definition(), &Profile::builtin_default(codex.id), &node)
+        .map_err(|refusal| match refusal {
+            Refusal::NoAccountHome => std::io::ErrorKind::NotFound,
+            _ => std::io::ErrorKind::InvalidInput,
+        })
+        .map(|account| {
+            account
+                .path(AccountPath::State)
+                .expect("Codex declares its own folder")
+                .to_path_buf()
         })
 }
 

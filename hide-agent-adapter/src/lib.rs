@@ -995,6 +995,33 @@ pub struct AgentAdapter {
     pub logo_id: &'static str,
 }
 
+impl AgentAdapter {
+    /// The agent's built-in definition, whose `[account]` names its folders.
+    pub fn definition(&self) -> &'static definition::Definition {
+        definition::builtin(self.id).expect("every adapter has a built-in definition")
+    }
+
+    /// The account the agent's built-in default profile runs in under `home`
+    /// for a node that honours none of the agent's variables: the places Hide
+    /// installs into, and those it reads at their default place.
+    pub fn account_in(&self, home: &std::path::Path) -> Account {
+        resolve(
+            self.definition(),
+            &Profile::builtin_default(self.id),
+            &NodeEnv::new(Some(home.to_path_buf())),
+        )
+        .expect("a default profile under a known home names no variable to refuse")
+    }
+
+    /// [`Self::account_in`]'s place for `path`, which the agent declares.
+    pub fn place_in(&self, home: &std::path::Path, path: AccountPath) -> std::path::PathBuf {
+        self.account_in(home)
+            .path(path)
+            .unwrap_or_else(|| panic!("{} declares no {path:?} place", self.id))
+            .to_path_buf()
+    }
+}
+
 /// Kind spellings, canonical ids and case variants share this one boundary.
 pub fn adapter(value: &str) -> Option<&'static AgentAdapter> {
     let value = value.trim();

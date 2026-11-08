@@ -81,33 +81,38 @@ const TITLE_LIMIT_CHARS: i64 = 512;
 /// The longest `directory` a session row may name; a longer one is no checkout.
 const DIRECTORY_LIMIT_BYTES: i64 = 4096;
 
-/// Where OpenCode keeps its data: a folder under a root Hide confines every
-/// read to. OpenCode takes its data folder from `XDG_DATA_HOME` when that is
-/// set (`xdg-basedir`, in 1.x and 2.x; proven live on 2.0.29), so that is the
-/// node's own value ([`crate::environment`]); otherwise it is under `home`.
+/// Where OpenCode keeps its data: its database in a folder under a root
+/// Hide confines every read to. The database is the default account's
+/// `sessions` place (`crate::account`), which follows `XDG_DATA_HOME` when
+/// the node has one (`xdg-basedir`, in 1.x and 2.x; proven live on 2.0.29):
+/// the root is then that folder, and otherwise `home`.
 struct Place {
     root: PathBuf,
-    folder: &'static str,
+    folder: PathBuf,
+    database: PathBuf,
 }
 
 fn place(home: &Path) -> Result<Place, String> {
-    match crate::environment::data_home() {
-        Err(reason) => Err(reason.to_owned()),
-        Ok(Some(data)) => Ok(Place {
-            root: data.to_owned(),
-            folder: "opencode",
-        }),
-        Ok(None) => Ok(Place {
-            root: home.to_owned(),
-            folder: ".local/share/opencode",
-        }),
-    }
+    let data = crate::environment::data_home().map_err(str::to_owned)?;
+    let database = crate::account::sessions(home, crate::Agent::OpenCode)
+        .map_err(str::to_owned)?
+        .expect("OpenCode declares its database");
+    let root = data.unwrap_or(home).to_path_buf();
+    let folder = database
+        .parent()
+        .and_then(|folder| folder.strip_prefix(&root).ok())
+        .expect("OpenCode's database is below its data folder")
+        .to_path_buf();
+    Ok(Place {
+        root,
+        folder,
+        database,
+    })
 }
 
 /// OpenCode's database, or why it cannot be named.
 pub(crate) fn database_path(home: &Path) -> Result<PathBuf, String> {
-    let place = place(home)?;
-    Ok(place.root.join(place.folder).join("opencode.db"))
+    Ok(place(home)?.database)
 }
 
 /// One bounded read of OpenCode's database ([`crate::sqlite::with_read`]),
@@ -138,8 +143,8 @@ pub(crate) fn with_unchecked_read<T>(
     let place = place(home)?;
     crate::sqlite::with_read(
         &place.root,
-        place.folder,
-        &place.root.join(place.folder).join("opencode.db"),
+        &place.folder,
+        &place.database,
         &REASONS,
         SQL_STEPS_PER_READ,
         read,

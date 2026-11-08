@@ -93,7 +93,7 @@ fn context_resets_require_native_metadata_and_keep_their_record_offsets() {
     let home = tempfile::tempdir().unwrap();
     let folder = home
         .path()
-        .join(hide_session::CLAUDE_SESSIONS)
+        .join(".claude/projects")
         .join("-work-app");
     std::fs::create_dir_all(&folder).unwrap();
     let request = request(Agent::Claude);

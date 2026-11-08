@@ -28,6 +28,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod account;
 pub mod antigravity;
 pub mod bell_line;
 pub mod call_shell;
@@ -144,29 +145,15 @@ pub const SESSION_INCREMENT_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 /// Largest individual JSONL record retained or parsed by a cursor.
 pub const SESSION_LINE_LIMIT_BYTES: usize = 256 * 1024;
 
-/// Claude Code's transcript folder, under the home folder.
-pub const CLAUDE_SESSIONS: &str = ".claude/projects";
-/// Codex CLI's transcript folder, under the home folder.
-pub const CODEX_SESSIONS: &str = ".codex/sessions";
-/// Pi's default native session root. Custom session directories grant no trust.
-pub const PI_SESSIONS: &str = ".pi/agent/sessions";
-/// Grok's default native root; a `GROK_HOME` elsewhere grants no trust.
-pub const GROK_SESSIONS: &str = ".grok/sessions";
-/// omp's default native root; profiles and custom session roots grant no trust.
-pub const OMP_SESSIONS: &str = ".omp/agent/sessions";
-
 /// The folder in `home` that holds `agent`'s session files, `None` for an
-/// agent that keeps no file per session.
+/// agent that keeps no file per session: its default account's `sessions`
+/// place ([`account`]), at the agent's default place below the home; a
+/// custom session folder or another account grants no trust.
 pub fn session_root(home: &Path, agent: Agent) -> Option<PathBuf> {
     match agent {
-        Agent::Claude => Some(home.join(CLAUDE_SESSIONS)),
-        Agent::Codex => Some(home.join(CODEX_SESSIONS)),
-        Agent::Grok => Some(home.join(GROK_SESSIONS)),
-        Agent::Pi => Some(home.join(PI_SESSIONS)),
-        Agent::Omp => Some(home.join(OMP_SESSIONS)),
         Agent::Cursor => Some(home.join(cursor::SESSIONS)),
-        Agent::Antigravity => Some(home.join(antigravity::SESSIONS)),
         Agent::OpenCode => None,
+        _ => Some(home.join(account::sessions_below_home(home, agent))),
     }
 }
 
@@ -850,11 +837,11 @@ impl SessionLocator {
     }
 
     fn claude_root(&self) -> PathBuf {
-        self.home.join(CLAUDE_SESSIONS)
+        session_root(&self.home, Agent::Claude).expect("Claude keeps a file per session")
     }
 
     fn codex_root(&self) -> PathBuf {
-        self.home.join(CODEX_SESSIONS)
+        session_root(&self.home, Agent::Codex).expect("Codex keeps a file per session")
     }
 
     fn claude_path_for_id(
