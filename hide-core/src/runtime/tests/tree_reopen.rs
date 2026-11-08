@@ -243,6 +243,7 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
                             name: registration_of(&old).into(),
                             launch: Default::default(),
                             session_id: Some(session_of(&old)),
+                            profile: None,
                         }],
                     },
                 ),

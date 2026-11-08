@@ -97,6 +97,9 @@ pub struct ClosedAgent {
     /// The model and effort it was started with, which its reopen starts it
     /// with again after the resume arguments.
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile it ran with, which its reopen runs it with again; `None`
+    /// for the built-in default.
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

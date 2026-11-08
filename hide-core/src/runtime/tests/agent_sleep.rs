@@ -247,6 +247,7 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
             registration: None,
             launch: Default::default(),
             owner: Some(owner),
+            profile: None,
         })
         .unwrap()
 }
@@ -1081,7 +1082,7 @@ fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
             .unwrap()
             .started_name = Some("reviewer".into());
         if let Some(recorded) = recorded {
-            runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None);
+            runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None, None);
         }
         runtime.dispatch_json(&event(
             "agent_sleep",

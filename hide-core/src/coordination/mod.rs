@@ -180,6 +180,11 @@ pub enum Command {
             skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
         )]
         launch: hide_agent_adapter::LaunchChoice,
+        /// The profile the child runs with, by its name on the child's
+        /// machine (`hide agent spawn --profile`, PRD agent-profiles B16);
+        /// none picks it (`launch::pick`). Part of the intent like `launch`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
         /// What Hide asked the child to do, for the screen to name it. Only
         /// Hide's own identity may give one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -697,6 +702,15 @@ pub struct SpawnRecord {
     /// 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub reserved_at_unix_ms: u64,
+    /// The profile the spawn named (`Command::Spawn::profile`), part of the
+    /// intent; none on a spawn that named none and every earlier record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The profile the engine took the child's start with, which the child's
+    /// pane record keeps for every restart Hide makes of it (D-27); none for
+    /// the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// What became of a spawn's brief, read from the facts its record keeps,
@@ -979,9 +993,11 @@ pub(crate) enum Mutation {
         id: String,
         pane: String,
     },
-    /// The engine took a start of the spawn's agent in its pane.
+    /// The engine took a start of the spawn's agent in its pane, with the
+    /// profile `profile` (none for the built-in default).
     Typed {
         id: String,
+        profile: Option<crate::launch::LaunchProfile>,
     },
     BindChild {
         id: String,
@@ -1556,6 +1572,7 @@ pub(crate) fn apply(
                 path,
                 args,
                 launch,
+                profile,
                 task,
                 brief,
                 beside,
@@ -1651,6 +1668,7 @@ pub(crate) fn apply(
                     || record.mode != mode
                     || record.args != *args
                     || record.launch != *launch
+                    || record.profile != *profile
                     || record.brief != *brief
                     || record.beside != *beside
                     || !task_agrees
@@ -1707,6 +1725,8 @@ pub(crate) fn apply(
                 launch_words: Vec::new(),
                 beside: *beside,
                 reserved_at_unix_ms: now,
+                profile: profile.clone(),
+                started_profile: None,
             };
             ledger.spawns.push(record.clone());
             Ok(json!(record))
@@ -1996,7 +2016,7 @@ pub(crate) fn apply(
                 .ok_or("spawn_unavailable")?;
             Ok(json!(record))
         }
-        Mutation::Typed { id } => {
+        Mutation::Typed { id, profile } => {
             let parent = ledger
                 .spawns
                 .iter()
@@ -2016,6 +2036,7 @@ pub(crate) fn apply(
                 return Err("spawn_incomplete".into());
             }
             record.typed = record.typed.saturating_add(1);
+            record.started_profile.clone_from(profile);
             Ok(json!(record))
         }
         Mutation::BindChild { id, record } => {
@@ -2771,6 +2792,7 @@ mod tests {
             task: None,
             brief: None,
             beside: false,
+            profile: None,
         }
     }
     fn register_as(
@@ -3699,7 +3721,10 @@ mod tests {
         apply(
             &mut ledger,
             &parent,
-            &Mutation::Typed { id: spawn.clone() },
+            &Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
             2,
         )
         .unwrap();
@@ -4102,7 +4127,16 @@ mod tests {
         assert_eq!(pane(&ledger), None, "the pane that never ran is no one's");
 
         apply(&mut ledger, &actor, &place("w1:p3"), 6).unwrap();
-        apply(&mut ledger, &actor, &Mutation::Typed { id: id.clone() }, 7).unwrap();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Typed {
+                id: id.clone(),
+                profile: None,
+            },
+            7,
+        )
+        .unwrap();
         assert_eq!(
             apply(&mut ledger, &actor, &place("w1:p4"), 8).unwrap_err(),
             "intent_conflict"
@@ -4172,7 +4206,10 @@ mod tests {
             apply(
                 &mut ledger,
                 &actor,
-                &Mutation::Typed { id: spawn.clone() },
+                &Mutation::Typed {
+                    id: spawn.clone(),
+                    profile: None,
+                },
                 2,
             )
             .unwrap();
@@ -4308,7 +4345,10 @@ mod tests {
                 shell: None,
                 child: None,
             },
-            Mutation::Typed { id: spawn.clone() },
+            Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
         ] {
             apply(&mut ledger, &actor, &mutation, 2).unwrap();
         }
@@ -4477,7 +4517,10 @@ mod tests {
         apply(
             &mut ledger,
             &actor,
-            &Mutation::Typed { id: spawn.clone() },
+            &Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
             3,
         )
         .unwrap();

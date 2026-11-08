@@ -996,6 +996,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             None,
             vec![flag.into(), "native-pi".into()],
             Default::default(),
+            None,
         );
         let reference = crate::sidebar::SessionAgentSessionPayload {
             kind: "path".into(),

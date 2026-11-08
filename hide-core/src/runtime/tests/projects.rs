@@ -3747,6 +3747,7 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             prompt.map(str::to_owned),
             Vec::new(),
             Default::default(),
+            None,
         );
         assert!(runtime.ingest_task_operation_result(
             id,
@@ -3783,10 +3784,10 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             "{prompt:?} before the start's answer"
         );
         // The start's answer lands before the engine reports the agent.
-        assert!(
-            runtime
-                .ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started)
-        );
+        assert!(runtime.ingest_task_agent_result(
+            id,
+            crate::worktree_control::TaskAgentOutcome::Started(None)
+        ));
         assert!(runtime.ingest_session(Ok(starting_task_agent(
             Some("claude"),
             "unknown",
@@ -3920,6 +3921,7 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
             },
             // An agent started in a checkout Hide did not make trusts nothing.
             made_worktree: None,
+            profile: None,
         })
     );
     // A concurrent kit inspection can learn about Codex while this Claude

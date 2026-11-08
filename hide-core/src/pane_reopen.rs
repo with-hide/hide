@@ -34,6 +34,9 @@ pub(crate) struct ReopenRequest {
     /// The model and effort the agent was started with, which the start
     /// after the end carries again.
     pub(crate) launch: hide_agent_adapter::LaunchChoice,
+    /// The profile the agent runs with, which the start after the end runs
+    /// with again; `None` for the built-in default.
+    pub(crate) profile: Option<crate::launch::LaunchProfile>,
     /// The machine's 권한 for the agent as the reopen was asked for.
     pub(crate) permission: crate::agent_permission::AgentPermission,
 }
@@ -60,8 +63,8 @@ fn failure(code: PaneReopenFailure, detail: impl Into<String>) -> ReopenFailure 
 /// Ends the agent and starts the same conversation again in the same pane.
 ///
 /// Order is the contract: every refusal that can be known first (an unread
-/// Codex, a conversation without resume arguments, a folder that is gone) is
-/// answered before the agent is touched; the agent is ended only then, and the
+/// Codex, a conversation without resume arguments, a profile its machine
+/// refuses, a folder that is gone) is answered before the agent is touched; the agent is ended only then, and the
 /// start follows only once the shell holds the terminal again.
 pub(crate) fn reopen(
     engine: &dyn Engine,
@@ -102,6 +105,21 @@ pub(crate) fn reopen(
             format!("{cwd} is not a directory"),
         ));
     }
+    let wake = WakeRequest {
+        pane_id: request.pane_id.clone(),
+        kind: request.kind.clone(),
+        name: request.name.clone(),
+        mode: WakeMode::Resume,
+        args,
+        cwd: request.cwd.clone(),
+        session_id: Some(request.session_id.clone()),
+        codex_daemon: request.codex_daemon,
+        profile: request.profile.clone(),
+    };
+    let launch = agent_sleep_engine::wake_launch(node, &wake).map_err(|outcome| match outcome {
+        WakeOutcome::Failed { detail, .. } => failure(PaneReopenFailure::StartRefused, detail),
+        WakeOutcome::Started => failure(PaneReopenFailure::StartRefused, "no start"),
+    })?;
     agent_sleep_engine::end_agent(engine, node, &request.pane_id, &request.kind).map_err(
         |error| {
             match error {
@@ -113,20 +131,7 @@ pub(crate) fn reopen(
             }
         },
     )?;
-    match agent_sleep_engine::start_agent(
-        engine,
-        node,
-        &WakeRequest {
-            pane_id: request.pane_id.clone(),
-            kind: request.kind.clone(),
-            name: request.name.clone(),
-            mode: WakeMode::Resume,
-            args,
-            cwd: request.cwd.clone(),
-            session_id: Some(request.session_id.clone()),
-            codex_daemon: request.codex_daemon,
-        },
-    ) {
+    match agent_sleep_engine::start_launched(engine, node, &wake, launch) {
         WakeOutcome::Started => Ok(()),
         WakeOutcome::Failed { detail, .. } => Err(ReopenFailure {
             ended: true,
@@ -178,6 +183,7 @@ mod tests {
             cwd: None,
             codex_daemon: daemon,
             launch: Default::default(),
+            profile: None,
             permission: Default::default(),
         }
     }

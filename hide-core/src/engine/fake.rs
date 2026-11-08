@@ -762,13 +762,23 @@ impl<'g> Engine for FakeEngine<'g> {
     /// Puts a start's arguments in order as every engine does, without a
     /// call: the start itself is the call a test answers.
     fn prepare_start(&self, mut launch: AgentLaunch) -> Result<PreparedStart, String> {
-        launch.kind = hide_agent_adapter::canonical_kind(&launch.kind).to_owned();
+        let kind = hide_agent_adapter::canonical_kind(launch.launch.kind()).to_owned();
         launch.args = crate::codex_launch::start_arguments(
-            &launch.kind,
+            &kind,
             launch.codex_daemon,
             std::mem::take(&mut launch.args),
         )?;
-        let line = launch.kind.len() + launch.args.iter().map(|arg| arg.len() + 1).sum::<usize>();
+        let line = launch
+            .launch
+            .line(
+                std::iter::once(kind)
+                    .chain(launch.args.iter().cloned())
+                    .collect(),
+            )
+            .iter()
+            .map(|word| word.len() + 1)
+            .sum::<usize>()
+            - 1;
         Ok(PreparedStart::new(launch, line))
     }
 
@@ -783,17 +793,20 @@ impl<'g> Engine for FakeEngine<'g> {
 
     fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
         let launch = start.launch();
-        self.ask(
-            "start_agent",
-            json!({
-                "pane": launch.pane_id,
-                "name": launch.name,
-                "kind": launch.kind,
-                "args": launch.args,
-                "codex_daemon": debug(&launch.codex_daemon),
-                "program": launch.program.as_ref().map(|file| json!([file.program, file.leading])),
-            }),
-        )
+        let mut asked = json!({
+            "pane": launch.pane_id,
+            "name": launch.name,
+            "kind": hide_agent_adapter::canonical_kind(launch.launch.kind()),
+            "args": launch.args,
+            "codex_daemon": debug(&launch.codex_daemon),
+            "program": launch.program.as_ref().map(|file| json!([file.program, file.leading])),
+        });
+        // Only a start with a profile of its own says which: every other
+        // start is asked as it always was.
+        if let Some(profile) = launch.launch.record() {
+            asked["profile"] = json!(profile.id.0);
+        }
+        self.ask("start_agent", asked)
     }
 
     fn agent_state(&self, _wait: Wait, target: &str) -> Answer<AgentState> {

@@ -4051,6 +4051,14 @@
                     }
                 },
                 {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
                     "name": "--model",
                     "required": false,
                     "requires": [],
@@ -4146,7 +4154,11 @@
                 "plan_delegate_full",
                 "plan_delegate_not_permitted",
                 "plan_unavailable",
-                "plan_session_unknown"
+                "plan_session_unknown",
+                "profile_gone",
+                "profiles_unsupported",
+                "profile_refused",
+                "profile_unanswered"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -6051,7 +6063,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ff1a8f37a1a4432f0c631a9e949cb015533f8aa89533dfcedbff18e16be36803",
+    "digest": "sha256:2cde29d06ea32e013a095cad9406db2ba20c7943b2d648fac4b365bcb1825bbc",
     "envelopes": {
         "agent": {
             "answer": "value",

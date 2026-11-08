@@ -808,7 +808,7 @@ mod tests {
             .prepare_start(crate::engine::AgentLaunch {
                 pane_id: text("pane_id", "w1:p1"),
                 name: text("name", "agent"),
-                kind: text("kind", "claude"),
+                launch: crate::launch::Launch::default_of(&text("kind", "claude")),
                 args: params["args"]
                     .as_array()
                     .map(|args| {

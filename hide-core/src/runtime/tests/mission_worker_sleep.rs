@@ -1007,7 +1007,7 @@ fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
     };
 
     // The spawn keeps the choice before any session: nothing is proven.
-    runtime.record_pane_launch(WORKER, "claude", NAME, &opus, None);
+    runtime.record_pane_launch(WORKER, "claude", NAME, &opus, None, None);
     show(&mut runtime, named(false));
     assert_eq!(
         runtime.snapshot.ui_state.pane_launches[WORKER].session,
@@ -1051,7 +1051,7 @@ fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
         None,
         "the earlier worker's launch is not the later one's"
     );
-    runtime.put_pane_launch(WORKER, "claude", NAME, &opus, Some(&later));
+    runtime.put_pane_launch(WORKER, "claude", NAME, &opus, None, Some(&later));
     show(&mut runtime, session("w-order:t1", None));
     assert_eq!(launched(&mut runtime), kept("agent-4"));
 

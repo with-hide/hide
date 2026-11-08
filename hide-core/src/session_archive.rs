@@ -191,6 +191,11 @@ pub struct ArchivedMember {
     #[serde(default)]
     pub closed: bool,
     pub resume: Resume,
+    /// The profile it ran with, which its resume runs it with again (PRD
+    /// agent-profiles D-27); none, as in a record from before profiles, for
+    /// the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 impl ArchivedMember {
@@ -598,6 +603,7 @@ pub(crate) fn fixture_member(session: &str, parent: Option<&str>) -> ArchivedMem
         depth: u8::from(parent.is_some()),
         closed: true,
         resume: Resume::Idle,
+        profile: None,
     }
 }
 

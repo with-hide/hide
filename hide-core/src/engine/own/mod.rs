@@ -2315,9 +2315,10 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
         let catalog = self.shared.definitions.get();
-        let definition = agents::definition(&catalog, &launch.kind)
-            .ok_or_else(|| format!("no agent definition names {}", launch.kind))?;
-        let argv = agents::start_argv(
+        let kind = launch.launch.kind();
+        let definition = agents::definition(&catalog, kind)
+            .ok_or_else(|| format!("no agent definition names {kind}"))?;
+        let argv = launch.launch.line(agents::start_argv(
             definition,
             launch.program.as_ref(),
             crate::codex_launch::start_arguments(
@@ -2325,7 +2326,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 launch.codex_daemon,
                 launch.args.clone(),
             )?,
-        )?;
+        )?);
         // The longest of the shells' lines, so the start is bounded as the
         // shell it meets will type it.
         let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
@@ -2343,12 +2344,9 @@ impl<'g> Engine for OwnEngine<'g> {
         let launch = start.launch();
         let pane = launch.pane_id.as_str();
         let catalog = self.shared.definitions.get();
-        let definition = agents::definition(&catalog, &launch.kind).ok_or_else(|| {
-            refused(
-                "unknown_agent",
-                format!("no agent definition names {}", launch.kind),
-            )
-        })?;
+        let kind = launch.launch.kind();
+        let definition = agents::definition(&catalog, kind)
+            .ok_or_else(|| refused("unknown_agent", format!("no agent definition names {kind}")))?;
         let args = crate::codex_launch::start_arguments(
             &definition.id,
             launch.codex_daemon,
@@ -2371,12 +2369,16 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
             )
         })?;
-        let line = shell_line::command(&argv, shell).ok_or_else(|| {
-            refused(
-                "agent_start_refused",
-                format!("the {} start cannot be typed into a shell", definition.id),
-            )
-        })?;
+        // A profile's start runs the agent through `hide agent exec`, so its
+        // variables reach the agent alone; the session the start names is
+        // read from the agent's own words.
+        let line =
+            shell_line::command(&launch.launch.line(argv.clone()), shell).ok_or_else(|| {
+                refused(
+                    "agent_start_refused",
+                    format!("the {} start cannot be typed into a shell", definition.id),
+                )
+            })?;
         self.type_agent_start(
             pane,
             agents::PaneAgent::started(
@@ -4273,7 +4275,7 @@ mod tests {
         AgentLaunch {
             pane_id: pane.to_owned(),
             name: name.to_owned(),
-            kind: kind.to_owned(),
+            launch: crate::launch::Launch::default_of(kind),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
@@ -4502,6 +4504,51 @@ mod tests {
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
         assert_eq!(listed[0].agent_status.as_deref(), Some("done"));
         assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "done");
+    }
+
+    /// A start with a profile other than the built-in default is typed as
+    /// `hide agent exec` with the profile's variables as its arguments, never
+    /// as a variable of the pane's shell (PRD agent-profiles D-26, B21); the
+    /// test above types the built-in default's line, unchanged (B29).
+    #[test]
+    fn a_profiles_start_is_typed_as_hide_agent_exec_with_its_variables_as_arguments() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let answered = hide_node_link::profiles::ProfileStart {
+            name: "work".to_owned(),
+            account: hide_agent_adapter::AccountKey::Folder("/home/me/.claude-work".to_owned()),
+            version: 1,
+            env: vec![(
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                "/home/me/.claude-work".to_owned(),
+            )],
+            program: None,
+            exec: "/opt/hide/hide".to_owned(),
+        };
+        let start = engine
+            .prepare_start(AgentLaunch {
+                launch: crate::launch::Launch::answered("claude", "p1", answered),
+                ..launch(&pane, "worker", "claude", &["--model", "it's"])
+            })
+            .unwrap();
+        engine.start_agent(WAIT, &start).unwrap();
+        assert_eq!(
+            holders.typed(&pane),
+            "/opt/hide/hide agent exec --profile 'Claude · work' --env CLAUDE_CONFIG_DIR=/home/me/.claude-work -- claude --model 'it'\\''s'\r"
+        );
+        // The agent is still the definition's agent, by its own program.
+        assert_eq!(
+            holders.rules_given(1),
+            [(pane.clone(), Some("claude-code".to_owned()))]
+        );
+        assert_eq!(
+            engine.delivery_agent(WAIT, "worker").unwrap().kind.as_deref(),
+            Some("claude")
+        );
     }
 
     fn undelivered_input() -> HolderError {
@@ -5754,6 +5801,7 @@ mod tests {
             effort: Some("high".to_owned()),
         };
         let record = |name: &str| crate::model::PaneLaunch {
+            profile: None,
             kind: "claude".to_owned(),
             name: name.to_owned(),
             choice: chosen.clone(),

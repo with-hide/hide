@@ -1877,6 +1877,7 @@ mod tests {
             brief: None,
             task: None,
             beside: false,
+            profile: None,
         }
     }
 

@@ -108,7 +108,7 @@ fn started(kind: &str, launch: Option<&LaunchChoice>) -> (Runtime, tempfile::Tem
     if let Some(launch) = launch {
         // What the task start, the spawn executor and every restart do once
         // the agent is running in the pane.
-        runtime.record_pane_launch(AGENT, kind, NAME, launch, None);
+        runtime.record_pane_launch(AGENT, kind, NAME, launch, None, None);
     }
     runtime.ingest_session(Ok(session(&checkout, kind, true)));
     (runtime, folder)
@@ -213,6 +213,7 @@ fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
                 name: NAME.to_owned(),
                 choice: launch,
                 session: Some(SESSION.to_owned()),
+                profile: None,
             }),
             "{kind}"
         );
@@ -233,7 +234,7 @@ fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
     kit.codex_daemon = Some(false);
     runtime.set_kit_state(crate::node::TEST_NODE, kit);
     // What the spawn writes once its start is typed, before any session.
-    runtime.record_pane_launch(AGENT, "codex", NAME, &launch, None);
+    runtime.record_pane_launch(AGENT, "codex", NAME, &launch, None, None);
     runtime.ingest_session(Ok(hosting(&checkout, Some(("codex", Some(NAME), None)))));
     assert_eq!(
         runtime.snapshot().ui_state.pane_launches[AGENT].session,
@@ -415,6 +416,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
             kind: "claude".into(),
             session_id: Some(SESSION.into()),
             launch: launch.clone(),
+            profile: None,
         })
     );
 
@@ -445,6 +447,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
                         name: "reopen-closed-0".into(),
                         launch: launch.clone(),
                         session_id: Some(SESSION.into()),
+                        profile: None,
                     }],
                 }
             )
@@ -461,6 +464,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
             name: "reopen-closed-0".into(),
             choice: launch,
             session: Some(SESSION.into()),
+            profile: None,
         })
     );
 }
@@ -494,6 +498,7 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
             name: NAME.into(),
             choice: launch.clone(),
             session: Some(SESSION.into()),
+            profile: None,
         })
     );
     assert_eq!(described(&runtime), launch);
@@ -529,18 +534,18 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
     assert!(launches(&runtime).is_empty());
 
     // Started under another name (another Hide start, or a reused pane id).
-    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None);
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, None);
     runtime.ingest_session(Ok(hosting(
         &checkout,
         Some(("claude", Some("other"), None)),
     )));
     assert!(launches(&runtime).is_empty());
 
-    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None);
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, None);
     runtime.ingest_session(Ok(session(&checkout, "codex", true)));
     assert!(launches(&runtime).is_empty());
 
-    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, Some(SESSION));
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, Some(SESSION));
     runtime.ingest_session(Ok(tab_order_payload(
         &checkout,
         &TABS[..1],
@@ -572,17 +577,24 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
             host_consent: None,
         });
     let remote = format!("remote:{device}:pane:w1:p1");
-    runtime.record_pane_launch(&remote, "claude", "hide-claude-w1-p1", &launch, None);
+    runtime.record_pane_launch(&remote, "claude", "hide-claude-w1-p1", &launch, None, None);
     assert!(runtime.dispatch_json(&event("remove_device", json!({"device_id": device}))));
     let launches = &runtime.snapshot().ui_state.pane_launches;
     assert!(!launches.contains_key(&remote));
     assert!(launches.contains_key(AGENT), "this machine's record stays");
 
     for index in launches.len()..crate::runtime::agent_choice::PANE_LAUNCH_LIMIT {
-        runtime.record_pane_launch(&format!("w9:p{index}"), "claude", "name", &launch, None);
+        runtime.record_pane_launch(
+            &format!("w9:p{index}"),
+            "claude",
+            "name",
+            &launch,
+            None,
+            None,
+        );
     }
     let ((), records) = crate::diagnostics::capture(|| {
-        runtime.record_pane_launch("w9:over", "claude", "name", &launch, None);
+        runtime.record_pane_launch("w9:over", "claude", "name", &launch, None, None);
     });
     let launches = &runtime.snapshot().ui_state.pane_launches;
     assert_eq!(

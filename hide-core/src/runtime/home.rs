@@ -136,6 +136,7 @@ impl Runtime {
                 model,
                 effort: None,
             },
+            self.new_start_profile(device, agent_kind.as_deref()),
         );
         let projects = self.home_projects(device);
         self.home_links

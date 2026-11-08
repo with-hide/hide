@@ -200,6 +200,8 @@ pub struct ReopenedAgent {
     /// The name the reopen started it under.
     pub name: String,
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile it started with, which its pane's record keeps.
+    pub profile: Option<crate::launch::LaunchProfile>,
     pub session_id: Option<String>,
 }
 
@@ -220,6 +222,7 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
                 crate::start_prompt::start_program_of(context.engine.as_ref(), node, kind)
             };
             let asks = ReopenNode {
+                link: Some(node),
                 folders: &folders,
                 program: &program,
             };
@@ -291,6 +294,8 @@ fn run_file_reopen(
 
 /// What a reopen asks of the node that held the closed panes.
 struct ReopenNode<'a> {
+    /// The node itself, which answers for an agent's profile.
+    link: Option<&'a dyn crate::node_access::NodeLink>,
     /// Whether a closed pane's folder is still a directory there.
     folders: &'a dyn Fn(&str) -> bool,
     /// The file a start of the agent of a kind names there
@@ -683,6 +688,7 @@ fn reopen_pane(
         .and_then(|agent| {
             start_or_degrade_agent(
                 engine,
+                node.link,
                 key,
                 0,
                 &restored_pane_id,
@@ -835,6 +841,7 @@ fn reopen_tab(
         if let Some(agent) = &pane.agent {
             agents.extend(start_or_degrade_agent(
                 engine,
+                node.link,
                 key,
                 index,
                 new_id,
@@ -891,13 +898,15 @@ fn restored_cwd(
 }
 
 /// Starts `agent` in a restored pane with its conversation, or a new one when
-/// the resume does not take, each with the launch choice it was started
-/// with and the machine's permission choice, naming `program` where the
+/// the resume does not take, each with the launch choice and the profile it
+/// was started with (the profile as `node` answers for it now) and the
+/// machine's permission choice, naming `program` where the
 /// node gave the file its start runs; answers what started, or none when
 /// only the shell was kept.
 #[allow(clippy::too_many_arguments)] // the pane's identity plus its machine's three start facts
 fn start_or_degrade_agent(
     engine: &dyn Engine,
+    node: Option<&dyn crate::node_access::NodeLink>,
     key: &str,
     index: usize,
     pane_id: &str,
@@ -926,24 +935,26 @@ fn start_or_degrade_agent(
         kind: agent.kind.clone(),
         name: name.clone(),
         launch: agent.launch.clone(),
+        profile: agent.profile.clone(),
         session_id: session_id.cloned(),
     };
     let interrupted_reused_agent = interrupt_reused_agent(engine, pane_id);
     let pane_was_clear = matches!(&interrupted_reused_agent, Ok(false));
+    let request = crate::launch::Request::recorded(&agent.kind, agent.profile.as_ref());
     let resume = resume_arguments(agent);
     if let Some(mut args) = resume {
         args.extend(launch.iter().cloned());
         // A resume line is a session id, far under every terminal's line
-        // limit, so the restore asks no node.
+        // limit, so the restore asks the node only for the agent's profile.
         let result = start_agent(
             engine,
-            None,
+            node,
             &format!("hide-core:{key}:agent:{index}:resume"),
             pane_id,
             crate::agent_start::ShellStart::Plain,
             crate::agent_start::SHELL_WAIT,
             &name,
-            &agent.kind,
+            &request,
             args,
             codex_daemon,
             program.clone(),
@@ -966,13 +977,13 @@ fn start_or_degrade_agent(
     }
     if let Err(message) = start_agent(
         engine,
-        None,
+        node,
         &format!("hide-core:{key}:agent:{index}:fresh"),
         pane_id,
         crate::agent_start::ShellStart::Plain,
         crate::agent_start::SHELL_WAIT,
         &name,
-        &agent.kind,
+        &request,
         launch,
         codex_daemon,
         program,
@@ -1075,6 +1086,7 @@ mod tests {
         let mut notices = Vec::new();
         let started = start_or_degrade_agent(
             fake.engine().as_ref(),
+            None,
             "key",
             0,
             "pane",
@@ -1082,6 +1094,7 @@ mod tests {
                 kind: "codex".into(),
                 session_id: Some("session".into()),
                 launch: launch.clone(),
+                profile: None,
             },
             crate::codex_launch::CodexDaemon::Unsupported,
             // No saved choice: full access, on the resume and on the new
@@ -1110,6 +1123,7 @@ mod tests {
                 name: "reopen-key-0".into(),
                 launch,
                 session_id: None,
+                profile: None,
             })
         );
         assert_eq!(
@@ -1147,6 +1161,7 @@ mod tests {
             let mut notices = Vec::new();
             start_or_degrade_agent(
                 fake.engine().as_ref(),
+                None,
                 "key",
                 0,
                 "pane",
@@ -1295,6 +1310,7 @@ mod tests {
         let outcome = reopen_pane(
             fake.engine().as_ref(),
             &ReopenNode {
+                link: None,
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
             },
@@ -1486,6 +1502,7 @@ mod tests {
         let outcome = reopen_pane(
             fake.engine().as_ref(),
             &ReopenNode {
+                link: None,
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
             },

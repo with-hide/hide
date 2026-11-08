@@ -245,6 +245,11 @@ pub struct SleepRecord {
         skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
     )]
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile the agent runs with, which its wake starts it with again
+    /// (PRD agent-profiles D-27); none, as in a record from before profiles,
+    /// for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 impl SleepRecord {
@@ -288,6 +293,7 @@ impl SleepRecord {
             reason: None,
             pending_wake: None,
             launch: Default::default(),
+            profile: None,
         })
     }
 

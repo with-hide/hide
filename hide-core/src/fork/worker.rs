@@ -264,12 +264,13 @@ fn run_agent_fork_with_registration(
             shell,
             crate::agent_start::SHELL_WAIT,
             &request.name,
-            request.agent.kind(),
+            &crate::launch::Request::recorded(request.agent.kind(), request.profile.as_ref()),
             args,
             request.codex_daemon,
             crate::start_prompt::start_program_of(mutation_engine, node, request.agent.kind()),
             &check,
         )
+        .map(|started| started.pane_id)
         .map_err(start_error_message);
         let started = started.and_then(|pane_id| {
             if request.agent == crate::fork::ForkableAgent::Antigravity {
@@ -750,6 +751,7 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
@@ -940,6 +942,7 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
@@ -1102,6 +1105,7 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
@@ -1234,6 +1238,7 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
@@ -1437,6 +1442,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                profile: None,
                 permission: Default::default(),
             };
             let result = fork_antigravity(fake.engine().as_ref(), &node, &request, "child-pane");
@@ -1609,6 +1615,7 @@ mod tests {
                 tab_label: None,
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                profile: None,
                 permission: Default::default(),
             };
             let result = fork_arguments(&node, &request);
@@ -1687,6 +1694,7 @@ mod tests {
             tab_label: None,
             placement: ForkPlacement::Side,
             launch: Default::default(),
+            profile: None,
             permission: Default::default(),
         };
 

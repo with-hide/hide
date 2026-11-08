@@ -295,6 +295,21 @@ pub(crate) fn mutate(
         STORE_TIMEOUT,
     )
 }
+/// The profile the caller runs with, when it is an agent of `kind` too: the
+/// one a child it starts on its own machine inherits (D-32).
+fn caller_profile(
+    client: &Client,
+    actor: &Actor,
+    kind: &str,
+) -> Option<crate::launch::LaunchProfile> {
+    client
+        .runtime
+        .upgrade()?
+        .lock()
+        .ok()?
+        .caller_launch_profile(actor, kind)
+}
+
 pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
     client
         .runtime
@@ -1080,6 +1095,7 @@ fn spawn(
         path,
         args,
         launch,
+        profile,
         task,
         brief,
         mission: _,
@@ -1206,6 +1222,15 @@ fn spawn(
             )?;
         }
     }
+    // A profile named by a name its machine does not list is refused before
+    // anything is reserved, so the same command with the right name is the
+    // same intent (B16).
+    if let Some(name) = profile.as_deref() {
+        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+        let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        crate::launch::chosen(kind, name, locked.machine_profiles(child_machine))?;
+    }
     // The child's hook is judged before anything is made for it, on every
     // attempt that has not typed its start yet: one that has is past what a
     // hook changes (with-hide/hide-private#661, #662).
@@ -1276,6 +1301,7 @@ fn spawn(
         permissions,
         on_node,
         node,
+        profiles,
     } = context(client, &child_device).map_err(|reason| {
         if reserved.machine.is_some() {
             "machine_unavailable".to_owned()
@@ -1283,6 +1309,24 @@ fn spawn(
             reason
         }
     })?;
+    // The profile the child runs with (PRD agent-profiles D-32, B16): the
+    // one named, else its caller's when the caller is the same agent on the
+    // same machine, else the agent's default there.
+    let agent = crate::launch::pick(
+        kind,
+        profile
+            .as_deref()
+            .map(|name| crate::launch::chosen(kind, name, profiles.as_ref()))
+            .transpose()?,
+        reserved
+            .machine
+            .is_none()
+            .then(|| caller_profile(client, actor, kind))
+            .flatten()
+            .as_ref(),
+        None,
+        profiles.as_ref(),
+    );
     // A device that stops answering partway leaves the spawn reserved and
     // resumable: the caller is told the device is unavailable, and the same
     // command continues once it answers again.
@@ -1606,7 +1650,7 @@ fn spawn(
                     "pane_id": pane,
                 }));
             }
-            crate::live::start_agent(
+            let started = crate::live::start_agent(
                 engine.as_ref(),
                 node.as_deref(),
                 &reserved.id,
@@ -1614,7 +1658,7 @@ fn spawn(
                 shell,
                 answer_by.saturating_duration_since(Instant::now()),
                 name,
-                kind,
+                &agent,
                 start_args,
                 codex_daemon,
                 form.as_ref()
@@ -1642,6 +1686,7 @@ fn spawn(
                 actor,
                 Mutation::Typed {
                     id: reserved.id.clone(),
+                    profile: started.profile,
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
@@ -1813,7 +1858,14 @@ fn spawn(
             runtime
                 .lock()
                 .map_err(|_| "delivery_unavailable")?
-                .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
+                .record_pane_launch(
+                    &pane_id,
+                    kind,
+                    name,
+                    &reserved.launch,
+                    reserved.started_profile.as_ref(),
+                    None,
+                );
         }
         let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
         {
@@ -2890,6 +2942,7 @@ mod tests {
                         task: None,
                         brief: None,
                         beside: false,
+                        profile: None,
                     },
                 },
                 1,
@@ -3139,6 +3192,7 @@ mod tests {
                 task: None,
                 brief: None,
                 beside: false,
+                profile: None,
             };
             let spawn = super::super::apply(
                 &mut state,

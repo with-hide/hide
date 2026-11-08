@@ -146,6 +146,7 @@ impl Runtime {
             ));
         };
         let launch = self.launch_choice_of(&agent);
+        let profile = self.launch_profile_of(&agent);
         let record = DormantRecord {
             phase: DormantPhase::SavingClose,
             revision: 1,
@@ -174,6 +175,7 @@ impl Runtime {
             registration: self.delivery_registration_of(pane_id),
             launch,
             owner: Some(owner),
+            profile,
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
             return Err(SleepRefusal::new(
@@ -1221,6 +1223,7 @@ impl Runtime {
                     &record.kind,
                     &name,
                     &record.launch,
+                    record.profile.as_ref(),
                     Some(&record.native_session_id),
                 );
             }

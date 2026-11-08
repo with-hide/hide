@@ -517,6 +517,7 @@ impl Spawner {
                 task: None,
                 brief: None,
                 beside: false,
+                profile: None,
             },
         )
     }
@@ -544,6 +545,7 @@ impl Spawner {
                 task: None,
                 brief: Some(brief.into()),
                 beside: false,
+                profile: None,
             },
         )
     }
@@ -627,6 +629,7 @@ fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, 
             task: None,
             brief: None,
             beside: false,
+            profile: None,
         },
     };
     let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
@@ -1262,6 +1265,7 @@ fn a_spawn_whose_agent_never_takes_input_answers_within_its_answer_time() {
             task: None,
             brief: Some("fix it".into()),
             beside: false,
+            profile: None,
         },
     );
     assert!(
@@ -1741,6 +1745,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
                 task: None,
                 brief: None,
                 beside: false,
+                profile: None,
             },
         )
         .expect_err("refused");

@@ -944,6 +944,7 @@ pub(crate) mod tests {
                     mission: None,
                     plan_node: None,
                     plan: None,
+                    profile: None,
                 },
             },
             1,
@@ -961,7 +962,10 @@ pub(crate) mod tests {
                 shell: None,
                 child: None,
             },
-            Mutation::Typed { id: spawn.clone() },
+            Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
         ] {
             apply(&mut ledger, mutation, 1);
         }

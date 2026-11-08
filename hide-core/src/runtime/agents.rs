@@ -3350,6 +3350,7 @@ impl Runtime {
                         &pending.kind,
                         &pending.name,
                         &pending.launch,
+                        pending.profile.as_ref(),
                         None,
                     );
                 }
@@ -4292,6 +4293,7 @@ pub(super) struct PendingFork {
     pub(super) kind: String,
     pub(super) name: String,
     pub(super) launch: hide_agent_adapter::LaunchChoice,
+    pub(super) profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// What one machine's rows say for a first run.

@@ -1582,6 +1582,7 @@ fn pending_fork(runtime: &mut Runtime, source: &str, request_id: Option<&str>) {
             kind: "claude".into(),
             name: "fork-fixture".into(),
             launch: Default::default(),
+            profile: None,
         },
     );
     if let Some(request_id) = request_id {

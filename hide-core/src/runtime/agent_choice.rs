@@ -6,10 +6,12 @@
 //! through here, so a pick on any of them is the next default on all of
 //! them, and a model reaches the CLI the same way wherever it was chosen.
 //!
-//! The model and effort a pane's agent was started with are kept here too
+//! The model and effort a pane's agent was started with, and the profile it
+//! runs with (PRD agent-profiles D-27), are kept here too
 //! (`ui_state.pane_launches`), for the conversation it was started for, so
-//! every restart Hide makes of it (a wake, a fork, a reopen) starts it with
-//! the same choice instead of the CLI's configured default.
+//! every restart Hide makes of it (a wake, a fork, a reopen, a resume) starts
+//! it with the same choice and profile instead of the CLI's configured
+//! default.
 
 use super::*;
 
@@ -195,20 +197,21 @@ pub(crate) fn settle_pane_launches(
 }
 
 impl Runtime {
-    /// Records the choice Hide started a `kind` agent named `name` with in
-    /// `pane_id` (the core's id for the pane), replacing what the pane held:
-    /// a start on the CLI's defaults leaves none. `session` is the
-    /// conversation a restart resumed there, which the record then already
-    /// describes.
+    /// Records the choice and profile Hide started a `kind` agent named
+    /// `name` with in `pane_id` (the core's id for the pane), replacing what
+    /// the pane held: a start on the CLI's defaults with the built-in default
+    /// profile leaves none. `session` is the conversation a restart resumed
+    /// there, which the record then already describes.
     pub(crate) fn record_pane_launch(
         &mut self,
         pane_id: &str,
         kind: &str,
         name: &str,
         choice: &hide_agent_adapter::LaunchChoice,
+        profile: Option<&crate::launch::LaunchProfile>,
         session: Option<&str>,
     ) {
-        if self.put_pane_launch(pane_id, kind, name, choice, session) {
+        if self.put_pane_launch(pane_id, kind, name, choice, profile, session) {
             self.persist_ui_state();
         }
     }
@@ -221,9 +224,10 @@ impl Runtime {
         kind: &str,
         name: &str,
         choice: &hide_agent_adapter::LaunchChoice,
+        profile: Option<&crate::launch::LaunchProfile>,
         session: Option<&str>,
     ) -> bool {
-        let moved = self.write_pane_launch(pane_id, kind, name, choice, session);
+        let moved = self.write_pane_launch(pane_id, kind, name, choice, profile, session);
         if moved {
             self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
         }
@@ -236,10 +240,11 @@ impl Runtime {
         kind: &str,
         name: &str,
         choice: &hide_agent_adapter::LaunchChoice,
+        profile: Option<&crate::launch::LaunchProfile>,
         session: Option<&str>,
     ) -> bool {
         let launches = &mut self.snapshot.ui_state.pane_launches;
-        if choice.is_default() {
+        if choice.is_default() && profile.is_none() {
             launches.remove(pane_id).is_some()
         } else if !launches.contains_key(pane_id) && launches.len() >= PANE_LAUNCH_LIMIT {
             crate::diagnostic!(serde_json::json!({
@@ -253,9 +258,66 @@ impl Runtime {
                 name: name.to_owned(),
                 choice: choice.clone(),
                 session: session.map(str::to_owned),
+                profile: profile.cloned(),
             };
             launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch)
         }
+    }
+
+    /// The agent profiles of the machine `device` as its node last listed
+    /// them; `None` until they were read.
+    pub(crate) fn machine_profiles(&self, device: &str) -> Option<&crate::model::ProfilesSnapshot> {
+        self.kit_states.get(device)?.profiles.as_ref()
+    }
+
+    /// The profile a new start of `kind` on `device` that names none and has
+    /// no parent runs with (D-32): the project's default once Project
+    /// settings choose one, else the agent's default there; `None` for the
+    /// built-in default and for a start of no agent.
+    pub(crate) fn new_start_profile(
+        &self,
+        device: &str,
+        kind: Option<&str>,
+    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
+        crate::launch::pick(kind?, None, None, None, self.machine_profiles(device)).profile()
+    }
+
+    /// The profile `agent` runs with, when its pane's record describes it;
+    /// otherwise the built-in default (`None`).
+    pub(crate) fn launch_profile_of(
+        &self,
+        agent: &SidebarAgentSnapshot,
+    ) -> Option<crate::launch::LaunchProfile> {
+        self.snapshot
+            .ui_state
+            .pane_launches
+            .get(&agent.pane_id)
+            .filter(|launch| describes(launch, agent))
+            .and_then(|launch| launch.profile.clone())
+    }
+
+    /// The profile the agent `actor` runs with, when it is an agent of
+    /// `kind` and its pane's record describes it: the profile a child of the
+    /// same agent it starts on its own machine inherits (D-32).
+    pub(crate) fn caller_launch_profile(
+        &self,
+        actor: &crate::delivery::Actor,
+        kind: &str,
+    ) -> Option<crate::launch::LaunchProfile> {
+        if hide_agent_adapter::canonical_kind(&actor.kind)
+            != hide_agent_adapter::canonical_kind(kind)
+        {
+            return None;
+        }
+        let launch = self.snapshot.ui_state.pane_launches.get(&actor.pane_id)?;
+        (launch_describes(
+            launch,
+            &actor.kind,
+            Some(&actor.name),
+            actor.session.as_deref(),
+        ) || launch_describes(launch, &actor.kind, None, actor.session.as_deref()))
+        .then(|| launch.profile.clone())
+        .flatten()
     }
 
     /// The choice `agent` was started with, when its pane's record describes

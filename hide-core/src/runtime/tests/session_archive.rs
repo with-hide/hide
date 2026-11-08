@@ -409,7 +409,7 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
     );
     runtime.ingest_task_agent_result(
         operation.id,
-        crate::worktree_control::TaskAgentOutcome::Started,
+        crate::worktree_control::TaskAgentOutcome::Started(None),
     );
     runtime.advance_session_archive();
     let (_, held) = record(&runtime).unwrap();

@@ -554,11 +554,11 @@ pub(crate) fn start_agent(
     shell: crate::agent_start::ShellStart,
     shell_wait: Duration,
     name: &str,
-    kind: &str,
+    agent: &crate::launch::Request,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
-) -> Result<String, String> {
+) -> Result<Started, String> {
     start_agent_checked(
         engine,
         node,
@@ -567,7 +567,7 @@ pub(crate) fn start_agent(
         shell,
         shell_wait,
         name,
-        kind,
+        agent,
         args,
         codex_daemon,
         program,
@@ -591,6 +591,14 @@ pub(crate) fn start_agent(
 /// A spawn's start that engine refused as busy for its whole wait.
 pub(crate) const PANE_BUSY_REFUSAL: &str = "pane_busy";
 
+/// A start the engine took: its pane, and the profile the agent runs with,
+/// which the agent's record keeps (`None` for the built-in default).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Started {
+    pub(crate) pane_id: String,
+    pub(crate) profile: Option<crate::launch::LaunchProfile>,
+}
+
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
 pub(crate) fn start_agent_checked(
     engine: &dyn Engine,
@@ -600,17 +608,19 @@ pub(crate) fn start_agent_checked(
     shell: crate::agent_start::ShellStart,
     shell_wait: Duration,
     name: &str,
-    kind: &str,
+    agent: &crate::launch::Request,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
     check: &dyn Fn() -> Result<(), String>,
-) -> Result<String, crate::agent_start::StartError> {
+) -> Result<Started, crate::agent_start::StartError> {
+    let launch = crate::launch::resolve(node, agent)?;
+    let profile = launch.record();
     let start = engine
         .prepare_start(crate::engine::AgentLaunch {
             pane_id: pane_id.to_owned(),
             name: name.to_owned(),
-            kind: kind.to_owned(),
+            launch,
             args,
             codex_daemon,
             wakes: false,
@@ -630,7 +640,10 @@ pub(crate) fn start_agent_checked(
         shell_wait,
         check,
     ) {
-        Ok(started) => Ok(started.pane_id),
+        Ok(started) => Ok(Started {
+            pane_id: started.pane_id,
+            profile,
+        }),
         Err(crate::agent_start::StartError::Engine(EngineError::Answer(detail))) => {
             Err(crate::agent_start::StartError::NotStarted {
                 reason: "agent_start.unconfirmed".into(),
