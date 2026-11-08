@@ -514,6 +514,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
 
+  /**
+   * What a mission's detail opens in the 보기 slot (a node's plan, a worker's
+   * or checker's record) is drawn by the Workspace in front, not on the
+   * mission screen, so the screen gives way to it first (PRD mission-screen
+   * D-09); with no Workspace in front the screen stays.
+   */
+  const leaveMissionsForSlot = () => {
+    if (ui().screen?.kind === "missions" && frontCheckout(rest()) && workspaceViewOf(rest())) ui().setScreen({ kind: "workspace" });
+  };
+
   /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
   const closeLane = () => setWorkspaceView({ open: false });
 
@@ -3172,6 +3182,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
     /** A session's plan, large in the lane's 보기 slot (PRD hide-plan B11); the keyboard stays in the terminal. */
     openPlan(session: import("./snapshot").WorkSession) {
+      leaveMissionsForSlot();
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session } } });
     },
     /**
@@ -3187,8 +3198,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (ui().planPane === paneId) return ui().setPlanPane(null);
       if (planOfPane(state.rest, paneId) || missionOfPane(state.rest, allPaneAgents(state.agents, state.rest?.status?.remote), paneId)) ui().setPlanPane(paneId);
     },
-    /** A child's record from the one shown (B16): it takes the slot, and ← comes back to the parent. */
+    /**
+     * A child's record from the one shown (B16): it takes the slot, and ←
+     * comes back to the parent. From a mission's detail it opens as any record
+     * does, in the Workspace in front or at Home in the Overview's panel.
+     */
     openChildRecord(session: import("./snapshot").WorkSession) {
+      if (ui().screen?.kind === "missions") {
+        leaveMissionsForSlot();
+        return this.openSessionRecord(session);
+      }
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
     /**

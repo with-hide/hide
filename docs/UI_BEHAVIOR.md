@@ -997,6 +997,7 @@ Before the core's missions first arrive the table draws quiet skeleton rows and 
 On a device that does not answer the head marks it `연결 안 됨`, the rows keep their last values dimmed and count no time, and `이어받기` is disabled until it answers (B9).
 
 Opening a mission narrows the table to a list on the left, in the same groups and order with that mission drawn selected, and its detail fills the rest: the kind mark with its `?`, the title and project, ⚙ (the defaults, Settings › Mission) and `✕`, then the map as a mission's map draws it (B10; [A mission's map](#tasks-the-보기-slot-and-the-pr-list)).
+A node's `크게 ›`, a worker's or checker's record and a pull request's card, pressed in the detail, leave the screen for the Workspace in front, whose 보기 slot shows them, or for the Overview's panel at Home for a record (D-09).
 ↑ and ↓ in the list show the previous or next mission's detail; `✕` returns to the table with the same scroll and project chip (B11).
 A mission removed or no longer held while its detail shows returns the screen to its table with no message (B22).
 The page tells the core which mission the detail shows, or none, with one event (`mission_shown`), which the core holds unsaved and uses to send that one mission's event record (`mission_events`); leaving the screen says none (D-16).

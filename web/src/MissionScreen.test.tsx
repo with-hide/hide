@@ -176,6 +176,23 @@ describe("the head's way back (B14)", () => {
   });
 });
 
+describe("what the detail opens in the 보기 slot (D-09)", () => {
+  it("leaves the screen for the Workspace in front, where the slot draws a node's plan or a worker's record", async () => {
+    const { actions, events } = await mount({ place: { selected: "mission-1" } });
+    act(() => useShellStore.setState((state) => ({
+      rest: { ...state.rest!, workspace_view: {}, navigator: { ...state.rest!.navigator!, focused_checkout_id: "c1", workspaces: [{ id: "w", label: "herdr-ide", device_id: "mac", checkouts: [{ id: "c1", path: "/repo" }] }] } } as unknown as SnapshotRest,
+    })));
+    const session = { pane_id: "w1:p4", device_id: "mac" } as never;
+    act(() => actions.openPlan(session));
+    expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+    expect(events.filter((event) => event.kind === "detail_open").map((event) => (event.payload as { item: { kind: string } }).item.kind)).toEqual(["plan"]);
+    act(() => useUiStore.setState({ screen: { kind: "missions" } }));
+    act(() => actions.openChildRecord(session));
+    expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+    expect(events.filter((event) => event.kind === "detail_open").map((event) => (event.payload as { item: { kind: string } }).item.kind)).toEqual(["plan", "record"]);
+  });
+});
+
 describe("opening a mission from anywhere (B2, B12, B13, D-04)", () => {
   it("opens the screen on the mission, brings another device forward first, and keeps the pane a chip opened it from", async () => {
     const { actions, events } = await mount();
