@@ -1505,6 +1505,14 @@ pub struct Hello {
     /// The home directory of the account the helper runs as, the boundary
     /// the device's own registration listing applies (PRD S5.5 B24).
     pub home: Option<String>,
+    /// The same folder as the node's filesystem names it (every link
+    /// resolved, on-disk case), so a registered folder, which a node
+    /// answers resolved the same way, is the home folder when the two
+    /// are equal; the core measures no size for it (PRD home-folder-project
+    /// D-06). Absent from a node older than protocol 85, or when the home
+    /// cannot be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_real: Option<String>,
     /// Read once when this connection starts; a failure leaves lineage
     /// unresolved without making the file helper unavailable.
     pub machine_identity: MachineIdentity,

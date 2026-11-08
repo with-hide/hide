@@ -1300,6 +1300,13 @@ pub struct Runtime {
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
     device_facts: HashMap<String, crate::device_catalog::DeviceFacts>,
+    /// The home folder each connected device's helper reported at its Hello
+    /// as its filesystem names it (`Hello::home_real`), the one project whose
+    /// size is never measured (PRD home-folder-project D-06). This machine's
+    /// is `home_real`.
+    device_homes: HashMap<String, String>,
+    /// This machine's home as its filesystem names it, read once at launch.
+    home_real: Option<PathBuf>,
     /// Each device checkout's last tab the device's engine had in focus, by
     /// device then checkout id: what opening the row brings forward (PRD
     /// checkout-workspace-binding B5, D-13), as `visible_tab_ids` is here.
@@ -2363,6 +2370,10 @@ impl Runtime {
             unresolved_machine_lineage: HashSet::new(),
             file_roots: None,
             state_path,
+            home_real: environment
+                .home_path
+                .as_deref()
+                .and_then(|home| std::fs::canonicalize(home).ok()),
             home_path: environment.home_path,
             codex_home: environment.codex_home,
             remote_connections: HashMap::new(),
@@ -2380,6 +2391,7 @@ impl Runtime {
             fetch: fetch::State::default(),
             device_raw_sessions: HashMap::new(),
             device_facts: HashMap::new(),
+            device_homes: HashMap::new(),
             device_recent_tabs: HashMap::new(),
             device_worktrees: HashMap::new(),
             device_ports: HashMap::new(),

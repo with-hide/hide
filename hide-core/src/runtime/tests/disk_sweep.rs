@@ -189,3 +189,14 @@ fn a_measurement_no_watch_shows_stops_and_starts_again_when_shown() {
         "the fresh one is not measured again"
     );
 }
+
+#[test]
+fn the_home_folder_is_never_queued_requested_or_marked_measuring() {
+    let mut runtime = folders();
+    runtime.home_real = Some("/a".into());
+    watch(&mut runtime, &["a", "b"]);
+    assert_eq!(measuring(&runtime), ["/b"]);
+    assert!(disk(&runtime, "b").measuring);
+    let home = disk(&runtime, "a");
+    assert!(!home.measuring && !home.queued);
+}

@@ -1145,6 +1145,10 @@ impl Runtime {
                         }
                     }
                 }
+                match node.hello.home_real.clone() {
+                    Some(home) => self.device_homes.insert(device_id.to_owned(), home),
+                    None => self.device_homes.remove(device_id),
+                };
                 self.set_host_phase(
                     device_id,
                     HostPhase::Ready {

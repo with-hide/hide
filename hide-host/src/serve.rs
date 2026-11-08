@@ -1014,6 +1014,12 @@ pub fn handle_with_progress(
             // On the wire, so a core on another system joins the engine's
             // worktree folders under it by names (`hide_kit::layout`).
             home: env.home.as_deref().map(crate::root::wire),
+            home_real: env
+                .home
+                .as_deref()
+                .and_then(|home| std::fs::canonicalize(home).ok())
+                .as_deref()
+                .map(crate::root::wire),
             machine_identity: match hide_platform::host::machine_id() {
                 Ok(id) => MachineIdentity::Available { id },
                 Err(error) => MachineIdentity::Unavailable {
