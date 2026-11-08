@@ -74,3 +74,21 @@ it("says the kind and place as plain text with the device's chip, never a link",
     await unmount();
   }
 });
+
+it("copies the whole place as the agent wrote it, query included, and shows it took", async () => {
+  const written: string[] = [];
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: async (text: string) => void written.push(text) } });
+  const actions = createActions(() => {});
+  const url = { ...turn, place: "https://github.com/login/device?user_code=TEST-1234" };
+  const { container, unmount } = await render("connected", <HumanTurnLine turn={url} copy={actions.copyText} />);
+  try {
+    const copy = container.querySelector<HTMLButtonElement>(`[data-human-turn-copy="${turn.id}"]`)!;
+    expect(copy.getAttribute("aria-label")).toBe("장소 복사");
+    await act(async () => copy.click());
+    expect(written).toEqual(["https://github.com/login/device?user_code=TEST-1234"]);
+    expect(copy.getAttribute("aria-label")).toBe("복사됨");
+    expect(container.querySelector("a")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});

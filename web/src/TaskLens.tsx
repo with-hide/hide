@@ -672,7 +672,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
     <>
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-        {human && ask ? <AskLine ask={ask} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
     </>
@@ -749,7 +749,7 @@ function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
   if (child.human_turn) {
     return <>
-      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} className="min-w-0 flex-1 text-micro" /></div>
+      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /></div>
       <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
     </>;
   }

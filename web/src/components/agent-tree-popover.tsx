@@ -80,7 +80,7 @@ export function AgentTreePopover({
   trigger: ReactNode;
   triggerLabel: string;
   /** Done on a descendant's person's turn (PRD ask-human B14); without it the tree draws none. */
-  actions?: Pick<Actions, "finishHumanTurn"> | null;
+  actions?: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -303,7 +303,7 @@ function TreeItem({
   place: ReturnType<typeof treePlaces>[number];
   ask: RaisedAsk | null;
   pending: boolean;
-  actions: Pick<Actions, "finishHumanTurn"> | null;
+  actions: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
   onToggle: () => void;
   onOpen: () => void;
   onOpenAsk: (ask: RaisedAsk) => void;
@@ -355,7 +355,7 @@ function TreeItem({
         </span>
         {ask && !unavailable ? (
           <span className="flex min-w-0 items-center gap-xs">
-            <AskLine ask={{ verb: ask.verb, what: ask.what, more: 0, subject: ask.subject }} className="flex-1" />
+            <AskLine ask={{ verb: ask.verb, what: ask.what, more: 0, subject: ask.subject }} copy={actions?.copyText} className="flex-1" />
             <button
               type="button"
               disabled={pending || askUnavailable}
@@ -370,7 +370,7 @@ function TreeItem({
             </button>
           </span>
         ) : null}
-        {human && !ask ? <HumanTurnLine turn={human} /> : null}
+        {human && !ask ? <HumanTurnLine turn={human} copy={actions?.copyText} /> : null}
         {human && actions ? <HumanTurnDone turn={human} actions={actions} /> : null}
         {childLine ? <RowLineText data-tree-line={childLine.mode} parts={lineParts(t, child, childLine)} className={cn("text-caption", lineTone(childLine, child))} /> : null}
         {ask?.unreceived_by && minutes !== null && !unavailable ? (
