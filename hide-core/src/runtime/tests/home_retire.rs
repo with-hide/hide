@@ -27,9 +27,9 @@ impl NodeLink for HomeHost {
         use std::sync::atomic::Ordering;
         self.writing.fetch_add(1, Ordering::SeqCst);
         let answer = match call {
-            Call::HomeRetire { keep_empty } => {
+            Call::HomeRetire { keep_empty, settle } => {
                 self.asked.fetch_add(1, Ordering::SeqCst);
-                hide_host::home::retire(&self.user_home, keep_empty)
+                hide_host::home::retire(&self.user_home, keep_empty, settle)
                     .map(|retired| LinkAnswer::Parsed(serde_json::to_value(retired).unwrap()))
                     .map_err(LinkError::Refused)
             }
@@ -382,9 +382,18 @@ fn old_home(machine: &Machine) -> String {
     let mut guide = String::from(
         "# Hide Home\n\nThis folder is Hide's Home on this device.\nEach entry is a link to a project registered in Hide.\n\n",
     );
-    for project in &machine.projects {
-        let name = Path::new(project).parent().unwrap().file_name().unwrap();
-        guide.push_str(&format!("- {} -> {project}\n", name.to_string_lossy()));
+    // One bullet per project, in the order of the names, as the generator wrote.
+    let mut bullets: Vec<(String, &String)> = machine
+        .projects
+        .iter()
+        .map(|project| {
+            let name = Path::new(project).parent().unwrap().file_name().unwrap();
+            (name.to_string_lossy().into_owned(), project)
+        })
+        .collect();
+    bullets.sort();
+    for (name, project) in bullets {
+        guide.push_str(&format!("- {name} -> {project}\n"));
     }
     guide.push_str("\nWork inside a project follows that project's own AGENTS.md or CLAUDE.md.\nWork that belongs to no project can live here.\nHide rewrites this file when projects change, so edits here are not kept.\n");
     std::fs::write(home.join("AGENTS.md"), guide).unwrap();
@@ -496,6 +505,9 @@ fn an_old_home_with_the_operators_files_stays_as_the_hide_project() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(names, ["notes.md"]);
+    // The first call kept the marker until the project was saved as `hide`;
+    // the second removed it.
+    assert_eq!(machine.asked.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 /// B7: a pane open in the old Home keeps its folder and project, however
@@ -559,6 +571,18 @@ fn an_unreadable_marker_keeps_the_project_and_asks_only_once() {
     assert_eq!(machine.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(pending(&shared), 1);
     assert!(registered(&shared, &id));
+    // The helper tried and could not finish: the project is the ordinary
+    // `hide` project, and the next launch asks again.
+    let label = shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .iter()
+        .find(|registration| registration.id == id)
+        .map(|registration| registration.label.clone());
+    assert_eq!(label.as_deref(), Some("hide"));
     assert!(shared.lock().unwrap().snapshot.status.last_error.is_none());
     assert!(Path::new(&home).join("AGENTS.md").exists());
 }

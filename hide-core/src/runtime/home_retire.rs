@@ -34,13 +34,6 @@ impl Runtime {
         if self.snapshot.ui_state.home_retire.is_empty() {
             return;
         }
-        let Some((runtime, notifier)) = self
-            .worker_context
-            .as_ref()
-            .map(|context| (context.runtime.clone(), context.notifier.clone()))
-        else {
-            return;
-        };
         let mut devices: Vec<String> = self
             .snapshot
             .ui_state
@@ -65,15 +58,38 @@ impl Runtime {
                 continue;
             }
             self.home_retiring.insert(device.clone());
-            if let Err(message) = crate::worktree_control::spawn_home_retire(
-                runtime.clone(),
-                notifier.clone(),
-                device.clone(),
-                keep_empty,
-                host,
-            ) {
+            if !self.ask_home_retire(&device, keep_empty, false) {
                 self.home_retiring.remove(&device);
-                self.log_home_retire_failure(&device, "home.retire_failed", &message);
+            }
+        }
+    }
+
+    /// Starts one call to `device`'s helper, which answers to
+    /// `ingest_home_retired`; false when the worker could not be started
+    /// (logged). `settle` is the second call of a folder that stays.
+    fn ask_home_retire(&mut self, device: &str, keep_empty: bool, settle: bool) -> bool {
+        let Some((runtime, notifier)) = self
+            .worker_context
+            .as_ref()
+            .map(|context| (context.runtime.clone(), context.notifier.clone()))
+        else {
+            return false;
+        };
+        let Ok((_, host)) = self.linked_node(device) else {
+            return false;
+        };
+        match crate::worktree_control::spawn_home_retire(
+            runtime,
+            notifier,
+            device.to_owned(),
+            keep_empty,
+            settle,
+            host,
+        ) {
+            Ok(()) => true,
+            Err(message) => {
+                self.log_home_retire_failure(device, "home.retire_failed", &message);
+                false
             }
         }
     }
@@ -136,21 +152,30 @@ impl Runtime {
         }
     }
 
-    /// The helper's answer. A kept folder leaves the registration as the
-    /// ordinary `hide` project it already is; a folder that is gone takes the
-    /// registration with it. A failure keeps the project and only the log
-    /// hears of it (B11).
+    /// The helper's answer. A folder Hide made that stays becomes the
+    /// ordinary project `hide`, saved before the helper is asked to remove its
+    /// marker (`settle`), so a stop in between is asked again with the same
+    /// answer; a folder that is gone takes the registration with it; a folder
+    /// with no marker changes nothing (B8). A failure of a helper that tried
+    /// leaves the project as the ordinary `hide` project and only the log
+    /// hears of it, and the next launch asks again (B11).
     pub(crate) fn ingest_home_retired(
         &mut self,
         device: &str,
+        settle: bool,
         retired: Result<HomeRetired, LinkError>,
     ) {
         let retired = match retired {
             Ok(retired) => retired,
             Err(error) => {
-                // A link that dropped is asked again when it is back; a
-                // helper that refused is not asked again this launch.
-                if !matches!(error, LinkError::Refused(_)) {
+                if matches!(error, LinkError::Refused(_)) {
+                    // The helper tried and could not finish: not asked again
+                    // this launch, and the project is the one the operator
+                    // keeps working in.
+                    self.rename_old_homes(device);
+                    self.persist_ui_state();
+                } else {
+                    // A link that dropped is asked again when it is back.
                     self.home_retiring.remove(device);
                 }
                 self.log_home_retire_failure(device, "home.retire_failed", &error.to_string());
@@ -159,7 +184,7 @@ impl Runtime {
         };
         crate::diagnostic!(serde_json::json!({
             "component": "home", "kind": "home.retired", "target": device,
-            "marked": retired.marked, "kept": retired.kept,
+            "marked": retired.marked, "kept": retired.kept, "settle": settle,
             "removed": retired.removed.len(), "changed": retired.changed.len(),
         }));
         for name in &retired.changed {
@@ -167,6 +192,16 @@ impl Runtime {
                 "component": "home", "kind": "home.entry_left", "target": device,
                 "name": name,
             }));
+        }
+        if retired.kept && retired.marked && !settle {
+            self.rename_old_homes(device);
+            // Saved before the marker goes: the answer is not lost to a stop.
+            self.persist_ui_state();
+            let keep_empty = self.home_kept_open(device).unwrap_or(true);
+            if !self.ask_home_retire(device, keep_empty, true) {
+                self.home_retiring.remove(device);
+            }
+            return;
         }
         let settled: Vec<String> = self
             .snapshot
@@ -180,10 +215,8 @@ impl Runtime {
             .ui_state
             .home_retire
             .retain(|retirement| retirement.device_id != device);
+        self.home_retiring.remove(device);
         if retired.kept {
-            // A folder Hide made that holds more than its own entries stays as
-            // the ordinary project it already is, named for its folder; one
-            // Hide did not make (no marker) is left exactly as it was (B8).
             if retired.marked {
                 for registration_id in &settled {
                     self.rename_old_home(registration_id);
@@ -198,6 +231,20 @@ impl Runtime {
         }
         if !removed {
             self.persist_ui_state();
+        }
+    }
+
+    fn rename_old_homes(&mut self, device: &str) {
+        let pending: Vec<String> = self
+            .snapshot
+            .ui_state
+            .home_retire
+            .iter()
+            .filter(|retirement| retirement.device_id == device)
+            .map(|retirement| retirement.registration_id.clone())
+            .collect();
+        for registration_id in pending {
+            self.rename_old_home(&registration_id);
         }
     }
 

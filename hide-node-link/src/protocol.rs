@@ -681,6 +681,10 @@ pub enum Call {
     /// Repeating it changes nothing more.
     HomeRetire {
         keep_empty: bool,
+        /// The second call for a folder that stays: the first leaves the
+        /// marker until the caller has saved the answer, this one removes it.
+        #[serde(default)]
+        settle: bool,
     },
     /// A branch measured against `base` in the repository at `root`
     /// (`hide_host::branch_merge::facts`): how far ahead, whether it is in

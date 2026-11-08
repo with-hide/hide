@@ -2092,6 +2092,7 @@ pub fn spawn_home_retire(
     notifier: crate::handle::ChangeNotifier,
     device_id: String,
     keep_empty: bool,
+    settle: bool,
     host: Arc<dyn crate::node_access::NodeLink>,
 ) -> Result<(), String> {
     thread::Builder::new()
@@ -2099,13 +2100,13 @@ pub fn spawn_home_retire(
         .spawn(move || {
             let retired: Result<hide_node_link::home::HomeRetired, _> = crate::node_access::call_as(
                 host.as_ref(),
-                hide_node_link::protocol::Call::HomeRetire { keep_empty },
+                hide_node_link::protocol::Call::HomeRetire { keep_empty, settle },
                 HOME_RETIRE_TIMEOUT,
             );
             if let Some(runtime) = runtime.upgrade()
                 && let Ok(mut guard) = runtime.lock()
             {
-                guard.ingest_home_retired(&device_id, retired);
+                guard.ingest_home_retired(&device_id, settle, retired);
                 drop(guard);
                 notifier.notify();
             }

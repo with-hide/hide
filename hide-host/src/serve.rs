@@ -1141,7 +1141,7 @@ pub fn handle_with_progress(
                 Path::new(&home),
             )?)
         }
-        Call::HomeRetire { keep_empty } => {
+        Call::HomeRetire { keep_empty, settle } => {
             let home =
                 env.home("HOME is not set, so the old Home folder has no place to be found")?;
             if !Path::new(&home).is_absolute() {
@@ -1150,7 +1150,7 @@ pub fn handle_with_progress(
                     "HOME is not an absolute path, so the old Home folder has no place to be found",
                 ));
             }
-            to_value(crate::home::retire(Path::new(&home), keep_empty)?)
+            to_value(crate::home::retire(Path::new(&home), keep_empty, settle)?)
         }
         Call::Kit {
             action,

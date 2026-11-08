@@ -425,6 +425,28 @@ class Scenario:
         self.agents[name] = {"pane": row["pane_id"], "session": row["session_id"], "device": device, "seen": 0}
         return row["pane_id"]
 
+    def old_home(self):
+        """A Home started on the core and on the device, as the releases that
+        kept one did: its registration (flagged `home`) is stored with each
+        machine's id, which a later build reads once as a pending retirement
+        and moves with the device. A release without a Home refuses the start."""
+        for device in (False, True):
+            self.send("agent_start_in_checkout", {"home": True, "provider": "claude", "request_id": self.rid("home"),
+                                                  **({"device_id": self.device} if device else {})})
+
+        def registered(rest):
+            rows = [row for row in (rest.get("ui_state") or {}).get("workspace_registrations") or [] if row.get("home")]
+            error = (rest.get("status") or {}).get("last_error") or {}
+            if len(rows) >= 2:
+                return rows
+            if "home" in str(error.get("kind")) or "invalid" in str(error.get("kind")):
+                return error
+            return None
+        rows = self.wait(registered, "the Home registrations", 120)
+        if isinstance(rows, dict):
+            raise NotInRelease(rows)
+        return [row.get("id") for row in rows]
+
     def start_panel(self):
         """Agents started from the start panel on the core and the device,
         left running: the launch record a later build adds the profile to."""
@@ -475,6 +497,7 @@ class Scenario:
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)
+            self.step("a Home started on the core and the device", self.old_home)
             self.step("agent started from the start panel", self.start_panel)
             self.step("archived session", self.archive)
             # Let the core write what it holds in memory before it stops.

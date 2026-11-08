@@ -44,7 +44,12 @@ impl Account {
             serde_json::json!({"version": 1, "links": {name: project}}).to_string(),
         )
         .unwrap();
-        std::fs::write(self.hide().join("AGENTS.md"), "# Hide Home\n\n- a -> /a\n").unwrap();
+        // The guide as the earlier build's generator wrote it for this link.
+        let guide = format!(
+            "# Hide Home\n\nThis folder is Hide's Home on this device.\nEach entry is a link to a project registered in Hide.\n\n- {name} -> {}\n\nWork inside a project follows that project's own AGENTS.md or CLAUDE.md.\nWork that belongs to no project can live here.\nHide rewrites this file when projects change, so edits here are not kept.\n",
+            project.display()
+        );
+        std::fs::write(self.hide().join("AGENTS.md"), guide).unwrap();
         std::os::unix::fs::symlink("AGENTS.md", self.hide().join("CLAUDE.md")).unwrap();
         project
     }
@@ -54,10 +59,16 @@ impl Account {
 fn home_retire_round_trips_and_removes_only_what_hide_made() {
     let request = Request {
         id: 7,
-        call: Call::HomeRetire { keep_empty: false },
+        call: Call::HomeRetire {
+            keep_empty: false,
+            settle: true,
+        },
     };
     let line = serde_json::to_string(&request).unwrap();
-    assert_eq!(line, r#"{"id":7,"op":"home_retire","keep_empty":false}"#);
+    assert_eq!(
+        line,
+        r#"{"id":7,"op":"home_retire","keep_empty":false,"settle":true}"#
+    );
     assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), request);
 
     // The helper reads HOME itself; run it as a process so the test never
@@ -130,7 +141,8 @@ fn ask_helper(home: Option<&Path>, keep_empty: bool) -> serde_json::Value {
         command.env("HOME", home);
     }
     let mut child = command.spawn().unwrap();
-    let request = serde_json::json!({"id": 1, "op": "home_retire", "keep_empty": keep_empty});
+    let request =
+        serde_json::json!({"id": 1, "op": "home_retire", "keep_empty": keep_empty, "settle": true});
     let mut stdin = child.stdin.take().unwrap();
     writeln!(stdin, "{request}").unwrap();
     let mut line = String::new();
