@@ -1,4 +1,4 @@
-// The mission flow (flow 4), where the first run and the sidebar's invitation land: one job
+// The mission flow (flow 3), where the first run and the sidebar's invitation land: one job
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
@@ -20,9 +20,9 @@ const SCREEN = "ui";
 
 export default chapter<MissionModel>({
   id: "mission",
-  number: 4,
+  number: 3,
   next: "overview",
-  version: 14,
+  version: 15,
   world: MISSION_WORLD,
   quest: true,
   preview: "mission",
@@ -46,6 +46,8 @@ export default chapter<MissionModel>({
     { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
     // What the answer changed runs to the end by itself: the workers finish and the Conductor reports.
     { id: "finishing", target: "[data-mission]", side: "left", wait: true, done: (model) => model.stage >= 9 },
+    // What Settings › Mission lets the operator set ahead: how far a mission goes, and which agents it may use.
+    { id: "settings", target: PANE, side: "center" },
     // ⇧⌘L opens Hide AI on its Memory tab; the rail icon would open it on 제안.
     { id: "memory", quest: true, target: '[data-lane-tool="memory"]', side: "left", command: "open_project_memory", done: showsMemory },
     // What Memory is, on the card the decision became; the last bubble says what to do next.

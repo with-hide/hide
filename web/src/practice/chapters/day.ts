@@ -1,4 +1,4 @@
-// Flow 6: starting the day from the Overview. What is going on (Work), what
+// Flow 5: starting the day from the Overview. What is going on (Work), what
 // to take up next (Backlog; Hide AI's 제안 in the lane suggests the same
 // kind of work), and finding what you did before (History, or ⌘K) and
 // bringing it back with Restore session.
@@ -10,7 +10,7 @@ const QUERY = { type: { input: "[data-history-query]", text: "login" } };
 
 export default chapter<DayModel>({
   id: "day",
-  number: 6,
+  number: 5,
   version: 1,
   world: DAY_WORLD,
   quest: true,

@@ -146,6 +146,8 @@ fn a_practice_chapter_counts_its_start_and_end_once() {
     assert!(practice_event(&mut runtime, "screen", 9, true));
     assert!(practice_event(&mut runtime, "find", 9, true));
     assert!(practice_event(&mut runtime, "project", 9, true));
+    // The step-by-step flow was removed, so its id sends nothing either.
+    assert!(practice_event(&mut runtime, "plan", 9, true));
     assert_eq!(statistics.take(), []);
     assert!(practice_event(&mut runtime, "agents", 0, false));
     assert_eq!(

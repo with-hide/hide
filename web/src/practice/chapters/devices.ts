@@ -1,4 +1,4 @@
-// Flow 5: running work on more than one computer. The device rail's tiles, the
+// Flow 4: running work on more than one computer. The device rail's tiles, the
 // mark that says a computer needs you, bringing the Mac mini forward, what
 // its screen shows, opening a tab on it, and going back to this Mac.
 
@@ -9,7 +9,7 @@ const TILE = `[data-rail-tile="${MINI}"]`;
 
 export default chapter<DevicesModel>({
   id: "devices",
-  number: 5,
+  number: 4,
   version: 1,
   world: DEVICES_WORLD,
   quest: true,

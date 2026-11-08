@@ -23,12 +23,12 @@ export function practiceSceneParams(params: URLSearchParams): PracticeSceneParam
 const NO_CHOICES = {};
 const ignore = () => {};
 
-/** The list as a learner partway through sees it: the mission seen, the step-by-step flow stopped partway, the overview seen on older steps. */
+/** The list as a learner partway through sees it: the mission seen, the several-agents flow stopped partway, the overview seen on older steps. */
 function sampleProgress(): PracticeProgress {
   const at = (id: string) => CHAPTERS.find((row) => row.id === id)!;
   return {
     [at("mission").id]: { version: at("mission").version, step: at("mission").steps.length - 1, finished: true },
-    [at("plan").id]: { version: at("plan").version, step: 4, finished: false },
+    [at("agents").id]: { version: at("agents").version, step: 4, finished: false },
     [at("overview").id]: { version: at("overview").version - 1, step: 3, finished: true },
   };
 }
