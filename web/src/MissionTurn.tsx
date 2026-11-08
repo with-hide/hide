@@ -67,7 +67,7 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
         </Row>
       );
     case "attention": {
-      const why = attentionReasonText(item.attention.reason, item.attention.pr, t);
+      const why = attentionReasonText(item.attention.reason, item.attention.pr, t, item.attention.unmet_nodes);
       return (
         // The choices wrap under the line in a narrow slot rather than overflow it (B30).
         <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>

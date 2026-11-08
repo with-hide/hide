@@ -136,6 +136,25 @@ it("lists missions in the desktop's four groups, badges the tab with the mission
   }
 });
 
+it("words each turn as the operator's action with no `!`, draws 지휘 다시 열기 as the pill of a mission no Conductor holds, and still opens a row on a press", async () => {
+  const items = [
+    deciding(),
+    mission("m-gone", { conductor: { present: false, takes_answers: false, name: "Conductor", agent_kind: "claude", agent: null }, nodes: [node("a", "done"), node("b", "planned")] }),
+  ];
+  const { container, click, unmount } = await connect(items);
+  try {
+    await click('[data-phone-tab="missions"]');
+    const pill = (id: string) => container.querySelector(`[data-phone-mission="${id}"] [data-phone-mission-pill]`)!;
+    expect([pill("m-turn").getAttribute("data-phone-mission-pill"), pill("m-turn").textContent]).toEqual(["decision", "Answer"]);
+    expect([pill("m-gone").getAttribute("data-phone-mission-pill"), pill("m-gone").textContent]).toEqual(["takeover", "Resume command"]);
+    for (const id of ["m-turn", "m-gone"]) expect(container.querySelector(`[data-phone-mission="${id}"]`)!.textContent).not.toContain("!");
+    await click('[data-phone-mission="m-gone"]');
+    expect(container.querySelector('[data-phone-mission-page="m-gone"]')).not.toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
 it("says there are no missions when the record is empty, and draws nothing for a record the core could not read but the unreadable line", async () => {
   const { container, click, serve, unmount } = await connect([]);
   try {

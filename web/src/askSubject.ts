@@ -18,7 +18,7 @@ export function askSubjectText(t: TFunction<"translation">, subject: AskSubject)
     case "mission_decision":
       return subject.line;
     case "mission_attention":
-      return `${subject.node} · ${attentionReasonText(subject.reason, null, t)}`;
+      return `${subject.node} · ${attentionReasonText(subject.reason, null, t, subject.unmet)}`;
     case "input_unconfirmed": {
       // Not received only when the composer was read still holding it; else not confirmed.
       const what = t(`agents.input.${subject.input}${subject.held ? "Held" : ""}`);

@@ -1,10 +1,12 @@
 /*
- * `claude` in a release-state container: runs the stand-in agent
- * (`/opt/agent.py`) as its child, so the pane's foreground program is named
- * `claude` the way the released engine detects Claude Code, while the agent
- * itself is a short Python program. Signals that end a pane's program reach
- * the child too.
+ * `claude` and `pi` in a release-state container: one program installed
+ * under both names, which runs the stand-in agent (`/opt/agent.py`) as its
+ * child with the name it was started as, so the pane's foreground program is
+ * named the way the released engine detects Claude Code or Pi, while the
+ * agent itself is a short Python program. Signals that end a pane's program
+ * reach the child too.
  */
+#include <libgen.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -18,11 +20,12 @@ static void forward(int signal_number) {
 }
 
 int main(int argc, char **argv) {
-  char **args = calloc((size_t)argc + 3, sizeof *args);
+  char **args = calloc((size_t)argc + 4, sizeof *args);
   if (!args) return 1;
   args[0] = "python3";
   args[1] = "/opt/agent.py";
-  for (int index = 1; index < argc; index++) args[index + 1] = argv[index];
+  args[2] = basename(argv[0]);
+  for (int index = 1; index < argc; index++) args[index + 2] = argv[index];
   child = fork();
   if (child < 0) return 1;
   if (child == 0) {

@@ -83,17 +83,20 @@ export function turnCount(entries: readonly Pick<MissionEntry<MissionBrief>, "gr
   return entries.filter((entry) => entry.group === "turn").length;
 }
 
-/** The state pill's word (B6): what waits on the operator, `!` in the decision colour, else the mission's own state. */
+/**
+ * The state pill's word (B6): what the operator does on a turn (`답하기`, `머지하기`), else the mission's own state.
+ * A takeover turn says `이어받기`; the table's row draws that as a button beside its line and leaves the pill out, the phone, which has no button, draws it as the pill.
+ */
 export function missionPillKey(mission: Pick<Mission, "status">, turn: Pick<TurnItem<MissionNodeBrief>, "kind"> & { git?: boolean } | null): MessageKey {
-  if (turn) return turn.kind === "landing" && turn.git ? "missionScreen.pill.join" : TURN_PILL[turn.kind];
-  return STATE_PILL[mission.status];
+  if (!turn) return STATE_PILL[mission.status];
+  return turn.kind === "landing" && turn.git ? "missionScreen.pill.join" : TURN_PILL[turn.kind];
 }
 
 const TURN_PILL: Record<TurnItem["kind"], MessageKey> = {
-  decision: "missionScreen.pill.decision",
-  takeover: "missionScreen.pill.takeover",
+  decision: "missionScreen.pill.answer",
+  takeover: "mission.takeOver",
   letters: "missionScreen.pill.letters",
-  attention: "mission.attention",
+  attention: "missionScreen.pill.attention",
   worker_blocked: "missionScreen.pill.blocked",
   landing: "missionScreen.pill.merge",
 };
@@ -165,7 +168,7 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     case "worker_blocked":
       return `${line.node.title} · ${line.line ?? t(`mission.turn.cause.${line.cause}`)}`;
     case "attention":
-      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t)}`;
+      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes)}`;
     case "landing":
       return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => (node.pr != null ? `#${node.pr}` : node.title)).join(" → ")}`;
     case "planning":

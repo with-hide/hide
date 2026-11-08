@@ -257,7 +257,7 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
   const { container, sent } = await render(rest, agents);
   const mission = container.querySelector<HTMLElement>("[data-mission-ask]")!;
   expect(mission.getAttribute("data-mission-ask")).toBe("mission-1");
-  expect([...mission.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["이어받기", "끝으로"]);
+  expect([...mission.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["지휘 다시 열기", "끝으로"]);
   // It reads as a task row does: how long it has waited, and its project where a 상태별 row names it.
   expect(mission.querySelector("[data-mission-ask-elapsed]")).not.toBeNull();
   expect(mission.querySelector("[data-mission-ask-place]")?.textContent ?? null).toBe(view === "status" ? "herdr-ide" : null);

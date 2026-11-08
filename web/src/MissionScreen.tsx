@@ -381,11 +381,12 @@ function ClosedMark({ mission }: { mission: Mission }) {
     : <XIcon aria-label={t("mission.pill.cancelled")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
 }
 
-/** The state pill: what waits on the operator, `!` in the decision colour, else the map head's own pill. */
+/** The state pill: what the operator does on their turn, in the decision colour, else the map head's own pill; a takeover row draws none, since its 이어받기 button is the action. */
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
+  if (turn?.kind === "takeover") return null;
   if (turn) {
-    return <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}><span aria-hidden="true">!</span>{t(missionPillKey(mission, turn))}</span>;
+    return <span className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}>{t(missionPillKey(mission, turn))}</span>;
   }
   return (
     <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", STATE_PILL_TONE[mission.status])} data-mission-row-pill={mission.status}>
@@ -492,7 +493,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
       data-selected={selected ? "true" : undefined}
     >
       <span className="flex min-w-0 items-center gap-xs">
-        {group === "turn" ? <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span> : group === "closed" ? <ClosedMark mission={mission} /> : <KindIcon kind="mission" className="size-(--size-icon-sm)" />}
+        {group === "closed" ? <ClosedMark mission={mission} /> : <KindIcon kind="mission" className="size-(--size-icon-sm)" />}
         <span className={cn("min-w-0 flex-1 truncate text-body", group === "closed" ? "text-subtle-foreground" : "text-foreground")} title={mission.title}>{mission.title}</span>
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>

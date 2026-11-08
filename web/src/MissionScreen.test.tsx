@@ -215,6 +215,28 @@ describe("what the detail opens in the 보기 slot (D-09)", () => {
   });
 });
 
+describe("the turn pill (B5)", () => {
+  it("words the operator's action with no `!`, draws no pill on the row that has the 이어받기 button, and opens a row on a press", async () => {
+    const gone = mission("mission-4", { conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: false, takes_answers: true } });
+    const { q, press, actions } = await mount({ missions: { items: [mission("mission-1", { decision: "Which order?" }), gone] } });
+    const row = (id: string) => q(`[data-mission-row="${id}"]`)!;
+    expect(row("mission-4").dataset.missionRowGroup).toBe("turn");
+    expect(row("mission-4").querySelector("[data-mission-row-pill]")).toBeNull();
+    expect(row("mission-4").querySelector("[data-mission-takeover]")?.textContent).toBe("Resume command");
+    expect(row("mission-1").querySelector("[data-mission-row-pill]")?.textContent).toBe("Answer");
+    for (const id of ["mission-1", "mission-4"]) expect(row(id).textContent).not.toContain("!");
+    const open = vi.spyOn(actions, "openMission");
+    await press(row("mission-4").querySelector<HTMLElement>('[data-slot="row-overlay-button"]'));
+    expect(open).toHaveBeenCalledWith("mission-4");
+    // The narrow list beside a detail marks a turn as every other row, with the mission mark and the action under the title, and no `!`.
+    act(() => actions.openMission("mission-1"));
+    const list = q('[data-mission-list-row="mission-4"]')!;
+    expect(list.textContent).toContain("Resume command");
+    expect(list.textContent).not.toContain("!");
+    expect(q('[data-mission-list-row="mission-1"]')!.textContent).not.toContain("!");
+  });
+});
+
 describe("opening a mission from anywhere (B2, B12, B13, D-04)", () => {
   it("opens the screen on the mission, brings another device forward first, and keeps the pane a chip opened it from", async () => {
     const { actions, events } = await mount();

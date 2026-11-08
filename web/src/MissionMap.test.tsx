@@ -367,7 +367,7 @@ it("offers Take over beside 터미널로 once a raise the live Conductor was ask
   try {
     const row = late.q("[data-mission-conductor]")!;
     expect(row.dataset.missionConductor).toBe("resting");
-    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal", "Take over"]);
+    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal", "Resume command"]);
     await act(async () => row.querySelector<HTMLElement>("[data-mission-takeover]")!.click());
     const start = late.events.find((event) => event.kind === "agent_start_in_checkout");
     expect(start?.payload).not.toHaveProperty("resume_session_id");
@@ -860,14 +860,14 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(item.textContent).toContain(`PR ${"#"}1232 closed without a merge`);
     // Beside its choices the pull request it is about, with its state (mission-38 flaky-phone).
     expect(item.querySelector("[data-attention-pr]")?.getAttribute("data-attention-pr")).toBe("1232");
-    // Its choices say what they do, handing it to the Conductor first; 노드 제외 never goes on one press.
+    // Its choices say what they do, handing it to the Conductor first; 이 단계 빼기 never goes on one press.
     expect([...item.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => button.dataset.attentionChoice)).toEqual(["leave", "drop"]);
-    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Leave to Conductor");
+    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Hand to the conducting agent");
     const drop = item.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
-    expect(drop.textContent).toBe("Drop node");
+    expect(drop.textContent).toBe("Remove this step");
     await act(async () => drop.click());
     expect(map.events.filter((event) => event.kind === "mission_attention")).toEqual([]);
-    expect(drop.textContent).toBe("Confirm drop");
+    expect(drop.textContent).toBe("Confirm removal");
     expect(drop.dataset.attentionConfirm).toBe("true");
     // The second press sends it, once, as one event (B15, B16).
     await act(async () => drop.click());
@@ -916,11 +916,11 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "attention", "now", "hide", "events"]);
     expect(panel.querySelector("[data-panel-attention]")?.textContent).toBe("! Conductor · Worker ended with work left");
     expect(panel.querySelector("[data-panel-worker-life]")?.textContent).toBe("Worker ended");
-    // The operator may settle it before the Conductor does (B17); a press away from 제외 확인 puts it back.
+    // The operator may settle it before the Conductor does (B17); a press away from 빼기 확인 puts it back.
     const drop = panel.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
     await act(async () => drop.click());
     await act(async () => { drop.focus(); drop.blur(); });
-    expect(drop.textContent).toBe("Drop node");
+    expect(drop.textContent).toBe("Remove this step");
     expect(map.events.filter((event) => event.kind === "mission_attention")).toEqual([]);
     await act(async () => drop.click());
     await act(async () => drop.click());

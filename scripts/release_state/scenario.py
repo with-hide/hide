@@ -378,6 +378,56 @@ class Scenario:
             raise Stop(f"dev-b ended but is listed as {runtime}")
         return f"{pane} asleep"
 
+    def dormant(self):
+        """Pi on the core put to sleep, which closes its pane and keeps the
+        session (`agent_sleep.dormant`): the record a later build adds the
+        agent's profile to. Only the core's own machine sleeps an agent that
+        way, and only once the release's own reader has proven the session
+        from its file, which the stand-in Pi writes as Pi does (`agent.py`)."""
+        rest = self.daemon.snapshot()
+        workspace, checkout = self.checkout(rest, False, str(CORE_REPO))
+        before = {row["id"] for tab in checkout["tabs"] for row in tab["panes"]}
+        self.send("create_tab", {"workspace_id": workspace["id"], "checkout_id": checkout["id"],
+                                 "label": checkout.get("next_tab_label") or "Tab", "request_id": self.rid("tab")})
+        pane = self.wait(lambda rest: next((row["id"] for tab in self.tabs(rest, False, str(CORE_REPO))
+                                            for row in tab["panes"] if row["id"] not in before), None), "a new core pane")
+        time.sleep(2)
+        sessions = HOME / ".pi/agent/sessions" / ("--" + str(CORE_REPO).lstrip("/").replace("/", "-") + "--")
+        self.type(pane, "pi")
+        native = self.wait(lambda rest: next((path.name.split("_", 1)[1].removesuffix(".jsonl")
+                                              for path in sessions.glob("*.jsonl")), None), "Pi's session file")
+        self.agents["core-pi"] = {"pane": pane, "session": native, "device": False, "seen": 0}
+        self.type(pane, "Say hello")
+
+        def at_rest(rest):
+            row = next((row for row in self.agent_rows(rest) if row.get("pane_id") == pane), None)
+            return row if row and row.get("session_id") == native and row.get("activity") == "stopped" else None
+        row = self.wait(at_rest, "Pi proven by its session and at rest", 120)
+        if row.get("agent_kind") != "pi":
+            raise Stop(f"the pane's agent reads as {row.get('agent_kind')}")
+        state = STATE / "core-state.json"
+        last = None
+        for _ in range(6):
+            seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+            self.send("agent_sleep", {"pane_id": pane})
+
+            def answered(rest):
+                error = (rest.get("status") or {}).get("last_error") or {}
+                if error != seen and str(error.get("kind")).startswith("agent_sleep."):
+                    return error
+                stored = json.loads(state.read_text()) if state.exists() else {}
+                return next(("sleeping" for record in ((stored.get("agent_sleep") or {}).get("dormant") or {}).values()
+                             if record.get("native_session_id") == native and record.get("phase") == "sleeping"
+                             and record.get("closed")), None)
+            answer = self.wait(answered, "the dormant sleep's answer", 120)
+            if answer == "sleeping":
+                return f"{pane} closed, Pi session {native} sleeping"
+            last = answer
+            if not answer.get("retryable", True):
+                break
+            time.sleep(5)
+        raise Stop(f"the dormant sleep was refused: {last}")
+
     def remains(self):
         workspace, checkout = self.checkout(self.daemon.snapshot(), True, DEVICE_REPO)
         self.show(self.agents["dev-a"]["pane"])
@@ -475,6 +525,7 @@ class Scenario:
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)
+            self.step("Pi on the core asleep with its pane closed", self.dormant)
             self.step("agent started from the start panel", self.start_panel)
             self.step("archived session", self.archive)
             # Let the core write what it holds in memory before it stops.
