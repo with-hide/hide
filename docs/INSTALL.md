@@ -617,12 +617,14 @@ Hide AI's settings move with the core and come back with it.
 ## Update
 
 A packaged release of hide updates itself from [with-hide/hide's releases](https://github.com/with-hide/hide/releases).
-It looks shortly after it opens and every six hours after, takes the highest release whose files for this system are all uploaded, and downloads it in the background.
+It looks shortly after it opens, every six hours after, and when you come back to the app an hour or more after it last looked, takes the highest release whose files for this system are all uploaded, and downloads it in the background.
+An update already waiting is replaced by a newer release that comes out meanwhile, so the one you install is the newest.
 Nothing shows while it looks or downloads.
 When the update is ready, a dot appears on the `?` button at the bottom of the sidebar, and the last line of the Help menu reads `hide <version> ready · Restart`.
 
 - **Restart** in the Help menu, or **Restart now** in Settings > About, closes the window, installs the update and opens the new version.
 - Without that, macOS and Windows install it the next time you quit hide, and the next launch is the new version.
+  On macOS, closing hide's last window while an update is ready quits hide to install it, since a Mac app otherwise keeps running with no window.
 - Linux installs it only when you choose Restart, after the system asks for your password; cancel the prompt and the update stays ready.
 
 Settings > About shows the update row under the hide version: up to date with when it last looked and **Check now**, looking, downloading with its progress, ready with **Restart now**, or that it could not look or download with **Check again**; the reason is in the app's log.

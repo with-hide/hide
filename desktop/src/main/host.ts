@@ -589,7 +589,14 @@ export class DesktopHost {
     ipcMain.on(UPDATE_DISMISS_CHANNEL, (event: IpcMainEvent, version: unknown) => {
       if (this.fromShell(event) && typeof version === "string") updates.dismiss(version);
     });
+    // Coming back to the app looks again when the last look is an hour old.
+    app.on("browser-window-focus", () => updates.returned());
     updates.start();
+  }
+
+  /** The last window closed: true when a ready macOS update should be installed by quitting now. */
+  installOnWindowClose(): boolean {
+    return this.updates?.installOnWindowClose() ?? false;
   }
 
   /** electron-updater's updater for this system, its own log lines routed to the host log. */

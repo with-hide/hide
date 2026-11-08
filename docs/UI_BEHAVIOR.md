@@ -2604,6 +2604,8 @@ In the desktop app, an Updates row and a preview switch sit under the `hide` ver
 | Failed | `Couldn't check for updates` or `Couldn't update`, with the reason in the app's log | `Check again` |
 | Off | `Updates are off in development builds`, or on macOS `Move hide to Applications to get updates` for an app on the disk image or in a folder it cannot write | none |
 
+The updater also looks when a window of the app takes the keyboard an hour or more after its last look, so an app left open does not keep an update a later release has passed.
+On macOS, closing the last window while an update is ready quits the app, which installs it; the core and its agents keep running.
 A ready update stays ready while a later check looks; a newer release that check finds is downloaded in its place, so the row shows that download, the ↑ button, the dot and Help's update leave meanwhile, and they return with the newer version once it is ready, with its card opening once, since the updater keeps one pending update.
 `Get preview versions (rc)`, with a note that turning it off never goes back to a lower version, is off at first, kept in the desktop profile, and cannot be turned while updates are off.
 `Check for updates…` in the app menu (macOS) or the Help menu (Windows, Linux) opens About and looks at once.
