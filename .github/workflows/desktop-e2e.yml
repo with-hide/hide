@@ -91,8 +91,11 @@ jobs:
           save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}
       - name: Install zsh and the virtual display on Linux
         if: runner.os == 'Linux'
-        timeout-minutes: 5
-        run: sudo apt-get install -y --no-install-recommends zsh xvfb
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh xvfb
+          minutes: 3
       - name: Build the desktop app's daemon and kit binaries
         # hide-agent-hooks too, which the fixture's app bundle links beside
         # them: the home-layout spec stages every binary the packaged app

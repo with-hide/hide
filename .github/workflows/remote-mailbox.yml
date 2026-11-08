@@ -68,14 +68,14 @@ jobs:
       - name: Install zsh and the SSH server
         # The fixture starts every pane's shell from SHELL=/bin/zsh, which the
         # Linux image lacks, and a device's tests run against the system's
-        # sshd. The mirror can stall (web-e2e.yml), so apt retries and gives
-        # up on a silent connection. macOS has both.
+        # sshd. The mirror can stall, so the packages are cached and fetched
+        # inside one time limit (.github/actions/apt-install). macOS has both.
         if: runner.os == 'Linux'
-        timeout-minutes: 5
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          sudo apt-get install -y --no-install-recommends zsh openssh-server
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh openssh-server
+          minutes: 3
       - name: A default key and a password account for the sign-in journeys
         # hided/tests/it/system_ssh.rs signs in with a key ssh finds by itself
         # in the runner account's own ~/.ssh, and as a second account with a
