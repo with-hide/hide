@@ -37,7 +37,7 @@ export type RelationTarget =
 
 /** The checkout a pane sits in, with its project, in one device's catalog. */
 function checkoutOfPane(scope: SearchDevice, paneId: string): { workspace: Workspace; checkout: Checkout } | null {
-  for (const workspace of scope.allWorkspaces) {
+  for (const workspace of scope.workspaces) {
     for (const checkout of workspace.checkouts) {
       if (checkout.tabs.some((tab) => tab.panes.some((pane) => pane.id === paneId))) return { workspace, checkout };
     }
@@ -159,13 +159,13 @@ export function relationsOf(rest: SnapshotRest | null, target: RelationTarget, t
       if (!agent) continue;
       const placed = checkoutOfPane(scope, agent.pane_id);
       if (!placed) return null;
-      const places = checkoutPlaces(scope.allWorkspaces);
+      const places = checkoutPlaces(scope.workspaces);
       const byPane = new Map(scope.agents.map((row) => [row.pane_id, row]));
       const lineage: Lineage = { byPane, here: paneSet(placed.checkout) };
       const own = group(scope, placed.workspace, placed.checkout, front, lineageRows(scope, lineage, agent, places, front, anchor, t), t);
       const groups = [own];
       const delegated = descendantsOf(agent, byPane);
-      for (const workspace of scope.allWorkspaces) {
+      for (const workspace of scope.workspaces) {
         for (const checkout of workspace.checkouts) {
           if (checkout.id === placed.checkout.id) continue;
           const inside = paneSet(checkout);
@@ -178,7 +178,7 @@ export function relationsOf(rest: SnapshotRest | null, target: RelationTarget, t
     return null;
   }
   for (const scope of scopes) {
-    for (const workspace of scope.allWorkspaces) {
+    for (const workspace of scope.workspaces) {
       const matching = workspace.checkouts.filter((checkout) => {
         if (target.kind === "checkout") return checkout.id === target.checkoutId;
         if (target.kind === "pr") return workspace.id === target.workspaceId && checkout.pull_request?.number === target.number;

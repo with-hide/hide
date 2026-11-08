@@ -67,22 +67,6 @@ pub(crate) fn agent_arguments(
     args
 }
 
-/// Each folder a Home agent may write through its links (D-08), as extra
-/// roots, for a launch dialect that accepts them, independently of the
-/// checkout cwd.
-pub(crate) fn directory_arguments(kind: Option<&str>, dirs: &[String]) -> Vec<String> {
-    let accepts = kind
-        .and_then(hide_agent_adapter::adapter)
-        .and_then(|row| row.start)
-        .is_some_and(|dialect| dialect.accepts_extra_directories());
-    if !accepts {
-        return Vec::new();
-    }
-    dirs.iter()
-        .flat_map(|dir| ["--add-dir".to_owned(), dir.clone()])
-        .collect()
-}
-
 /// The arguments a restart of a `kind` agent adds after its resume or fork
 /// arguments: the machine's permission choice as it is now, then the model
 /// and effort it was started with (none for the CLI's defaults). A saved

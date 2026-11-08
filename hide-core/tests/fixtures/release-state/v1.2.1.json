@@ -57,11 +57,19 @@
    "why": "not in this release: Agents on another device cannot sleep"
   },
   {
+   "step": "Pi on the core asleep with its pane closed",
+   "ok": true
+  },
+  {
    "step": "agent started from the start panel",
    "ok": true
   },
   {
    "step": "archived session",
+   "ok": true
+  },
+  {
+   "step": "a Home started on the core and the device",
    "ok": true
   }
  ]

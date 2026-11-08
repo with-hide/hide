@@ -820,7 +820,6 @@ impl Runtime {
                 confirm_only: false,
                 checkout_path: Some(checkout.path.clone()),
                 device_id: machine,
-                home: false,
                 provider: payload.provider,
                 prompt,
                 model: payload.model,

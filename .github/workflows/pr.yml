@@ -496,9 +496,11 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-agent-adapter::it) & test(/^account::/)'
-      - name: Hide's Home lists its projects and holds no link
-        # Every process of an ssh session refuses a junction no administrator
-        # made, so Home holds none on Windows (hide-host/src/home.rs, LINKS).
+      - name: Retiring Hide's old Home removes only what its marker lists
+        # An old Windows Home held no link (every process of an ssh session
+        # refuses a junction no administrator made), only the guide and the
+        # import file, which the retirement removes by their content
+        # (hide-host/src/home.rs).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(/^home::tests::/)'

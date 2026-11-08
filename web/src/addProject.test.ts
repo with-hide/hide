@@ -148,8 +148,6 @@ describe("Add a project", () => {
     // A worktree folder added last does not take the default away from where the projects are.
     expect(defaultProjectParent([registration("/home/me/a"), registration("/home/me/b"), registration("/home/me/app.worktrees/c")], "local")).toBe("/home/me");
     expect(defaultProjectParent([registration("/home/me/a", "mini")], "local")).toBe("~");
-    // The device's Home is no project: a project added after it is not expected beside `~/hide`.
-    expect(defaultProjectParent([registration("/home/me/work/a"), { ...registration("/home/me/hide"), home: true }], "local")).toBe("/home/me/work");
   });
 
   it("takes one folder name, and says why another is not one", () => {

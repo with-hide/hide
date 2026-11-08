@@ -733,123 +733,6 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
 }
 
 #[test]
-fn a_first_local_home_result_waits_for_its_catalog_and_respects_a_newer_visit() {
-    for registration_state in ["unlisted", "empty", "seed-pane"] {
-        for boundary in ["catalog", "newer-visit", "reconnect"] {
-            let t = tree();
-            let home = Path::new(&t.main).parent().unwrap().join("home");
-            std::fs::create_dir(&home).unwrap();
-            let home = home.to_str().unwrap();
-            let (mut runtime, _) = live_tab_order_runtime(&t.main);
-            let old = tab_order_payload(&t.main, &["w-order:t1"], &["w-order:t1"], "w-order:t1");
-            runtime.ingest_session_with_catalog(Ok(old.clone()), None);
-            let task = runtime
-                .begin_task_operation("agent_start", None, None, None, None)
-                .unwrap();
-            // HomeSync records Home before its first session catalog arrives.
-            let mut registration = runtime.snapshot.ui_state.workspace_registrations[0].clone();
-            registration.id = "workspace:home".into();
-            registration.path = home.into();
-            registration.label = "Home".into();
-            registration.home = true;
-            runtime
-                .snapshot
-                .ui_state
-                .workspace_registrations
-                .push(registration);
-            if registration_state != "unlisted" {
-                runtime.ingest_session_with_catalog(Ok(old.clone()), None);
-            }
-            if registration_state == "seed-pane" {
-                // workspace.create's seed can be catalogued before the
-                // replacement tab and the owner's mark reach this session.
-                let mut seed = tab_order_payload(home, &["w-home:t0"], &["w-home:t0"], "w-home:t0");
-                seed.workspaces[0].workspace_id = "w-home".into();
-                seed.tabs[0].workspace_id = "w-home".into();
-                seed.layouts[0].workspace_id = "w-home".into();
-                seed.workspaces.extend(old.workspaces.clone());
-                seed.tabs.extend(old.tabs.clone());
-                seed.layouts.extend(old.layouts.clone());
-                seed.panes.extend(old.panes.clone());
-                seed.focused_workspace_id = old.focused_workspace_id.clone();
-                seed.focused_pane_id = old.focused_pane_id.clone();
-                runtime.ingest_session_with_catalog(Ok(seed), None);
-                let checkout = runtime
-                    .catalog_workspaces()
-                    .flat_map(|workspace| &workspace.checkouts)
-                    .find(|checkout| checkout.path == home)
-                    .unwrap();
-                assert!(checkout.has_panes);
-                assert!(checkout.owner_workspace_id.is_none());
-            }
-            runtime.ingest_task_operation_result(
-                task,
-                Ok(crate::worktree_control::WorktreeTaskOutcome {
-                    path: home.into(),
-                    pane_id: "w-home:t1:p".into(),
-                    created_tab_id: Some("w-home:t1".into()),
-                    purpose_error: None,
-                    unconfirmed_purpose_token: None,
-                    issue_error: None,
-                    shell: crate::agent_start::ShellStart::Plain,
-                }),
-            );
-            assert_eq!(
-                runtime.snapshot.navigator.root_path.as_deref(),
-                Some(t.main.as_str())
-            );
-            assert_eq!(
-                runtime.snapshot.focused.pane_id.as_deref(),
-                Some("w-order:t1:p"),
-                "{registration_state}: {boundary} waits for the returned pane, not the seed"
-            );
-            match boundary {
-                "newer-visit" => dispatch(
-                    &mut runtime,
-                    "focus_device",
-                    json!({"device_id":crate::node::TEST_NODE}),
-                ),
-                "reconnect" => runtime.live_generation += 1,
-                _ => {}
-            }
-            let mut landed = tab_order_payload(home, &["w-home:t1"], &["w-home:t1"], "w-home:t1");
-            landed.workspaces[0].workspace_id = "w-home".into();
-            landed.tabs[0].workspace_id = "w-home".into();
-            landed.layouts[0].workspace_id = "w-home".into();
-            landed.workspaces.extend(old.workspaces.clone());
-            landed.tabs.extend(old.tabs.clone());
-            landed.layouts.extend(old.layouts.clone());
-            landed.panes.extend(old.panes.clone());
-            // An unrelated keyboard report cannot choose Home for the start.
-            landed.focused_workspace_id = old.focused_workspace_id.clone();
-            landed.focused_pane_id = old.focused_pane_id.clone();
-            runtime.ingest_session_with_catalog(Ok(landed.clone()), None);
-            assert_eq!(
-                runtime.snapshot.navigator.root_path.as_deref(),
-                Some(if boundary == "catalog" { home } else { &t.main }),
-                "{boundary}"
-            );
-            assert_eq!(
-                runtime.snapshot.focused.pane_id.as_deref(),
-                Some(if boundary == "catalog" {
-                    "w-home:t1:p"
-                } else {
-                    "w-order:t1:p"
-                }),
-                "{boundary}"
-            );
-            runtime.ingest_session_with_catalog(Ok(landed), None);
-            assert_eq!(runtime.snapshot.status.last_error, None, "{boundary}");
-            assert_eq!(
-                runtime.snapshot.navigator.root_path.as_deref(),
-                Some(if boundary == "catalog" { home } else { &t.main }),
-                "{boundary} keeps its selection on the next session"
-            );
-        }
-    }
-}
-
-#[test]
 fn a_start_follow_notifies_the_engine_when_its_tab_is_only_active_in_a_background_workspace() {
     let t = tree();
     for focused in ["wa", "wb"] {
@@ -1282,58 +1165,6 @@ fn a_local_worktree_result_waits_for_its_catalog_before_it_comes_forward() {
 }
 
 #[test]
-fn a_first_local_home_catalog_does_not_supersede_its_start_result() {
-    let t = tree();
-    let mut runtime = runtime();
-    let (mut local, _) = live_tab_order_runtime(&t.main);
-    runtime.live = local.live.take();
-    assert!(runtime.snapshot.navigator.root_path.is_none());
-    let task = runtime
-        .begin_task_operation("agent_start", None, None, None, None)
-        .unwrap();
-    runtime
-        .snapshot
-        .ui_state
-        .workspace_registrations
-        .extend(local.snapshot.ui_state.workspace_registrations.clone());
-    runtime.snapshot.ui_state.workspace_registrations[0].home = true;
-    runtime.rebuild_catalog();
-    runtime.ingest_session_with_catalog(
-        Ok(tab_order_payload(
-            &t.main,
-            &["w-order:t1", "w-order:t4"],
-            &["w-order:t1", "w-order:t4"],
-            "w-order:t1",
-        )),
-        None,
-    );
-    runtime.ingest_task_operation_result(
-        task,
-        Ok(crate::worktree_control::WorktreeTaskOutcome {
-            path: t.main.clone(),
-            pane_id: "w-order:t4:p".into(),
-            created_tab_id: Some("w-order:t4".into()),
-            purpose_error: None,
-            unconfirmed_purpose_token: None,
-            issue_error: None,
-            shell: crate::agent_start::ShellStart::Plain,
-        }),
-    );
-    assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(
-        runtime.snapshot.focused.pane_id.as_deref(),
-        Some("w-order:t4:p")
-    );
-    assert_eq!(
-        runtime
-            .pending_pane_focus
-            .as_ref()
-            .map(|pending| pending.target_id.as_str()),
-        Some("w-order:t4:p")
-    );
-}
-
-#[test]
 fn a_global_local_start_brings_its_device_forward_from_a_remote_screen() {
     let t = tree();
     let (mut runtime, _saved) = setup(LinkOrigin::Inbound, &t.main);
@@ -1470,7 +1301,6 @@ fn inbound_and_ssh_empty_checkout_groups_and_drafts_survive_stale_engine_focus_w
                 path: empty.clone(),
                 device_id: DEVICE.into(),
                 pinned: false,
-                home: false,
             },
         );
         runtime.ingest_remote_session(DEVICE, Ok(raw(&t.main)));

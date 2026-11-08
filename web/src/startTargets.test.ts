@@ -2,7 +2,7 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { describe, expect, it } from "vitest";
 import type { Checkout, Device, SnapshotRest, Workspace } from "./snapshot";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { checkoutKey, homeKey, projectKey, projectOf, resolveTarget, startTargets as targetsWith, worktreeKey } from "./startTargets";
+import { checkoutKey, projectKey, projectOf, resolveTarget, startTargets as targetsWith, worktreeKey } from "./startTargets";
 import type { Screen } from "./ui";
 
 const { t } = initializeInterfaceI18n("en");
@@ -27,7 +27,6 @@ function rest(over: { front?: string; connected?: boolean; miniSession?: boolean
   const front = over.front ?? "local";
   const miniWorkspaces = [
     workspace("mw", "app", "mini", [MINI_MAIN], { remote_target_id: "mini" }),
-    workspace("mh", "hide", "mini", [checkout("m-home", "mh", "/home/u/hide")], { is_home: true, remote_target_id: "mini" }),
   ];
   return {
     navigator: {
@@ -37,7 +36,6 @@ function rest(over: { front?: string; connected?: boolean; miniSession?: boolean
       workspaces: [
         workspace("w-hide", "hide", "local", [HIDE_MAIN, HIDE_TREE]),
         workspace("w-sasu", "sasu", "local", [SASU_MAIN]),
-        workspace("w-home", "hide", "local", [checkout("h1", "w-home", "/Users/example/hide")], { is_home: true }),
       ],
     },
     status: {
@@ -69,9 +67,17 @@ describe("start target default (PRD home-device-rail D-19, B25)", () => {
     expect(overviewTargets(rest(), "w-hide").defaultKey).toBe(checkoutKey("local", "/hide"));
   });
 
-  it("is the front device's Home when no project is in front", () => {
-    for (const screen of [null, { kind: "main" } as Screen]) expect(startTargets(rest(), screen).defaultKey).toBe(homeKey("local"));
-    expect(startTargets(rest({ front: "mini" }), { kind: "main" }).defaultKey).toBe(homeKey("mini"));
+  it("is the front device's first project when no project is in front and none was used", () => {
+    for (const screen of [null, { kind: "main" } as Screen]) expect(startTargets(rest(), screen).defaultKey).toBe(checkoutKey("local", "/hide"));
+    expect(startTargets(rest({ front: "mini" }), { kind: "main" }).defaultKey).toBe(checkoutKey("mini", "/srv/app"));
+  });
+
+  it("is the front device's most recently used project when no project is in front (PRD retire-hide-home B2)", () => {
+    const used = rest();
+    used.ui_state = { recent_checkouts: [{ device_id: "mini", checkout_id: "m-main", project_name: "app", branch: "main" }, { device_id: "local", checkout_id: "c-sasu", project_name: "sasu", branch: "main" }, { device_id: "local", checkout_id: "c-main", project_name: "hide", branch: "main" }] } as SnapshotRest["ui_state"];
+    expect(startTargets(used, { kind: "main" }).defaultKey).toBe(checkoutKey("local", "/sasu"));
+    expect(startTargets(used, { kind: "workspace" }, true).defaultKey).toBe(checkoutKey("local", "/sasu"));
+    expect(startTargets(used, { kind: "main", deviceId: "mini" }).defaultKey).toBe(checkoutKey("mini", "/srv/app"));
   });
 
   it("is that device's own checkout when a remote device's thing is in front", () => {
@@ -79,37 +85,41 @@ describe("start target default (PRD home-device-rail D-19, B25)", () => {
     expect(overviewTargets(rest({ front: "mini" }), "mw").defaultKey).toBe(checkoutKey("mini", "/srv/app"));
   });
 
-  it("is the front device's Home when the panel took Settings' place, whatever is under it", () => {
-    expect(startTargets(rest(), { kind: "workspace" }, true).defaultKey).toBe(homeKey("local"));
-    expect(startTargets(rest({ front: "mini", focusedCheckout: "m-main" }), { kind: "workspace" }, true).defaultKey).toBe(homeKey("mini"));
+  it("is the front device's project when the panel took Settings' place, whatever is under it", () => {
+    expect(startTargets(rest(), { kind: "workspace" }, true).defaultKey).toBe(checkoutKey("local", "/hide"));
+    expect(startTargets(rest({ front: "mini", focusedCheckout: "m-main" }), { kind: "workspace" }, true).defaultKey).toBe(checkoutKey("mini", "/srv/app"));
   });
 
-  it("is the Home of the device a Home screen names", () => {
+  it("is the project of the device a device screen names", () => {
     expect(startTargets(rest(), { kind: "main", deviceId: "mini" }).groups[0]?.deviceId).toBe("mini");
-    expect(startTargets(rest(), { kind: "main", deviceId: "mini" }).defaultKey).toBe(homeKey("mini"));
+    expect(startTargets(rest(), { kind: "main", deviceId: "mini" }).defaultKey).toBe(checkoutKey("mini", "/srv/app"));
   });
 
-  it("reads a checkout of the Home itself as the Home, since Home is not a project", () => {
-    expect(startTargets(rest({ focusedCheckout: "h1" }), { kind: "workspace" }).defaultKey).toBe(homeKey("local"));
-    expect(overviewTargets(rest(), "w-home").defaultKey).toBe(homeKey("local"));
+  it("has no target, and names the front device for Add a project, when that device has no project (B1)", () => {
+    const empty = rest();
+    empty.navigator!.workspaces = [];
+    const targets = startTargets(empty, { kind: "main" });
+    expect(targets.defaultKey).toBeNull();
+    expect(targets.frontDeviceId).toBe("local");
+    expect(resolveTarget(targets, null)).toBeNull();
   });
 
-  it("falls back to Home when the thing in front is not listed", () => {
-    expect(overviewTargets(rest(), "gone").defaultKey).toBe(homeKey("local"));
+  it("falls back to the front device's project when the thing in front is not listed", () => {
+    expect(overviewTargets(rest(), "gone").defaultKey).toBe(checkoutKey("local", "/hide"));
   });
 
   it("falls back to the first usable target when the front device is not connected", () => {
     const down = rest({ front: "mini", connected: false });
-    expect(startTargets(down, { kind: "main" }).defaultKey).toBe(homeKey("local"));
+    expect(startTargets(down, { kind: "main" }).defaultKey).toBe(checkoutKey("local", "/hide"));
   });
 });
 
 describe("start target menu (B26)", () => {
-  it("lists the front device's Home and checkouts, then each other device's Home and checkouts", () => {
+  it("lists the front device's checkouts, then each other device's, and no Home on any", () => {
     expect(keys(rest(), { kind: "main" })).toEqual([
-      [homeKey("local"), checkoutKey("local", "/hide"), checkoutKey("local", "/hide.worktrees/rail"), checkoutKey("local", "/sasu")],
-      [homeKey("mini"), checkoutKey("mini", "/srv/app")],
-      [homeKey("box")],
+      [checkoutKey("local", "/hide"), checkoutKey("local", "/hide.worktrees/rail"), checkoutKey("local", "/sasu")],
+      [checkoutKey("mini", "/srv/app")],
+      [],
     ]);
   });
 
@@ -118,18 +128,10 @@ describe("start target menu (B26)", () => {
     expect(groups.map((group) => group.deviceId)).toEqual(["mini", "local", "box"]);
   });
 
-  it("never lists the Home workspace among checkouts", () => {
-    const all = startTargets(rest(), null).groups.flatMap((group) => group.items);
-    expect(all.some((item) => item.kind === "checkout" && ["w-home", "mh"].includes(item.workspaceId))).toBe(false);
-  });
-
   it("names the front device's items plainly and the others' with their device", () => {
     const labels = startTargets(rest(), null).groups.map((group) => group.items.map((item) => item.label));
-    expect(labels[0]).toEqual(["Home", "hide · main", "hide · rail", "sasu · main"]);
-    expect(labels[1]).toEqual(["mini · Home", "mini · app · main"]);
-    // Home is the one word this module words itself.
-    const ko = targetsWith(rest(), null, initializeInterfaceI18n("ko").t).groups.map((group) => group.items[0]!.label);
-    expect(ko).toEqual(["홈", "mini · 홈", "build-box · 홈"]);
+    expect(labels[0]).toEqual(["hide · main", "hide · rail", "sasu · main"]);
+    expect(labels[1]).toEqual(["mini · app · main"]);
   });
 
   it("disables every item of a device that is not connected, with the reason", () => {
@@ -138,13 +140,13 @@ describe("start target menu (B26)", () => {
     expect(mini.connected).toBe(false);
     expect(mini.items.every((item) => item.disabled === "not_connected")).toBe(true);
     expect(all[0]!.items.every((item) => item.disabled === null)).toBe(true);
-    // A device that never answered still has its Home, disabled.
+    // A device that never answered lists nothing to start in.
     const box = all.find((group) => group.deviceId === "box")!;
-    expect(box.items.map((item) => [item.key, item.disabled])).toEqual([[homeKey("box"), "not_connected"]]);
+    expect([box.connected, box.items]).toEqual([false, []]);
   });
 
   it("offers nothing before the first snapshot", () => {
-    expect(startTargets(null, null)).toEqual({ groups: [], defaultKey: null, currentKey: null });
+    expect(startTargets(null, null)).toEqual({ groups: [], frontDeviceId: null, defaultKey: null, currentKey: null });
   });
 });
 
@@ -160,15 +162,15 @@ describe("resolving the target a start goes to", () => {
     expect(scoped.defaultKey).toBe(worktreeKey("local", "/hide"));
     expect(resolveTarget(scoped, checkoutKey("local", "/hide.worktrees/rail"))?.key).toBe(checkoutKey("local", "/hide.worktrees/rail"));
     expect(startTargets(snapshot, { kind: "workspace" }).defaultKey).toBe(checkoutKey("local", "/hide"));
-    expect(startTargets(snapshot, { kind: "workspace" }, true, "w-hide").defaultKey).toBe(homeKey("local"));
+    expect(startTargets(snapshot, { kind: "workspace" }, true, "w-hide").defaultKey).toBe(checkoutKey("local", "/hide"));
     snapshot.ui_state!.project_settings!.selected!.new_work = "checkout";
     expect(overviewTargets(snapshot, "w-hide").defaultKey).toBe(checkoutKey("local", "/hide"));
   });
   it("keeps the operator's pick while it is listed, else the default", () => {
     const targets = startTargets(rest(), { kind: "main" });
     expect(resolveTarget(targets, checkoutKey("local", "/sasu"))?.key).toBe(checkoutKey("local", "/sasu"));
-    expect(resolveTarget(targets, checkoutKey("local", "/removed"))?.key).toBe(homeKey("local"));
-    expect(resolveTarget(targets, null)?.key).toBe(homeKey("local"));
+    expect(resolveTarget(targets, checkoutKey("local", "/removed"))?.key).toBe(checkoutKey("local", "/hide"));
+    expect(resolveTarget(targets, null)?.key).toBe(checkoutKey("local", "/hide"));
   });
 
   it("keeps a pick whose device stopped answering, disabled, instead of moving the start elsewhere", () => {
@@ -180,10 +182,10 @@ describe("resolving the target a start goes to", () => {
 });
 
 describe("the where row: which project, then which branch", () => {
-  it("lists each device's Home and projects, a project once however many checkouts it has", () => {
+  it("lists each device's projects, a project once however many checkouts it has", () => {
     const groups = startTargets(rest(), { kind: "main" }).groups;
-    expect(groups.map((group) => group.projects.map((project) => project.label))).toEqual([["Home", "hide", "sasu"], ["Home", "app"], ["Home"]]);
-    expect(groups[0]!.projects[1]!.key).toBe(projectKey("local", "w-hide"));
+    expect(groups.map((group) => group.projects.map((project) => project.label))).toEqual([["hide", "sasu"], ["app"], []]);
+    expect(groups[0]!.projects[0]!.key).toBe(projectKey("local", "w-hide"));
   });
 
   it("puts the main checkout first and the one in front second, and marks the one in front", () => {
@@ -191,7 +193,7 @@ describe("the where row: which project, then which branch", () => {
     const extra = checkout("c-other", "w-hide", "/hide.worktrees/docs", { is_worktree: true, label: "docs", branch: "docs/start" });
     snapshot.navigator!.workspaces![0]!.checkouts = [extra, HIDE_TREE, HIDE_MAIN];
     const targets = startTargets(snapshot, { kind: "workspace" });
-    const hide = targets.groups[0]!.projects[1]!;
+    const hide = targets.groups[0]!.projects[0]!;
     expect(hide.branches.map((branch) => branch.key)).toEqual([checkoutKey("local", "/hide"), checkoutKey("local", "/hide.worktrees/rail"), checkoutKey("local", "/hide.worktrees/docs")]);
     expect(hide.branches.map((branch) => branch.kind === "checkout" && branch.branch)).toEqual(["main", "rail", "docs/start"]);
     expect(targets.currentKey).toBe(checkoutKey("local", "/hide.worktrees/rail"));
@@ -204,11 +206,10 @@ describe("the where row: which project, then which branch", () => {
     const snapshot = rest();
     snapshot.navigator!.workspaces![0]!.is_git = true;
     const targets = startTargets(snapshot, { kind: "main" });
-    const [, hide, sasu] = targets.groups[0]!.projects;
+    const [hide, sasu] = targets.groups[0]!.projects;
     expect(hide!.worktree?.key).toBe(worktreeKey("local", "/hide"));
     expect(sasu!.worktree).toBeNull();
     expect(projectOf(targets, resolveTarget(targets, worktreeKey("local", "/hide")))?.key).toBe(hide!.key);
     expect(projectOf(targets, resolveTarget(targets, checkoutKey("local", "/hide.worktrees/rail")))?.key).toBe(hide!.key);
-    expect(projectOf(targets, resolveTarget(targets, homeKey("local")))?.home).toBe(true);
   });
 });

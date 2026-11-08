@@ -217,8 +217,6 @@ struct WorkspaceIn {
     #[serde(default)]
     is_git: bool,
     #[serde(default)]
-    is_home: bool,
-    #[serde(default)]
     pull_requests: Vec<Value>,
     #[serde(default)]
     checkouts: Vec<CheckoutIn>,
@@ -254,7 +252,7 @@ impl PhonePrs {
             let Some(workspace) = read::<WorkspaceIn>(workspace, "pr.workspace_invalid") else {
                 continue;
             };
-            if workspace.is_home || !has_pull_requests(&workspace) {
+            if !has_pull_requests(&workspace) {
                 continue;
             }
             projects.push(PhoneProject {

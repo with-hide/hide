@@ -358,7 +358,6 @@ pub(crate) fn refresh_inactive_groups(
         } else if !has_rows
             && !workspace.checkouts.iter().any(holds_named_tab)
             && !workspace.pinned
-            && !workspace.is_home
             && !in_front
         {
             // A project with no agent and no sleeping conversation waits in
@@ -610,7 +609,6 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: vec![checkout(id, last_commit_unix_seconds, pane_ids)],
             pinned: false,
-            is_home: false,
             inactive_checkouts: InactiveCheckoutGroupSnapshot::default(),
             session_folds: Default::default(),
             removal: Default::default(),

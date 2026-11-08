@@ -101,7 +101,6 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
             path: t.main.clone(),
             device_id: NODE.to_owned(),
             pinned: false,
-            home: false,
         });
     let caller = format!("remote:{NODE}:pane:t1");
     let context = runtime

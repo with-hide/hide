@@ -12,7 +12,6 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
-import { projectsOf } from "./remote";
 import { PR_LOOK } from "./prMark";
 import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import type { AgentRow, Checkout, Device, GithubSearchResult, PrState, PullRequest, SessionWorkSearch, SnapshotRest, Task, WorkSession, Workspace } from "./snapshot";
@@ -159,8 +158,8 @@ export function openUrlEntry(query: string, unavailable: string | null, t: TFunc
 }
 
 
-/** What ⌘K reads from one device: its name as this window calls it, its agents and its projects (not its Home, which the device entry stands for). `own` is this window's machine. */
-export type SearchDevice = { agentScope: AgentScope | undefined; device: Device; name: string; own: boolean; agents: AgentRow[]; workspaces: Workspace[]; allWorkspaces: Workspace[]; local: boolean };
+/** What ⌘K reads from one device: its name as this window calls it, its agents and its projects. `own` is this window's machine. */
+export type SearchDevice = { agentScope: AgentScope | undefined; device: Device; name: string; own: boolean; agents: AgentRow[]; workspaces: Workspace[]; local: boolean };
 
 /** This machine and each connected device, in the rail's order; a device that is not connected has no current agents or projects to find. */
 export function searchDevices(rest: SnapshotRest): SearchDevice[] {
@@ -173,12 +172,12 @@ export function searchDevices(rest: SnapshotRest): SearchDevice[] {
     const named = { name: listed?.length ? machineName(listed, device.id, translate) : translate(thisMachineKey(null)), own: device.id === own };
     if (device.id === localDeviceId(rest)) {
       const all = rest.navigator?.workspaces ?? [];
-      rows.push({ agentScope: rest.navigator?.devices?.find((d) => d.id === device.id)?.agent_scope ?? rest.navigator?.agent_scope, device, ...named, agents: rest.navigator?.agents ?? [], workspaces: projectsOf(all), allWorkspaces: all, local: true });
+      rows.push({ agentScope: rest.navigator?.devices?.find((d) => d.id === device.id)?.agent_scope ?? rest.navigator?.agent_scope, device, ...named, agents: rest.navigator?.agents ?? [], workspaces: all, local: true });
       continue;
     }
     const status = rest.status?.remote?.find((row) => row.target_id === device.id);
     const session = status?.state === "connected" ? status.session : null;
-    rows.push({ agentScope: device.agent_scope, device, ...named, agents: session?.agents ?? [], workspaces: projectsOf(session?.workspaces ?? []), allWorkspaces: session?.workspaces ?? [], local: false });
+    rows.push({ agentScope: device.agent_scope, device, ...named, agents: session?.agents ?? [], workspaces: session?.workspaces ?? [], local: false });
   }
   return rows;
 }
@@ -388,7 +387,7 @@ export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translati
   const front = frontDeviceId(rest);
   const devices = searchDevices(rest);
   for (const scope of devices) {
-    const places = checkoutPlaces(scope.allWorkspaces);
+    const places = checkoutPlaces(scope.workspaces);
     for (const agent of scope.agents) entries.push(agentEntry(scope, agent, places.get(agent.pane_id) ?? null, front, t));
     for (const workspace of scope.workspaces) {
       entries.push(projectEntry(scope, workspace, front));

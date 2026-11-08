@@ -1579,7 +1579,6 @@ impl Runtime {
                 confirm_only: false,
                 checkout_path: Some(member.checkout_path.clone()),
                 device_id: (!local).then(|| member.machine.clone()),
-                home: false,
                 provider: member.kind.clone(),
                 prompt: None,
                 model: None,

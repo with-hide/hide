@@ -46,9 +46,6 @@ pub enum ErrorCode {
     Unsupported,
     /// The host is at its concurrency or queue limit; nothing was started.
     Busy,
-    /// `~/hide` exists and is not a Home Hide made, or its marker cannot be
-    /// read; nothing was written.
-    HomeConflict,
     /// A folder outside the host's home was named without the operator's
     /// confirmation of it; nothing there was read.
     NeedsConfirmation,
@@ -76,7 +73,6 @@ impl ErrorCode {
             Self::TooLarge => "too_large",
             Self::Unsupported => "unsupported",
             Self::Busy => "busy",
-            Self::HomeConflict => "home_conflict",
             Self::NeedsConfirmation => "needs_confirmation",
             Self::ProjectHoldsHome => "project_holds_home",
             Self::Cancelled => "cancelled",
@@ -172,7 +168,6 @@ mod tests {
             ErrorCode::TooLarge,
             ErrorCode::Unsupported,
             ErrorCode::Busy,
-            ErrorCode::HomeConflict,
             ErrorCode::Cancelled,
             ErrorCode::Io,
         ] {

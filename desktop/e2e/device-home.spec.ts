@@ -1,8 +1,8 @@
-// A device's Home and the device rail over real SSH (PRD home-device-rail
+// The device rail over real SSH, with no Home made on the device (PRD home-device-rail
 // B2, B10, B15, B18, B25, B38, B46, with the rail rework of quick
 // device-rail-badges B1, B3, B6). Run with an isolated sshd
 // whose port, key and known_hosts are supplied in HIDE_E2E_SSH_*, and whose
-// sessions get HIDE_E2E_DEVICE_HOME as HOME, so the device's `~/hide` is made
+// sessions get HIDE_E2E_DEVICE_HOME as HOME, so what a device start writes lands
 // there and never in the account's own home. The device's holders, the daemon,
 // the helper install and the desktop profile stay private; the agent is the
 // fixture's `claude` shim.
@@ -124,7 +124,7 @@ async function startDeviceHomeRun() {
   return { deviceHome, local, device, run, daemonLog, daemon };
 }
 
-test("a device's Home is made on its first start, the rail follows registration, and a device start lands on that device", async () => {
+test("the rail follows registration, no ~/hide is made on a device, and a device start lands on that device", async () => {
   const { deviceHome, local, device, run, daemonLog, daemon } = await startDeviceHomeRun();
   let app: ElectronApplication | undefined;
   try {
@@ -160,45 +160,36 @@ test("a device's Home is made on its first start, the rail follows registration,
     await expect(page.locator(`[data-rail-tile="${nodeOf(run.env)}"]`)).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator(`[data-rail-tile="${DEVICE}"]`)).toHaveAttribute("data-rail-connected", "true", { timeout: 120_000 });
-    // A device Home start needs the helper, which installs after the route connects.
+    // A device start needs the helper, which installs after the route connects.
     await expect
       .poll(() => fs.readFileSync(daemonLog, "utf8").includes('"kind":"host.ready","target":"mini-e2e"'), { timeout: 120_000 })
       .toBe(true);
     await device.attach(run, DEVICE, deviceHome);
-    // Before any Home start the device has no ~/hide (B18).
+    // Hide makes no ~/hide on a device (PRD retire-hide-home D-01).
     expect(fs.existsSync(path.join(deviceHome, "hide"))).toBe(false);
 
-    // B38, B18: a start aimed at the device's Home makes ~/hide there and runs the agent on that device.
+    // B38: a start aimed at the device's checkout runs the agent on that device, and the panel offers no Home.
     await openStartPanel(page);
-    await chooseTarget(page, `[data-start-target-option="home:${DEVICE}"]`);
-    await expect(page.locator("[data-start-panel] [data-start-target]")).toHaveAttribute("data-start-target", `home:${DEVICE}`);
+    await expect(page.locator(`[data-start-target-option="home:${DEVICE}"]`)).toHaveCount(0);
+    await chooseTarget(page, `[data-start-target-option^="checkout:${DEVICE}:"][data-start-target-option$="/fixture"]`);
     await expect(page.locator("[data-start-panel] [data-agent-kind]")).toHaveAttribute("data-agent-kind", "claude");
-    await page.locator("[data-start-text]").fill("홈에서 첫 지시 확인");
+    await page.locator("[data-start-text]").fill("체크아웃 지시 확인");
     await submitStart(page);
-    await expect.poll(() => fs.existsSync(path.join(deviceHome, "hide", ".hide-home.json")), { timeout: 60_000 }).toBe(true);
-    for (const guide of ["AGENTS.md", "CLAUDE.md"]) expect(fs.existsSync(path.join(deviceHome, "hide", guide))).toBe(true);
-    await expect.poll(() => ownSshPaneRunning(deviceHome, DEVICE, "홈에서 첫 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
-    const homeAgent = ownSshPaneRunning(deviceHome, DEVICE, "홈에서 첫 지시 확인")!;
-    const homeCwd = homeAgent.cwd!;
-    expect(homeCwd).toContain(fs.realpathSync(path.join(deviceHome, "hide")));
+    await expect.poll(() => ownSshPaneRunning(deviceHome, DEVICE, "체크아웃 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
+    const homeAgent = ownSshPaneRunning(deviceHome, DEVICE, "체크아웃 지시 확인")!;
     // B15, B2: the center, rail and sidebar moved to that device's pane together, under the device band.
     await expect(page.locator(`[data-device-band="${DEVICE}"]`)).toBeVisible({ timeout: 30_000 });
     await expect(page.locator(`[data-rail-tile="${DEVICE}"]`)).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("[data-sidebar-title-name]")).toContainText(DEVICE_LABEL);
-    await expect(page.locator('nav[aria-label="Location"]')).toHaveText("~/hide");
+    expect(fs.existsSync(path.join(deviceHome, "hide"))).toBe(false);
     await capture(page, app, "device-home-started");
 
-    // B25: with the device's Home pane in front, the panel aims at that device's Home.
+    // B25: with the device's pane in front, the panel aims at that device's checkout.
     await openStartPanel(page);
-    await expect(page.locator("[data-start-panel] [data-start-target]")).toHaveAttribute("data-start-target", `home:${DEVICE}`);
-    // B38: a device checkout start runs there too.
-    await chooseTarget(page, `[data-start-target-option^="checkout:${DEVICE}:"][data-start-target-option$="/fixture"]`);
-    await page.locator("[data-start-text]").fill("체크아웃 지시 확인");
-    await submitStart(page);
-    await expect.poll(() => ownSshPaneRunning(deviceHome, DEVICE, "체크아웃 지시 확인")?.info ?? "", { timeout: 60_000 }).toContain("claude");
-    await expect(page.locator(`[data-device-band="${DEVICE}"]`)).toBeVisible();
+    await expect(page.locator("[data-start-panel] [data-start-target]")).toHaveAttribute("data-start-target", new RegExp(`^checkout:${DEVICE}:.*/fixture$`));
+    await page.keyboard.press("Escape");
 
-    // The raw shim starts idle; give its Home pane a real detected question for the counts and rail mark.
+    // The raw shim starts idle; give its pane a real detected question for the counts and rail mark.
     const session = `device-home-${process.pid}`;
     await device.send(`\x1b]7770;session=${session}\x07`, homeAgent.pane);
     const homeRow = (rest: unknown) => (rest as SshRest).status?.remote?.find((row) => row.target_id === DEVICE)?.session?.agents.find((row) => row.pane_id === homeAgent.pane);
@@ -210,13 +201,12 @@ test("a device's Home is made on its first start, the rail follows registration,
     await expect(page.locator('[data-raised-group="needs_you"]')).toBeVisible();
     await expect(page.locator(`[data-rail-tile="${DEVICE}"] [data-rail-badge]`).first()).toBeVisible();
     await capture(page, app, "device-home-device-agents");
-    // B10: removing the device in front moves the front to This Mac; the rail stays with its one tile, and the device keeps ~/hide and its agents.
+    // B10: removing the device in front moves the front to This Mac; the rail stays with its one tile, and the device keeps its agents.
     await sendFrame(page, state, { kind: "remove_device", payload: { device_id: DEVICE } });
     await expect(page.locator("[data-rail-tile]")).toHaveCount(1, { timeout: 30_000 });
     await expect(nav).toHaveAttribute("data-sidebar-rail", "device");
     await expect(page.locator(`[data-device-band="${DEVICE}"]`)).toHaveCount(0);
-    expect(fs.existsSync(path.join(deviceHome, "hide", ".hide-home.json"))).toBe(true);
-    expect(ownSshPaneRunning(deviceHome, DEVICE, "홈에서 첫 지시 확인")).not.toBeNull();
+    expect(ownSshPaneRunning(deviceHome, DEVICE, "체크아웃 지시 확인")).not.toBeNull();
   } finally {
     await app?.close();
     await endChild(daemon);

@@ -1,10 +1,13 @@
-// Where the start panel starts an agent (PRD home-device-rail D-19, D-22):
-// the default is what is in front. The panel asks two things, which project
-// and which branch: the project menu lists the front device's Home and
+// Where the start panel starts an agent (PRD home-device-rail D-19, D-22,
+// retire-hide-home D-02): the default is what is in front, else the front
+// device's most recently used project. The panel asks two things, which
+// project and which branch: the project menu lists the front device's
 // projects, then each other device's, and a device that is not connected is
 // listed but cannot be chosen; the branch menu lists that project's
-// checkouts and a new branch of its own. A target is never remembered: the
-// default is read from the page when the panel opens, so nothing here is state.
+// checkouts and a new branch of its own. A device with no project has no
+// target: the panel offers Add a project instead of a start. A target is never
+// remembered: the default is read from the page when the panel opens, so
+// nothing here is state.
 
 import type { TFunction } from "i18next";
 import { thisMachineKey } from "./devices";
@@ -25,21 +28,19 @@ type TargetBase = {
 };
 
 export type StartTarget =
-  | (TargetBase & { kind: "home" })
   | (TargetBase & { kind: "checkout"; checkoutPath: string; workspaceId: string; checkoutId: string; branch: string; primary: boolean })
   | (TargetBase & { kind: "worktree"; repositoryRoot: string; workspaceId: string });
 
 /**
- * One row of the project menu: a device's Home, or a project with the
- * checkouts its branch menu lists (its main one first) and, for a Git
- * project, the new branch a start can make.
+ * One row of the project menu: a project with the checkouts its branch menu
+ * lists (its main one first) and, for a Git project, the new branch a start
+ * can make.
  */
 export type StartProject = {
   key: string;
   deviceId: string;
   label: string;
   disabled: "not_connected" | null;
-  home: boolean;
   branches: StartTarget[];
   worktree: StartTarget | null;
 };
@@ -49,13 +50,14 @@ export type TargetGroup = { deviceId: string; deviceLabel: string; connected: bo
 export type StartTargets = {
   /** The front device's group first, then each other device's, in the order the catalog lists devices. */
   groups: TargetGroup[];
-  /** The key the panel opens on; null only while nothing can be chosen. */
+  /** The device Add a project opens on when there is no target: the front device. */
+  frontDeviceId: string | null;
+  /** The key the panel opens on; null while the front device has no project to start in. */
   defaultKey: string | null;
   /** The checkout in front, which the branch menu marks; null when no checkout is. */
   currentKey: string | null;
 };
 
-export const homeKey = (deviceId: string) => `home:${deviceId}`;
 export const checkoutKey = (deviceId: string, path: string) => `checkout:${deviceId}:${path}`;
 export const worktreeKey = (deviceId: string, root: string) => `worktree:${deviceId}:${root}`;
 
@@ -77,10 +79,9 @@ function groupOf(rest: SnapshotRest, device: Pick<Device, "id" | "kind">, name: 
   const disabled = connected ? null : "not_connected";
   // Only the front device's items go unprefixed: the trigger already sits where that device is.
   const prefix = front ? "" : `${name} · `;
-  const home: StartTarget = { kind: "home", key: homeKey(device.id), deviceId: device.id, label: `${prefix}${t("common.home")}`, disabled };
-  const projects: StartProject[] = [{ key: home.key, deviceId: device.id, label: t("common.home"), disabled, home: true, branches: [home], worktree: null }];
+  const projects: StartProject[] = [];
   for (const workspace of workspaces) {
-    if (workspace.is_home || workspace.temporary) continue;
+    if (workspace.temporary) continue;
     const branches: StartTarget[] = [];
     for (const checkout of workspace.checkouts) {
       if (!checkout.exists) continue;
@@ -104,7 +105,7 @@ function groupOf(rest: SnapshotRest, device: Pick<Device, "id" | "kind">, name: 
     const worktree: StartTarget | null = workspace.is_git
       ? { kind: "worktree", key: worktreeKey(device.id, workspace.path), deviceId: device.id, label: `${prefix}${workspace.label} · ${t("projectSettings.worktree")}`, disabled, repositoryRoot: workspace.path, workspaceId: workspace.id }
       : null;
-    projects.push({ key: projectKey(device.id, workspace.id), deviceId: device.id, label: workspace.label, disabled, home: false, branches, worktree });
+    projects.push({ key: projectKey(device.id, workspace.id), deviceId: device.id, label: workspace.label, disabled, branches, worktree });
   }
   const items = projects.flatMap((project) => (project.worktree ? [...project.branches, project.worktree] : project.branches));
   return { deviceId: device.id, deviceLabel: name, connected, projects, items };
@@ -115,33 +116,45 @@ function mainCheckout(workspace: Workspace): Checkout | null {
   return workspace.checkouts.find((row) => row.exists && row.is_primary) ?? workspace.checkouts.find((row) => row.exists) ?? null;
 }
 
-/** The key of the thing in front on the front device, before it is checked against the menu. */
-function frontKey(rest: SnapshotRest, screen: Screen | null, noProject: boolean, deviceId: string, workspaces: Workspace[], projectId: string | null): string {
-  const home = homeKey(deviceId);
+/** The key of the checkout in front on the front device, before it is checked against the menu; null when none is. */
+function frontKey(rest: SnapshotRest, screen: Screen | null, noProject: boolean, deviceId: string, workspaces: Workspace[], projectId: string | null): string | null {
   // Settings sits in front of a center that stays where it was, so what the center shows is not what is in front.
-  if (noProject) return home;
+  if (noProject) return null;
   if (projectId) {
-    const project = workspaces.find((row) => row.id === projectId);
-    const checkout = project && !project.is_home ? mainCheckout(project) : null;
-    return checkout ? checkoutKey(deviceId, checkout.path) : home;
+    const checkout = mainCheckoutOf(workspaces, projectId);
+    return checkout ? checkoutKey(deviceId, checkout.path) : null;
   }
   if (screen?.kind === "workspace") {
     const checkout = frontCheckout(rest);
-    if (!checkout) return home;
-    const workspace = workspaces.find((row) => row.checkouts.some((candidate) => candidate.id === checkout.id));
-    return workspace && !workspace.is_home ? checkoutKey(deviceId, checkout.path) : home;
+    return checkout && workspaces.some((row) => row.checkouts.some((candidate) => candidate.id === checkout.id)) ? checkoutKey(deviceId, checkout.path) : null;
   }
-  // All projects, a device's Home and Settings are all "no project in front".
-  return home;
+  // All projects and Settings are "no project in front".
+  return null;
+}
+
+function mainCheckoutOf(workspaces: Workspace[], projectId: string): Checkout | null {
+  const project = workspaces.find((row) => row.id === projectId);
+  return project ? mainCheckout(project) : null;
+}
+
+/** The front device's most recently used checkout the menu lists, else its first project's main one. */
+function recentKey(rest: SnapshotRest, front: TargetGroup | undefined): string | null {
+  if (!front) return null;
+  for (const visit of rest.ui_state?.recent_checkouts ?? []) {
+    if (visit.device_id !== front.deviceId) continue;
+    const item = front.items.find((candidate) => candidate.kind === "checkout" && candidate.checkoutId === visit.checkout_id && candidate.disabled === null);
+    if (item) return item.key;
+  }
+  return front.items.find((item) => item.disabled === null)?.key ?? null;
 }
 
 /**
- * `settings` says the panel was opened over Settings, so the front device's
- * Home is the default. A device's own Home screen names its device, which is
- * then the front device.
+ * `settings` says the panel was opened over Settings, so nothing is in front
+ * and the front device's most recently used project is the default. A
+ * device's own Overview names its device, which is then the front device.
  */
 export function startTargets(rest: SnapshotRest | null, screen: Screen | null, t: TFunction<"translation">, settings = false, projectId: string | null = null): StartTargets {
-  if (!rest) return { groups: [], defaultKey: null, currentKey: null };
+  if (!rest) return { groups: [], frontDeviceId: null, defaultKey: null, currentKey: null };
   const listed = rest.navigator?.devices?.length ? rest.navigator.devices : null;
   const devices = listed ?? [localDevice];
   const named = screen?.kind === "main" ? screen.deviceId : undefined;
@@ -156,7 +169,7 @@ export function startTargets(rest: SnapshotRest | null, screen: Screen | null, t
   const currentKey = screen?.kind === "workspace" && !settings && inFront?.startsWith("checkout:") ? inFront : null;
   const groups = ordered.map((device) => groupOf(rest, device, name(device.id), device.id === frontId, currentKey, t));
   // Only a project-scoped start offers this initial default. Explicit checkout,
-  // Home, issue, PR and resume targets keep their existing meaning.
+  // issue, PR and resume targets keep their existing meaning.
   let projectDefault: string | null = null;
   if (projectId && !settings) {
     for (const group of groups) {
@@ -173,9 +186,9 @@ export function startTargets(rest: SnapshotRest | null, screen: Screen | null, t
   const usable = (key: string) => items.some((item) => item.key === key && item.disabled === null);
   const front = groups[0];
   const wanted = projectDefault ?? inFront;
-  const defaultKey =
-    (wanted && usable(wanted) ? wanted : null) ?? (front && usable(homeKey(front.deviceId)) ? homeKey(front.deviceId) : null) ?? items.find((item) => item.disabled === null)?.key ?? null;
-  return { groups, defaultKey, currentKey };
+  // A front device that is not connected cannot start anything: the first usable target elsewhere stands in. One that answers and has no project has no target.
+  const defaultKey = (wanted && usable(wanted) ? wanted : null) ?? recentKey(rest, front) ?? (front && !front.connected ? (items.find((item) => item.disabled === null)?.key ?? null) : null);
+  return { groups, frontDeviceId: front?.deviceId ?? null, defaultKey, currentKey };
 }
 
 /**

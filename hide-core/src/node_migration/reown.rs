@@ -1507,6 +1507,9 @@ mod tests {
                     "device_id": devices[index], "checkout_id": checkouts[index],
                     "project_name": "p", "branch": "main", "device_name": "d",
                 })).collect::<Vec<_>>(),
+                "home_retire": (0..3).map(|index| json!({
+                    "device_id": devices[index], "registration_id": registrations[index],
+                })).collect::<Vec<_>>(),
                 "expanded_paths": [M_ROOT],
                 "device_expanded_paths": {ALIAS: [C_ROOT], X: [X_ROOT]},
                 "selected_path": M_ROOT,

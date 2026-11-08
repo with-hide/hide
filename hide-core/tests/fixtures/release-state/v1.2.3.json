@@ -66,6 +66,10 @@
   {
    "step": "archived session",
    "ok": true
+  },
+  {
+   "step": "a Home started on the core and the device",
+   "ok": true
   }
  ]
 }

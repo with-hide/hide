@@ -71,12 +71,12 @@
     "session_places": []
   },
   "selected_path": "/home/me/core-proj/README.md",
-  "selected_pane_id": "h1:p2",
+  "selected_pane_id": null,
   "shortcut_bindings": {},
   "shortcut_bindings_imported": false,
   "browser_shortcut_bindings": {},
-  "focused_device_id": "c0de0000000000000000000000000001",
-  "focused_checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+  "focused_device_id": "mini",
+  "focused_checkout_id": "workspace:3d884a4df35c7595:checkout:3d884a4df35c7595",
   "workspace_registrations": [
     {
       "primary_checkout_id": null,
@@ -93,6 +93,24 @@
       "path": "/home/remote/dev-proj",
       "device_id": "mini",
       "pinned": false
+    },
+    {
+      "primary_checkout_id": null,
+      "id": "workspace:3d884a4df35c7595",
+      "label": "Home",
+      "path": "/home/me/hide",
+      "device_id": "c0de0000000000000000000000000001",
+      "pinned": true,
+      "home": true
+    },
+    {
+      "primary_checkout_id": null,
+      "id": "remote:mini:project:f202aea872714ebdddfd5863218a9bdceede1e34db5d697572d1cf95880eced5",
+      "label": "Home",
+      "path": "/home/remote/hide",
+      "device_id": "mini",
+      "pinned": true,
+      "home": true
     }
   ],
   "device_registrations": [
@@ -104,7 +122,7 @@
         "contract": 4,
         "helper_root": "~/.hide/host-helper",
         "cli_dir": "~/.local/bin",
-        "granted_at_unix_ms": 1794152709020,
+        "granted_at_unix_ms": 1794163855013,
         "identity": {
           "user": "remote",
           "hostname": "device",
@@ -163,80 +181,90 @@
   "pane_read_records": {
     "h1:p1": {
       "state_change_seq": 1,
-      "session_id": "12610a5d-895e-4a87-ad94-e159b7b4d435",
+      "session_id": "4bafac4f-26ef-403d-803f-9dcaad56e2f5",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd5b9f0-24-1",
+      "server": "1a1bc7fccbe-24-1",
       "unread": false
     },
-    "h1:p2": {
-      "state_change_seq": 2,
-      "session_id": "29bc9d12-6d79-444a-ba0a-0803ffe8cc0d",
+    "h1:p3": {
+      "state_change_seq": 3,
+      "session_id": "74444880-eabf-4ad8-a8a2-70c69c5fde2d",
       "demand": "none",
       "activity": "stopped",
       "completed": false,
       "descendant_signals": [],
-      "server": "1a1bbd5b9f0-24-1",
+      "server": "1a1bc7fccbe-24-1",
       "unread": false
     },
     "remote:mini:pane:h1:p1": {
       "state_change_seq": 1,
-      "session_id": "4b5cbdfa-036e-438c-a713-9302963dc049",
+      "session_id": "b777808a-3cda-4078-9bde-0d0b784ab4ff",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd5bf0c-24-2",
+      "server": "1a1bc7fd26c-24-2",
       "unread": false
     },
     "remote:mini:pane:h1:p2": {
       "state_change_seq": 2,
-      "session_id": "16d21c1c-bdc9-4871-9e09-54268f92fee4",
+      "session_id": "cda9cfb2-0d72-4b3b-a15f-391e23e92910",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd5bf0c-24-2",
+      "server": "1a1bc7fd26c-24-2",
       "unread": false
     },
     "remote:mini:pane:h1:p5": {
       "state_change_seq": 5,
-      "session_id": "8615404c-13e1-4026-8448-92b5c02816cd",
+      "session_id": "e88a10aa-b3fe-465f-a25a-673da2c01647",
       "demand": "none",
       "activity": "stopped",
       "completed": false,
       "descendant_signals": [],
-      "server": "1a1bbd60636-24-3",
+      "server": "1a1bc801983-24-3",
+      "unread": false
+    },
+    "remote:mini:pane:h3:p2": {
+      "state_change_seq": 6,
+      "session_id": "257c2ebb-be2d-4f49-bfe3-808fb2cd5d28",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": false,
+      "descendant_signals": [],
+      "server": "1a1bc801983-24-3",
       "unread": false
     }
   },
   "pane_completions": {
     "h1:p1": {
-      "session": "670b7b7057de39592a12eb9e6a4589fb5b4fb51e4abbc4b4c53e3b03830d0ab5",
-      "server": "1a1bbd5b9f0-24-1",
+      "session": "974321d988980af805bd1d548da7b981180de295af003710e5d1f3741d8e6ddd",
+      "server": "1a1bc7fccbe-24-1",
       "state_change_seq": 1
     },
     "remote:mini:pane:h1:p1": {
-      "session": "067f3e9ee08e5efb427112bb8a7019b9f909368a8e9df6fff76dc55ca4f161b0",
-      "server": "1a1bbd5bf0c-24-2",
+      "session": "3dcdb2cc6a226809b4767358c50c280de5fde79a36d7ca95da728c05b6387d8c",
+      "server": "1a1bc7fd26c-24-2",
       "state_change_seq": 1
     },
     "remote:mini:pane:h1:p2": {
-      "session": "86ae0a16ffd86cd81927cfea73c35673567a79bd62d2664c76933b330e10566f",
-      "server": "1a1bbd5bf0c-24-2",
+      "session": "ed5d2865dabe7dc859d28f418f6e6eff5880c4b8573fcfdd28abe7ca8ac60953",
+      "server": "1a1bc7fd26c-24-2",
       "state_change_seq": 2
     }
   },
   "pane_launches": {
-    "h1:p2": {
+    "h1:p3": {
       "kind": "claude",
-      "name": "hide-claude-h1-p2",
+      "name": "hide-claude-h1-p3",
       "choice": {
         "model": "sonnet"
       },
-      "session": "29bc9d12-6d79-444a-ba0a-0803ffe8cc0d"
+      "session": "74444880-eabf-4ad8-a8a2-70c69c5fde2d"
     },
     "remote:mini:pane:h1:p5": {
       "kind": "claude",
@@ -244,37 +272,45 @@
       "choice": {
         "model": "sonnet"
       },
-      "session": "8615404c-13e1-4026-8448-92b5c02816cd"
+      "session": "e88a10aa-b3fe-465f-a25a-673da2c01647"
     }
   },
   "request_verbs": {
     "h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794152847173
+      "since_unix_ms": 1794164003522
     },
-    "h1:p2": {
+    "h1:p3": {
       "verb": "idle",
-      "since_unix_ms": 1794152834314
+      "since_unix_ms": 1794163985479
+    },
+    "h2:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794163991921
     },
     "remote:mini:pane:h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794152833005
+      "since_unix_ms": 1794163980030
     },
     "remote:mini:pane:h1:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152721841
+      "since_unix_ms": 1794163867905
     },
     "remote:mini:pane:h1:p4": {
       "verb": "idle",
-      "since_unix_ms": 1794152794821
+      "since_unix_ms": 1794163942004
     },
     "remote:mini:pane:h1:p5": {
       "verb": "idle",
-      "since_unix_ms": 1794152834483
+      "since_unix_ms": 1794163985648
     },
     "remote:mini:pane:h2:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152752936
+      "since_unix_ms": 1794163899047
+    },
+    "remote:mini:pane:h3:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794163996953
     }
   },
   "pane_terminal_sizes": {},
@@ -296,24 +332,31 @@
   },
   "agent_start": {
     "kind": "claude",
-    "models": {
-      "claude": "sonnet"
-    }
+    "models": {}
   },
   "agent_sleep": {
     "stamps": {
       "h1:p1": {
-        "changed_at_unix_ms": 1794152749688,
-        "seen_at_unix_ms": 0,
+        "changed_at_unix_ms": 1794163895799,
+        "seen_at_unix_ms": 1794163985286,
         "state": {
           "demand": "none",
           "activity": "stopped",
           "completed": true
         }
       },
-      "h1:p2": {
-        "changed_at_unix_ms": 1794152834330,
-        "seen_at_unix_ms": 1794152840697,
+      "h1:p3": {
+        "changed_at_unix_ms": 1794163985495,
+        "seen_at_unix_ms": 1794163991835,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
+        }
+      },
+      "h2:p2": {
+        "changed_at_unix_ms": 1794163991941,
+        "seen_at_unix_ms": 0,
         "state": {
           "demand": "none",
           "activity": "stopped",
@@ -322,24 +365,80 @@
       }
     },
     "records": {},
-    "dormant": {}
+    "dormant": {
+      "sleep-18e626a38300fd72-1": {
+        "phase": "sleeping",
+        "revision": 5,
+        "node_id": "c0de0000000000000000000000000001",
+        "connection_generation": 1,
+        "old_pane_id": "h1:p2",
+        "old_state_change_seq": 2,
+        "kind": "pi",
+        "native_session_id": "f810e69a-829b-4f30-8c50-9ad6d566d542",
+        "source_reference": {
+          "kind": "path",
+          "value": "/home/me/.pi/agent/sessions/--home-me-core-proj--/2026-11-08T18-53-04-000Z_f810e69a-829b-4f30-8c50-9ad6d566d542.jsonl"
+        },
+        "label_owner": "v1:adb7d30d95e163450e6aaf1a05f7597af4d3d11f1312a4be0a88454efb6b641c",
+        "identity_label": "pi",
+        "cwd": "/home/me/core-proj",
+        "context": {
+          "workspace_id": "h1",
+          "workspace_label": "Core project",
+          "workspace_ids_before_close": [
+            "h1"
+          ],
+          "tab_ids_before_close": [
+            "h1:t1",
+            "h1:t2"
+          ],
+          "pane_ids_before_close": [
+            "h1:p2"
+          ],
+          "checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+          "checkout_path": "/home/me/core-proj",
+          "tab_id": "h1:t2",
+          "tab_label": "pi",
+          "tab_index": 1,
+          "agent_area": [
+            "a1",
+            1
+          ],
+          "agent_group": null,
+          "replacement_in_tab": false,
+          "tab_name": "unnamed"
+        },
+        "close_key": "reopen-1794163985285-1",
+        "closed": true,
+        "wake_pane_id": null,
+        "wake_tab_id": null,
+        "since_unix_ms": 1794163985273,
+        "transition_started_unix_ms": 1794163985273,
+        "reason": null,
+        "owner": {
+          "repository_root": "/home/me/core-proj",
+          "is_git": true,
+          "label": "Core project"
+        }
+      }
+    }
   },
   "session_archive": {
-    "archive-18e61c80b54c2acf-1": {
+    "archive-18e626a509b1a8e0-1": {
       "phase": "archived",
       "revision": 2,
-      "archived_at_unix_ms": 1794152840676,
+      "archived_at_unix_ms": 1794163991827,
       "project_root": "/home/me/core-proj",
       "project_label": "Core project",
       "members": [
         {
           "machine": "c0de0000000000000000000000000001",
-          "pane_id": "h1:p3",
+          "pane_id": "h1:p4",
           "kind": "claude",
-          "native_session_id": "ea6dc887-d451-476b-813c-12cc4f34a9f0",
+          "native_session_id": "693d2086-414d-487d-917d-41c00d7e4b15",
           "source_reference": {
             "kind": "id",
-            "value": "ea6dc887-d451-476b-813c-12cc4f34a9f0"
+            "value": "693d2086-414d-487d-917d-41c00d7e4b15"
           },
           "cwd": "/home/me/core-proj",
           "checkout_path": "/home/me/core-proj",

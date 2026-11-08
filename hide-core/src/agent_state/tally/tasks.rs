@@ -193,9 +193,6 @@ impl<'a> Forest<'a> {
             .filter(|id| self.parent(id).is_none())
         {
             let place = &self.places[root];
-            if place.project.is_home {
-                continue;
-            }
             let members = self.subtree(root);
             let card = self.card(place, &members);
             let key = (place.device_id.to_owned(), place.project.id.clone());
@@ -328,7 +325,7 @@ impl<'a> Forest<'a> {
         let mut result: Vec<((String, String), Incoming)> = Vec::new();
         for id in members {
             let row = &self.places[*id];
-            if row.device_id == root.device_id || row.project.is_home {
+            if row.device_id == root.device_id {
                 continue;
             }
             let key = (row.device_id.to_owned(), row.project.id.clone());

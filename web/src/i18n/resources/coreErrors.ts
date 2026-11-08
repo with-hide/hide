@@ -95,8 +95,6 @@ export const coreErrorsEnglish = {
   "coreError.worktree.ignoredChanged": "Not deleted: the list of ignored repositories changed. Refresh it, check every repository, then choose again.",
   "coreError.worktree.discardUnconfirmed": "Not deleted: deleting it would lose work. To delete it anyway, tick the box that discards it.",
   "coreError.worktree.blocked": "Not deleted. Resolve the reason shown, then try again.",
-  "coreError.home.conflict": "~/hide on this device is not Hide's Home, so Home was not opened. Rename or move it, then try again.",
-  "coreError.home.unavailable": "This device is not connected, so Home cannot open there. Try again once it is.",
 
   "coreError.prLink.busy": "Another PR is still being linked. Try again once it finishes.",
 
@@ -245,8 +243,6 @@ const ko = {
   "coreError.worktree.ignoredChanged": "삭제하지 않았어요. 무시된 저장소 목록이 바뀌었어요. 목록을 새로 고치고 저장소를 모두 확인한 뒤 다시 선택하세요.",
   "coreError.worktree.discardUnconfirmed": "삭제하지 않았어요. 삭제하면 작업이 사라져요. 그래도 삭제하려면 변경 내용을 버리는 확인란을 선택하세요.",
   "coreError.worktree.blocked": "삭제하지 않았어요. 표시된 이유를 해결한 뒤 다시 시도하세요.",
-  "coreError.home.conflict": "이 기기의 ~/hide 폴더는 Hide의 홈이 아니라서 홈을 열지 않았어요. 폴더 이름을 바꾸거나 옮긴 뒤 다시 시도하세요.",
-  "coreError.home.unavailable": "이 기기에 연결돼 있지 않아서 홈을 열 수 없어요. 연결된 뒤 다시 시도하세요.",
 
   "coreError.prLink.busy": "다른 PR을 연결하는 중이에요. 끝난 뒤 다시 시도하세요.",
 
@@ -395,8 +391,6 @@ const ja = {
   "coreError.worktree.ignoredChanged": "削除しませんでした。無視されたリポジトリの一覧が変わりました。一覧を更新し、すべてのリポジトリを確認してから、もう一度選んでください。",
   "coreError.worktree.discardUnconfirmed": "削除しませんでした。削除すると作業が失われます。それでも削除する場合は、変更を破棄するチェックボックスを選んでください。",
   "coreError.worktree.blocked": "削除しませんでした。表示された理由を解決してから、もう一度お試しください。",
-  "coreError.home.conflict": "このデバイスの~/hideはHideのホームではないため、ホームを開きませんでした。名前を変えるか移動してから、もう一度お試しください。",
-  "coreError.home.unavailable": "このデバイスに接続されていないため、ホームを開けません。接続されてからもう一度お試しください。",
 
   "coreError.prLink.busy": "別のPRを関連付けています。終わってからもう一度お試しください。",
 
@@ -545,8 +539,6 @@ const zhCN = {
   "coreError.worktree.ignoredChanged": "未删除：被忽略的仓库列表已变化。请刷新列表并检查每个仓库，然后重新选择。",
   "coreError.worktree.discardUnconfirmed": "未删除：删除会丢失工作。如仍要删除，请勾选放弃更改的复选框。",
   "coreError.worktree.blocked": "未删除。请先解决显示的原因，然后重试。",
-  "coreError.home.conflict": "此设备上的 ~/hide 不是 Hide 的主页，因此未打开主页。请重命名或移动它后重试。",
-  "coreError.home.unavailable": "此设备未连接，无法在那里打开主页。连接后请重试。",
 
   "coreError.prLink.busy": "另一个 PR 仍在关联中。完成后请重试。",
 

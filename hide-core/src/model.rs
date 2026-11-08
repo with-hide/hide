@@ -2237,11 +2237,6 @@ pub struct WorkspaceSnapshot {
     /// (D-07), so an unregistered workspace is never pinned.
     #[serde(default)]
     pub pinned: bool,
-    /// This row is its device's Home (`~/hide`, PRD home-device-rail D-01):
-    /// the registration's flag carried onto the row. The shell draws it as
-    /// the Home row and never lists or counts it as a project.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub is_home: bool,
     pub checkouts: Vec<CheckoutSnapshot>,
     /// Checkout rows grouped after the active rows in this project. The full
     /// rows stay in `checkouts`, which remains the authority for focus,
@@ -4907,6 +4902,11 @@ pub struct UiStateSnapshot {
     /// recorded, is not the operator's. Persisted and never on the wire.
     #[serde(default, skip_serializing)]
     pub operator_tab_names: BTreeMap<String, String>,
+    /// The devices whose old Home still waits for their helper's one-time
+    /// retirement (`runtime/home_retire.rs`). Only a store written by the
+    /// release before this one makes an entry; the answer removes it.
+    #[serde(default, skip_serializing)]
+    pub home_retire: Vec<HomeRetirement>,
 }
 
 /// The most checkouts the recent list keeps; the oldest leave first.
@@ -5703,6 +5703,7 @@ impl Default for UiStateSnapshot {
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
             operator_tab_names: BTreeMap::new(),
+            home_retire: Vec::new(),
         }
     }
 }
@@ -5723,11 +5724,17 @@ pub struct WorkspaceRegistration {
     /// takes the pin with it; nothing else about the pin is stored.
     #[serde(default)]
     pub pinned: bool,
-    /// The device's Home folder (`~/hide`), registered by its first Home
-    /// start (PRD home-device-rail D-01, D-04). Absent in every other
-    /// registration and in stores written before Home existed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub home: bool,
+}
+
+/// A device's old Home registration (`~/hide`) whose retirement the helper has
+/// not yet answered (PRD retire-hide-home D-03, D-04). The registration is an
+/// ordinary pinned project meanwhile; the answer decides whether it stays.
+/// Persisted and never on the wire.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HomeRetirement {
+    pub device_id: String,
+    /// The registration that was the device's Home.
+    pub registration_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

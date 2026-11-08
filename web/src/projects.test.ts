@@ -114,7 +114,7 @@ describe("projectRows", () => {
     const projects = [workspace("a", { checkouts: [{ id: "a-main", tabs: [{ id: "a-t", panes: panes.map((pane) => ({ id: pane })) }] } as unknown as Checkout] })];
     const listed = panes.map((pane) => ({ agent: legacyAgentRow({ pane_id: pane, id: pane, group: pane.startsWith("ask") ? "needs_you" : "done" }) as AgentRow, device: null }));
     const sections = (open: string[]) =>
-      projectRows(projects, {}, listed, null, open).flatMap((row) =>
+      projectRows(projects, {}, listed, open).flatMap((row) =>
         row.kind === "raised" ? [{ group: row.group, drawn: row.agents.map(({ agent }) => agent.pane_id), more: row.more.map(({ agent }) => agent.pane_id), expanded: row.expanded }] : [],
       );
     expect(sections([])).toEqual([

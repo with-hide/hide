@@ -161,12 +161,10 @@ fn an_unchanged_front_writes_nothing() {
     assert_eq!(recent(&runtime), ["c-alpha"]);
 }
 
-/// A front the catalog cannot name, and a device's Home, are never recorded.
+/// A front the catalog cannot name is never recorded.
 #[test]
-fn nothing_is_recorded_for_an_unknown_front_or_a_home() {
-    let mut runtime = runtime_with(&["alpha", "home"]);
-    runtime.snapshot.navigator.workspaces[1].is_home = true;
-    bring_front(&mut runtime, "home");
+fn nothing_is_recorded_for_an_unknown_front() {
+    let mut runtime = runtime_with(&["alpha"]);
     runtime.snapshot.navigator.focused_workspace_id = Some("w-gone".to_owned());
     runtime.snapshot.navigator.focused_checkout_id = Some("c-gone".to_owned());
     runtime.sync_workspace_view();
@@ -192,7 +190,6 @@ fn removing_a_project_or_a_worktree_drops_its_records() {
             path: "/fixture/alpha".to_owned(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         });
 
     runtime.dispatch_json(&event(
@@ -276,7 +273,6 @@ fn unregistering_a_project_of_a_disconnected_device_drops_its_folder_checkout() 
             path: "/srv/api".to_owned(),
             device_id: "mini".to_owned(),
             pinned: false,
-            home: false,
         });
     let record = |checkout: String| RecentCheckout {
         device_id: "mini".to_owned(),

@@ -602,7 +602,6 @@ fn a_device_project_at_this_machines_path_does_not_hold_up_its_add_or_removal() 
         path: "/work/same".to_owned(),
         device_id: device.to_owned(),
         pinned: false,
-        home: false,
     };
     runtime.snapshot.ui_state.workspace_registrations =
         vec![registration("remote:mac:workspace:1", "mac")];

@@ -53,7 +53,6 @@ impl Runtime {
                     workspace.remote_target_id.is_none()
                         && workspace.device_id == device
                         && workspace.path == root
-                        && !workspace.is_home
                 })
                 .ok_or("project_settings_project_missing");
         }
@@ -76,7 +75,7 @@ impl Runtime {
                 session
                     .workspaces
                     .iter()
-                    .find(|workspace| workspace.path == root && !workspace.is_home)
+                    .find(|workspace| workspace.path == root)
             })
             .ok_or("project_settings_project_missing")
     }
@@ -386,7 +385,7 @@ impl Runtime {
     /// settles: this machine's rows are relabelled where they stand, a
     /// device's catalog is derived again, and the agents placed in either
     /// read the new name. A name cleared gives back the catalog's own label.
-    fn rename_project(&mut self, device: &str, root: &str) {
+    pub(super) fn rename_project(&mut self, device: &str, root: &str) {
         if device != self.node.as_str() {
             self.refresh_device_catalog(device);
             return;
@@ -397,9 +396,7 @@ impl Runtime {
             .navigator
             .workspaces
             .iter_mut()
-            .filter(|project| {
-                project.device_id == device && project.path == root && !project.is_home
-            })
+            .filter(|project| project.device_id == device && project.path == root)
         {
             project.label = registrations
                 .iter()

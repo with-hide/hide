@@ -2749,7 +2749,6 @@ impl Runtime {
                 path: row.path.clone(),
                 device_id: device_id.to_owned(),
                 pinned: true,
-                home: false,
             }
         };
         if let Some(row) =
@@ -2913,7 +2912,7 @@ impl Runtime {
 
     /// A project's checkout folders and the panes in them, by the ids its
     /// own engine uses.
-    fn project_panes(
+    pub(super) fn project_panes(
         &self,
         workspace_id: &str,
         device: Option<&str>,
@@ -4702,23 +4701,13 @@ impl Runtime {
             .clone()
             .filter(|device| !device.is_empty())
             .unwrap_or_else(|| self.node.as_str().to_owned());
-        // A start names one place: a device's Home, or one of its checkouts.
-        let checkout_path = match (payload.home, payload.checkout_path.clone()) {
-            (true, None) => {
-                return self.start_in_home(
-                    &device,
-                    agent_kind,
-                    model,
-                    prompt,
-                    request_id,
-                    payload.stay_behind,
-                );
-            }
-            (false, Some(path)) if !path.is_empty() => path,
+        // A start names one checkout of a project the operator registered.
+        let checkout_path = match payload.checkout_path.clone() {
+            Some(path) if !path.is_empty() => path,
             _ => {
                 self.set_request_error(
                     "agent_start.invalid_target",
-                    "A start names either Home or one checkout",
+                    "A start names one checkout",
                     false,
                     request_id.as_deref(),
                 );

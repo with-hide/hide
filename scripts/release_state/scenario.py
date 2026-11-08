@@ -475,6 +475,51 @@ class Scenario:
         self.agents[name] = {"pane": row["pane_id"], "session": row["session_id"], "device": device, "seen": 0}
         return row["pane_id"]
 
+    def old_home(self):
+        """A Home started on the core and on the device, as the releases that
+        kept one did: its registration (flagged `home`) is stored with each
+        machine's id, which a later build reads once as a pending retirement
+        and moves with the device. A release without a Home refuses the start.
+        One start at a time: the core runs one task operation at once."""
+        ids = []
+        for device in (False, True):
+            known = {row.get("id") for row in self.home_rows(self.daemon.snapshot())}
+            rows = None
+            # The core runs one task operation at once, so a start sent while
+            # the one before is still opening its pane is refused as busy; it
+            # is sent again until it is taken.
+            for _ in range(12):
+                seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+                self.send("agent_start_in_checkout", {"home": True, "provider": "claude", "request_id": self.rid("home"),
+                                                      **({"device_id": self.device} if device else {})})
+
+                def registered(rest):
+                    fresh = [row for row in self.home_rows(rest) if row.get("id") not in known]
+                    error = (rest.get("status") or {}).get("last_error") or {}
+                    if fresh:
+                        return fresh
+                    if error == seen:
+                        return None
+                    if "busy" in str(error.get("kind")):
+                        return "busy"
+                    if "home" in str(error.get("kind")) or "invalid" in str(error.get("kind")):
+                        return error
+                    return None
+                rows = self.wait(registered, "the Home registration", 30)
+                if rows != "busy":
+                    break
+                time.sleep(5)
+            if rows == "busy" or rows is None:
+                raise Stop("the Home start stayed busy")
+            if isinstance(rows, dict):
+                raise NotInRelease(rows)
+            ids.extend(row.get("id") for row in rows)
+        return ids
+
+    @staticmethod
+    def home_rows(rest):
+        return [row for row in ((rest or {}).get("ui_state") or {}).get("workspace_registrations") or [] if row.get("home")]
+
     def start_panel(self):
         """Agents started from the start panel on the core and the device,
         left running: the launch record a later build adds the profile to."""
@@ -528,6 +573,7 @@ class Scenario:
             self.step("Pi on the core asleep with its pane closed", self.dormant)
             self.step("agent started from the start panel", self.start_panel)
             self.step("archived session", self.archive)
+            self.step("a Home started on the core and the device", self.old_home)
             # Let the core write what it holds in memory before it stops.
             time.sleep(5)
         except Stop:

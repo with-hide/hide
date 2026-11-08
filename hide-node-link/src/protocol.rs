@@ -362,17 +362,21 @@ use crate::error::HostError;
 /// installs into each profile's account; a helper on 85 would refuse the
 /// calls, so it upgrades, and a node the core still admits on an older
 /// protocol answers them unrun, which the core reads as no profiles there.
-/// 87: a node answers how a start of one of its profiles runs there
+/// 87: `home_retire` replaces `home_sync` (PRD retire-hide-home): the core no
+/// longer keeps a Home folder, and asks each helper once to remove what
+/// Hide's marker lists in `~/hide`; a helper on 86 would refuse the call, so
+/// it upgrades first and keeps its `~/hide` until then.
+/// 88: a node answers how a start of one of its profiles runs there
 /// (`ProfileLaunch`, PRD agent-profiles D-26): the profile's variables and
 /// program, checked on that machine, and the `hide` beside the node that
-/// starts it (`hide agent exec`); a helper on 86 would refuse the call, so
+/// starts it (`hide agent exec`); a helper on 87 would refuse the call, so
 /// it upgrades, and a node the core still admits on an older protocol
 /// answers it unrun, which the core reads as a machine that starts only each
 /// agent's built-in default profile. The same step lets the core read one
 /// process of a pane fresh (`holders::PaneCall::Process`) and carries the
 /// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
 /// `executor`), by which the core decides what came of that start.
-pub const PROTOCOL_VERSION: u32 = 87;
+pub const PROTOCOL_VERSION: u32 = 88;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -686,11 +690,16 @@ pub enum Call {
         name: String,
         kind: crate::browse::NewFolderKind,
     },
-    /// Makes this host's Hide Home folder (`~/hide`) hold one link per
-    /// project in `projects` and nothing Hide did not make
-    /// (`hide_host::home::sync`).
-    HomeSync {
-        projects: Vec<String>,
+    /// Retires this host's old Hide Home folder (`~/hide`) once: removes the
+    /// entries Hide's marker lists as its own and, unless something else is
+    /// there or `keep_empty`, the folder (`hide_host::home::retire`).
+    /// Repeating it changes nothing more.
+    HomeRetire {
+        keep_empty: bool,
+        /// The second call for a folder that stays: the first leaves the
+        /// marker until the caller has saved the answer, this one removes it.
+        #[serde(default)]
+        settle: bool,
     },
     /// A branch measured against `base` in the repository at `root`
     /// (`hide_host::branch_merge::facts`): how far ahead, whether it is in
@@ -1393,7 +1402,7 @@ impl Call {
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
-            | Self::HomeSync { .. }
+            | Self::HomeRetire { .. }
             | Self::HomeList { .. }
             | Self::ImportableProjects { .. }
             | Self::NewFolderTarget { .. }

@@ -362,7 +362,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       agent_onboarding: state === "agents-refused" ? null : step === "agents" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
-      workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
+      workspace_registrations: [...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
     status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
