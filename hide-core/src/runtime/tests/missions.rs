@@ -8316,3 +8316,74 @@ fn the_operator_closes_a_refused_mission_as_done_passing_the_empty_lines() {
         Some(crate::mission_criteria::Role::Operator)
     );
 }
+
+/// The same passing check sent again after the folder moved on changes
+/// nothing: the proof the node finished on stays, so the line stays passed.
+#[test]
+fn a_check_sent_again_unchanged_keeps_the_proof_a_node_finished_on() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    checkout_at(&mut runtime, OTHER_HEAD);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let done_head = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .done_head
+        .clone();
+    assert_eq!(done_head.as_deref(), Some(HEAD));
+}
+
+/// 완료로 닫기 answers a question about a mission whose every node was
+/// finished: once another node works again it is refused and passes nothing,
+/// and the next evaluation takes the question and its choices away.
+#[test]
+fn a_refused_close_is_not_closed_by_the_operator_once_a_node_works_again() {
+    use crate::missions::{AttentionReason, NodeStatus, OperatorAction};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let mut second = mission.nodes[0].clone();
+        second.key = "second".into();
+        mission.nodes.push(second);
+        mission.nodes[0].done_head = None;
+    }
+    checkout_at(&mut runtime, OTHER_HEAD);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let attention = node_view(&runtime, "fix").attention.unwrap();
+    assert_eq!(attention.reason, AttentionReason::CloseRefused);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    let payload = crate::runtime::mission_health::MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        action: OperatorAction::Done,
+        since_unix_ms: Some(attention.since_unix_ms),
+    };
+    assert_eq!(
+        runtime.mission_attention_act(&payload, now + 1),
+        Err("mission_attention_moved".into())
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(mission.nodes[1].status, NodeStatus::Working);
+    assert!(
+        mission.nodes[0]
+            .criteria
+            .iter()
+            .all(|line| line.skip.is_none())
+    );
+    runtime.drive_mission_health(now + 2);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+}

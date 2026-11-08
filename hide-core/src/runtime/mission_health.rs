@@ -1273,6 +1273,11 @@ impl Runtime {
             && attention
                 .as_ref()
                 .is_some_and(|attention| attention.reason == AttentionReason::CloseRefused);
+        // The question was asked of a mission with every node finished; a
+        // node taken back to work since leaves nothing to pass or close.
+        if closes && mission.nodes.iter().any(|node| !node.status.finished()) {
+            return Err("mission_attention_moved".into());
+        }
         let others: Vec<(usize, Vec<String>)> = if closes {
             self.unmet_done_nodes(mission)
                 .into_iter()

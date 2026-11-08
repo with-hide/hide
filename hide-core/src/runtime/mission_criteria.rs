@@ -466,13 +466,14 @@ impl Runtime {
                         next.set_check_folder(&mission.device_id, &actor.device_id, &folder);
                     let mut effect = next.criteria[at]
                         .record(pass, evidence, summary, commit, rerun, recorder)?;
-                    effect.changed |= moved;
                     // A check recorded on a node already done is the proof
-                    // it finishes on from now.
-                    if next.status == NodeStatus::Done {
+                    // it finishes on from now, when the record is new: the
+                    // same result sent again changes nothing, so it leaves
+                    // the proof the node finished on as it is.
+                    if pass && effect.changed && next.status == NodeStatus::Done {
                         self.freeze_done_head(mission, &mut next);
-                        effect.changed |= next.done_head != row.done_head;
                     }
+                    effect.changed |= moved || next.done_head != row.done_head;
                     effect
                 } else {
                     next.criteria[at].record(pass, evidence, summary, commit, rerun, recorder)?
