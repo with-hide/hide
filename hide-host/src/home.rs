@@ -671,15 +671,26 @@ mod tests {
     /// The guide an earlier build wrote for these projects, as its generator
     /// did.
     fn guide_text(user_home: &Path, projects: &[&str]) -> String {
-        let mut text = format!("{GUIDE_HEAD}{GUIDE_INTRO_LINKS}");
+        // As the earlier build wrote it: links with their targets in the wire
+        // spelling, or on Windows one line per project.
+        let intro = if cfg!(windows) {
+            GUIDE_INTRO_LINES
+        } else {
+            GUIDE_INTRO_LINKS
+        };
+        let mut text = format!("{GUIDE_HEAD}{intro}");
         if projects.is_empty() {
             text.push_str(GUIDE_NO_PROJECT);
         }
         for name in projects {
-            text.push_str(&format!("- {name} -> {}\n", user_home.join(name).display()));
+            text.push_str(&format!("{}\n", bullet(user_home, name)));
         }
         text.push_str(GUIDE_TAIL);
         text
+    }
+
+    fn bullet(user_home: &Path, name: &str) -> String {
+        format!("- {name} -> {}", to_wire_lossy(&user_home.join(name)))
     }
 
     /// A name Hide sets a folder aside under.
@@ -895,8 +906,8 @@ mod tests {
             (
                 "reordered",
                 Box::new(|dir| {
-                    let a = format!("- alpha -> {}\n", dir.join("alpha").display());
-                    let b = format!("- beta -> {}\n", dir.join("beta").display());
+                    let a = format!("{}\n", bullet(dir, "alpha"));
+                    let b = format!("{}\n", bullet(dir, "beta"));
                     exact(dir).replace(&format!("{a}{b}"), &format!("{b}{a}"))
                 }),
             ),
