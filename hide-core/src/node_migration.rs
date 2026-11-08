@@ -1517,6 +1517,12 @@ pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -
                         if let Some(device) = entry.get_mut("device_id") {
                             changed |= change(device);
                         }
+                    } else if key == "openers" {
+                        for opener in entry.as_array_mut().into_iter().flatten() {
+                            if let Some(device) = opener.get_mut("device_id") {
+                                changed |= change(device);
+                            }
+                        }
                     } else {
                         changed |= walk(entry, change);
                     }

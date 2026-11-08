@@ -1400,6 +1400,65 @@ mod tests {
         );
     }
 
+    /// An opener with every field its store keeps, on `device`.
+    fn opener(device: &str, terminal: &str) -> crate::view_feedback::Opener {
+        crate::view_feedback::Opener {
+            device_id: device.to_owned(),
+            terminal_id: terminal.to_owned(),
+            session: Some(format!("session-{terminal}")),
+            resume: Some(format!("resume-{terminal}")),
+            resume_path: Some(format!("/home/me/.claude/{terminal}.jsonl")),
+            provider: "claude".to_owned(),
+            name: "worker".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_device_whose_agents_opened_a_view_takes_its_machine_id_in_every_opener() {
+        // The View store as the core writes it: two agents on the device and
+        // one on the core opened the same file, so the View keeps a mark and
+        // a list of openers.
+        let dir = folder();
+        let state = dir.path();
+        let mut views = crate::workspace_views::WorkspaceViews::default();
+        let view = views.entry_at(ALIAS, ROOT, 1);
+        let mut display =
+            view.layout
+                .new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
+        display.opened_by(opener(ALIAS, "t1"));
+        display.opened_by(opener(NODE, "t2"));
+        display.opened_by(opener(ALIAS, "t3"));
+        view.layout.insert("a1", display, 0).unwrap();
+        crate::workspace_views::save(&state.join(WORKSPACE_VIEWS), &views).unwrap();
+
+        let outcome = name_devices(state, &node()).unwrap();
+        assert_eq!(
+            outcome.renamed,
+            vec![(ALIAS.to_owned(), MACHINE.to_owned())]
+        );
+        assert!(outcome.held.is_empty(), "{outcome:?}");
+
+        let (loaded, _) = crate::workspace_views::load(&state.join(WORKSPACE_VIEWS), 2);
+        assert!(loaded.get(ALIAS, ROOT).is_none());
+        let display = loaded
+            .get(MACHINE, ROOT)
+            .unwrap()
+            .layout
+            .displays()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(display.opener, Some(opener(MACHINE, "t3")));
+        assert_eq!(
+            display.openers,
+            vec![
+                opener(MACHINE, "t1"),
+                opener(NODE, "t2"),
+                opener(MACHINE, "t3")
+            ]
+        );
+    }
+
     #[test]
     fn a_device_whose_machine_is_the_core_is_held() {
         let dir = folder();
