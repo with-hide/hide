@@ -102,16 +102,16 @@ describe("a mission whose Conductor has not got its letters (hide-private issue 
 });
 
 describe("the turn pill words the operator's action (B6)", () => {
-  it("names the action in every language, and says 이어받기 for a mission no Conductor holds", async () => {
+  it("names the action in every language, and says 지휘 다시 열기 for a mission no Conductor holds", async () => {
     const { initializeInterfaceI18n } = await import("./i18n/instance");
     const asked = mission("a", { decision: "?" });
     const word = (language: "en" | "ko" | "zh-CN" | "ja", turn: Parameters<typeof missionPillKey>[1]) => initializeInterfaceI18n(language).getFixedT(null, "translation")(missionPillKey(asked, turn));
     const turns = [{ kind: "decision" }, { kind: "landing" }, { kind: "landing", git: true }, { kind: "worker_blocked" }, { kind: "letters" }, { kind: "attention" }, { kind: "takeover" }] as const;
     const words = (language: "en" | "ko" | "zh-CN" | "ja") => turns.map((turn) => word(language, turn));
-    expect(words("ko")).toEqual(["답하기", "머지하기", "합치기", "막힌 곳 보기", "편지 읽기", "확인하기", "이어받기"]);
-    expect(words("en")).toEqual(["Answer", "Merge", "Join", "See what's stuck", "Read letters", "Take a look", "Take over"]);
-    expect(words("zh-CN")).toEqual(["去回答", "去合并", "去汇合", "查看受阻处", "读信件", "去查看", "接手"]);
-    expect(words("ja")).toEqual(["答える", "マージする", "合流する", "停止箇所を見る", "手紙を読む", "確認する", "引き継ぐ"]);
+    expect(words("ko")).toEqual(["답하기", "머지하기", "합치기", "막힌 곳 보기", "편지 읽기", "확인하기", "지휘 다시 열기"]);
+    expect(words("en")).toEqual(["Answer", "Merge", "Join", "See what's stuck", "Read letters", "Take a look", "Resume command"]);
+    expect(words("zh-CN")).toEqual(["去回答", "去合并", "去汇合", "查看受阻处", "读信件", "去查看", "重新开启指挥"]);
+    expect(words("ja")).toEqual(["答える", "マージする", "合流する", "停止箇所を見る", "手紙を読む", "確認する", "指揮を再開"]);
     expect(missionPillKey(mission("b", {}), null)).toBe("mission.pill.running");
     initializeInterfaceI18n("en");
   });
