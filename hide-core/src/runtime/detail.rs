@@ -234,6 +234,9 @@ impl Runtime {
     /// columns B9); the Workspace, its Agent tab and the keyboard stay
     /// (D-43).
     pub(super) fn open_detail(&mut self, item: DetailItem) -> bool {
+        // An event that moved the tab first (a card opened in its own
+        // Workspace) opens in the tab it left in front.
+        self.sync_detail_home();
         let before = self.snapshot.ui_state.detail.clone();
         self.snapshot.ui_state.detail.open(item);
         // Opening the item shown again reads it again, as Look again does.
@@ -365,7 +368,11 @@ impl Runtime {
     /// own slot or none, and a tab that closed takes its slot with it. With
     /// no Workspace in front nothing moves. After a launch, a slot kept
     /// window-wide by an older build attaches to the tab then in front.
-    /// Whether anything changed.
+    /// Whether the front slot or a saved slot changed.
+    ///
+    /// It runs on every event, terminal input included, so the work per call
+    /// is one lookup of the front tab and, while the front tab is the slot's
+    /// home with no other slot held, nothing more.
     pub(super) fn sync_detail_home(&mut self) -> bool {
         let Some(front) = self
             .front_workspace_key()
@@ -374,35 +381,32 @@ impl Runtime {
         else {
             return false;
         };
-        // The tabs the catalog carries now; before it carries any (a launch
-        // before the session arrives) no slot is judged closed.
-        let open: BTreeSet<&str> = self
-            .catalog_workspaces()
-            .flat_map(|workspace| &workspace.checkouts)
-            .flat_map(|checkout| &checkout.tabs)
-            .filter_map(|tab| tab.id.as_deref())
-            .collect();
-        let judge = !open.is_empty();
-        let gone = |tab: &str| judge && !open.contains(tab);
         let state = &self.snapshot.ui_state;
-        let stale: Vec<String> = state
+        let home_moved = state.detail_home.as_deref() != Some(front.as_str());
+        if !home_moved && state.detail_tabs.is_empty() {
+            return false;
+        }
+        let closed: BTreeSet<String> = state
             .detail_tabs
             .keys()
-            .filter(|tab| gone(tab))
-            .cloned()
+            .map(String::as_str)
+            .chain(state.detail_home.as_deref())
+            .filter(|tab| self.tab_closed(tab))
+            .map(str::to_owned)
             .collect();
-        let home_gone = state.detail_home.as_deref().is_some_and(gone);
-        let home_moved = state.detail_home.as_deref() != Some(front.as_str());
-        if stale.is_empty() && !home_moved {
+        if !home_moved && closed.is_empty() {
             return false;
         }
         let state = &mut self.snapshot.ui_state;
-        for tab in &stale {
-            state.detail_tabs.remove(tab);
+        let mut changed = false;
+        for tab in &closed {
+            changed |= state.detail_tabs.remove(tab).is_some();
         }
         if !home_moved {
-            self.persist_ui_state();
-            return true;
+            if changed {
+                self.persist_ui_state();
+            }
+            return changed;
         }
         let before = state.detail.top().cloned();
         match state.detail_home.replace(front.clone()) {
@@ -410,15 +414,54 @@ impl Runtime {
             None => {}
             Some(home) => {
                 let leaving = std::mem::take(&mut state.detail);
-                if !home_gone && leaving != crate::model::DetailSlot::default() {
+                let leaving_held = leaving != crate::model::DetailSlot::default();
+                if leaving_held && !closed.contains(&home) {
                     state.detail_tabs.insert(home, leaving);
                 }
                 state.detail = state.detail_tabs.remove(&front).unwrap_or_default();
+                changed |= leaving_held || state.detail != crate::model::DetailSlot::default();
             }
         }
-        self.read_detail_top(before.as_ref(), false);
-        self.persist_ui_state();
-        true
+        if changed {
+            self.read_detail_top(before.as_ref(), false);
+            self.persist_ui_state();
+        }
+        changed
+    }
+
+    /// Whether the catalog that owns `tab` is here and does not list it: a
+    /// tab of this machine is judged against the navigator once it lists any
+    /// tab, a device's against that device's session once it has one, so a
+    /// launch before a session arrives, or a device that is offline, drops
+    /// no slot.
+    fn tab_closed(&self, tab: &str) -> bool {
+        let lists = |workspaces: &[crate::model::WorkspaceSnapshot]| {
+            workspaces
+                .iter()
+                .flat_map(|workspace| &workspace.checkouts)
+                .flat_map(|checkout| &checkout.tabs)
+                .any(|row| row.id.as_deref() == Some(tab))
+        };
+        let device = self.snapshot.status.remote.iter().find(|remote| {
+            tab.strip_prefix("remote:")
+                .and_then(|rest| rest.strip_prefix(remote.target_id.as_str()))
+                .is_some_and(|rest| rest.starts_with(':'))
+        });
+        match device {
+            Some(remote) => remote
+                .session
+                .as_ref()
+                .is_some_and(|session| !lists(&session.workspaces)),
+            None if tab.starts_with("remote:") => false,
+            None => {
+                let local = &self.snapshot.navigator.workspaces;
+                local
+                    .iter()
+                    .flat_map(|workspace| &workspace.checkouts)
+                    .any(|checkout| !checkout.tabs.is_empty())
+                    && !lists(local)
+            }
+        }
     }
 
     /// The viewing column folded behind the rail's 보기 button (B11).

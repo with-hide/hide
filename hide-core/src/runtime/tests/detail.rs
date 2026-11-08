@@ -465,3 +465,49 @@ fn a_window_wide_detail_slot_from_an_older_build_attaches_to_the_front_tab() {
         crate::model::DetailSlot::default()
     );
 }
+
+/// A device's tab is judged closed only against that device's own session:
+/// before it arrives, or while the device is offline, its slot is kept
+/// through events on this machine.
+#[test]
+fn a_device_tab_slot_is_kept_until_that_devices_session_says_the_tab_closed() {
+    let checkout_path = "/private/tmp/hide-slot-per-tab-device";
+    let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    let tabs = ["w-order:t1", "w-order:t2"];
+    runtime.ingest_session(Ok(tab_order_payload(
+        checkout_path,
+        &tabs,
+        &tabs,
+        "w-order:t1",
+    )));
+    let mut kept = crate::model::DetailSlot::default();
+    kept.open(DetailItem::Cost {
+        workspace_id: "remote:mini:project:p".into(),
+    });
+    let device_tab = "remote:mini:tab:w9:t1";
+    runtime
+        .snapshot
+        .ui_state
+        .detail_tabs
+        .insert(device_tab.to_owned(), kept.clone());
+    runtime
+        .snapshot
+        .ui_state
+        .detail_tabs
+        .insert("w-order:t9".to_owned(), kept.clone());
+
+    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_tabs.get(device_tab),
+        Some(&kept),
+        "no session of mini is here to say its tab closed"
+    );
+    assert!(
+        !runtime
+            .snapshot
+            .ui_state
+            .detail_tabs
+            .contains_key("w-order:t9"),
+        "this machine's own catalog lists no such tab"
+    );
+}
