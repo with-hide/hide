@@ -101,7 +101,7 @@ function holdWords(reason: HoldReason, t: TFunction<"translation">): { to: Missi
     case "worker":
       return { to: "operator", who: t("mission.attention.to.operator"), why: reason.escalation.line ?? t(`mission.turn.cause.${reason.escalation.cause}`) };
     case "decision":
-      return { to: "operator", who: t("mission.attention.to.operator"), why: t("missionTool.pill.decision") };
+      return { to: "operator", who: t("mission.attention.to.operator"), why: t("missionScreen.pill.decision") };
   }
 }
 

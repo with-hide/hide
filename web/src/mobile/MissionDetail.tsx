@@ -105,7 +105,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
             <h2 className="flex items-center justify-between gap-md pb-xs text-body text-muted-foreground">
               <span>{t("mobile.mission.finished", { count: steps.done.length })}</span>
               <Button variant="text" size="inline" aria-expanded={doneOpen} className="min-h-(--size-touch-target)" data-phone-fold={foldKey} onClick={() => setMissionFold(foldKey, !doneOpen)}>
-                {doneOpen ? t("missionTool.fewer") : t("mobile.mission.unfold")}
+                {doneOpen ? t("missionScreen.fewer") : t("mobile.mission.unfold")}
               </Button>
             </h2>
             {doneOpen ? (

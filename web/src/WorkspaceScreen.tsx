@@ -119,25 +119,6 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       useShellStore.getState().noteDiagnostic(`document_width: widening for a page refused (${documentWidth})`);
     }
   }, [pageWiden, front, width, expanded, drawnView, view?.document_width, beside, sizes, actions]);
-  // A mission's map opening in the 보기 slot widens the slot once, as a page
-  // does, so its nodes have room (PRD software-factory-conductor B14); the
-  // width is stored like a divider landing and the operator's narrower drag
-  // afterwards stays.
-  const mission = detail?.shown ? (detail.items.at(-1)?.kind === "mission" ? detail.items.at(-1) : null) : null;
-  const missionKey = mission?.kind === "mission" ? mission.mission : null;
-  const widened = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    if (missionKey === null) {
-      widened.current = null;
-      return;
-    }
-    if (width <= 0 || expanded || widened.current === missionKey) return;
-    widened.current = missionKey;
-    const detailWidth = pageLaneWidth({ width: view?.detail_width ?? null, beside, body: width, sizes });
-    if (detailWidth !== null && actions.setWorkspaceView({ detail_width: detailWidth }) === false) {
-      useShellStore.getState().noteDiagnostic(`detail_width: widening for a mission map refused (${detailWidth})`);
-    }
-  }, [missionKey, width, expanded, view?.detail_width, beside, sizes, actions]);
   // The rail, the chords and the close shortcut read what is drawn.
   useLayoutEffect(() => {
     useUiStore.getState().setDrawnLane({ mode: frame.mode, view: drawnView, tool: drawnTool, stacked: frame.stacked });

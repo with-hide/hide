@@ -134,7 +134,7 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
   } finally { await unreadable.unmount(); }
 });
 
-it("shows its popover on focus or pointing without taking the keyboard, and a press opens the mission's map in the 보기 slot instead of pinning (B3)", async () => {
+it("shows its popover on focus or pointing without taking the keyboard, and a press opens the mission on the mission screen instead of pinning (B3; PRD mission-screen B12, B14)", async () => {
   const view = await mount([mission()]);
   try {
     expect(view.popover()).toBeNull();
@@ -153,11 +153,13 @@ it("shows its popover on focus or pointing without taking the keyboard, and a pr
     expect(view.popover()).not.toBeNull();
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(view.popover()).toBeNull();
-    // A press (Enter and Space on the focused button are presses too) opens the map and closes the popover.
+    // A press (Enter and Space on the focused button are presses too) opens the mission screen, coming back to this pane, and closes the popover.
     await point("pointerover", null);
     expect(view.popover()).not.toBeNull();
     await act(async () => view.chip()!.click());
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
+    expect(useUiStore.getState().missions).toMatchObject({ selected: "mission-1", returnPane: "p1" });
+    expect(view.events.some((event) => event.kind === "detail_open")).toBe(false);
     expect([useUiStore.getState().planPane, view.popover()]).toEqual([null, null]);
     expect(view.chip()!.hasAttribute("aria-pressed")).toBe(false);
   } finally { await view.unmount(); }

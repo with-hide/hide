@@ -7,6 +7,7 @@ import { Gallery, GalleryFrame } from "./Gallery";
 import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
+import { MissionScreenScene, missionScreenSceneParams } from "./MissionScreenScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
 import { GroupTabsScene } from "./GroupTabsScene";
 import { ViewFeedbackScene, viewFeedbackSceneParams } from "./ViewFeedbackScene";
@@ -155,6 +156,11 @@ export function mountGallery(root: Root) {
     // A scene seeds the app's own stores, so it is one document per scene.
     if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
+      return;
+    }
+    if (scene === "mission-screen") {
+      document.title = "hide · Mission screen scene";
+      root.render(<StrictMode><MissionScreenScene {...missionScreenSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "right-lane") {

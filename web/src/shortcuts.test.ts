@@ -118,13 +118,13 @@ describe("shortcut registry", () => {
       // ⌘E shows the Explorer in both hosts (issue 170); the macOS set keeps
       // it on the sidebar switch, which has no chord here until one is bound.
       overview: "⇧⌘O",
+      open_missions: "",
       add_backlog: "⇧⌘M",
       sidebar_projects: "⇧⌘P",
       toggle_device_rail: "",
       toggle_lane: "⌘E",
       toggle_lane_project: "",
       toggle_lane_memory: "",
-      toggle_lane_mission: "",
       toggle_lane_explorer: "⇧⌘E",
       toggle_lane_changes: "⇧⌘G",
       toggle_lane_documents: "",
@@ -339,8 +339,8 @@ describe("browser pane chord overrides (S5 B9, B10)", () => {
       [
         "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
         "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down",
-        "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom", "toggle_plan",
-        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_mission", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs", "desk_terminal",
+        "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "open_missions", "sidebar_projects", "toggle_zoom", "toggle_plan",
+        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs", "desk_terminal",
         "focus_next_agent_area", "focus_previous_agent_area", "grow_agent_area", "shrink_agent_area",
         "focus_next_view_area", "focus_previous_view_area", "grow_view_area", "shrink_view_area",
         "copy_path", "copy_relative_path",
@@ -475,13 +475,13 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       toggle_left_sidebar: "Ctrl+Shift+B",
       toggle_sidebar_lens: "Alt+Shift+B",
       overview: "Alt+Shift+O",
+      open_missions: "",
       add_backlog: "Alt+Shift+M",
       sidebar_projects: "Alt+Shift+P",
       toggle_device_rail: "",
       toggle_lane: "Ctrl+Shift+E",
       toggle_lane_project: "",
       toggle_lane_memory: "",
-      toggle_lane_mission: "",
       toggle_lane_explorer: "Alt+Shift+E",
       toggle_lane_changes: "Alt+Shift+G",
       toggle_lane_documents: "",
@@ -627,6 +627,15 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(browser.registry.find((command) => command.id === "open_sidebar_prs")?.browser).toEqual({ code: "Digit7", alt: true, shift: true });
     const both = effectiveRegistry({ toggle_lane_prs: "command+option+j", open_sidebar_prs: "command+option+u" }, "electron", "mac");
     expect(displayCommand("open_sidebar_prs", "electron", both.registry, "mac")).toBe("⌥⌘U");
+  });
+
+  it("runs a chord bound to the retired Mission tool as Open missions, the new name winning (PRD mission-screen D-12, B21)", () => {
+    const electron = effectiveRegistry({ toggle_lane_mission: "command+option+m" }, "electron", "mac");
+    expect(electron.diagnostic).toBeNull();
+    expect(displayCommand("open_missions", "electron", electron.registry, "mac")).toBe("⌥⌘M");
+    const both = effectiveRegistry({ toggle_lane_mission: "command+option+j", open_missions: "command+option+u" }, "electron", "mac");
+    expect(displayCommand("open_missions", "electron", both.registry, "mac")).toBe("⌥⌘U");
+    expect(displayCommand("open_missions", "electron", effectiveRegistry(null, "electron", "mac").registry, "mac")).toBe("");
   });
 
   it("drops only a stored chord that a fixed number now holds, keeping the rest of the set (⌥⌘n went to the devices)", () => {

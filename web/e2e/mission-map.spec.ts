@@ -1,12 +1,16 @@
 // A Conductor's mission as the operator meets it, on either engine and an
 // isolated hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
 // the real `hide mission` commands from the pane's own shell change the
-// core's record, the first plan opens nothing in the lane and, with the
-// operator looking at the Conductor pane, pins that pane's popover once
-// (PRD mission-pane-chip B11, B12), the map follows each change of the
-// record, a card opens its node's panel and Escape lets it go without
-// closing the lane (PRD mission-map-git-criteria B25, B28, B30, B31), and
-// Settings › Mission keeps the cap the next `hide mission settings` reads.
+// core's record, the first plan opens nothing and, with the operator looking
+// at the Conductor pane, pins that pane's popover once (PRD mission-pane-chip
+// B11, B12); the pane's chip opens the mission screen on its mission (PRD
+// mission-screen B10, B12, B14), whose map follows each change of the record,
+// a card opens its node's panel with the events the core sends for the
+// mission the screen shows (D-16), and Escape lets the pick go without leaving
+// the screen (B16; PRD mission-map-git-criteria B25, B28, B30, B31); `← <pane>`
+// goes back to the pane, the lane holding no mission (B19), the sidebar's
+// `미션` row opens the table (B1, B2), and Settings › Mission keeps the cap
+// the next `hide mission settings` reads.
 
 import { expect, test, type Page } from "@playwright/test";
 import type { HideAnswer } from "./agent-pane";
@@ -66,7 +70,7 @@ async function createMission(conductor: Hide) {
   await expect.poll(async () => (await conductor(["mission", "create", "--title", "이슈 정리"])).out, { timeout: 20_000 }).toContain('"ok":true');
 }
 
-test("the Conductor's first plan shows on its pane, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
+test("the Conductor's first plan shows on its pane, and the mission screen's map follows the record", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -74,7 +78,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     const opened = await conductorRepo(page, fixture, "mission-map");
     daemon = opened.daemon;
     const { conductor, worker } = opened;
-    const map = page.locator('aside[data-detail="mission"]');
+    const map = page.locator("[data-mission-screen-detail]");
     await createMission(conductor);
     // A mission without a plan opens nothing; its pane's chip says it is being planned.
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
@@ -95,11 +99,14 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(small.locator("[data-mission-mini-tally]")).toHaveAttribute("data-mission-mini-tally", "0 3");
     await expect(map).toHaveCount(0);
     await screenshot(page, "mission-pane-first-plan");
-    // A press on the chip opens the big map in the 보기 slot and closes the popover.
+    // A press on the chip opens the mission screen on its mission, the list beside it, and closes the popover.
     await paneChip.click();
     await expect(small).toHaveCount(0);
     await expect(map).toBeVisible();
-    await expect(map.locator("[data-detail-title]")).toHaveAttribute("data-detail-title", /이슈 정리/);
+    await expect(page.locator("[data-workspace-screen]")).toHaveCount(0);
+    await expect(map.locator("[data-mission-screen-detail-head]")).toContainText("이슈 정리");
+    await expect(page.locator("[data-mission-list] [data-mission-list-row]")).toHaveCount(1);
+    await expect(page.locator("[data-mission-screen-back]")).toHaveAttribute("data-mission-screen-back", opened.pane);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     // The node that waits on another is drawn below it (down flow).
@@ -119,7 +126,8 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     // The decision is the operator's turn, above the map.
     await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
-    // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice, and the core's events for it (B31).
+    // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice,
+    // and the core's events for it, which the core sends for the mission the screen shows (B31; PRD mission-screen D-16).
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
@@ -128,14 +136,44 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(panel.locator("[data-panel-meta] [data-run]")).toHaveAttribute("title", "opus (planned)");
     await panel.locator("[data-panel-events-toggle]").click();
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
-    // Escape lets the pick go and leaves the lane open (B30).
+    // Escape lets the pick go and neither leaves the screen nor closes the detail (B30; PRD mission-screen B16).
     await page.keyboard.press("Escape");
     await expect(map.locator("[data-mission-panel]")).toHaveCount(0);
     await expect(map).toBeVisible();
     await screenshot(page, "mission-map-running");
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
 
-    // Closed by the operator, a later plan does not open it again.
-    await map.locator("[data-detail-close]").click();
+test("the mission screen goes back to its pane, opens on its table from the sidebar, and its gear keeps the cap the Conductor reads", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, fixture, "mission-screen");
+    daemon = opened.daemon;
+    const { conductor } = opened;
+    const map = page.locator("[data-mission-screen-detail]");
+    const small = page.locator("[data-pane-mission]");
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    await mission(conductor, ["mission", "start"]);
+    await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
+    await page.locator("[data-pane-mission-chip]").click();
+    await expect(map).toBeVisible();
+
+    // ← <pane> goes back to the Conductor's pane; the lane holds no mission and the rail no Mission icon (PRD mission-screen B14, B18, B19).
+    await page.locator("[data-mission-screen-back]").click();
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator('[data-lane-tool="mission"]')).toHaveCount(0);
+    await expect(page.locator('[data-detail="mission"]')).toHaveCount(0);
+    // The sidebar's 미션 row opens the table, the mission in its group, never the last mission shown (B1, B2; D-04).
+    await page.locator("[data-sidebar-missions]").click();
+    await expect(page.locator('[data-mission-screen-view="table"]')).toBeVisible();
+    await expect(page.locator("[data-sidebar-missions]")).toHaveAttribute("aria-current", "page");
+    await expect(page.locator('[data-mission-row-group="turn"]')).toHaveCount(1);
     await expect(map).toHaveCount(0);
     await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", criteria: ["두 변경이 함께 동작한다"], depends_on: ["screen"] }] })]);
     const shown = await mission(conductor, ["mission", "show", "--json"]);
@@ -153,10 +191,9 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(4);
 
-    // The map head's gear opens the rail's Mission tool on its defaults, Settings › Mission's own
-    // controls, which write the cap the Conductor reads (PRD mission-tool B9).
-    await map.locator("[data-detail-conductor-settings]").click();
-    const sheet = page.locator('[data-mission-tool-page="settings"]');
+    // The detail's gear opens Settings › Mission, whose controls write the cap the Conductor reads (PRD mission-screen B10).
+    await map.locator("[data-mission-screen-settings]").click();
+    const sheet = page.getByRole("dialog").filter({ has: page.locator("[data-conductor-cap]") });
     await expect(sheet).toBeVisible();
     await sheet.locator("[data-conductor-cap]").click();
     await page.getByRole("option", { name: "6", exact: true }).click();
@@ -178,7 +215,7 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     await createMission(opened.conductor);
     await mission(opened.conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-detail="mission"]');
+    const map = page.locator("[data-mission-screen-detail]");
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>

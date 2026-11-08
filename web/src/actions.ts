@@ -1611,6 +1611,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     focusDevice(deviceId: string) {
       const screen = ui().screen;
+      // The mission screen follows the rail to the device chosen (PRD mission-screen D-06).
+      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
       if (screen?.kind === "main" && screen.deviceId !== deviceId) {
         // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
         ui().setOverview({ deviceId: null, projectId: null, panel: null });
@@ -1881,25 +1883,38 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A mission's map in the lane's 보기 slot (PRD software-factory-conductor
-     * B14, B46): the Conductor row's mark, the task list or the Overview open
-     * it. Away from a Workspace, the mission's checkout comes to the front
-     * first, its Agent tab and the keyboard where they were.
+     * The sidebar's `미션` row, `Open missions` and a chord bound to the
+     * retired `Toggle Mission tool` (PRD mission-screen B2, B21): the mission
+     * screen on its table, whatever the center showed (D-04), the device the
+     * rail has in front.
      */
-    openMission(missionId: string) {
+    openMissions() {
+      ui().setMissions({ deviceId: null, selected: null, returnPane: null, scroll: 0 });
+      ui().setScreen({ kind: "missions" });
+    },
+
+    /**
+     * A mission's detail on the mission screen (PRD mission-screen B10, B12,
+     * B13): a table row, a 내 차례 or Needs You row, the Overview, a
+     * Conductor row's mark and a pane's mission chip all open it here, never
+     * in the 보기 slot (D-09). A mission of another device brings that
+     * device's rail tile forward first. `from` names the agent pane whose
+     * chip opened it, which the head's `← <pane>` returns to (B14); another
+     * entry keeps the one the screen already had, or none.
+     */
+    openMission(missionId: string, from?: { paneId: string }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
       const state = ui();
-      if (state.overviewOpen) state.setOverviewOpen(false);
-      if (!workspaceInFront()) {
-        const checkout = (mission.device_id === localDeviceId(rest()) ? rest()?.navigator?.workspaces : rest()?.status?.remote?.find((row) => row.target_id === mission.device_id)?.session?.workspaces)
-          ?.flatMap((row) => row.checkouts)
-          .find((row) => row.path === mission.checkout_path);
-        if (!checkout) return diagnostic(`mission_open: checkout ${mission.checkout_path} is not listed`);
-        this.openWorkspace(mission.device_id, checkout.workspace_id, checkout.id);
-        state.setScreen({ kind: "workspace" });
-      }
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
+      if (mission.device_id !== frontDeviceId(rest())) this.focusDevice(mission.device_id);
+      const returnPane = from?.paneId ?? (state.screen?.kind === "missions" ? state.missions.returnPane : null);
+      state.setMissions({ deviceId: mission.device_id, selected: missionId, returnPane });
+      if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
+    },
+
+    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16). */
+    missionShown(missionId: string | null) {
+      dispatch({ schema_version: 2, kind: "mission_shown", payload: { mission: missionId } });
     },
 
     /**
@@ -2039,15 +2054,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       showTool("memory");
     },
 
-    /**
-     * The Mission tool on its defaults (PRD mission-tool B9): its head's ⚙,
-     * the empty tool's `바꾸기 ›` and the map head's ⚙ all open it here, never
-     * a settings window.
-     */
+    /** The mission detail's ⚙ (PRD mission-screen B10): Settings › Mission, the one place a new mission's defaults are edited. */
     openMissionSettings() {
-      if (!workspaceInFront()) return diagnostic("mission_settings: no Workspace in front");
-      useUiStore.getState().setMissionToolPage("settings");
-      showTool("mission");
+      ui().openSettings("conductor");
     },
 
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */

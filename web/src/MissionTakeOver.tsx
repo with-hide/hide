@@ -15,9 +15,11 @@ import { useSessionResume } from "./useSessionResume";
  * the agent failed, and a second press after a resume that brought no
  * Conductor back start a new agent told to take the mission; only when that
  * start fails too does the button say so, and pressing it tries again.
- * While a start is on its way the button says 이어받는 중… and takes no press.
+ * While a start is on its way the button says 이어받는 중… and takes no press,
+ * nor while the mission's device does not answer (`disabled`, PRD
+ * mission-screen B9).
  */
-export function MissionTakeOver({ mission, actions }: { mission: Mission; actions: Actions }) {
+export function MissionTakeOver({ mission, actions, disabled = false }: { mission: Mission; actions: Actions; disabled?: boolean }) {
   const { t } = useInterfaceTranslation();
   const node = useShellStore((state) => localDeviceId(state.rest));
   const resumed = useSessionResume();
@@ -50,7 +52,7 @@ export function MissionTakeOver({ mission, actions }: { mission: Mission; action
     startFresh();
   };
   const failed = fresh.resume.failure !== null;
-  return <Button size="sm" variant={failed ? "destructive" : "secondary"} disabled={busy} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
+  return <Button size="sm" variant={failed ? "destructive" : "secondary"} disabled={busy || disabled} onClick={press} data-mission-takeover={failed ? "failed" : "true"}>
     {t(busy ? "mission.takingOver" : failed ? "mission.takeOverFailed" : "mission.takeOver")}
   </Button>;
 }
