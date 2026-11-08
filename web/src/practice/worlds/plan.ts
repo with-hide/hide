@@ -41,12 +41,6 @@ export type PlanModel = {
   laneCalls: number;
 };
 
-/** Whether the 보기 slot shows this chapter's plan in front. */
-export function planInSlot(model: PlanModel): boolean {
-  const top = model.detail.at(-1);
-  return model.detailShown && top?.kind === "plan" && top.session.session_id === SESSION.session_id;
-}
-
 const tone = (kind: StatusTone["kind"]): StatusTone => ({ kind, read: false });
 
 /** The agent's row at rest after its first answer, as the core shows a finished, read root: Seen. */
