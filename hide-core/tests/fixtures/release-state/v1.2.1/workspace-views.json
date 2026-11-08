@@ -8,8 +8,8 @@
       "documents": true,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794163307085,
-      "made_unix_ms": 1794163183043,
+      "last_used_unix_ms": 1794163985817,
+      "made_unix_ms": 1794163855011,
       "view_layout": {
         "root": {
           "area": {
@@ -22,12 +22,12 @@
                 "kind": "file",
                 "committed": null,
                 "preview": false,
-                "last_focused_unix_ms": 1794163197034,
+                "last_focused_unix_ms": 1794163869166,
                 "opener": {
                   "device_id": "c0de0000000000000000000000000001",
                   "terminal_id": "h1:p1",
-                  "session": "3ae795dcc38cce7e80f22ce4a6e2fed6fd1a027e22d0c0461e44c38058ff57a3",
-                  "resume": "b0281313-909a-45a4-a493-78373e2aee3a",
+                  "session": "974321d988980af805bd1d548da7b981180de295af003710e5d1f3741d8e6ddd",
+                  "resume": "4bafac4f-26ef-403d-803f-9dcaad56e2f5",
                   "provider": "claude",
                   "name": "Claude"
                 },
@@ -35,14 +35,14 @@
                   {
                     "device_id": "c0de0000000000000000000000000001",
                     "terminal_id": "h1:p1",
-                    "session": "3ae795dcc38cce7e80f22ce4a6e2fed6fd1a027e22d0c0461e44c38058ff57a3",
-                    "resume": "b0281313-909a-45a4-a493-78373e2aee3a",
+                    "session": "974321d988980af805bd1d548da7b981180de295af003710e5d1f3741d8e6ddd",
+                    "resume": "4bafac4f-26ef-403d-803f-9dcaad56e2f5",
                     "provider": "claude",
                     "name": "Claude"
                   }
                 ],
                 "unseen": {
-                  "opened_unix_ms": 1794163197034
+                  "opened_unix_ms": 1794163869166
                 }
               }
             ]
@@ -55,15 +55,15 @@
         "root": {
           "area": {
             "id": "a1",
-            "active": "h1:t2",
+            "active": "h1:t3",
             "displays": [
               {
                 "id": "h1:t1",
-                "focused": 0
+                "focused": 1794163985286
               },
               {
-                "id": "h1:t2",
-                "focused": 1794163313115
+                "id": "h1:t3",
+                "focused": 1794163991839
               }
             ]
           }
@@ -79,53 +79,18 @@
         "drafts": []
       },
       "agent_starts": {
-        "release-state-start-44": {
+        "release-state-start-45": {
           "group_id": null,
           "area_id": "a1",
           "draft_tab_id": "draft:1",
-          "live_tab_id": "h1:t2",
-          "pane_id": "h1:p2",
-          "add_pane": false,
-          "marker": "6c5e2723494bd0dc81af3a70e9662dbfe43e7677b479c5f9eaeb1924a097528a",
-          "state": "ready",
-          "agent_kind": "claude",
-          "agent_phase": "started",
-          "recorded_at": 1794163306625,
-          "seen_in_topology": true,
-          "effect": {
-            "workspace_id": "h1",
-            "seed_tab_id": null,
-            "target": null,
-            "expected_command": [
-              "/bin/bash",
-              "--init-file",
-              "/home/me/.hide/shell-integration/2b77f9b41a87a588/bash/interactive.bash"
-            ],
-            "shell_env": {},
-            "shell_readiness": "integrated",
-            "binding": {
-              "tab_id": "h1:t2",
-              "pane_id": "h1:p2",
-              "identity": {
-                "terminal_id": "h1:p2",
-                "shell_pid": 1862,
-                "shell_started": 141283
-              }
-            }
-          }
-        },
-        "release-state-start-46": {
-          "group_id": null,
-          "area_id": "a1",
-          "draft_tab_id": "draft:2",
           "live_tab_id": "h1:t3",
           "pane_id": "h1:p3",
           "add_pane": false,
-          "marker": "b95fcdc890a0f53cfd4f6720a8e6da1444bb125cdbeac8375bdbd63841b4a3b6",
+          "marker": "5df96aa3d4766ea8fa882b4986b15d5d3027fe87247d6df5f37215b59a0a7fb1",
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794163306941,
+          "recorded_at": 1794163985347,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -143,8 +108,43 @@
               "pane_id": "h1:p3",
               "identity": {
                 "terminal_id": "h1:p3",
-                "shell_pid": 2000,
-                "shell_started": 141313
+                "shell_pid": 2016,
+                "shell_started": 209154
+              }
+            }
+          }
+        },
+        "release-state-start-47": {
+          "group_id": null,
+          "area_id": "a1",
+          "draft_tab_id": "draft:2",
+          "live_tab_id": "h1:t4",
+          "pane_id": "h1:p4",
+          "add_pane": false,
+          "marker": "a99f65dc5f1f274fd882fb541376a0eb6a69a5abf6215ea2f9a05c347ad6eae4",
+          "state": "ready",
+          "agent_kind": "claude",
+          "agent_phase": "started",
+          "recorded_at": 1794163985674,
+          "seen_in_topology": true,
+          "effect": {
+            "workspace_id": "h1",
+            "seed_tab_id": null,
+            "target": null,
+            "expected_command": [
+              "/bin/bash",
+              "--init-file",
+              "/home/me/.hide/shell-integration/2b77f9b41a87a588/bash/interactive.bash"
+            ],
+            "shell_env": {},
+            "shell_readiness": "integrated",
+            "binding": {
+              "tab_id": "h1:t4",
+              "pane_id": "h1:p4",
+              "identity": {
+                "terminal_id": "h1:p4",
+                "shell_pid": 2168,
+                "shell_started": 209186
               }
             }
           }
@@ -158,8 +158,8 @@
       "documents": true,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794163223409,
-      "made_unix_ms": 1794163183883,
+      "last_used_unix_ms": 1794163985548,
+      "made_unix_ms": 1794163855982,
       "view_layout": {
         "root": {
           "area": {
@@ -172,12 +172,12 @@
                 "kind": "file",
                 "committed": null,
                 "preview": false,
-                "last_focused_unix_ms": 1794163194596,
+                "last_focused_unix_ms": 1794163866698,
                 "opener": {
                   "device_id": "mini",
                   "terminal_id": "h1:p2",
-                  "session": "ad3b9b83f392429f0a3b27bbfc270f8c92ba30c80e8d3b379c200399b89e5d5a",
-                  "resume": "94a93d66-2273-4708-9cf4-a75df2d08eef",
+                  "session": "ed5d2865dabe7dc859d28f418f6e6eff5880c4b8573fcfdd28abe7ca8ac60953",
+                  "resume": "cda9cfb2-0d72-4b3b-a15f-391e23e92910",
                   "provider": "claude",
                   "name": "Claude"
                 },
@@ -185,22 +185,22 @@
                   {
                     "device_id": "mini",
                     "terminal_id": "h1:p1",
-                    "session": "9abe7fcb58d66dd79932e1754d606d011098e560c318e59affe61528f32afbd9",
-                    "resume": "b8c236a2-8b7d-4789-9e21-e27157803ef2",
+                    "session": "3dcdb2cc6a226809b4767358c50c280de5fde79a36d7ca95da728c05b6387d8c",
+                    "resume": "b777808a-3cda-4078-9bde-0d0b784ab4ff",
                     "provider": "claude",
                     "name": "Claude"
                   },
                   {
                     "device_id": "mini",
                     "terminal_id": "h1:p2",
-                    "session": "ad3b9b83f392429f0a3b27bbfc270f8c92ba30c80e8d3b379c200399b89e5d5a",
-                    "resume": "94a93d66-2273-4708-9cf4-a75df2d08eef",
+                    "session": "ed5d2865dabe7dc859d28f418f6e6eff5880c4b8573fcfdd28abe7ca8ac60953",
+                    "resume": "cda9cfb2-0d72-4b3b-a15f-391e23e92910",
                     "provider": "claude",
                     "name": "Claude"
                   }
                 ],
                 "unseen": {
-                  "opened_unix_ms": 1794163195787
+                  "opened_unix_ms": 1794163867902
                 }
               }
             ]
@@ -217,11 +217,11 @@
             "displays": [
               {
                 "id": "remote:mini:tab:h1:t1",
-                "focused": 1794163201024
+                "focused": 1794163874185
               },
               {
                 "id": "remote:mini:tab:h1:t2",
-                "focused": 1794163201010
+                "focused": 1794163874169
               },
               {
                 "id": "remote:mini:tab:h1:t3",
@@ -229,7 +229,7 @@
               },
               {
                 "id": "remote:mini:tab:h1:t4",
-                "focused": 1794163306826
+                "focused": 1794163985548
               }
             ]
           }
@@ -268,7 +268,7 @@
           "terminal_id": "h1:p3",
           "workspace_id": "h1",
           "phase": "completed",
-          "started_at": 1794163201001,
+          "started_at": 1794163874162,
           "message": null,
           "target_terminal": "h1:p2",
           "new_tab_slot": false,
@@ -277,18 +277,18 @@
         }
       },
       "agent_starts": {
-        "release-state-start-45": {
+        "release-state-start-46": {
           "group_id": null,
           "area_id": "a1",
           "draft_tab_id": "draft:1",
           "live_tab_id": "remote:mini:tab:h1:t4",
           "pane_id": "remote:mini:pane:h1:p5",
           "add_pane": false,
-          "marker": "5de2f8766ba6cdfdf485b4e623505b0532ce90337dbd010a4f7992bb9e2abfc1",
+          "marker": "2545f7d3efbf153684691bd9ae41033e876073b3d236584f9587d9f5815ba133",
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794163306796,
+          "recorded_at": 1794163985516,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -306,8 +306,8 @@
               "pane_id": "h1:p5",
               "identity": {
                 "terminal_id": "h1:p5",
-                "shell_pid": 1999,
-                "shell_started": 141299
+                "shell_pid": 2049,
+                "shell_started": 209170
               }
             }
           }
@@ -322,7 +322,7 @@
       "tool": null,
       "pinned": false,
       "last_used_unix_ms": 0,
-      "made_unix_ms": 1794163225756,
+      "made_unix_ms": 1794163898986,
       "view_layout": {
         "root": {
           "area": {
@@ -367,7 +367,7 @@
       "tool": null,
       "pinned": false,
       "last_used_unix_ms": 0,
-      "made_unix_ms": 1794163313140,
+      "made_unix_ms": 1794163991868,
       "view_layout": {
         "root": {
           "area": {
@@ -387,7 +387,7 @@
             "displays": [
               {
                 "id": "h2:t2",
-                "focused": 0
+                "focused": 1794163991916
               }
             ]
           }
@@ -411,8 +411,8 @@
       "documents": false,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794163318225,
-      "made_unix_ms": 1794163318152,
+      "last_used_unix_ms": 1794163996947,
+      "made_unix_ms": 1794163996877,
       "view_layout": {
         "root": {
           "area": {
@@ -432,7 +432,7 @@
             "displays": [
               {
                 "id": "remote:mini:tab:h3:t2",
-                "focused": 1794163318225
+                "focused": 1794163996947
               }
             ]
           }
