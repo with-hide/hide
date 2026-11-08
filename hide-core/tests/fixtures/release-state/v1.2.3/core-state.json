@@ -71,7 +71,7 @@
     "session_places": []
   },
   "selected_path": "/home/me/core-proj/README.md",
-  "selected_pane_id": "h1:p2",
+  "selected_pane_id": "h1:p3",
   "shortcut_bindings": {},
   "shortcut_bindings_imported": false,
   "browser_shortcut_bindings": {},
@@ -104,7 +104,7 @@
         "contract": 4,
         "helper_root": "~/.hide/host-helper",
         "cli_dir": "~/.local/bin",
-        "granted_at_unix_ms": 1794152561593,
+        "granted_at_unix_ms": 1794157601453,
         "identity": {
           "user": "remote",
           "hostname": "device",
@@ -163,80 +163,80 @@
   "pane_read_records": {
     "h1:p1": {
       "state_change_seq": 1,
-      "session_id": "a0dae058-101f-4304-a3ce-c319006f922a",
+      "session_id": "4b9f78a8-b7c9-4176-ba51-584a7c0cc468",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd379f3-24-1",
+      "server": "1a1bc2060e8-24-1",
       "unread": false
     },
-    "h1:p2": {
-      "state_change_seq": 2,
-      "session_id": "5882c47a-674f-4d72-84d0-dcdb809a4bdf",
+    "h1:p3": {
+      "state_change_seq": 3,
+      "session_id": "4eaf7f10-506f-4c70-a6ef-503eaaef63c3",
       "demand": "none",
       "activity": "stopped",
       "completed": false,
       "descendant_signals": [],
-      "server": "1a1bbd379f3-24-1",
+      "server": "1a1bc2060e8-24-1",
       "unread": false
     },
     "remote:de510000000000000000000000000002:pane:h1:p1": {
       "state_change_seq": 1,
-      "session_id": "bd0c2faf-ff69-466e-b447-ab3c7a7fe090",
+      "session_id": "23622b62-00ac-4144-9154-8373383b1275",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd38768-24-2",
+      "server": "1a1bc206ee9-24-2",
       "unread": false
     },
     "remote:de510000000000000000000000000002:pane:h1:p2": {
       "state_change_seq": 2,
-      "session_id": "30cf7b35-219b-4b5f-84dc-3e89c989551b",
+      "session_id": "ac04d17b-7a91-4d24-9ce7-427173b64661",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd38768-24-2",
+      "server": "1a1bc206ee9-24-2",
       "unread": false
     },
     "remote:de510000000000000000000000000002:pane:h1:p5": {
       "state_change_seq": 5,
-      "session_id": "1caeec7d-e915-4a0d-8e91-ee0198bd64ac",
+      "session_id": "b35d1781-ba1b-4adf-8be7-a69b6fa60379",
       "demand": "none",
       "activity": "stopped",
       "completed": false,
       "descendant_signals": [],
-      "server": "1a1bbd3ca3d-24-3",
+      "server": "1a1bc20b690-24-3",
       "unread": false
     }
   },
   "pane_completions": {
     "h1:p1": {
-      "session": "50901de6bcb07e79eebb01c9ee24df133ca14bd03aafa8fc5711e274db909488",
-      "server": "1a1bbd379f3-24-1",
+      "session": "07f984c8a7c15d5f795d887c701afeb44a657feda8830fa48f68b118eba64f72",
+      "server": "1a1bc2060e8-24-1",
       "state_change_seq": 1
     },
     "remote:de510000000000000000000000000002:pane:h1:p1": {
-      "session": "4d46a913d3cd033194e2f88d35ae1e7e9232f1a41fa61393e9aea76f17d1fd23",
-      "server": "1a1bbd38768-24-2",
+      "session": "fb9c6ca3e76962b7da00b078008f6644aa2d5bf00d0dcba495d904e2fb21a967",
+      "server": "1a1bc206ee9-24-2",
       "state_change_seq": 1
     },
     "remote:de510000000000000000000000000002:pane:h1:p2": {
-      "session": "1586804018c9816ef57662ecb6393801731a4eea9c4b11379681d9956219861f",
-      "server": "1a1bbd3ca3d-24-3",
+      "session": "c1f6395bc2158abd95f8083b307d630891628a83357fb7eeb1ecbf8a1a6e03e6",
+      "server": "1a1bc20b690-24-3",
       "state_change_seq": 2
     }
   },
   "pane_launches": {
-    "h1:p2": {
+    "h1:p3": {
       "kind": "claude",
-      "name": "hide-claude-h1-p2",
+      "name": "hide-claude-h1-p3",
       "choice": {
         "model": "sonnet"
       },
-      "session": "5882c47a-674f-4d72-84d0-dcdb809a4bdf"
+      "session": "4eaf7f10-506f-4c70-a6ef-503eaaef63c3"
     },
     "remote:de510000000000000000000000000002:pane:h1:p5": {
       "kind": "claude",
@@ -244,37 +244,37 @@
       "choice": {
         "model": "sonnet"
       },
-      "session": "1caeec7d-e915-4a0d-8e91-ee0198bd64ac"
+      "session": "b35d1781-ba1b-4adf-8be7-a69b6fa60379"
     }
   },
   "request_verbs": {
     "h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794152688704
+      "since_unix_ms": 1794157735186
     },
-    "h1:p2": {
+    "h1:p3": {
       "verb": "idle",
-      "since_unix_ms": 1794152676325
+      "since_unix_ms": 1794157722312
     },
     "remote:de510000000000000000000000000002:pane:h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794152676118
+      "since_unix_ms": 1794157717858
     },
     "remote:de510000000000000000000000000002:pane:h1:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152675165
+      "since_unix_ms": 1794157716903
     },
     "remote:de510000000000000000000000000002:pane:h1:p4": {
       "verb": "idle",
-      "since_unix_ms": 1794152642053
+      "since_unix_ms": 1794157683540
     },
     "remote:de510000000000000000000000000002:pane:h1:p5": {
       "verb": "idle",
-      "since_unix_ms": 1794152676381
+      "since_unix_ms": 1794157722466
     },
     "remote:de510000000000000000000000000002:pane:h2:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152606540
+      "since_unix_ms": 1794157647829
     }
   },
   "pane_terminal_sizes": {},
@@ -300,17 +300,17 @@
   "agent_sleep": {
     "stamps": {
       "h1:p1": {
-        "changed_at_unix_ms": 1794152603317,
-        "seen_at_unix_ms": 0,
+        "changed_at_unix_ms": 1794157644566,
+        "seen_at_unix_ms": 1794157722120,
         "state": {
           "demand": "none",
           "activity": "stopped",
           "completed": true
         }
       },
-      "h1:p2": {
-        "changed_at_unix_ms": 1794152676342,
-        "seen_at_unix_ms": 1794152682448,
+      "h1:p3": {
+        "changed_at_unix_ms": 1794157722325,
+        "seen_at_unix_ms": 1794157728641,
         "state": {
           "demand": "none",
           "activity": "stopped",
@@ -318,8 +318,8 @@
         }
       },
       "remote:de510000000000000000000000000002:pane:h1:p1": {
-        "changed_at_unix_ms": 1794152676118,
-        "seen_at_unix_ms": 1794152676361,
+        "changed_at_unix_ms": 1794157717858,
+        "seen_at_unix_ms": 1794157722349,
         "state": {
           "demand": "none",
           "activity": "stopped",
@@ -327,8 +327,8 @@
         }
       },
       "remote:de510000000000000000000000000002:pane:h1:p2": {
-        "changed_at_unix_ms": 1794152581694,
-        "seen_at_unix_ms": 1794152581702,
+        "changed_at_unix_ms": 1794157622929,
+        "seen_at_unix_ms": 1794157622936,
         "state": {
           "demand": "none",
           "activity": "stopped",
@@ -336,7 +336,7 @@
         }
       },
       "remote:de510000000000000000000000000002:pane:h1:p4": {
-        "changed_at_unix_ms": 1794152642071,
+        "changed_at_unix_ms": 1794157683558,
         "seen_at_unix_ms": 0,
         "state": {
           "demand": "none",
@@ -345,8 +345,8 @@
         }
       },
       "remote:de510000000000000000000000000002:pane:h1:p5": {
-        "changed_at_unix_ms": 1794152676387,
-        "seen_at_unix_ms": 1794152679386,
+        "changed_at_unix_ms": 1794157722484,
+        "seen_at_unix_ms": 1794157725470,
         "state": {
           "demand": "none",
           "activity": "stopped",
@@ -354,7 +354,7 @@
         }
       },
       "remote:de510000000000000000000000000002:pane:h2:p2": {
-        "changed_at_unix_ms": 1794152606558,
+        "changed_at_unix_ms": 1794157647847,
         "seen_at_unix_ms": 0,
         "state": {
           "demand": "none",
@@ -367,12 +367,12 @@
       "remote:de510000000000000000000000000002:pane:h1:p2": {
         "phase": "sleeping",
         "kind": "claude",
-        "session_id": "30cf7b35-219b-4b5f-84dc-3e89c989551b",
+        "session_id": "ac04d17b-7a91-4d24-9ce7-427173b64661",
         "agent_name": null,
         "identity_label": "Claude",
-        "label_owner": "v1:969747940f4ea17582b5d8ff3fcb1b4d4a9c4568b5433c59ae9e3354307d169e",
+        "label_owner": "v1:955e71bc326748c6eba53468a27b86c00904f79f252ce2448d1d87565c72c4a9",
         "progress": null,
-        "last_activity": "1794152573081",
+        "last_activity": "1794157613131",
         "state_change_seq": 2,
         "completed": true,
         "parent_pane_id": null,
@@ -380,29 +380,85 @@
         "fork_source": null,
         "workspace_label": "dev-proj",
         "cwd": "/home/remote/dev-proj",
-        "since_unix_ms": 1794152675162,
+        "since_unix_ms": 1794157716901,
         "reason": null,
         "pending_wake": null
       }
     },
-    "dormant": {}
+    "dormant": {
+      "sleep-18e620f140662763-1": {
+        "phase": "sleeping",
+        "revision": 5,
+        "node_id": "c0de0000000000000000000000000001",
+        "connection_generation": 1,
+        "old_pane_id": "h1:p2",
+        "old_state_change_seq": 2,
+        "kind": "pi",
+        "native_session_id": "616ebe5c-f2b0-49a0-a3e1-0c28422ccac1",
+        "source_reference": {
+          "kind": "path",
+          "value": "/home/me/.pi/agent/sessions/--home-me-core-proj--/2026-11-08T17-08-41-000Z_616ebe5c-f2b0-49a0-a3e1-0c28422ccac1.jsonl"
+        },
+        "label_owner": "v1:df2f7a12958ec46cebdabc5ee39f570cf37e5cafa24f473317c931da4ac53b38",
+        "identity_label": "pi",
+        "cwd": "/home/me/core-proj",
+        "context": {
+          "workspace_id": "h1",
+          "workspace_label": "Core project",
+          "workspace_ids_before_close": [
+            "h1"
+          ],
+          "tab_ids_before_close": [
+            "h1:t1",
+            "h1:t2"
+          ],
+          "pane_ids_before_close": [
+            "h1:p2"
+          ],
+          "checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+          "checkout_path": "/home/me/core-proj",
+          "tab_id": "h1:t2",
+          "tab_label": "pi",
+          "tab_index": 1,
+          "agent_area": [
+            "a1",
+            1
+          ],
+          "agent_group": null,
+          "replacement_in_tab": false,
+          "tab_name": "unnamed"
+        },
+        "close_key": "reopen-1794157722119-1",
+        "closed": true,
+        "wake_pane_id": null,
+        "wake_tab_id": null,
+        "since_unix_ms": 1794157722093,
+        "transition_started_unix_ms": 1794157722093,
+        "reason": null,
+        "owner": {
+          "repository_root": "/home/me/core-proj",
+          "is_git": true,
+          "label": "Core project"
+        }
+      }
+    }
   },
   "session_archive": {
-    "archive-18e61c5bdd73e363-1": {
+    "archive-18e620f2c625c1ed-1": {
       "phase": "archived",
       "revision": 2,
-      "archived_at_unix_ms": 1794152682436,
+      "archived_at_unix_ms": 1794157728632,
       "project_root": "/home/me/core-proj",
       "project_label": "Core project",
       "members": [
         {
           "machine": "c0de0000000000000000000000000001",
-          "pane_id": "h1:p3",
+          "pane_id": "h1:p4",
           "kind": "claude",
-          "native_session_id": "ad17cc0a-f058-42d9-bc92-e4da1cbfa8a7",
+          "native_session_id": "170dcd6c-82ae-4e5e-a5db-b1f130e56811",
           "source_reference": {
             "kind": "id",
-            "value": "ad17cc0a-f058-42d9-bc92-e4da1cbfa8a7"
+            "value": "170dcd6c-82ae-4e5e-a5db-b1f130e56811"
           },
           "cwd": "/home/me/core-proj",
           "checkout_path": "/home/me/core-proj",
