@@ -32,6 +32,29 @@ class CheckAgentFolders(unittest.TestCase):
             self.assertEqual(result.returncode, 1, literal)
             self.assertIn("crate/src/lib.rs:2: names an agent's folder", result.stderr)
 
+    def test_a_folder_built_from_several_literals_fails(self):
+        for built in ['home.join(".config").join("opencode")',
+                      'home.join(".gemini")\n        .join("config")',
+                      'home.join(".local").join("share").join("opencode")',
+                      'home.join(".claude").join("projects")',
+                      '[".config", "opencode"].iter().collect::<PathBuf>()']:
+            result = check({"crate/src/lib.rs": f"fn f(home: &Path) -> PathBuf {{\n    {built}\n}}\n"})
+            self.assertEqual(result.returncode, 1, built)
+            self.assertIn("crate/src/lib.rs:2: names an agent's folder", result.stderr)
+
+    def test_only_the_root_agents_folder_is_left_out(self):
+        result = check({"crate/src/agents/config.rs": NAMES_CODEX})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("crate/src/agents/config.rs:2", result.stderr)
+        result = check({"agents/runs/scratch/src/lib.rs": NAMES_CODEX})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_joined_names_that_are_no_agents_folder_pass(self):
+        result = check({"crate/src/lib.rs": 'fn f(home: &Path) -> PathBuf {\n'
+                        '    home.join(".config").join("hide").join("opencode.json")\n}\n'
+                        'const NAMES: [&str; 2] = [".gemini", "settings"];\n'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_an_agent_module_a_comment_and_test_code_may_name_it(self):
         brace = 'const OPEN: &str = "{";\n'
         result = check({

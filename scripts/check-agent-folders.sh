@@ -6,9 +6,11 @@
 # one of those folders anywhere else, so a reader or an installer cannot
 # fix an agent's folder again and miss the account a profile runs in.
 #
-# What it reads: every string literal of production Rust (comments, test
-# files, a module behind `#[cfg(test)]` and every item behind it are left
-# out, as `scripts/rust_scan.py` reads them). What it allows: a module that
+# What it reads: every string literal of production Rust, and every path
+# built from several of them (a `.join("…")` chain, an array of literals);
+# comments, test files, a module behind `#[cfg(test)]` and every item behind
+# it are left out, as `scripts/rust_scan.py` reads them, and so are the root
+# `agents/` and `vendor/` folders and build output. What it allows: a module that
 # is one agent's own (its file or folder is named after the agent), which
 # handles what only that agent does with the folder the account names; and
 # the files listed in ALLOWED below, each with its reason.
@@ -64,14 +66,17 @@ ALLOWED = {
         "journey writes into the fake account it lays out",
 }
 
-# Folders whose Rust is not Hide's own production code.
-SKIPPED = {"target", "node_modules", "vendor", "agents", ".git", "dist", "out"}
+# Folders whose Rust is not Hide's own production code: at the checkout's
+# root, the local-only harness namespace and the vendored crates; anywhere,
+# build output.
+ROOT_SKIPPED = {"agents", "vendor", ".git"}
+SKIPPED = {"target", "node_modules", "dist", "out"}
 
 
 def rust_files():
     for path in sorted(ROOT.rglob("*.rs")):
         relative = path.relative_to(ROOT)
-        if SKIPPED.intersection(relative.parts[:-1]):
+        if relative.parts[0] in ROOT_SKIPPED or SKIPPED.intersection(relative.parts[:-1]):
             continue
         yield relative.as_posix(), path
 
@@ -109,6 +114,20 @@ def without_test_items(kept: str, blanked: str) -> str:
 
 
 LITERAL = re.compile(r'(?<![A-Za-z0-9_])b?r(#*)"(.*?)"\1|b?"((?:\\.|[^"\\])*)"', re.S)
+# A path built from several literals: a chain of `.join("…")` calls, or an
+# array of literals (`[".config", "opencode"]`), read as the names joined
+# by `/`.
+QUOTED = r'"(?:\\.|[^"\\])*"'
+JOINS = re.compile(r"(?:\.join\(\s*" + QUOTED + r"\s*\)\s*){2,}")
+ARRAY = re.compile(r"\[\s*" + QUOTED + r"(?:\s*,\s*" + QUOTED + r")+\s*,?\s*\]")
+
+
+def built_paths(text: str):
+    """Each path `text` builds from several literals, with where it starts."""
+    for pattern in (JOINS, ARRAY):
+        for match in pattern.finditer(text):
+            names = [name[1:-1] for name in re.findall(QUOTED, match.group(0))]
+            yield match.start(), "/".join(names)
 
 
 def main() -> int:
@@ -124,10 +143,13 @@ def main() -> int:
         text = without_test_items(
             rust_scan.strip(source, keep_literals=True), rust_scan.strip(source)
         )
-        for match in LITERAL.finditer(text):
-            content = match.group(2) if match.group(2) is not None else match.group(3)
+        found = [
+            (match.start(), match.group(2) if match.group(2) is not None else match.group(3))
+            for match in LITERAL.finditer(text)
+        ]
+        for start, content in found + list(built_paths(text)):
             if FOLDER.search(content):
-                line = text.count("\n", 0, match.start()) + 1
+                line = text.count("\n", 0, start) + 1
                 failures.append(f"{relative}:{line}: names an agent's folder: {content!r}")
     if failures:
         print("\n".join(failures), file=sys.stderr)
