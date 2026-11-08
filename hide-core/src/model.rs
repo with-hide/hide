@@ -78,8 +78,8 @@ pub struct Snapshot {
     /// Each Conductor's mission as its map draws it (PRD
     /// software-factory-conductor D-14).
     pub missions: crate::runtime::missions::MissionsSnapshot,
-    /// The events of the mission open in the 보기 slot only (PRD
-    /// mission-plan-visibility D-22).
+    /// The events of the mission the page's mission screen shows only (PRD
+    /// mission-plan-visibility D-22; PRD mission-screen D-16).
     pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
     /// The brief of the one node whose folded box the operator opened.
     pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
@@ -310,7 +310,7 @@ pub struct WorkspaceViewSnapshot {
     /// drawn over the agents only once a call opened it (right-lane D-02).
     pub open: bool,
     /// Whether the viewing column shows the checkout's documents; the
-    /// window's 보기 slot, while shown, stands in front of them (D-04).
+    /// front tab's 보기 slot, while shown, stands in front of them (D-04).
     pub documents: bool,
     /// The tool column's tool, or null while there is none.
     pub tool: Option<crate::workspace_views::Tool>,
@@ -4306,8 +4306,6 @@ pub enum DetailItem {
     Record {
         session: crate::links::ledger::SessionIdentity,
     },
-    /// A Conductor's mission map (PRD software-factory-conductor D-14).
-    Mission { mission: String },
     /// A session's own plan, drawn large (PRD hide-plan B11).
     Plan {
         session: crate::links::ledger::SessionIdentity,
@@ -4490,11 +4488,22 @@ pub struct UiStateSnapshot {
     /// opened a chapter loses it through `practice` instead.
     #[serde(default)]
     pub practice_invite_closed: bool,
-    /// The lane's 보기 slot (D-50): a pull request's card or a session's
-    /// record, one per window and no checkout's or Agent tab's, so it stays
-    /// when either changes.
+    /// The lane's 보기 slot (D-50) of the Agent tab in front: a pull
+    /// request's card or a session's record, which belongs to the tab that
+    /// was in front when it was opened (`detail_home`). Another tab in front
+    /// swaps its own slot in (`Runtime::sync_detail_home`), so the wire and
+    /// the shell see only the front tab's.
     #[serde(default)]
     pub detail: DetailSlot,
+    /// The Agent tab `detail` belongs to; none until a tab is in front after
+    /// a launch, when a slot kept window-wide by an older build attaches to
+    /// the tab then in front. Core only.
+    #[serde(default, skip_serializing)]
+    pub detail_home: Option<String>,
+    /// The 보기 slots of the tabs not in front, by tab id; a slot ends with
+    /// its tab, so the map holds at most one per open tab. Core only.
+    #[serde(default, skip_serializing)]
+    pub detail_tabs: BTreeMap<String, DetailSlot>,
     /// The Overview Work map's filter, hidden and folded projects, hand
     /// team folds and dragged places (PRD overview-graph-remembered D-05).
     #[serde(default)]
@@ -5467,6 +5476,8 @@ impl Default for UiStateSnapshot {
             practice: BTreeMap::new(),
             practice_invite_closed: false,
             detail: DetailSlot::default(),
+            detail_home: None,
+            detail_tabs: BTreeMap::new(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
             selected_pane_id: None,
@@ -9849,9 +9860,6 @@ mod wire_enum_tests {
             DetailItem::Record {
                 session: session.clone(),
             },
-            DetailItem::Mission {
-                mission: "mission-1".into(),
-            },
             DetailItem::Worktrees {
                 workspace_id: "w".into(),
             },
@@ -9873,7 +9881,6 @@ mod wire_enum_tests {
             match item {
                 DetailItem::PullRequest { .. }
                 | DetailItem::Record { .. }
-                | DetailItem::Mission { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
                 | DetailItem::Remains { .. }

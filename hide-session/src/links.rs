@@ -823,7 +823,7 @@ pub fn candidates(
     let mut found = Vec::new();
     let mut visited = 0_usize;
     walk(
-        &home.join(crate::CLAUDE_SESSIONS),
+        &crate::session_root(home, crate::Agent::Claude).expect("Claude keeps a file per session"),
         crate::Agent::Claude,
         3,
         window,
@@ -831,7 +831,7 @@ pub fn candidates(
         &mut visited,
     )?;
     walk(
-        &home.join(crate::CODEX_SESSIONS),
+        &crate::session_root(home, crate::Agent::Codex).expect("Codex keeps a file per session"),
         crate::Agent::Codex,
         4,
         window,

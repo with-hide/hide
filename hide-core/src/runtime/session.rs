@@ -1989,7 +1989,9 @@ impl Runtime {
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
         self.request_home_retirements();
-        changed | self.complete_look()
+        // The engine's word on the tab in front, or a tab it closed.
+        let detail = self.sync_detail_home();
+        changed | detail | self.complete_look()
     }
 
     fn apply_remote_session(

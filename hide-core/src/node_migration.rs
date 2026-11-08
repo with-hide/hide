@@ -308,6 +308,33 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
+    // The 보기 slots of the Agent tabs not in front, by tab id, and the tab
+    // the front slot belongs to.
+    (CORE_STATE, "/detail_home", Mechanism::Owned, Moves::Tab),
+    (
+        CORE_STATE,
+        "/detail_tabs/{key}",
+        Mechanism::Owned,
+        Moves::Tab,
+    ),
+    (
+        CORE_STATE,
+        "/detail_tabs/*/items/*/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/detail_tabs/*/items/*/checkout_id",
+        Mechanism::Owned,
+        Moves::Checkout,
+    ),
+    (
+        CORE_STATE,
+        "/detail_tabs/*/items/*/session/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
     // The sidebar's project, written only by builds that have node ids.
     (
         CORE_STATE,
@@ -1487,6 +1514,19 @@ fn rename_key(object: Option<&mut Value>, node: &str) -> bool {
     true
 }
 
+/// The device a 보기 slot's records name.
+fn rewrite_slot_devices(slot: &mut Value, node: &str) -> bool {
+    let mut changed = false;
+    for item in each(slot, "items") {
+        changed |= rewrite(
+            item.get_mut("session")
+                .and_then(|session| session.get_mut("device_id")),
+            node,
+        );
+    }
+    changed
+}
+
 fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String, String>) -> bool {
     let mut changed = false;
     for row in each(value, "workspace_registrations") {
@@ -1519,17 +1559,13 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
     for row in each(value, "home_retire") {
         changed |= rewrite(row.get_mut("device_id"), node);
     }
-    if let Some(items) = value
-        .get_mut("detail")
-        .and_then(|detail| detail.get_mut("items"))
-        .and_then(Value::as_array_mut)
-    {
-        for item in items {
-            changed |= rewrite(
-                item.get_mut("session")
-                    .and_then(|session| session.get_mut("device_id")),
-                node,
-            );
+    // The front tab's slot and each other tab's.
+    if let Some(detail) = value.get_mut("detail") {
+        changed |= rewrite_slot_devices(detail, node);
+    }
+    if let Some(tabs) = value.get_mut("detail_tabs").and_then(Value::as_object_mut) {
+        for slot in tabs.values_mut() {
+            changed |= rewrite_slot_devices(slot, node);
         }
     }
     changed |= rename_key(value.get_mut("device_expanded_paths"), node);
@@ -1920,6 +1956,15 @@ mod tests {
             .tap_insert(
                 "device_add_project_folders",
                 json!({"mini": "/home/me/projects"}),
+            )
+            .tap_insert("detail_home", json!("w1:t1"))
+            .tap_insert(
+                "detail_tabs",
+                json!({"w1:t2": {"items": [
+                    {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
+                    {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
+                    {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
+                ], "shown": false}}),
             )
             .tap_insert("agent_permissions", json!({"codex": {"mode": "ask"}}))
             .tap_insert(

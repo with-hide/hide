@@ -52,7 +52,8 @@ export function phoneGroups(): AgentGroup[] {
   });
   const needsYou: GroupRow[] = [
     row(parent),
-    row(agent("a2", "모닥불 입문반 강의 정산", 5, { ...mini, group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, line: asking("환불 2건도 포함할까요?") })),
+    // A person's turn, its place with Copy beside it and Done under it (PRD ask-human B19).
+    row(agent("a2", "모닥불 입문반 강의 정산", 5, { ...mini, group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, line: asking("환불 2건도 포함할까요?"), human_turn: { id: "a2.1", kind: "auth", place: "https://github.com/login/device?user_code=TEST-1234", pane_id: "a2", title: "모닥불 입문반 강의 정산", device_id: "mini", since_unix_ms: null, own: true } })),
     row(agent("a3", "설치 가이드 다듬기", 11, { group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "herdr-ide · main", line: asking("INSTALL.md의 순서를 바꿔도 될까요?") })),
   ];
   const working: GroupRow[] = [

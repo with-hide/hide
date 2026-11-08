@@ -291,6 +291,219 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         failures.push(format!("counts changed: {before:?} -> {after:?}"));
     }
     failures.extend(load_every_store(state, &node));
+    failures.extend(records_kept(fixture, state));
+    failures
+}
+
+/// The agent records a later build reads back about each agent, as the
+/// release wrote them: who started under which session and model, which
+/// slept or was archived under which conversation, the ledger's agents and
+/// each project's choices. Read from the released JSON before any
+/// migration, so a field this build's migration or loader drops shows.
+fn released_facts(
+    fixture: &Path,
+) -> (std::collections::BTreeMap<&'static str, Vec<String>>, Value) {
+    let core = json(fixture, CORE_STATE);
+    let text = |value: &Value| value.as_str().map(str::to_owned);
+    let mut facts = std::collections::BTreeMap::new();
+    facts.insert(
+        "launches",
+        core["pane_launches"]
+            .as_object()
+            .into_iter()
+            .flat_map(|rows| rows.values())
+            .map(|row| {
+                launch_fact(
+                    &text(&row["kind"]),
+                    &text(&row["name"]),
+                    &text(&row["choice"]["model"]),
+                    &text(&row["session"]),
+                )
+            })
+            .collect(),
+    );
+    facts.insert(
+        "sleep records",
+        core["agent_sleep"]["records"]
+            .as_object()
+            .into_iter()
+            .flat_map(|rows| rows.values())
+            .map(|row| {
+                sleep_fact(
+                    &text(&row["kind"]),
+                    &text(&row["session_id"]),
+                    &text(&row["identity_label"]),
+                )
+            })
+            .collect(),
+    );
+    facts.insert(
+        "dormant sleeps",
+        core["agent_sleep"]["dormant"]
+            .as_object()
+            .into_iter()
+            .flat_map(|rows| rows.values())
+            .map(|row| session_fact(&text(&row["kind"]), &text(&row["native_session_id"])))
+            .collect(),
+    );
+    facts.insert(
+        "archived members",
+        core["session_archive"]
+            .as_object()
+            .into_iter()
+            .flat_map(|rows| rows.values())
+            .flat_map(|row| row["members"].as_array().into_iter().flatten())
+            .map(|member| session_fact(&text(&member["kind"]), &text(&member["native_session_id"])))
+            .collect(),
+    );
+    facts.insert(
+        "ledger agents",
+        json(fixture, DELIVERY_LEDGER)["agents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|row| {
+                agent_fact(
+                    &text(&row["id"]),
+                    &text(&row["name"]),
+                    &text(&row["session"]),
+                )
+            })
+            .collect(),
+    );
+    (facts, core["project_settings"].clone())
+}
+
+fn launch_fact(
+    kind: &Option<String>,
+    name: &Option<String>,
+    model: &Option<String>,
+    session: &Option<String>,
+) -> String {
+    format!("{kind:?} {name:?} model {model:?} session {session:?}")
+}
+
+fn sleep_fact(kind: &Option<String>, session: &Option<String>, label: &Option<String>) -> String {
+    format!("{kind:?} session {session:?} label {label:?}")
+}
+
+fn session_fact(kind: &Option<String>, session: &Option<String>) -> String {
+    format!("{kind:?} session {session:?}")
+}
+
+fn agent_fact(id: &Option<String>, name: &Option<String>, session: &Option<String>) -> String {
+    format!("{id:?} {name:?} session {session:?}")
+}
+
+/// The project choices a later build reads, by field, as JSON: an absent
+/// field reads as null, as the loader's default for it does.
+const PROJECT_FIELDS: &[&str] = &[
+    "name",
+    "repository",
+    "issue_source",
+    "new_work",
+    "base_branch",
+    "auto_fetch",
+    "guardrails",
+];
+
+/// Whether the loader this build starts with kept every released record:
+/// each fact of [`released_facts`] is found in what it loaded, and every
+/// store the scenario writes in every release holds at least one.
+fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
+    let (released, projects) = released_facts(fixture);
+    let (ui, _, _) = crate::persistence::load(&state.join(CORE_STATE));
+    let some = |value: &str| Some(value.to_owned());
+    let mut loaded: std::collections::BTreeMap<&'static str, Vec<String>> =
+        std::collections::BTreeMap::new();
+    loaded.insert(
+        "launches",
+        ui.pane_launches
+            .values()
+            .map(|row| {
+                launch_fact(
+                    &some(&row.kind),
+                    &some(&row.name),
+                    &row.choice.model,
+                    &row.session,
+                )
+            })
+            .collect(),
+    );
+    loaded.insert(
+        "sleep records",
+        ui.agent_sleep
+            .records
+            .values()
+            .map(|row| {
+                sleep_fact(
+                    &some(&row.kind),
+                    &row.session_id,
+                    &some(&row.identity_label),
+                )
+            })
+            .collect(),
+    );
+    loaded.insert(
+        "dormant sleeps",
+        ui.agent_sleep
+            .dormant
+            .values()
+            .map(|row| session_fact(&some(&row.kind), &some(&row.native_session_id)))
+            .collect(),
+    );
+    loaded.insert(
+        "archived members",
+        ui.session_archive
+            .records
+            .values()
+            .flat_map(|row| &row.members)
+            .map(|member| session_fact(&some(&member.kind), &some(&member.native_session_id)))
+            .collect(),
+    );
+    loaded.insert(
+        "ledger agents",
+        crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER))
+            .map(|ledger| ledger.agents)
+            .unwrap_or_default()
+            .iter()
+            .map(|row| agent_fact(&some(&row.id), &row.name, &some(&row.session)))
+            .collect(),
+    );
+    let mut failures = Vec::new();
+    for (store, facts) in &released {
+        // Every release writes these; a sleep on a device is refused before 1.2.3,
+        // and no step makes a release write a dormant sleep yet.
+        let optional = matches!(*store, "sleep records" | "dormant sleeps");
+        if facts.is_empty() && !optional {
+            failures.push(format!(
+                "the released folder holds no {store}: the scenario no longer writes them"
+            ));
+        }
+        for fact in facts {
+            if !loaded[store].contains(fact) {
+                failures.push(format!("{store}: {fact} was not loaded"));
+            }
+        }
+    }
+    let projects = projects.as_object().cloned().unwrap_or_default();
+    if projects.is_empty() {
+        failures.push("the released folder holds no project settings".to_owned());
+    }
+    for released in projects.values() {
+        let root = released["root"].as_str().unwrap_or_default();
+        let Some(read) = ui.project_settings.values().find(|read| read.root == root) else {
+            failures.push(format!("the project settings of {root} were not loaded"));
+            continue;
+        };
+        let read = serde_json::to_value(read).unwrap();
+        for field in PROJECT_FIELDS {
+            let (was, is) = (&released[*field], &read[*field]);
+            if was != is {
+                failures.push(format!("{root}'s {field} was {was}, loads as {is}"));
+            }
+        }
+    }
     failures
 }
 

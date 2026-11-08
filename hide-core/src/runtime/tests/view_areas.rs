@@ -2112,7 +2112,7 @@ fn a_pull_request_card_opens_in_the_detail_slot_and_never_as_a_view() {
     assert!(runtime.snapshot.workspace_view.as_ref().unwrap().documents);
     assert!(!runtime.snapshot.ui_state.detail.shown);
     assert_eq!(runtime.snapshot.ui_state.detail.items, vec![item(42)]);
-    // The slot is the window's: an open in a Workspace behind the one in
+    // The slot is the front tab's: an open in a Workspace behind the one in
     // front, such as an agent's `hide view open`, leaves it on screen.
     assert!(runtime.dispatch_json(&explorer_event(
         "detail_show",

@@ -7,6 +7,7 @@ import { Gallery, GalleryFrame } from "./Gallery";
 import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
+import { MissionScreenScene, missionScreenSceneParams } from "./MissionScreenScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
 import { GroupTabsScene } from "./GroupTabsScene";
 import { StartPanelScene } from "./StartPanelScene";
@@ -27,6 +28,7 @@ import { AddDeviceScene } from "./AddDeviceScene";
 import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
+import { AgentProfilesScene } from "./AgentProfilesScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
 import { PrListScene } from "./PrListScene";
@@ -89,6 +91,11 @@ export function mountGallery(root: Root) {
     if (scene === "agents-settings") {
       document.title = "hide · Agents settings scene";
       root.render(<StrictMode><AgentsSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "agent-profiles") {
+      document.title = "hide · Agent profiles scene";
+      root.render(<StrictMode><AgentProfilesScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "close-tree") {
@@ -161,6 +168,11 @@ export function mountGallery(root: Root) {
     // A scene seeds the app's own stores, so it is one document per scene.
     if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
+      return;
+    }
+    if (scene === "mission-screen") {
+      document.title = "hide · Mission screen scene";
+      root.render(<StrictMode><MissionScreenScene {...missionScreenSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "right-lane") {

@@ -18,13 +18,12 @@ use crate::{
 /// Routing constraint of Pi's native --session <id>: its default cwd folder
 /// is searched first. Global matches prompt to fork, so they cannot wake an
 /// existing conversation without an operator decision.
-fn root_suffix(agent: Agent) -> &'static str {
+fn root_suffix(home: &Path, agent: Agent) -> PathBuf {
     match agent {
-        Agent::Grok => crate::GROK_SESSIONS,
-        Agent::Pi => crate::PI_SESSIONS,
-        Agent::Omp => crate::OMP_SESSIONS,
-        Agent::Cursor => crate::cursor::SESSIONS,
-        Agent::Antigravity => crate::antigravity::SESSIONS,
+        Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
+            crate::account::sessions_below_home(home, agent)
+        }
+        Agent::Cursor => PathBuf::from(crate::cursor::SESSIONS),
         _ => unreachable!("native-file policy requires a native-file format"),
     }
 }
@@ -113,7 +112,7 @@ pub(crate) fn default_directory(home: &Path, agent: Agent, cwd: &Path) -> Result
         }
         _ => absolute_directory_name(cwd),
     };
-    Ok(home.join(root_suffix(agent)).join(name))
+    Ok(home.join(root_suffix(home, agent)).join(name))
 }
 
 /// OMP startup migrates these fixed aliases before resolving a selector.
@@ -125,7 +124,7 @@ fn confirm_omp_migrations(home: &Path, cwd: &Path, directory: &Path) -> Result<(
     let canonical_cwd = hide_platform::fs::identity::canonical(cwd)
         .map_err(|_| anyhow!("session_route_unconfirmed"))?;
     let policy = omp_directory(home, &canonical_cwd)?;
-    let root = home.join(crate::OMP_SESSIONS);
+    let root = home.join(root_suffix(home, Agent::Omp));
     for spelling in [home, policy.canonical_home.as_path()] {
         let legacy = absolute_directory_name(spelling);
         let prefix = format!("{}-", legacy.strip_suffix("--").unwrap());
@@ -225,7 +224,8 @@ pub(crate) fn inside_root(
         .strip_prefix(home)
         .or_else(|_| path.strip_prefix(&canonical_home))
         .map_err(|_| RootRefusal::Outside)?;
-    if !relative.starts_with(root_suffix(agent)) || relative == Path::new(root_suffix(agent)) {
+    let suffix = root_suffix(home, agent);
+    if !relative.starts_with(&suffix) || relative == suffix {
         return Err(RootRefusal::Outside);
     }
     if agent == Agent::Cursor {
@@ -238,7 +238,7 @@ pub(crate) fn inside_root(
 }
 
 pub(crate) fn root(home: &Path, agent: Agent) -> std::result::Result<PathBuf, RootRefusal> {
-    checked_path(home, agent, &home.join(root_suffix(agent)))
+    checked_path(home, agent, &home.join(root_suffix(home, agent)))
 }
 
 fn checked_path(
@@ -246,12 +246,12 @@ fn checked_path(
     agent: Agent,
     path: &Path,
 ) -> std::result::Result<PathBuf, RootRefusal> {
-    checked_path_under(home, root_suffix(agent), path)
+    checked_path_under(home, &root_suffix(home, agent), path)
 }
 
 pub(crate) fn checked_path_under(
     home: &Path,
-    suffix: &str,
+    suffix: &Path,
     path: &Path,
 ) -> std::result::Result<PathBuf, RootRefusal> {
     let canonical_home =

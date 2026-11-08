@@ -560,7 +560,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask in 내 차례
     // also offers 치우기, which puts it away until the agent asks something new (needs-you-cleanup B15).
     if (root) entries.push(revisitEntry(agent, disabled, t));
-    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "unstar", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
+    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "put_away", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
@@ -672,7 +672,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
     <>
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-        {human && ask ? <AskLine ask={ask} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
     </>
@@ -749,7 +749,7 @@ function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
   if (child.human_turn) {
     return <>
-      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} className="min-w-0 flex-1 text-micro" /></div>
+      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /></div>
       <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
     </>;
   }

@@ -52,11 +52,11 @@ pub struct PluginFile {
     pub source_name: &'static str,
     /// Raised when the file's text changes.
     pub version: u32,
-    /// The agent whose own folder holds the file: its install-scope folder
-    /// (`hide_agent_adapter::HomeScope::Install`), which Hide never creates.
+    /// The agent whose own folder holds the file: its default account's
+    /// (`AccountPath::State`), which Hide never creates, and the folder in
+    /// it the agent loads scripts from (`AccountPath::Plugins`), which Hide
+    /// may create.
     pub config: hide_agent_adapter::AgentId,
-    /// The folder inside it the agent loads scripts from, which Hide may create.
-    pub folder: &'static str,
     /// Hide's own folder inside that one, for a plugin the agent loads as a
     /// folder: made with its first file and taken out with its last.
     pub own_folder: Option<&'static str>,
@@ -225,12 +225,7 @@ impl Plugin {
         }
         for file in self.files {
             if let Some(own) = file.own_folder {
-                remove_if_empty(
-                    &file
-                        .config_directory(home)
-                        .join(file.folder)
-                        .join(named(own, install)),
-                )?;
+                remove_if_empty(&file.scripts_directory(home).join(named(own, install)))?;
             }
         }
         Ok(removed)
@@ -279,15 +274,22 @@ fn remove_if_empty(folder: &Path) -> Result<(), String> {
 impl PluginFile {
     /// The agent's own folder, the one Herdr's integration for it used too.
     pub fn config_directory(&self, home: &Path) -> PathBuf {
-        self.config.adapter().install_home(home)
+        self.config
+            .adapter()
+            .place_in(home, hide_agent_adapter::AccountPath::State)
+    }
+
+    /// The folder in it the agent loads scripts from.
+    pub fn scripts_directory(&self, home: &Path) -> PathBuf {
+        self.config
+            .adapter()
+            .place_in(home, hide_agent_adapter::AccountPath::Plugins)
     }
 
     /// Where the installation `install` keeps this file: Hide's own folder
     /// carries its mark when the plugin has one, and the file does otherwise.
     pub fn path(&self, home: &Path, install: Option<&str>) -> PathBuf {
-        self.config_directory(home)
-            .join(self.folder)
-            .join(self.name(install))
+        self.scripts_directory(home).join(self.name(install))
     }
 
     /// The file's name inside the agent's folder, as a sentence names it.
@@ -447,7 +449,7 @@ impl PluginFile {
         if observed == PluginObserved::Current {
             return Ok(false);
         }
-        let folder = self.config_directory(home).join(self.folder);
+        let folder = self.scripts_directory(home);
         for folder in std::iter::once(folder.clone()).chain(
             self.own_folder
                 .map(|own| folder.join(named(own, helper.install()))),

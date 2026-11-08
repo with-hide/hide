@@ -91,7 +91,8 @@ pub fn same_file(left: &Path, right: &Path) -> io::Result<bool> {
 /// The path with every link followed and every spelling made the filesystem's
 /// own, so two paths to one place compare equal as text. On Windows the
 /// `\\?\` prefix the system adds is removed whenever the path means the same
-/// without it.
+/// without it, and on macOS the `/System/Volumes/Data` spelling of a folder
+/// under `/Users` or any other data folder is the one without that prefix.
 pub fn canonical(path: &Path) -> io::Result<PathBuf> {
     sys::canonical(path)
 }
@@ -364,7 +365,30 @@ mod sys {
     }
 
     pub(super) fn canonical(path: &Path) -> io::Result<PathBuf> {
-        fs::canonicalize(path)
+        let real = fs::canonicalize(path)?;
+        Ok(firmlink_spelling(real))
+    }
+
+    /// macOS names a folder of the user's data both `/Users/me` and
+    /// `/System/Volumes/Data/Users/me`, and a link followed to the second
+    /// spelling stays there. The one spelling is the one without the prefix,
+    /// when it leads to the same file, so two paths to one place compare equal
+    /// as text (PRD home-folder-project D-07).
+    #[cfg(target_os = "macos")]
+    fn firmlink_spelling(real: PathBuf) -> PathBuf {
+        let Ok(rest) = real.strip_prefix("/System/Volumes/Data") else {
+            return real;
+        };
+        let plain = Path::new("/").join(rest);
+        match (id_of_path(&plain, true), id_of_path(&real, true)) {
+            (Ok(plain_id), Ok(real_id)) if plain_id == real_id => plain,
+            _ => real,
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn firmlink_spelling(real: PathBuf) -> PathBuf {
+        real
     }
 
     #[cfg(target_os = "macos")]
@@ -546,6 +570,17 @@ mod tests {
         assert_eq!(strip_verbatim(r"\\?\C:\a\..\b"), None);
         let long = format!(r"\\?\C:\{}", "a".repeat(300));
         assert_eq!(strip_verbatim(&long), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_data_volume_spelling_of_a_folder_is_the_one_without_the_prefix() {
+        let plain = canonical(Path::new("/Users")).unwrap();
+        assert_eq!(plain, Path::new("/Users"));
+        assert_eq!(
+            canonical(Path::new("/System/Volumes/Data/Users")).unwrap(),
+            plain
+        );
     }
 
     #[test]

@@ -97,8 +97,7 @@ impl Fixture {
 
     /// The folder the agent loads scripts from.
     fn folder(&self) -> PathBuf {
-        let entry = self.plugin.entry();
-        entry.config_directory(self.home()).join(entry.folder)
+        self.plugin.entry().scripts_directory(self.home())
     }
 
     /// The file Settings names.

@@ -2,9 +2,8 @@
 // production Workspace over invented local data: each `state` the design
 // boards drew, from the closed rail to a narrow window whose pinned lane
 // stacks its two columns; the rail's pin is drawn off and on, with the lane
-// up and closed. The Mission tool (PRD mission-tool) has its list with one
-// mission's map open, its empty start guide, the guide unfolded over the
-// list, its defaults and an unreadable record. The Project tool draws its
+// up and closed; the rail has no Mission icon, missions being the page's
+// mission screen (PRD mission-screen B18). The Project tool draws its
 // week empty, partly filled and filled (PRD project-panel-results B21). No
 // daemon is used.
 import { useLayoutEffect, useMemo } from "react";
@@ -20,11 +19,10 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 import { hideAiSceneProject } from "./HideAiScene";
 import { landingTaskTitles, landingUsage, partialWeek } from "./landingSceneData";
 import { memorySceneProject } from "./MemoryScene";
-import { MISSION_TOOL_DEFAULTS, missionToolMissions } from "./missionToolSceneData";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "closed-pinned", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "mission", "mission-empty", "mission-guide", "mission-settings", "mission-unreadable", "changes", "narrow"] as const;
+const STATES = ["closed", "closed-pinned", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
 type Lane = { tool: Tool | null; pinned: boolean; documents: boolean; expanded: boolean };
@@ -41,11 +39,6 @@ const LANES: Record<LaneState, Lane> = {
   "project-partial": { tool: "project", pinned: true, documents: true, expanded: false },
   "project-empty": { tool: "project", pinned: true, documents: true, expanded: false },
   memory: { tool: "memory", pinned: true, documents: true, expanded: false },
-  mission: { tool: "mission", pinned: true, documents: true, expanded: false },
-  "mission-empty": { tool: "mission", pinned: true, documents: false, expanded: false },
-  "mission-guide": { tool: "mission", pinned: true, documents: false, expanded: false },
-  "mission-settings": { tool: "mission", pinned: true, documents: false, expanded: false },
-  "mission-unreadable": { tool: "mission", pinned: true, documents: false, expanded: false },
   changes: { tool: "changes", pinned: true, documents: true, expanded: false },
   narrow: { tool: "explorer", pinned: true, documents: true, expanded: false },
 };
@@ -120,18 +113,12 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     // The project's Hide AI, so the tool draws its 제안 and Memory tabs and the rail counts both.
     const memory = { ...memorySceneProject("workspace"), workspace_id: workspace.id };
     const suggestions = hideAiSceneProject("new", workspace.id);
-    // The project's missions: the list with one map open in the 보기 slot, none for the start guide, an unreadable record.
-    if (lane.tool === "mission") {
-      const missions = missionToolMissions(workspace.id, root, Date.now());
-      scene.rest.missions = state === "mission-empty" ? { items: [] } : state === "mission-unreadable" ? { items: [], failed: "mission book: unreadable" } : { items: missions };
-      scene.rest.ui_state = { ...scene.rest.ui_state!, conductor_settings: MISSION_TOOL_DEFAULTS, ...(state === "mission" ? { detail: { items: [{ kind: "mission" as const, mission: "m-tabs" }], shown: true } } : {}) };
-    }
     return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory, suggestions, usage };
   }, [content, lane, open, state]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory }, suggestions: { project: fixture.suggestions }, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null });
-    useUiStore.setState({ screen: { kind: "workspace" }, laneExpanded: lane.expanded, stackFront: "view", missionToolPage: state === "mission-settings" ? "settings" : "list", missionGuideOpen: state === "mission-guide", missionClosedAll: false });
+    useUiStore.setState({ screen: { kind: "workspace" }, laneExpanded: lane.expanded, stackFront: "view"});
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));

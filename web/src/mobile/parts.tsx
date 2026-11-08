@@ -7,12 +7,17 @@ import type { ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { StatusMark } from "../components/status-mark";
 import { DeviceChip } from "../components/device-chip";
+import { HumanTurnCopy } from "../components/human-turn-copy";
+import { browserClipboard } from "../clipboard";
 import { Button } from "../components/ui/button";
 import { humanTurnText } from "../humanTurn";
 import { useInterfaceTranslation } from "../i18n/client";
 import { finishHumanTurn } from "./connection";
 import type { PhoneAgent } from "./protocol";
 import { usePhone } from "./store";
+
+/** The phone's own clipboard, which Copy of a person's turn's place writes; a refusal is the log's. */
+const clipboard = browserClipboard((message) => console.warn("phone.copy_failed", { message }));
 
 /** The column a list row's detail lines start in: under the title, after the status mark alone. */
 export const LIST_INSET = "pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]";
@@ -73,7 +78,8 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 /**
  * A person's turn on the phone (PRD ask-human B9, B10, B19, B21): its kind
- * and place as text the operator can select, the device it waits on, and
+ * and place as text the operator can select, Copy beside the place, which
+ * puts it on this phone's clipboard, the device it waits on, and
  * Done, which waits while the Mac or that device is away and says when a
  * press did not land.
  */
@@ -89,7 +95,8 @@ export function PhoneHumanTurn({ agent, inset }: { agent: PhoneAgent; inset: str
   return (
     <div className={`flex min-w-0 flex-col gap-xs ${inset}`} data-phone-human-turn={turn.id}>
       <span className="flex min-w-0 items-baseline gap-sm text-body">
-        <span className="min-w-0 break-words text-warning select-text" data-phone-human-place={turn.id}>{what}</span>
+        {/* Copy follows the place's last word, however the place wraps. */}
+        <span className="min-w-0 break-words text-warning select-text" data-phone-human-place={turn.id}>{what}<HumanTurnCopy turn={turn} copy={clipboard.write} touch className="-my-md ml-xxs align-middle" /></span>
         {agent.device_label ? <DeviceChip label={agent.device_label} variant="inline" className="shrink-0" /> : null}
       </span>
       <span className="flex min-w-0 items-center gap-sm">

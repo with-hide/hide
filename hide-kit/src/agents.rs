@@ -25,6 +25,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+use hide_agent_adapter::AccountPath;
 use hide_agent_hooks::guidance::GuidanceAgent;
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
@@ -59,24 +60,30 @@ impl SkillDir {
     }
 
     /// The folder the skill folder sits in: the shared `~/.agents`, which no
-    /// one agent owns, or the agent's own folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), the one its hooks and
-    /// go into.
+    /// one agent owns, or the agent's own folder in its default account
+    /// (`AccountPath::State`), the one its hooks go into.
     fn folder(self, home: &Path) -> PathBuf {
-        match self {
-            Self::Shared => home.join(".agents"),
-            Self::Claude => hide_agent_adapter::AgentId::ClaudeCode
-                .adapter()
-                .install_home(home),
-            Self::Antigravity => hide_agent_adapter::AgentId::Antigravity
-                .adapter()
-                .install_home(home),
+        match self.agent() {
+            None => home.join(".agents"),
+            Some(agent) => agent.adapter().place_in(home, AccountPath::State),
         }
     }
 
-    /// `<folder>/skills`.
+    /// The skill folder: `<folder>/skills`, the agent's own from its default
+    /// account (`AccountPath::Skills`).
     pub fn path(self, home: &Path) -> PathBuf {
-        self.folder(home).join("skills")
+        match self.agent() {
+            None => self.folder(home).join("skills"),
+            Some(agent) => agent.adapter().place_in(home, AccountPath::Skills),
+        }
+    }
+
+    fn agent(self) -> Option<hide_agent_adapter::AgentId> {
+        match self {
+            Self::Shared => None,
+            Self::Claude => Some(hide_agent_adapter::AgentId::ClaudeCode),
+            Self::Antigravity => Some(hide_agent_adapter::AgentId::Antigravity),
+        }
     }
 
     /// Whether the folder can be written without creating the agent's own

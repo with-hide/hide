@@ -136,7 +136,7 @@ const BUSY_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
 /// files changed by the time the read ends ([`ReadRefusal::InMotion`]).
 pub(crate) fn with_read<T>(
     home: &Path,
-    folder: &str,
+    folder: &Path,
     path: &Path,
     reasons: &Reasons,
     steps: usize,

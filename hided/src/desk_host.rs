@@ -39,11 +39,7 @@ impl DeskHost {
                 codex_home: hide_kit::layout::desk_codex_home(state_dir),
                 codex_sign_in: hide_desk::codex::operator_sign_in(
                     home,
-                    hide_agent_adapter::AgentId::Codex
-                        .adapter()
-                        .home_variable
-                        .and_then(hide_platform::host::variable)
-                        .as_deref(),
+                    hide_platform::host::variable,
                 ),
                 hide_dir,
             },

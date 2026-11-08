@@ -314,6 +314,8 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleLeftSidebar();
       case "overview":
         return actions.toggleOverview();
+      case "open_missions":
+        return actions.openMissions();
       case "sidebar_projects":
         return actions.focusSidebar();
       case "add_backlog":
@@ -328,8 +330,6 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleTool("project");
       case "toggle_lane_memory":
         return actions.toggleTool("memory");
-      case "toggle_lane_mission":
-        return actions.toggleTool("mission");
       case "toggle_lane_explorer":
         return actions.toggleTool("explorer");
       case "toggle_lane_changes":

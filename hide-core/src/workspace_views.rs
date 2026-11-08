@@ -47,11 +47,13 @@ pub const MAX_WORKSPACES: usize = 256;
 pub const MAX_WIDTH: u32 = 8192;
 
 /// The tool the lane's tool column shows (PRD lane-two-columns D-03, D-07,
-/// D-14): the Project's status, its Memory and its missions, then the checkout's Explorer
+/// D-14): the Project's status and its Memory, then the checkout's Explorer
 /// (the file tree) and History, in the rail's order. Memory is a tool of its
 /// own, no longer a tab of the Project tool (operator decision 2026-10-23,
 /// replacing D-20). The documents are no tool: they are the viewing column's
-/// (`WorkspaceView::documents`).
+/// (`WorkspaceView::documents`). Missions are no tool either: they are the
+/// page's mission screen (PRD mission-screen D-02), so a lane saved on the
+/// retired `mission` tool reads as no tool column.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
@@ -59,8 +61,6 @@ pub enum Tool {
     Project,
     /// The Project's Memory.
     Memory,
-    /// The Project's missions (PRD mission-tool D-01).
-    Mission,
     /// The file tree.
     Explorer,
     /// History, the checkout's changes.
@@ -72,7 +72,6 @@ impl Tool {
         match value {
             "project" => Some(Self::Project),
             "memory" => Some(Self::Memory),
-            "mission" => Some(Self::Mission),
             "explorer" => Some(Self::Explorer),
             "changes" => Some(Self::Changes),
             _ => None,
@@ -102,7 +101,7 @@ pub struct WorkspaceView {
     /// moment, not a close.
     pub open: bool,
     /// Whether the viewing column shows the checkout's documents, the View
-    /// areas (D-01, D-04). The window's 보기 slot, while it is shown, stands
+    /// areas (D-01, D-04). The front tab's 보기 slot, while it is shown, stands
     /// in front of them; the rail's document button brings them back.
     pub documents: bool,
     /// The tool column's tool, or `None` while there is no tool column.
@@ -151,8 +150,8 @@ pub struct WorkspaceView {
 }
 
 /// A stored schema 5 or schema 4 entry. A tool this build no longer has (a
-/// schema 4 file's `memory` or `prs`) reads as no tool column; the rest of
-/// the lane is the same shape.
+/// schema 4 file's `prs`, or the retired `mission`) reads as no tool column;
+/// the rest of the lane is the same shape.
 #[derive(Deserialize)]
 struct StoredLane {
     device_id: String,
@@ -359,7 +358,7 @@ impl WorkspaceView {
     }
 
     /// Whether the viewing column holds the View areas: the lane is open
-    /// with the documents shown, whether or not the window's 보기 slot
+    /// with the documents shown, whether or not the front tab's 보기 slot
     /// stands in front of them.
     pub fn shows_documents(&self) -> bool {
         self.open && self.documents
@@ -1304,6 +1303,40 @@ mod tests {
         );
         assert!(written.contains("\"tool\": \"memory\""));
         assert_eq!(load(&path, 2).1, current());
+    }
+
+    /// PRD mission-screen D-02, B18: a lane saved open on the retired Mission
+    /// tool loads with no tool column, its documents and the rest of the
+    /// lane as they were, and the next save writes no `mission` tool.
+    #[test]
+    fn a_lane_saved_on_the_mission_tool_loads_with_no_tool_column() {
+        let folder = scratch("mission-tool-lane");
+        let path = folder.path().join("workspace-views.json");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "schema_version": 5,
+                "workspaces": [
+                    {"device_id": "local", "path": "/docs", "open": true, "documents": true,
+                     "tool": "mission", "pinned": true, "view_layout": one_view_layout()},
+                    {"device_id": "local", "path": "/alone", "open": true, "tool": "mission"},
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (loaded, outcome) = load(&path, 1);
+        assert_eq!(outcome, current());
+        let docs = loaded.get("local", "/docs").unwrap();
+        assert_eq!(lane(docs), (true, true, None, true));
+        assert_eq!(docs.layout.display_count(), 1);
+        assert_eq!(
+            lane(loaded.get("local", "/alone").unwrap()),
+            (true, false, None, false)
+        );
+
+        save(&path, &loaded).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("\"mission\""));
     }
 
     /// PRD lane-two-columns D-10: every shape schema 2 stored loads its View

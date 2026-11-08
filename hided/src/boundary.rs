@@ -1781,6 +1781,45 @@ mod tests {
         assert_eq!(workspace(&f.boundary, "~", Some("~")), Ok(f.home.clone()));
     }
 
+    /// PRD home-folder-project B18: a registered home is a root like any other,
+    /// so a save or an edit under it is inside the boundary (`explorer_save`
+    /// asks `is_under_root`), a path beside it is not, and a project inside it
+    /// keeps its own root.
+    #[test]
+    fn a_registered_home_folder_holds_the_paths_under_it_and_a_nested_project_keeps_its_own() {
+        let f = fixture();
+        let nested = f.home.join("projects/alpha");
+        fs::create_dir_all(f.home.join("Documents")).unwrap();
+        fs::write(f.home.join("Documents/note.md"), "x").unwrap();
+        f.boundary.set_roots(vec![
+            Root {
+                workspace_id: "home".into(),
+                checkout_id: "home".into(),
+                path: f.home.clone(),
+            },
+            Root {
+                workspace_id: "alpha".into(),
+                checkout_id: "alpha".into(),
+                path: nested.clone(),
+            },
+        ]);
+        assert!(
+            f.boundary
+                .is_under_root(&s(&f.home.join("Documents/note.md")))
+        );
+        assert!(
+            f.boundary
+                .is_under_root(&s(&f.home.join("Documents/new.md")))
+        );
+        assert!(!f.boundary.is_under_root(&s(f.home.parent().unwrap())));
+        assert_eq!(
+            f.boundary
+                .strip_root(&nested.join("src/main.rs"))
+                .map(|(root, _)| root),
+            Some(nested)
+        );
+    }
+
     #[test]
     fn home_spelled_as_given_resolves_when_home_is_a_symlink() {
         let outer = tempfile::tempdir().unwrap();

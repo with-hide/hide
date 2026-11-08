@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -47,6 +48,11 @@ KEEP_FILES = {
     "factory.sqlite3", "factory.v1.sqlite3",
 }
 KEEP_FOLDERS = {"engine", "mission-events"}
+# What a start reads from the device's account outside its state folder: the kit's
+# record of what it installed and the agent configuration it put Hide's hooks
+# into. Kept per machine in `hide-kit/tests/fixtures/release-home/<tag>/<machine>/`,
+# whose upgrade test reads them with the kit's own loader.
+HOME_FILES = (".hide/kit/installed.json", ".claude/settings.json", ".claude.json", ".hide/agent-hooks/claude-trust.json")
 
 
 FOLD = """
@@ -76,7 +82,11 @@ def download(tag, work):
     arch = {"arm64": "aarch64", "amd64": "x86_64"}.get(arch, arch)
     platform = f"linux-{arch}"
     asset = f"hide-device-{platform}-{version}.tar.gz"
-    run("gh", "release", "download", tag, "-R", REPO, "-p", asset, "-p", "device-bundles.json", "-D", str(work))
+    # The public download address, not the API: a release asset fetched
+    # through the API counts against the account's shared rate limit, which
+    # agents beside this run exhaust. The digests below are what is trusted.
+    for name in (asset, "device-bundles.json"):
+        urllib.request.urlretrieve(f"https://github.com/{REPO}/releases/download/{tag}/{name}", work / name)
     manifest = json.loads((work / "device-bundles.json").read_text())
     bundle = manifest["platforms"][platform]
     digest = hashlib.sha256((work / asset).read_bytes()).hexdigest()
@@ -93,10 +103,19 @@ def download(tag, work):
     return manifest
 
 
+# The operator's own Claude Code settings, there before Hide's kit adds its
+# hooks: a permission and a Stop hook of another tool, which every later
+# build's install and removal must leave as they are.
+OPERATOR_SETTINGS = json.dumps({
+    "permissions": {"allow": ["Bash(ls:*)"]},
+    "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo operator-stop"}]}]}})
+
+
 def setup(tag, work, names):
     image, network, core, device = names
     for name in ("Dockerfile", "agent.py", "claude.c"):
         shutil.copy(HERE / name, work / name)
+    (work / "settings.json").write_text(OPERATOR_SETTINGS)
     docker("build", "-q", "-t", image, str(work))
     docker("network", "create", network)
     key = work / "id_ed25519"
@@ -104,29 +123,31 @@ def setup(tag, work, names):
     device_script = (
         f"echo {DEVICE_ID} > /etc/machine-id && useradd -m -s /bin/bash remote && mkdir -p /home/remote/.ssh /run/sshd"
         " && cp /key.pub /home/remote/.ssh/authorized_keys && mkdir -p /home/remote/.claude"
+        " && cp /settings.json /home/remote/.claude/settings.json"
         " && chown -R remote:remote /home/remote/.ssh /home/remote/.claude"
         " && chmod 700 /home/remote/.ssh && chmod 600 /home/remote/.ssh/authorized_keys && exec /usr/sbin/sshd -D -e")
     docker("run", "-d", "--name", device, "--hostname", "device", "--network", network, "--network-alias", "device",
-           "-v", f"{key}.pub:/key.pub:ro", image, "sh", "-c", device_script)
+           "-v", f"{key}.pub:/key.pub:ro", "-v", f"{work / 'settings.json'}:/settings.json:ro", image, "sh", "-c", device_script)
     core_script = (
         f"echo {CORE_ID} > /etc/machine-id && useradd -m -s /bin/bash me && mkdir -p /home/me/.ssh"
         " && cp /key /home/me/.ssh/id_ed25519"
         f" && printf 'Host mini\\n  HostName device\\n  User remote\\n  StrictHostKeyChecking accept-new\\n' > /home/me/.ssh/config"
         # Claude Code is set up for both accounts, and the core's Hide AI
         # runs on it (`agent.py` answers), as an operator's first run picks.
-        " && mkdir -p /home/me/.claude /home/me/.local/state/hide"
+        " && mkdir -p /home/me/.claude /home/me/.local/state/hide && cp /settings.json /home/me/.claude/settings.json"
         " && printf '{\"provider\":\"claude\",\"models\":{\"claude\":\"sonnet\"}}' > /home/me/.local/state/hide/ai.json"
         " && chown -R me:me /home/me/.ssh /home/me/.claude /home/me/.local && chmod 700 /home/me/.ssh && chmod 600 /home/me/.ssh/*"
         " && exec sleep infinity")
     docker("run", "-d", "--name", core, "--hostname", "core", "--network", network,
-           "-v", f"{key}:/key:ro", "-v", f"{ROOT / 'scripts'}:/scripts:ro", image, "sh", "-c", core_script)
+           "-v", f"{key}:/key:ro", "-v", f"{work / 'settings.json'}:/settings.json:ro",
+           "-v", f"{ROOT / 'scripts'}:/scripts:ro", image, "sh", "-c", core_script)
     as_me = ["exec", "-u", "me", "-e", "HOME=/home/me", "-e", "USER=me", "-e", "SHELL=/bin/bash", "-w", "/home/me", core]
     # sshd and the account come up a moment after the container.
     docker(*as_me, "sh", "-c", "for i in $(seq 30); do ssh -o BatchMode=yes mini true 2>/dev/null && exit 0; sleep 1; done; exit 1")
     return as_me
 
 
-def generate(tag, out):
+def generate(tag, out, home_out):
     suffix = secrets.token_hex(3)
     version = tag.removeprefix("v")
     names = (f"hide-release-state:{version}-{suffix}", f"hide-release-state-{suffix}",
@@ -151,12 +172,20 @@ def generate(tag, out):
         # the shell's defensive mode refuses Project Memory's FTS triggers.
         docker(*as_me, "python3", "-I", "-c", FOLD)
         docker("cp", f"{core}:/home/me/.hide/state", str(work / "state"))
+        # The device's account only: the core runs outside a desktop
+        # package, whose kit installs nothing (`kit.unavailable`).
+        for machine, (container, home) in {"device": (device, "/home/remote")}.items():
+            for name in HOME_FILES:
+                target = work / "homes" / machine / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                docker("cp", f"{container}:{home}/{name}", str(target), check=False, capture=True)
         report = json.loads((work / "scenario.json").read_text())
         for step in report["steps"]:
             print(f"{ {True: 'ok  ', None: 'n/a ', False: 'FAIL'}[step['ok']] } {step['step']}: {json.dumps(step['detail'])[:300 if step['ok'] else 3000]}")
         if scenario.returncode != 0:
             raise SystemExit(f"the scenario stopped before its device and agents were up; the core's log is {log}")
         keep(work / "state", out)
+        keep_homes(work / "homes", home_out)
         (out.parent / f"{out.name}.json").write_text(json.dumps({
             "tag": tag, "commit": manifest["commit"], "core_node": CORE_ID, "device": {"alias": "mini", "machine_id": DEVICE_ID},
             "steps": [{"step": step["step"], "ok": step["ok"],
@@ -183,13 +212,27 @@ def keep(state, out):
             shutil.copytree(entry, out / entry.name, ignore=shutil.ignore_patterns("*.sock", "*.lock", "*.log"))
 
 
+def keep_homes(homes, out):
+    """Each account's files a start reads outside the state folder, under
+    `<machine>/` at their place in the home."""
+    if out.exists():
+        shutil.rmtree(out)
+    for path in sorted(homes.rglob("*")):
+        if path.is_file():
+            target = out / path.relative_to(homes)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(path, target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("tag", help="a published release tag, such as v1.2.1")
     parser.add_argument("--out", type=Path, help="default: hide-core/tests/fixtures/release-state/<tag>")
+    parser.add_argument("--home-out", type=Path, help="default: hide-kit/tests/fixtures/release-home/<tag>")
     args = parser.parse_args()
     out = (args.out or ROOT / "hide-core/tests/fixtures/release-state" / args.tag).resolve()
-    generate(args.tag, out)
+    home_out = (args.home_out or ROOT / "hide-kit/tests/fixtures/release-home" / args.tag).resolve()
+    generate(args.tag, out, home_out)
     return 0
 
 

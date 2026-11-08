@@ -538,7 +538,7 @@ mod tests {
         let session = fixture["record"]["sessionId"].as_str().unwrap();
         let path = home
             .path()
-            .join(hide_session::CLAUDE_SESSIONS)
+            .join(".claude/projects")
             .join("-work")
             .join(format!("{session}.jsonl"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

@@ -16,6 +16,28 @@ hooks = "claude"
 [resume]
 session = ["--resume", "{session}"]
 
+# Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts). The default profile sets no CLAUDE_CONFIG_DIR: Claude keys its
+# login by the variable's exact value, so naming ~/.claude is another login.
+[account]
+by = "folder"
+
+[account.vars]
+CLAUDE_CONFIG_DIR = { default = "~/.claude", profile = "{account}" }
+
+[account.paths]
+hooks = "{CLAUDE_CONFIG_DIR}/settings.json"
+hook_trust = false
+plugins = false
+skills = "{CLAUDE_CONFIG_DIR}/skills"
+# Claude keeps folder trust in its global config, which moves into the
+# folder for any account but the default.
+folder_trust = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
+sessions = "{CLAUDE_CONFIG_DIR}/projects"
+login = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
+state = "{CLAUDE_CONFIG_DIR}"
+usage = "{CLAUDE_CONFIG_DIR}/.credentials.json"
+
 [screen]
 version = "2026.10.11.1"
 min_engine_version = 2
