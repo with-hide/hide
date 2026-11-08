@@ -489,6 +489,13 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & (test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does) | test(=kit::tests::every_kit_location_follows_the_home_the_platform_names))'
+      - name: Each agent's account folders, from its definition's [account]
+        # `resolve`'s contract (hide-agent-adapter/tests/it/account.rs): a
+        # folder is absolute only in Windows' forms, variable names compare
+        # regardless of case, and each place joins with Windows' separator.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-agent-adapter::it) & test(/^account::/)'
       - name: Hide's Home lists its projects and holds no link
         # Every process of an ssh session refuses a junction no administrator
         # made, so Home holds none on Windows (hide-host/src/home.rs, LINKS).
