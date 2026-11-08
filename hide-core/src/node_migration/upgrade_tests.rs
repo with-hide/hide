@@ -376,9 +376,16 @@ fn released_facts(
             .into_iter()
             .flatten()
             .filter(|row| row["home"] == true)
-            // By its name: a device's registration id is renamed with the
-            // device, and the loaded retirement must follow it.
-            .map(|row| row["label"].as_str().unwrap_or_default().to_owned())
+            // By its name and folder: a device's registration id is renamed
+            // with the device, and the loaded retirement must follow it, one
+            // for each Home (two share the name).
+            .map(|row| {
+                format!(
+                    "{} {}",
+                    row["label"].as_str().unwrap_or_default(),
+                    row["path"].as_str().unwrap_or_default()
+                )
+            })
             .collect(),
     );
     facts.insert(
@@ -550,7 +557,7 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
                 ui.workspace_registrations
                     .iter()
                     .find(|registration| registration.id == retirement.registration_id)
-                    .map(|registration| registration.label.clone())
+                    .map(|registration| format!("{} {}", registration.label, registration.path))
             })
             .collect(),
     );
@@ -585,6 +592,14 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
             if !loaded[store].contains(fact) {
                 failures.push(format!("{store}: {fact} was not loaded"));
             }
+        }
+        // Each old Home is one pending retirement, no more and no fewer.
+        if *store == "old homes" && loaded[store].len() != facts.len() {
+            failures.push(format!(
+                "{} old Homes were released, {} pending retirements were loaded",
+                facts.len(),
+                loaded[store].len()
+            ));
         }
     }
     // A pending retirement names the device its registration was moved to, so
