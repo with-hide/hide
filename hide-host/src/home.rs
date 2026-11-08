@@ -711,7 +711,8 @@ mod tests {
     #[test]
     fn a_guide_the_operator_changed_in_any_way_is_kept() {
         let exact = |dir: &Path| guide_text(dir, &["alpha", "beta"]);
-        let variants: [(&str, Box<dyn Fn(&Path) -> String>); 6] = [
+        type Variant<'a> = (&'static str, Box<dyn Fn(&Path) -> String + 'a>);
+        let variants: [Variant<'_>; 6] = [
             ("title only", Box::new(|_| "# Hide Home\n".to_owned())),
             (
                 "under the title",
