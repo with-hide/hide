@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { asFirstRun, startHided } from "./hided-fixture";
-import { registerFolder, sendEvent } from "./wire";
+import { registerFolder, screenshot, sendEvent } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 180_000 });
@@ -39,8 +39,8 @@ test("the home folder is asked about once, added when confirmed, and listed and 
     if (APP_DATA) write(`${APP_DATA}/cache.db`);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    // A plain folder is a folder row: one button named for it.
-    const project = page.locator("[data-project]").filter({ has: page.getByRole("button", { name: "account", exact: true }) });
+    // A plain folder is a folder row: one button named for it (the dialog names it for its folder).
+    const project = page.locator("[data-project]").filter({ has: page.getByRole("button", { name: "home", exact: true }) });
     // A project inside home, which the home project's search leaves to its own.
     await registerFolder(page, daemon, path.join(home, "work/app"));
 
@@ -52,8 +52,22 @@ test("the home folder is asked about once, added when confirmed, and listed and 
     const holder = await sendEvent(page, daemon, "create_workspace", { path: toPage(path.dirname(home)), label: "up", initialize_git: false }, "path_refused");
     expect((holder?.payload as { reason?: string } | undefined)?.reason).toBe("home_root");
 
+    // B1, B4: typing `~` in the dialog leads to the same question, with its button holding the keyboard (B3).
+    await page.locator("[data-sidebar-new-workspace]").click();
+    const dialog = page.locator("[data-add-project]");
+    await dialog.locator("[data-add-project-browse]").click();
+    await dialog.locator("[data-folder-browser-field]").fill("~");
+    await dialog.locator("[data-folder-browser-field]").press("Enter");
+    await expect(dialog.locator("[data-folder-browser-target]")).toHaveAttribute("data-folder-browser-target", home);
+    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    const question = dialog.locator("[data-registration-confirm]");
+    await expect(question).toContainText("home folder");
+    await expect(dialog.locator("[data-registration-confirm-add]")).toBeFocused();
+    await screenshot(page, "home-folder-project-question");
+    await expect(project).toHaveCount(0);
+
     // B2: confirmed, it is a project of its own.
-    await sendEvent(page, daemon, "create_workspace", add(true));
+    await dialog.locator("[data-registration-confirm-add]").click();
     await expect(project).toBeVisible({ timeout: 30_000 });
 
     // B8: the root lists no hidden name and no app data, and every other folder.
