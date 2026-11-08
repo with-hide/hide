@@ -2155,6 +2155,7 @@ Hovering a weekly limit outlines the recent seven days, and a five-hour limit ou
 Only the chosen seven or thirty date buttons are mounted, and closing the popover removes them.
 
 Account limits follow the grass as compact rows without individual card borders.
+Each row is one line: a model's window under an account window (`└ Fable`) draws its reset countdown only where it differs from the account window's, and a name too long for the line is cut with an ellipsis and given whole on hover.
 Each visible agent has 5 hours and 7 days rows with a countdown, short inline bar and percent; model-specific limits are indented below their weekly row.
 Not-started windows say `Not started`, never 0%.
 Expired, not-offered and individually unreadable windows have no popover row; a whole malformed response makes the agent unavailable.

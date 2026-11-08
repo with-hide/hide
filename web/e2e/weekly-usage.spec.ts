@@ -71,14 +71,15 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     await expect.poll(() => hints.at(-1)).toEqual({ usage_popover_open: true });
     await screenshot(page, "usage-loading-unavailable");
 
-    // Claude answers: the open popover fills in the row, its reset, and the Fable bucket under it.
+    // Claude answers: the open popover fills in the row, its reset, and the Fable bucket under it,
+    // which repeats no reset the week above it already says.
     usage.release();
     const week = claudeRow.locator('[data-usage-window-row="weekly"]:not([data-usage-bucket])');
     await expect(week.locator("[data-usage-value]")).toHaveText("62%", { timeout: 20_000 });
     await expect(week.locator("[data-usage-reset]")).toHaveText("· in 5d 4h");
     const fable = claudeRow.locator('[data-usage-bucket="Fable"]');
     await expect(fable.locator("[data-usage-value]")).toHaveText("6%");
-    await expect(fable.locator("[data-usage-reset]")).toHaveText("· in 5d 4h");
+    await expect(fable.locator("[data-usage-reset]")).toHaveCount(0);
     await screenshot(page, "usage-popover-available");
     await page.clock.setSystemTime(Date.now());
 
