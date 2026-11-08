@@ -154,21 +154,22 @@ export function ImportableProjects({
       {filters.length > 0 ? (
         <ToggleGroup
           type="single"
+          variant="pill"
           value={source ?? ALL}
           // Pressing the chip already on shows every row again.
           onValueChange={(next) => setFilter(next === "" || next === ALL ? null : next)}
           aria-label={t("addProject.import.filter")}
-          className="flex-wrap"
           data-add-project-import-filters="true"
         >
-          <ToggleGroupItem value={ALL} size="sm" data-add-project-import-filter={ALL}>
+          <ToggleGroupItem value={ALL} variant="pill" className="text-caption" data-add-project-import-filter={ALL}>
             {t("addProject.import.all")}
-            <span className="text-muted-foreground">{rows.length}</span>
+            <span className="opacity-(--opacity-secondary)">{rows.length}</span>
           </ToggleGroupItem>
           {filters.map((chip) => (
-            <ToggleGroupItem key={chip.source} value={chip.source} size="sm" data-add-project-import-filter={chip.source}>
+            <ToggleGroupItem key={chip.source} value={chip.source} variant="pill" className="text-caption" data-add-project-import-filter={chip.source}>
+              {sourceIsApp(chip.source) ? null : <AgentLogo agent={chip.source} label={sourceName(chip.source)} size="sm" />}
               {sourceName(chip.source)}
-              <span className="text-muted-foreground">{chip.count}</span>
+              <span className="opacity-(--opacity-secondary)">{chip.count}</span>
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -198,9 +199,8 @@ export function ImportableProjects({
           ))}
         </ul>
       </div>
-      <div className="flex items-center gap-sm">
-        <span className="text-caption text-muted-foreground">{ready.length > 0 ? t("addProject.import.checked", { count: ready.length }) : t("addProject.import.choose")}</span>
-        <Button size="sm" className="ml-auto" disabled={disabled || ready.length === 0} onClick={add} data-add-project-import-add={ready.length}>
+      <div className="flex justify-end">
+        <Button size="sm" disabled={disabled || ready.length === 0} onClick={add} data-add-project-import-add={ready.length}>
           {ready.length > 0 ? t("addProject.import.addChecked", { count: ready.length }) : t("common.add")}
         </Button>
       </div>
@@ -244,7 +244,7 @@ function ImportRow({
               </Badge>
             ) : (
               <span key={source} title={sourceName(source)} data-add-project-import-source={source}>
-                <AgentLogo agent={source} label={sourceName(source)} />
+                <AgentLogo agent={source} label={sourceName(source)} size="sm" />
               </span>
             ),
           )}
