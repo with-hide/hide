@@ -330,7 +330,7 @@ impl Runtime {
     }
 
     /// Takes out of the slot the items whose subject is gone (a deleted
-    /// session's plan, a mission no longer kept); a slot this empties is
+    /// session's plan); a slot this empties is
     /// left as ✕ leaves it, what stood under the slot in the viewing column
     /// or the column closed (lane-two-columns B13). Whether anything was
     /// taken.
@@ -463,12 +463,11 @@ impl Runtime {
             Some(DetailItem::Record { session }) => {
                 self.open_session_record(super::links::RecordOpenPayload { session });
             }
-            // A map draws the mission or the plan the snapshot already
-            // carries, a project's worktrees and cost what its row and the
-            // usage frame already carry, and a branch card its 제안 row.
+            // A map draws the plan the snapshot already carries, a project's
+            // worktrees and cost what its row and the usage frame already
+            // carry, and a branch card its 제안 row.
             Some(
-                DetailItem::Mission { .. }
-                | DetailItem::Plan { .. }
+                DetailItem::Plan { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
                 | DetailItem::Remains { .. }

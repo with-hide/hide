@@ -1791,6 +1791,9 @@ pub(super) enum Event {
     MissionAttention(super::mission_health::MissionAttentionPayload),
     /// `mission_brief_read`: the operator opened the folded brief of a node.
     MissionBriefRead(super::mission_brief::BriefReadPayload),
+    /// `mission_shown`: the mission the page's mission screen shows in its
+    /// detail, or none (PRD mission-screen D-16).
+    MissionShown(super::mission_events::MissionShownPayload),
     /// `mission_reopen`: the operator opens a closed mission again (PRD
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
@@ -2149,6 +2152,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             MissionAttention
         ),
         "mission_brief_read" => decode!(super::mission_brief::BriefReadPayload, MissionBriefRead),
+        "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
@@ -4111,6 +4115,7 @@ impl Runtime {
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
+            Event::MissionShown(payload) => self.mission_shown(payload),
             Event::MissionReopen(payload) => self.mission_reopen_event(&payload.mission),
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)

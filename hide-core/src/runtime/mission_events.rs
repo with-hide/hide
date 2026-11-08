@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::Runtime;
@@ -20,7 +20,6 @@ use crate::missions::{
     Answer, AnswerFailure, Mission, MissionEnd, MissionNode, MissionStatus, Question, WakeEvent,
     answer_text,
 };
-use crate::model::DetailItem;
 
 /// The events of the mission open in the 보기 slot (B18-B21, B31): sent
 /// only for that one, so a mission's history never rides every frame. The
@@ -184,6 +183,14 @@ fn answer_line(question: &str, answer: &str, language: crate::model::InterfaceLa
             format!("[Decision answer] {question} → {answer}")
         }
     }
+}
+
+/// `mission_shown`: the mission the page's mission screen shows in its
+/// detail, or `None` once the detail closes or the page leaves the screen.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionShownPayload {
+    pub mission: Option<String>,
 }
 
 impl Runtime {
@@ -756,18 +763,20 @@ impl Runtime {
         self.announce_missions();
     }
 
-    /// Makes the published events those of the mission open in the 보기
-    /// slot, when it or its events moved.
+    /// `mission_shown`: the mission the page's mission screen shows in its
+    /// detail, or none (PRD mission-screen D-16). Whether it changed.
+    pub(super) fn mission_shown(&mut self, payload: MissionShownPayload) -> bool {
+        if self.missions.shown == payload.mission {
+            return false;
+        }
+        self.missions.shown = payload.mission;
+        true
+    }
+
+    /// Makes the published events those of the mission the page's detail
+    /// shows, when it or its events moved.
     pub(super) fn refresh_mission_events(&mut self) {
-        let slot = &self.snapshot.ui_state.detail;
-        let open = slot
-            .items
-            .last()
-            .filter(|_| slot.shown)
-            .and_then(|item| match item {
-                DetailItem::Mission { mission } => Some(mission.clone()),
-                _ => None,
-            });
+        let open = self.missions.shown.clone();
         if self.missions.events_made == (open.clone(), self.missions.events_edit) {
             return;
         }

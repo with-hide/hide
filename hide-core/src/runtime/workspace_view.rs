@@ -1334,12 +1334,10 @@ impl Runtime {
             let (visible, section) = match view.tool.filter(|_| view.open) {
                 Some(Tool::Explorer) => (true, RightPanelSection::Explorer),
                 Some(Tool::Changes) => (true, RightPanelSection::Changes),
-                // The Project tool, Memory and the Mission tool project as
-                // `Memory`, which no reader gates on; `Overview` would start the
-                // disk and Git reads.
-                Some(Tool::Project | Tool::Memory | Tool::Mission) => {
-                    (true, RightPanelSection::Memory)
-                }
+                // The Project tool and Memory project as `Memory`, which no
+                // reader gates on; `Overview` would start the disk and Git
+                // reads.
+                Some(Tool::Project | Tool::Memory) => (true, RightPanelSection::Memory),
                 None => (false, self.snapshot.ui_state.right_panel_section),
             };
             self.snapshot.ui_state.right_panel_visible = visible;
