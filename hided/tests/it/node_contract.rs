@@ -1674,15 +1674,15 @@ fn credential(pane_id: &str, nonce: char, one_shot: bool) -> Value {
     json!({"pane_id": pane_id, "nonce": nonce.to_string().repeat(32), "one_shot": one_shot})
 }
 
-/// One credential request on the device's pane socket from this test
-/// process, which descends from no pane of the device, and the line it
-/// answers.
-fn ask_unproved(socket: &Path, request: &Value) -> Value {
-    use std::io::{BufRead, BufReader, Write};
+/// The line the device's pane socket answers a caller that connects and
+/// says nothing. At its cap the node answers before it reads a request and
+/// ends the connection, so a caller that wrote first could find the
+/// connection already ended (`BrokenPipe`); this one only listens.
+fn listen_at_the_cap(socket: &Path) -> Value {
+    use std::io::{BufRead, BufReader};
     use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(socket).unwrap();
+    let stream = UnixStream::connect(socket).unwrap();
     stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-    writeln!(stream, "{request}").unwrap();
     let mut answer = String::new();
     BufReader::new(&stream).read_line(&mut answer).unwrap();
     serde_json::from_str(&answer).unwrap()
@@ -1740,7 +1740,7 @@ fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     let waiting = (0..16)
         .map(|_| UnixStream::connect(socket).unwrap())
         .collect::<Vec<_>>();
-    let busy = ask_unproved(socket, &credential(PROVED_PANE, 'd', false));
+    let busy = listen_at_the_cap(socket);
     assert_eq!(
         busy,
         json!({"ok": false, "reason": "bridge_busy", "next_action": "Reconnect the pane and retry"})

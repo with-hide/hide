@@ -197,6 +197,41 @@ pub fn wait_within<T>(
     }
 }
 
+/// What the hook helper recorded about why it gave no letter, read from the
+/// account's own `delivery-diagnostics.json`: the cause and the stage times
+/// of the request it stopped at (`asked_ms`, `connected_ms`, `answered_ms`,
+/// `ended_ms`), so a hook that ran out of its budget says which stage the
+/// time went to. Read-only; a missing file says so.
+pub fn hook_diagnostics(home: &Path) -> String {
+    fn find(folder: &Path, depth: usize) -> Option<PathBuf> {
+        for entry in fs::read_dir(folder).ok()?.flatten() {
+            let path = entry.path();
+            if path
+                .file_name()
+                .is_some_and(|name| name == "delivery-diagnostics.json")
+            {
+                return Some(path);
+            }
+            if depth > 0
+                && path.is_dir()
+                && !path.is_symlink()
+                && let Some(found) = find(&path, depth - 1)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    find(&home.join(".hide"), 4).map_or_else(
+        || "no delivery-diagnostics.json under the account's .hide".to_owned(),
+        |path| {
+            fs::read_to_string(&path)
+                .map(|text| text.chars().take(4096).collect())
+                .unwrap_or_else(|error| format!("{}: {error}", path.display()))
+        },
+    )
+}
+
 /// What the account's machine is running when the helper never became ready,
 /// read-only, so a failed run shows whether the helper started at all. It
 /// starts nothing: a second helper would change the state it reports.
