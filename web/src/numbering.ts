@@ -136,7 +136,7 @@ export function numberedList(rest: SnapshotRest | null): "projects" | "tasks" {
 export function taskListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, taskFoldsOpen: readonly string[]): string[] {
   const { rest } = state;
   const view = rest?.ui_state?.task_view ?? "status";
-  const list = taskList(deviceScope(rest, frontDeviceId(rest))?.tasks, agentsByPane(everyPaneAgent(state.agents, rest?.status?.remote)), catalogWorkspaces(rest), view);
+  const list = taskList(deviceScope(rest, frontDeviceId(rest))?.tasks, frontDeviceId(rest), agentsByPane(everyPaneAgent(state.agents, rest?.status?.remote)), catalogWorkspaces(rest), view);
   return drawnTasks(taskSections(list, view, new Set(taskFoldsOpen))).map(({ agent }) => agent.pane_id);
 }
 

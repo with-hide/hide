@@ -111,7 +111,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const everyAsk = useEveryDeviceMissionAsks(deviceId);
   const asks = filter ? ownAsks : everyAsk;
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
-  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, byPane, projects, view, archived, asks, elsewhere]);
+  const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
   const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
@@ -218,7 +218,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const numbers = numbered ? numberedPanes(drawnTasks(shown).map(({ agent }) => agent.pane_id)) : null;
   const siblings = useShellStore((s) => siblingsShown(s.rest));
   const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll, siblings) }));
-  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => ({ state: band.state, missions: band.missions, trees: treesOf(band.entries) })), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
+  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => { const trees = treesOf(band.entries); return { state: band.state, trees, rows: band.rows.map((row) => (row.kind === "mission" ? row : { kind: "task" as const, tree: trees[band.entries.indexOf(row.entry)]! })) }; }), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
   const restingTrees = treesOf(shown.resting);
   const cleanupTrees = treesOf(shown.cleanup);
   const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting, ...cleanup]), ...restingTrees, ...cleanupTrees]
@@ -252,8 +252,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
           <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
-            {band.missions.map((ask) => <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />)}
-            {rows(band.trees)}
+            {band.rows.map((row) => (row.kind === "mission"
+              ? <SidebarMissionRow key={`mission:${row.ask.mission.id}`} ask={row.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
+              : rows([row.tree])[0]))}
           </ul>
         </Fragment>
       ))}
