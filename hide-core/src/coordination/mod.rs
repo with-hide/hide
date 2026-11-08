@@ -790,6 +790,14 @@ fn spawn_json(ledger: &Ledger, id: &str) -> Result<Value, String> {
 /// started on, and a letter the parent sends later under the same intent is
 /// this one. A letter the parent already holds under that intent stays as
 /// it is, so asking again never writes over it.
+///
+/// Hide's record of the brief (`Briefed`, `BriefConfirmed` under its input
+/// authority) can arrive after the parent ended. The fact is saved then, and
+/// the letter is not written: an ended parent sends nothing new, and a
+/// request from it would open an answer wait no one ends. Its registration
+/// is still read as the sender of a letter it already holds. A live parent's
+/// letter refused (capacity, an invalid actor) refuses the transition, as
+/// it always did.
 fn first_letter(ledger: &mut Ledger, id: &str, now: u64) -> Result<(), String> {
     let spawn = ledger
         .spawns
@@ -811,9 +819,33 @@ fn first_letter(ledger: &mut Ledger, id: &str, now: u64) -> Result<(), String> {
         return Ok(());
     };
     let intent = spawn.intent.clone();
-    let sender = resolve_actor(ledger, &spawn.parent)
-        .ok_or("parent_unavailable")?
-        .clone();
+    let sender = match resolve_actor(ledger, &spawn.parent) {
+        Some(parent) => parent.clone(),
+        None => {
+            let reason = match past_record(ledger, &spawn.parent) {
+                Some(parent) if !parent.ended => return Err("parent_unavailable".into()),
+                Some(parent) => {
+                    if crate::delivery::mailbox::existing_intent(
+                        ledger,
+                        &parent.actor,
+                        &intent,
+                        now,
+                    )
+                    .is_some()
+                    {
+                        return Ok(());
+                    }
+                    "parent_ended"
+                }
+                None => "parent_unregistered",
+            };
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "spawn.first_letter_skipped",
+                "spawn": id, "reason": reason,
+            }));
+            return Ok(());
+        }
+    };
     if crate::delivery::mailbox::existing_intent(ledger, &sender, &intent, now).is_some() {
         return Ok(());
     }
@@ -1052,6 +1084,20 @@ pub(crate) fn registered_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a
 
 fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
     record_by(ledger, is).map(|record| &record.actor)
+}
+
+/// The registration `key` named when it was recorded, ended or not: by its
+/// id, else the one record the keys [`resolve_actor`] reads name. It says
+/// who did something in the past, never who may act now.
+fn past_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
+    if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+        return Some(record);
+    }
+    let mut found = ledger.agents.iter().filter(|record| {
+        record.name.as_deref() == Some(key) || record.actor.pane_id == key || record.pane == key
+    });
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
 }
 
 fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&AgentRecord> {
@@ -3830,6 +3876,162 @@ mod tests {
         );
         step(&mut ledger, &parent, briefed(&spawn));
         assert_eq!(intent_letters(&ledger), before);
+    }
+
+    /// #717 review R3: Hide's record of a brief that arrives after the parent
+    /// ended is saved. The first letter the parent already holds stays as it
+    /// is; with none, no letter is written, and the log says the parent
+    /// ended. A live parent's letter that is refused still refuses the
+    /// record, as before.
+    #[test]
+    fn a_briefs_record_after_its_parent_ended_is_kept_and_writes_no_new_letter() {
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let end_parent = |ledger: &mut Ledger, parent: &Actor| {
+            let id = ledger.spawns[0].parent.clone();
+            step(ledger, parent, Mutation::End { id, actor: None });
+            assert!(resolve_actor(ledger, &ledger.spawns[0].parent).is_none());
+        };
+        let confirmed = |ledger: &Ledger| {
+            ledger.spawns[0]
+                .brief_input
+                .as_ref()
+                .and_then(|input| input.confirmed_at_unix_ms)
+        };
+        let skipped = |logged: &[Value]| {
+            logged
+                .iter()
+                .filter(|record| record["kind"] == "spawn.first_letter_skipped")
+                .map(|record| record["reason"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        // Completed with its first letter; the parent ended before the
+        // agent's record arrived.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::Briefed {
+                id: spawn.clone(),
+                route: crate::delivery::typed::SendRoute::Typed,
+            },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child.clone(),
+            },
+        );
+        assert_eq!(intent_letters(&ledger).len(), 1);
+        end_parent(&mut ledger, &parent);
+        let letters = intent_letters(&ledger);
+        let (_, logged) = crate::diagnostics::capture(|| {
+            for _ in 0..2 {
+                step(
+                    &mut ledger,
+                    &input,
+                    Mutation::BriefConfirmed { id: spawn.clone() },
+                );
+            }
+        });
+        assert!(confirmed(&ledger).is_some());
+        assert_eq!(intent_letters(&ledger), letters);
+        assert!(skipped(&logged).is_empty(), "the letter is there");
+
+        // Bound before the brief went in; the parent ended after the typing
+        // was reserved, before its outcome or the agent's record was saved.
+        for phase in [BriefPhase::Confirmed, BriefPhase::Typed] {
+            let record = |id| match phase {
+                BriefPhase::Confirmed => Mutation::BriefConfirmed { id },
+                _ => Mutation::Briefed {
+                    id,
+                    route: crate::delivery::typed::SendRoute::Typed,
+                },
+            };
+            let (mut ledger, parent, spawn, child) = briefed_spawn();
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::BindChild {
+                    id: spawn.clone(),
+                    record: child,
+                },
+            );
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::BriefTyping { id: spawn.clone() },
+            );
+            end_parent(&mut ledger, &parent);
+            let (_, logged) = crate::diagnostics::capture(|| {
+                step(&mut ledger, &input, record(spawn.clone()));
+            });
+            assert_eq!(phase_of(&ledger), phase);
+            assert!(intent_letters(&ledger).is_empty());
+            assert!(ledger.letters.iter().all(|letter| !letter.waiting_answer));
+            assert_eq!(skipped(&logged), ["parent_ended"]);
+        }
+
+        // A parent whose registration is gone is told apart in the log.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        let parent_id = ledger.spawns[0].parent.clone();
+        ledger.agents.retain(|record| record.id != parent_id);
+        let (_, logged) = crate::diagnostics::capture(|| {
+            step(
+                &mut ledger,
+                &input,
+                Mutation::BriefConfirmed { id: spawn.clone() },
+            );
+        });
+        assert!(confirmed(&ledger).is_some());
+        assert_eq!(skipped(&logged), ["parent_unregistered"]);
+
+        // A live parent's letter refused refuses the record.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        ledger.spawns[0].brief = Some("x".repeat(crate::delivery::BODY_LIMIT + 1));
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &input,
+                &Mutation::BriefConfirmed { id: spawn.clone() },
+                3
+            )
+            .unwrap_err(),
+            "capacity"
+        );
     }
 
     /// PRD engine-bundle-3-core-owns D-11: the engine names a spawn's pane

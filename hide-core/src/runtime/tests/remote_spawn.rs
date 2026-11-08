@@ -2322,6 +2322,98 @@ fn a_brief_confirmed_before_its_send_was_saved_completes_the_same_intent_without
     assert_eq!(spawner.count("prompt_agent"), 0);
 }
 
+/// #717 review R3, through the store's own transaction: Hide's record of a
+/// brief that arrives after the parent ended is kept. A completed spawn's
+/// first letter stays as it was, however often the record comes; a spawn
+/// bound before its brief went in gets no letter from the ended parent and
+/// no answer wait.
+#[test]
+fn a_briefs_record_after_its_parent_ended_is_kept_by_the_store() {
+    let confirmed = |spawner: &Spawner| {
+        spawner.published().spawns[0]
+            .brief_input
+            .as_ref()
+            .and_then(|input| input.confirmed_at_unix_ms)
+    };
+    let confirm = |spawner: &Spawner| {
+        let spawn = spawner.published().spawns[0].id.clone();
+        spawner
+            .runtime
+            .lock()
+            .unwrap()
+            .post_brief_confirmed(&spawn, "hook");
+        wait_for("the agent's record of the brief is kept", || {
+            confirmed(spawner).is_some()
+        });
+    };
+
+    let done = spawner();
+    done.screen.store(SCREEN_READY, Ordering::SeqCst);
+    done.spawn_briefed("done", "reply JOURNEY-4")
+        .expect("the spawn completes");
+    assert_eq!(intent_letters(&done, "done").len(), 1);
+    assert_eq!(confirmed(&done), None);
+    // Hide's input identity posts through the client the session sync
+    // installs.
+    let _writer = done.writer();
+    end_parent(&done);
+    let letters = intent_letters(&done, "done");
+    assert_eq!(letters[0].body, "reply JOURNEY-4");
+    confirm(&done);
+    confirm(&done);
+    assert_eq!(intent_letters(&done, "done"), letters);
+    drop(done);
+
+    let early = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *early.session.lock().unwrap() = None;
+    early.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    early
+        .spawn_briefed("early", "reply JOURNEY-5")
+        .expect_err("the screen asks");
+    let mut writer = early.writer();
+    early.refresh(&mut writer);
+    wait_for("the writer's worker takes the at-rest batch", || {
+        writer.taken()
+    });
+    *early.session.lock().unwrap() = Some("device-child-session".into());
+    early.refresh(&mut writer);
+    wait_for("the core binds the agent", || {
+        early.published().spawns[0].child.is_some()
+    });
+    crate::coordination::executor::mutate(
+        &early.client,
+        &authority(&early.actor),
+        &early.actor,
+        crate::coordination::Mutation::BriefTyping {
+            id: early.published().spawns[0].id.clone(),
+        },
+    )
+    .unwrap();
+    end_parent(&early);
+    confirm(&early);
+    assert!(intent_letters(&early, "early").is_empty());
+    assert!(
+        early
+            .published()
+            .letters
+            .iter()
+            .all(|letter| !letter.waiting_answer)
+    );
+}
+
+/// Ends the spawn's parent, as `hide agent end` from its own pane does.
+fn end_parent(spawner: &Spawner) {
+    let id = spawner.published().spawns[0].parent.clone();
+    crate::coordination::executor::mutate(
+        &spawner.client,
+        &authority(&spawner.actor),
+        &spawner.actor,
+        crate::coordination::Mutation::End { id, actor: None },
+    )
+    .unwrap();
+}
+
 /// An agent that ends before it takes its brief is said to have ended, not
 /// to be late; nothing was typed, and no wait is left for an agent that is
 /// gone.
