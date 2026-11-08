@@ -154,7 +154,10 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
       uninstall();
       menu = null;
     }
-  });
+    // The search visits up to STATES states for each step no keyboard command reaches (a step done by typing words keeps the state before it),
+    // and the several-agents flow has several, each started from states its own splits widen: 1.5 s here, past vitest's 5 s on a Windows runner.
+    // The work is bounded by DEPTH and STATES, so the limit is sized to it, not raised to cover a stall.
+  }, 30_000);
 
   // Esc closes a palette mid-step; ⏎ alone has to bring it back (docs/UI_BEHAVIOR.md, Adding a chapter).
   it("gives every step done inside a palette the command that opens it", () => {
