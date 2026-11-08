@@ -323,7 +323,7 @@ function StartPanel({ actions }: { actions: Actions }) {
       role="dialog"
       aria-label={t("commands.start_agent")}
       data-start-panel="true"
-      className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover text-body text-popover-foreground shadow-lg"
+      className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg"
     >
       <Textarea
         ref={field}
