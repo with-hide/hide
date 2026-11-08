@@ -37,6 +37,8 @@ export type PracticeStep<M = unknown> = {
   zones?: true;
   /** The command the step teaches; ⏎ presses its chord unless the step has a gesture. */
   command?: CommandId;
+  /** A command whose chord the step only shows, as a look names a shortcut: ⏎ does not press it. */
+  shows?: CommandId;
   /** What ⏎ does in the learner's place: press the target, drag a pane, type, choose from a right-click menu, or press a control and choose from its list. */
   gesture?: { click: true } | { drag: PracticeDrag } | { type: PracticeTyping } | { menu: PracticeMenu } | { pick: PracticePick };
   /** Done when the world says so; a step without it is a look, done when the learner presses on. */

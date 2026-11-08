@@ -1,7 +1,7 @@
 // The several-agents flow's world: one invented project with a lead agent at
 // work, a docs agent in a tab of its own, and what happens when the learner
-// runs more agents than one: a second terminal beside, a reviewer the lead is
-// asked for in words (an agent of its own, in a tab of its own), the docs
+// runs more agents than one: a reviewer the lead is asked for in words (an
+// agent of its own, opened in a pane beside the lead), the docs
 // agent finishing into Done while the reviewer asks into Needs You, the
 // reviewer finishing and opening a file for the learner to look at (a View, the
 // row's 볼 것), closing and reopening an agent, the keyboard going back to the
@@ -25,7 +25,6 @@ const MINUTE = 60_000;
 export const LEAD = "lead";
 export const DOCS = "docs";
 export const REV = "rev";
-const REVIEWER_TAB = "t3";
 
 type Role = "lead" | "docs" | "rev";
 const SESSION: Record<Role, string> = { lead: "practice-lead", docs: "practice-docs", rev: "practice-rev" };
@@ -76,12 +75,6 @@ export type AgentsModel = DeskModel & {
   expanded: string[];
 };
 
-/** Whether a second pane stands beside the lead in its tab. */
-export const besideLead = (model: AgentsModel) => {
-  const lead = paneOf(model, "lead");
-  const tab = lead && model.tabs.find((row) => panesOf(row.root).includes(lead.id));
-  return tab ? panesOf(tab.root).length >= 2 : false;
-};
 /** Whether the keyboard is in the pane of the reviewer. */
 export const inReviewer = (model: AgentsModel) => paneOf(model, "rev")?.id === focusedPane(model);
 export const showsExplorer = (model: AgentsModel) => model.tool === "explorer";
@@ -116,14 +109,13 @@ function initial(): AgentsModel {
   };
 }
 
-/** The reviewer the lead starts: an agent of its own in a tab of its own, which Hide leaves behind the screen the learner is on. */
+/** The reviewer the lead starts: an agent of its own in a pane beside the lead, as `hide agent spawn --beside` opens one; the keyboard stays where it was. */
 function startReviewer(model: AgentsModel): AgentsModel {
   const rev: PracticePane = { id: REV, title: TITLE.rev, agent: placeholder("rev", REV, "codex", false) };
   return {
     ...model,
     panes: [...model.panes, rev],
-    tabs: [...model.tabs, { id: REVIEWER_TAB, name: null, root: { type: "pane", pane_id: REV }, focused: REV, zoomed: false }],
-    groups: model.groups.map((group) => (group.id === null ? { ...group, tabs: [...group.tabs, REVIEWER_TAB] } : group)),
+    tabs: model.tabs.map((tab) => (panesOf(tab.root).includes(LEAD) ? { ...tab, root: { type: "split", direction: "right", ratio: 0.5, first: tab.root, second: { type: "pane", pane_id: REV } } as LayoutNode, zoomed: false } : tab)),
     recent: [...model.recent, REV],
   };
 }
@@ -260,10 +252,10 @@ function apply(model: AgentsModel, event: CoreEvent): AgentsModel | null {
     }
     case "close_pane":
       return closePane(model, String(p.pane_id), p.confirmed === true);
-    // ⌘W closes the tab holding the keyboard; a practice tab holds one pane, so that pane closes with it.
+    // ⌘W closes the focused pane of the tab it names, the tab with it when that was its last.
     case "close_tab": {
-      const panes = panesOf(model.tabs.find((tab) => tab.id === p.tab_id)?.root ?? { type: "pane", pane_id: "" });
-      return panes.length === 1 ? closePane(model, panes[0]!, p.confirmed === true) : null;
+      const tab = model.tabs.find((row) => row.id === p.tab_id);
+      return tab ? closePane(model, tab.focused, p.confirmed === true) : null;
     }
     case "reopen_closed": {
       const back = reopen(model);
@@ -472,7 +464,7 @@ function leadScreen(model: AgentsModel, cols: number): string {
     `  ${DIM}⎿${RESET}  Editing src/payment/timeout.ts…`,
   ];
   if (model.stage >= 1) {
-    rows.push(...said(model.said[0]!), `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --name reviewer …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.rev} in a tab of its own`);
+    rows.push(...said(model.said[0]!), `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --beside --name reviewer …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.rev} beside this pane`);
     for (const later of model.said.slice(1)) rows.push(...said(later), `${CLAUDE}●${RESET} Noted.`);
   }
   rows.push("", `${CLAUDE}✻ ${DIM}Working… (esc to interrupt)${RESET}`, "", rule(cols), `${DIM}>${RESET} ${model.draftIn === paneOf(model, "lead")?.id ? model.draft : ""}`, rule(cols));

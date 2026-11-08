@@ -20,10 +20,13 @@ const answered = () => apply(apply(asking(), focus(REV)), typedInto(REV, "yes\r"
 const looking = () => beat(answered());
 
 describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () => {
-  it("starts the reviewer as an agent of its own, in a tab of its own, on the lead's first words", () => {
+  it("starts the reviewer as an agent of its own, in a pane beside the lead, on the lead's first words", () => {
     const model = started();
     expect(doneAt("words", model)).toBe(true);
     expect(AGENTS_WORLD.panes(model)).toEqual([LEAD, "docs", REV]);
+    expect(model.tabs[0]!.root).toMatchObject({ type: "split", first: { pane_id: LEAD }, second: { pane_id: REV } });
+    expect(model.tabs).toHaveLength(2);
+    expect(model.tabs[0]!.focused).toBe(LEAD);
     expect(row(model, REV).delegated).toBeFalsy();
   });
 
@@ -43,7 +46,7 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
   });
 
   it("brings a closed reviewer back with its conversation and its View still waiting", () => {
-    const closed = apply(looking(), { kind: "close_tab", payload: { tab_id: "t3" } });
+    const closed = apply(looking(), { kind: "close_tab", payload: { tab_id: "t1" } });
     expect(doneAt("close", closed)).toBe(true);
     expect(AGENTS_WORLD.panes(closed)).not.toContain(REV);
     const back = apply(closed, { kind: "reopen_closed", payload: {} });
@@ -65,7 +68,7 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
   });
 
   it("goes back to the lead after the reviewer came back", () => {
-    const back = apply(apply(looking(), { kind: "close_tab", payload: { tab_id: "t3" } }), { kind: "reopen_closed", payload: {} });
+    const back = apply(apply(looking(), { kind: "close_tab", payload: { tab_id: "t1" } }), { kind: "reopen_closed", payload: {} });
     expect(doneAt("switch", back)).toBe(false);
     expect(doneAt("switch", apply(back, focus(LEAD)))).toBe(true);
   });
