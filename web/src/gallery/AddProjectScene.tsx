@@ -4,7 +4,8 @@
 // of that device's home with a repository, a project already added, a folder
 // holding repositories and a file (`state=list`). The start view carries the
 // device's projects to import, one found by two agents, one by Paseo and
-// Herdr, one with a long path (B20-B23, B32). The scene answers each folder
+// Herdr, one with a long path, and enough more to scroll under the source
+// chips (B20-B23, B32). The scene answers each folder
 // list and import ask itself, as hided would from the device's node; it
 // proves the rendered rows, not the node's reading.
 import { useLayoutEffect, useMemo } from "react";
@@ -48,16 +49,23 @@ const LISTINGS: Record<string, HomeListing> = {
   },
 };
 
+// Activity counted back from when the scene opens, so each row reads as hours or days ago.
+const HOUR = 3_600_000;
+const ago = (hours: number) => Date.now() - hours * HOUR;
 const IMPORTABLE: ImportableProject[] = [
-  { path: `${HOME}/api-server`, label: "~/api-server", name: "api-server", sources: ["claude", "codex"], active_at_unix_ms: 3 },
-  { path: `${HOME}/infra`, label: "~/infra", name: "infra", sources: ["paseo", "herdr"], active_at_unix_ms: 2 },
+  { path: `${HOME}/api-server`, label: "~/api-server", name: "api-server", sources: ["claude", "codex"], active_at_unix_ms: ago(2) },
+  { path: `${HOME}/infra`, label: "~/infra", name: "infra", sources: ["paseo", "herdr"], active_at_unix_ms: ago(26) },
   {
     path: `${HOME}/projects/clients/northwind-traders/customer-portal-redesign`,
     label: "~/projects/clients/northwind-traders/customer-portal-redesign",
     name: "customer-portal-redesign",
     sources: ["opencode", "antigravity", "herdr"],
-    active_at_unix_ms: 1,
+    active_at_unix_ms: ago(80),
   },
+  { path: `${HOME}/projects/billing`, label: "~/projects/billing", name: "billing", sources: ["claude"], active_at_unix_ms: ago(120) },
+  { path: `${HOME}/projects/landing`, label: "~/projects/landing", name: "landing", sources: ["codex", "herdr"], active_at_unix_ms: ago(200) },
+  { path: `${HOME}/scratch/etl`, label: "~/scratch/etl", name: "etl", sources: ["claude"], active_at_unix_ms: ago(400) },
+  { path: `${HOME}/projects/docs-site`, label: "~/projects/docs-site", name: "docs-site", sources: ["paseo"], active_at_unix_ms: ago(600) },
 ];
 
 export function AddProjectScene({ params }: { params: URLSearchParams }) {

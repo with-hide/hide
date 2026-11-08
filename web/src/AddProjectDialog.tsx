@@ -1,6 +1,6 @@
-// Add a project: a Host selector and one start view the same on every
-// machine (PRD device-add-project D-01): Browse folder, Clone from URL and
-// Create new project, each line naming the machine. Browse folder opens the
+// Add a project: a Host selector beside the title and one start view the
+// same on every machine (PRD device-add-project D-01): Browse folder, Clone
+// from URL and Create new project as three tiles, then the projects to import. Browse folder opens the
 // system's own folder window on the machine this window runs on when the
 // desktop app can open one, and the dialog's own folder list anywhere else
 // (`hostWays`, `FolderBrowser`); Clone and Create run on the chosen machine
@@ -9,9 +9,9 @@
 // outside home is asked about once and sent again with the operator's
 // confirmation of that path (PRD wsl-device B15).
 
-import { CornerDownLeftIcon, FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucide-react";
+import { FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type Ref } from "react";
 import type { Actions } from "./actions";
 import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, rememberedFolder, trimFolder } from "./addProject";
 import { CloneFromUrl, cloneRunning } from "./CloneFromUrl";
@@ -19,8 +19,7 @@ import { CreateProjectView } from "./CreateProjectView";
 import { FolderBrowser } from "./FolderBrowser";
 import { ImportableProjects } from "./ImportableProjects";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
-import { Kbd } from "./components/ui/kbd";
-import { RowButton } from "./components/ui/row-button";
+import { Button } from "./components/ui/button";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./components/ui/select";
 import { RegistrationStatus, useRegistration } from "./registration";
 import type { MessageKey } from "./i18n/catalogs";
@@ -57,11 +56,11 @@ function AddProject({ actions }: { actions: Actions }) {
 }
 
 /** The other ways to add, each a view of this dialog; their lines name the chosen machine. */
-type OtherWay = { id: "clone" | "create"; label: MessageKey; detail: MessageKey; icon: LucideIcon };
+type OtherWay = { id: "clone" | "create"; label: MessageKey; icon: LucideIcon };
 
 const OTHER_WAYS: readonly OtherWay[] = [
-  { id: "clone", label: "addProject.wayClone", detail: "addProject.wayCloneDetail", icon: LinkIcon },
-  { id: "create", label: "addProject.wayCreate", detail: "addProject.wayCreateDetail", icon: FolderPlusIcon },
+  { id: "clone", label: "addProject.wayClone", icon: LinkIcon },
+  { id: "create", label: "addProject.wayCreate", icon: FolderPlusIcon },
 ];
 
 /** The Host list's last entry; it opens Add device instead of choosing a host. */
@@ -214,11 +213,8 @@ export function AddProjectViews({
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>{title(t)}</DialogTitle>
-            </DialogHeader>
-            <DialogBody className="flex flex-col gap-md">
-              <div className="flex items-center gap-sm">
-                <span className="text-body text-subtle-foreground">{t("addProject.host")}</span>
+              <div className="flex min-w-0 items-center gap-sm pr-xl">
+                <DialogTitle>{title(t)}</DialogTitle>
                 <Select
                   value={host.id}
                   onValueChange={(next) => {
@@ -234,7 +230,7 @@ export function AddProjectViews({
                     hostChanged.current = true;
                   }}
                 >
-                  <SelectTrigger size="sm" className="w-auto" aria-label={t("addProject.host")} data-add-project-host="true">
+                  <SelectTrigger size="sm" className="w-auto min-w-0" aria-label={t("addProject.host")} data-add-project-host="true">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent
@@ -263,35 +259,25 @@ export function AddProjectViews({
                   </SelectContent>
                 </Select>
               </div>
-              <RowButton
-                ref={(row: HTMLButtonElement | null) => {
-                  browseRef.current = row;
-                  if (row && returnTo.current === "browse") {
-                    returnTo.current = null;
-                    row.focus();
-                  }
-                }}
-                disabled={pending || offline}
-                onClick={() => void browse()}
-                data-add-project-browse={ways.native ? "native" : "list"}
-                className="gap-md rounded-md border border-border bg-card px-md py-sm"
-              >
-                <WayIcon icon={FolderOpenIcon} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-subhead font-medium text-foreground">{t("addProject.browseTitle")}</span>
-                  <span className="text-body text-muted-foreground">
-                    {ways.native ? t("addProject.browseDetailNative", { host: host.label }) : t("addProject.browseDetail", { host: host.label })}
-                  </span>
-                </span>
-                <Kbd aria-hidden="true">
-                  <CornerDownLeftIcon />
-                </Kbd>
-              </RowButton>
-              <RegistrationStatus registration={registration} drives={drives} onConfirm={(path) => add(path, true)} />
-              <div className="flex flex-col gap-xs" data-add-project-other-ways="true">
-                <span className="text-caption text-muted-foreground">{t("addProject.otherWays")}</span>
+            </DialogHeader>
+            <DialogBody className="flex flex-col gap-lg">
+              <div className="grid grid-cols-3 gap-sm" data-add-project-other-ways="true">
+                <WayButton
+                  ref={(row: HTMLButtonElement | null) => {
+                    browseRef.current = row;
+                    if (row && returnTo.current === "browse") {
+                      returnTo.current = null;
+                      row.focus();
+                    }
+                  }}
+                  icon={FolderOpenIcon}
+                  label={t("addProject.browseTitle")}
+                  disabled={pending || offline}
+                  onClick={() => void browse()}
+                  data-add-project-browse={ways.native ? "native" : "list"}
+                />
                 {OTHER_WAYS.map((way) => (
-                  <RowButton
+                  <WayButton
                     key={way.id}
                     ref={(row: HTMLButtonElement | null) => {
                       if (row && returnTo.current === way.id) {
@@ -299,19 +285,15 @@ export function AddProjectViews({
                         row.focus();
                       }
                     }}
+                    icon={way.icon}
+                    label={t(way.label)}
                     disabled={pending || offline}
                     onClick={() => open(way.id)}
                     data-add-project-way={way.id}
-                    className="gap-md rounded-md px-md py-sm"
-                  >
-                    <WayIcon icon={way.icon} />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="text-subhead font-medium text-foreground">{t(way.label)}</span>
-                      <span className="text-body text-muted-foreground">{t(way.detail, { host: host.label })}</span>
-                    </span>
-                  </RowButton>
+                  />
                 ))}
               </div>
+              <RegistrationStatus registration={registration} drives={drives} onConfirm={(path) => add(path, true)} />
               <ImportableProjects actions={actions} device={host.id} hostLabel={host.label} registrations={registrations} offline={offline} busy={pending} />
             </DialogBody>
           </>
@@ -320,10 +302,12 @@ export function AddProjectViews({
   );
 }
 
-function WayIcon({ icon: Icon }: { icon: LucideIcon }) {
+/** One way to add, as a tile: its icon over its name. Browse folder, the first, holds the keyboard so Enter picks a folder. */
+function WayButton({ icon: Icon, label, ref, ...props }: { icon: LucideIcon; label: string; ref?: Ref<HTMLButtonElement> } & Omit<ComponentProps<typeof Button>, "children">) {
   return (
-    <span aria-hidden="true" className="flex size-(--size-control) shrink-0 items-center justify-center rounded-sm bg-secondary text-foreground [&_svg]:size-(--size-icon)">
+    <Button ref={ref} variant="secondary" className="h-auto min-w-0 flex-col gap-xs whitespace-normal px-sm py-md text-center" {...props}>
       <Icon />
-    </span>
+      <span className="min-w-0 text-body">{label}</span>
+    </Button>
   );
 }

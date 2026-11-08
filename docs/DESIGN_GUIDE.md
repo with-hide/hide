@@ -28,7 +28,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | An icon action inside a row that lights on hover | `Button variant="row-action" size="icon-xs"` | `ghost` would light in the row's own hover color and vanish. |
 | A whole row that is one action | `RowButton` | You lay out its content; it spans the line, reads left to right and lights on hover. |
 | A row that is one action but holds controls of its own | `RowOverlayButton` behind the content | Content gets `pointer-events-none relative`, each control inside `pointer-events-auto`; `aria-label` names the row's action. |
-| One of a few options, all visible | `ToggleGroup type="single"` + `ToggleGroupItem` | Roving focus and arrow keys come with it; `size="sm"` for caption text, `"xs"` for micro text. |
+| One of a few options, all visible | `ToggleGroup type="single"` + `ToggleGroupItem` | Roving focus and arrow keys come with it; `size="sm"` for caption text, `"xs"` for micro text. `variant="pill"` on the group and each item draws loose rounded chips that wrap, for a filter over a list whose options vary in number (Add a project's sources). |
 | Panels switched by a strip | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | |
 | An on/off setting | `Switch` | |
 | Several independent choices | `Checkbox` | |
