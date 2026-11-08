@@ -296,6 +296,8 @@ function history(mission: Mission, now: number): MissionEvent[] {
 const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
 
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+  // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
+  if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
   // An answer sent from the banner draws the decision with that answer on it.
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
   // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
@@ -370,13 +372,27 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   return { mission, rest };
 }
 
+/** The no-Conductor mission with every node done and its close refused for three empty check lines, raised on the first node and waiting on the operator. */
+function closeRefused({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number): { mission: Mission; rest: SnapshotRest } {
+  mission.nodes.forEach((one, index) => {
+    Object.assign(one, { status: "done", finished_at_unix_ms: now - (30 - index) * MINUTE, attention: null, hide: null, landing: null, warnings: [], agent_runtime: null });
+    one.criteria = one.criteria.map((criterion) => (criterion.state === "open" && criterion.kind !== "check" ? { ...criterion, state: "pass" as const } : criterion));
+    one.criteria_met = one.criteria.filter((criterion) => criterion.state === "pass" || criterion.state === "skipped").length;
+  });
+  const first = mission.nodes[0]!;
+  first.title = "카톡 통화 기록";
+  first.attention = { reason: "close_refused", pr: null, to: "operator", since_unix_ms: now - 6 * MINUTE, on_row: false, item: true, choices: ["done"], unmet_nodes: 3 };
+  mission.decision = null;
+  return { mission, rest };
+}
+
 /**
  * `rest` with the no-Conductor mission waiting on the operator, counted on
  * `deviceId`'s scope as the core counts a mission no row carries (PRD
  * mission-node-simple B14): named in `mission_asks` and in its Needs You number.
  */
-export function withMissionAsk(rest: SnapshotRest, deviceId: string, now: number): SnapshotRest {
-  const { mission, rest: fixture } = missionFixture("no-conductor", now);
+export function withMissionAsk(rest: SnapshotRest, deviceId: string, now: number, shown = "no-conductor"): SnapshotRest {
+  const { mission, rest: fixture } = missionFixture(shown, now);
   const devices = rest.navigator?.devices?.map((device) => device.id !== deviceId ? device : {
     ...device,
     agent_scope: { ...device.agent_scope, mission_asks: [mission.id], overview_needs_you: device.agent_scope.overview_needs_you + 1, groups: { ...device.agent_scope.groups, needs_you: device.agent_scope.groups.needs_you + 1 } },
