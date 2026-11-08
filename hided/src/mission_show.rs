@@ -83,7 +83,7 @@ fn reason_word(reason: &Value) -> &'static str {
         Some("unplanned_pr") => "계획에 없는 PR",
         Some("conductor_failed") => "지휘자가 실패로 기록",
         Some("wake_refused") => "잠든 작업자를 깨우지 못함",
-        Some("close_refused") => "미션을 닫지 못함",
+        Some("close_refused") => "작업은 끝났는데 확인 기록이 빠져 미션을 닫지 못함",
         _ => "확인 필요",
     }
 }

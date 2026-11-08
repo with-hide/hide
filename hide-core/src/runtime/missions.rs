@@ -431,6 +431,10 @@ pub struct AttentionView {
     pub item: bool,
     /// The operator's choices for it, in order (`AttentionReason::choices`).
     pub choices: Vec<crate::missions::OperatorAction>,
+    /// For a refused close, how many finished nodes have a line empty now,
+    /// read from the book the way the close reads it, so the row can say
+    /// how much is missing; 0 for every other reason.
+    pub unmet_nodes: u32,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -3040,6 +3044,14 @@ impl Runtime {
                                 && mission.status.asks()
                                 && node.status != NodeStatus::Dropped,
                             choices: attention.reason.choices(conductor_present),
+                            unmet_nodes: if attention.reason
+                                == crate::missions::AttentionReason::CloseRefused
+                            {
+                                u32::try_from(self.unmet_done_nodes(mission).len())
+                                    .unwrap_or(u32::MAX)
+                            } else {
+                                0
+                            },
                         }
                     }),
                     hide: node.hide.clone(),

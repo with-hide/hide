@@ -29,6 +29,15 @@ describe("a mission node raised to the operator, laid on its Conductor's row (PR
     expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: raised })).toEqual({ lead: null, text: "device-row-simple · PR 머지됨, 기준 기록이 없거나 실패", tail: null });
     expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...raised, reason: "worker_ended" } })).toEqual({ lead: null, text: "device-row-simple · Worker ended with work left", tail: null });
   });
+
+  it("says a refused close as work done with check records missing, and how many nodes lack one when the core counted", async () => {
+    const { t: ko } = await createInterfaceI18n("ko");
+    const { t: en } = await createInterfaceI18n("en");
+    const refused = { cause: "mission_attention", node: "calls", reason: "close_refused" } as const;
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: refused }).text).toBe("calls · 작업은 끝남 · 확인 기록 빠짐");
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: { ...refused, unmet: 3 } }).text).toBe("calls · 작업은 끝남 · 확인 기록 빠짐 3개");
+    expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...refused, unmet: 3 } }).text).toBe("calls · Work is done · 3 check records missing");
+  });
 });
 
 describe("a brief or a letter the agent has not confirmed, laid on its row", () => {
