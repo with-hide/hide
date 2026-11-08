@@ -94,3 +94,16 @@ describe("a mission whose Conductor has not got its letters (hide-private issue 
     expect(group(mission("a", { conductor_letters: null }))).toBe("running");
   });
 });
+
+describe("the turn pill words the operator's action (B6)", () => {
+  it("names the action, and a row without a Conductor draws none since its button says it", () => {
+    const asked = mission("a", { decision: "?" });
+    expect(missionPillKey(asked, missionEntry(asked, () => null).turn[0] ?? null)).toBe("missionTool.pill.answer");
+    expect(missionPillKey(asked, { kind: "landing", git: true })).toBe("missionTool.pill.join");
+    expect(missionPillKey(asked, { kind: "landing" })).toBe("missionTool.pill.merge");
+    expect(missionPillKey(asked, { kind: "worker_blocked" })).toBe("missionTool.pill.blocked");
+    expect(missionPillKey(asked, { kind: "attention" })).toBe("missionTool.pill.attention");
+    expect(missionPillKey(asked, { kind: "takeover" })).toBeNull();
+    expect(missionPillKey(mission("b", {}), null)).toBe("mission.pill.running");
+  });
+});

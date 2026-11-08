@@ -66,17 +66,20 @@ export function shownMission(detail: DetailSlot | null | undefined): string | nu
   return top?.kind === "mission" ? top.mission : null;
 }
 
-/** The state pill's word (B6): what waits on the operator, `!` in the decision colour, else the mission's own state. */
-export function missionPillKey(mission: Pick<Mission, "status">, turn: Pick<TurnItem<MissionNodeBrief>, "kind"> & { git?: boolean } | null): MessageKey {
-  if (turn) return turn.kind === "landing" && turn.git ? "missionTool.pill.join" : TURN_PILL[turn.kind];
-  return STATE_PILL[mission.status];
+/**
+ * The state pill's word (B6): what the operator does on a turn (`답하기`, `머지하기`), else the mission's own state.
+ * A takeover turn has no pill, since the 이어받기 button on its row says it; null draws none.
+ */
+export function missionPillKey(mission: Pick<Mission, "status">, turn: Pick<TurnItem<MissionNodeBrief>, "kind"> & { git?: boolean } | null): MessageKey | null {
+  if (!turn) return STATE_PILL[mission.status];
+  if (turn.kind === "takeover") return null;
+  return turn.kind === "landing" && turn.git ? "missionTool.pill.join" : TURN_PILL[turn.kind];
 }
 
-const TURN_PILL: Record<TurnItem["kind"], MessageKey> = {
-  decision: "missionTool.pill.decision",
-  takeover: "missionTool.pill.takeover",
+const TURN_PILL: Record<Exclude<TurnItem["kind"], "takeover">, MessageKey> = {
+  decision: "missionTool.pill.answer",
   letters: "missionTool.pill.letters",
-  attention: "mission.attention",
+  attention: "missionTool.pill.attention",
   worker_blocked: "missionTool.pill.blocked",
   landing: "missionTool.pill.merge",
 };
