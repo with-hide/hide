@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -105,9 +104,11 @@ pub fn facts_and_repository(
     if !path.exists() {
         return Err(ResolveError::MissingPath(path.to_path_buf()));
     }
-    let canonical = fs::canonicalize(path).map_err(|source| ResolveError::Canonicalize {
-        path: path.to_path_buf(),
-        source,
+    let canonical = hide_platform::fs::identity::canonical(path).map_err(|source| {
+        ResolveError::Canonicalize {
+            path: path.to_path_buf(),
+            source,
+        }
     })?;
     if let Some(repository) = git::discover_checked(&canonical)? {
         let root = repository.main_root();
@@ -1121,7 +1122,20 @@ pub mod git {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::process::Command;
+
+    /// A device groups its panes by these facts, so the macOS data-volume
+    /// spelling of a folder names the same project root as the plain one
+    /// (PRD home-folder-project D-07, B16).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_folder_on_the_macos_data_volume_has_the_root_of_its_plain_spelling() {
+        let plain = facts(Path::new("/Users")).unwrap();
+        let physical = facts(Path::new("/System/Volumes/Data/Users")).unwrap();
+        assert_eq!(plain.root, Path::new("/Users"));
+        assert_eq!(physical, plain);
+    }
 
     /// A core on another system reads a device's root only as the device
     /// sent it, on the wire; the id it derives is the one the device derives
