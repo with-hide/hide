@@ -5,7 +5,7 @@
 import { expect, test } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
 import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
-import { screenshot } from "./wire";
+import { screenshot, sendEvent } from "./wire";
 import { chord } from "./chords";
 
 test.describe.configure({ timeout: 150_000 });
@@ -18,6 +18,13 @@ test("the start panel with no project offers Add a project and opens its dialog"
     daemon = await asFirstRun(await startHided(fixture, "start-no-project"));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
+    // The fixture engine registers one project; remove it so none is left.
+    const projects = page.locator("[data-project]");
+    await expect(projects.first()).toBeVisible({ timeout: 20_000 });
+    for (const id of await projects.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-project")))) {
+      await sendEvent(page, daemon, "remove_workspace", { workspace_id: id });
+    }
+    await expect(projects).toHaveCount(0, { timeout: 30_000 });
     await page.keyboard.press(chord("search"));
     await page.keyboard.type("Start an agent");
     await page.locator('[data-palette-row="command:start-agent"]').click();
