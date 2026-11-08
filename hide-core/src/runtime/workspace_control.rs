@@ -1014,6 +1014,7 @@ impl Runtime {
             "browser.open",
             "browser.status",
         ];
+        capabilities.extend(crate::workspace_control::BROWSER_PAGE_CAPABILITIES);
         // Delivery acts as one agent, which only a pane-bound caller names.
         if matches!(Caller::parse(pane_id), Caller::Pane(_)) {
             capabilities.extend([

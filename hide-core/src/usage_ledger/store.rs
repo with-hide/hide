@@ -102,6 +102,8 @@ const START_CONVERSION: &str = "INSERT INTO nodes(device) SELECT device FROM dev
 /// second on a loaded Mac, so 640,000 calls take one to two minutes of
 /// steps while a window is open.
 const CONVERT_BATCH: usize = 4096;
+/// The store's size limit in 4 KiB pages: 512 MiB.
+const PAGE_LIMIT: u64 = 131_072;
 /// A conversion step's own budget: every step reads and writes thousands of
 /// calls, past an ordinary step's 250 ms on a machine under load.
 const CONVERT_BUDGET: Duration = Duration::from_secs(30);
@@ -273,13 +275,23 @@ impl Store {
 
     /// A test that is not about the budgets holds this clock still.
     fn open_with_clock(path: &Path, clock: fn() -> Instant) -> Result<Self, &'static str> {
+        Self::open_limited(path, clock, PAGE_LIMIT)
+    }
+
+    /// A test of a store at its page limit names a limit its small store
+    /// reaches.
+    fn open_limited(
+        path: &Path,
+        clock: fn() -> Instant,
+        page_limit: u64,
+    ) -> Result<Self, &'static str> {
         hide_platform::fs::private::open_own_file(path, true)
             .map_err(|_| "usage_store_unavailable")?;
         let connection = Connection::open(path).map_err(failed)?;
         connection
             .busy_timeout(Duration::from_millis(100))
             .map_err(failed)?;
-        let store = Self { connection, clock };
+        let mut store = Self { connection, clock };
         store.budget();
         let version: i64 = store
             .connection
@@ -290,10 +302,10 @@ impl Store {
         }
         store
             .connection
-            .execute_batch(
+            .execute_batch(&format!(
                 "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; \
-             PRAGMA max_page_count=131072; PRAGMA wal_autocheckpoint=256;",
-            )
+             PRAGMA max_page_count={page_limit}; PRAGMA wal_autocheckpoint=256;"
+            ))
             .map_err(failed)?;
         if version == 0 {
             let tables: u64 = store
@@ -327,10 +339,25 @@ impl Store {
             .map_err(failed)?;
         if !converted {
             store.budget_of(CONVERT_BUDGET);
-            store
+            let started = store
                 .connection
-                .execute_batch(&format!("BEGIN;{CALLS_SCHEMA}{START_CONVERSION}COMMIT;"))
-                .map_err(failed)?;
+                .transaction()
+                .map_err(failed)
+                .and_then(|tx| {
+                    tx.execute_batch(&format!("{CALLS_SCHEMA}{START_CONVERSION}"))
+                        .map_err(failed)?;
+                    tx.commit().map_err(failed)
+                });
+            match started {
+                Ok(()) => {}
+                // An older build filled the store to its page limit, which
+                // leaves no page for the new tables: the first step frees
+                // its calls' pages before it makes them.
+                Err("usage_store_full") => {
+                    store.convert_batch(true)?;
+                }
+                Err(code) => return Err(code),
+            }
             store.budget();
         }
         store.connection.execute_batch(AI_SCHEMA).map_err(failed)?;
@@ -859,12 +886,14 @@ impl Store {
     /// after a restart, takes the same calls again.
     pub fn convert(&mut self) -> Result<usize, &'static str> {
         self.budget_of(CONVERT_BUDGET);
-        let moved = self.convert_batch();
+        let moved = self.convert_batch(false);
         self.budget();
         moved
     }
 
-    fn convert_batch(&mut self) -> Result<usize, &'static str> {
+    /// One conversion step; `start` also makes the calls tables
+    /// ([`START_CONVERSION`]), from the pages the step's deleted calls free.
+    fn convert_batch(&mut self, start: bool) -> Result<usize, &'static str> {
         let tx = self.connection.transaction().map_err(failed)?;
         type Old = (i64, String, String, String, String, String);
         let rows: Vec<Old> = {
@@ -892,6 +921,10 @@ impl Store {
         // leave in a store at its page limit.
         if let Some((last, ..)) = rows.last() {
             tx.execute("DELETE FROM events WHERE rowid<=?1", [last])
+                .map_err(failed)?;
+        }
+        if start {
+            tx.execute_batch(&format!("{CALLS_SCHEMA}{START_CONVERSION}"))
                 .map_err(failed)?;
         }
         let mut nodes = HashMap::new();

@@ -1,9 +1,10 @@
 import { UsageOverview } from "./UsageOverview";
-import { BrandOwl } from "./components/brand-owl";
+import { useOffersReconnect } from "./centerReconnect";
+import { EmptyWelcome } from "./components/empty-welcome";
 import { firstRunStep } from "./firstRun";
 import { useSetupWalk } from "./FirstRunWizard";
 import { useInterfaceTranslation } from "./i18n/client";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -75,10 +76,12 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
   const noProject = availability.state === "ready" && projects.length === 0;
+  // A count is drawn only once the device has answered; before that a 0 would be a number nobody read.
+  const counted = availability.state === "ready";
   const counts: Record<MainView, ReactNode> = {
-    work: <Count value={workCount} />,
-    backlog: <Count value={backlog.open} />,
-    projects: <Count value={projects.length} />,
+    work: counted ? <Count value={workCount} /> : null,
+    backlog: counted ? <Count value={backlog.open} /> : null,
+    projects: counted ? <Count value={projects.length} /> : null,
     history: null,
     usage: null,
   };
@@ -101,6 +104,8 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
       </div>
       {unavailable && needsLiveDevice ? (
         <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
+      ) : availability.state === "loading" && needsLiveDevice ? (
+        <DeviceLoading text={availability.text} />
       ) : (
         <div className="relative flex min-h-0 flex-1">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-overview-body={view} inert={widePanel || undefined} aria-hidden={widePanel || undefined}>
@@ -177,14 +182,25 @@ function ProjectChip({ projects }: { projects: readonly { id: string; label: str
   );
 }
 
+/** A device on its way (B4): what it waits for, in place of counts and lists nobody has read yet. */
+function DeviceLoading({ text }: { text: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-sm p-xl text-center" data-device-loading="true">
+      <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon) animate-spin text-muted-foreground" />
+      <p role="status" className="text-body text-subtle-foreground">{text}</p>
+    </div>
+  );
+}
+
 /** A device that does not answer (B4): why, and Reconnect, in place of the tabs' content. */
 function DeviceUnanswered({ device, availability, actions }: { device: Device; availability: DeviceAvailability; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const name = useShellStore((s) => machineName(s.rest?.navigator?.devices, device.id, t));
   // B4: since when the device stopped answering, as the core recorded it on that transition; its reason is the tooltip.
   const since = useShellStore((s) => s.rest?.status?.remote?.find((row) => row.target_id === device.id)?.unreachable_since_unix_ms ?? null);
+  const retry = availability.state === "unavailable" ? availability.retry : undefined;
+  useOffersReconnect(retry ? device.id : null);
   if (availability.state !== "unavailable") return null;
-  const retry = availability.retry;
   const words = since === null ? t("overviewTasks.unanswered", { device: name }) : t("overviewTasks.unansweredSince", { device: name, since: ageWords(requireInterfaceLanguage(i18n.language), Date.now() - since, t) });
   return (
     <div role="status" className="flex flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-device-unavailable={device.id}>
@@ -211,9 +227,7 @@ function NoProjectView({ actions }: { actions: Actions }) {
   const setup = useSetupWalk((s) => s.step);
   const chord = commandLabel("new_workspace");
   return (
-    <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
-      {firstRun === null && setup === null ? <BrandOwl pose="ai" className="size-(--size-owl-empty)" /> : null}
-      <p className="text-subhead break-keep text-subtle-foreground">{t("firstRun.home.noProject")}</p>
+    <EmptyWelcome pose="factory" owl={firstRun === null && setup === null} title={t("firstRun.home.noProjectTitle")} detail={t("firstRun.home.noProjectDetail")} data-main-empty-home="no_project">
       <span className="flex items-center gap-sm">
         <Button onClick={() => actions.openAddProject()} data-main-empty-home-action="new_workspace">
           {t("firstRun.home.addProject")}
@@ -223,7 +237,7 @@ function NoProjectView({ actions }: { actions: Actions }) {
       <Button variant="ghost" size="sm" onClick={() => openPractice()} data-main-empty-home-action="practice">
         {t("firstRun.home.practice")}
       </Button>
-    </div>
+    </EmptyWelcome>
   );
 }
 

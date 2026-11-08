@@ -154,6 +154,7 @@ impl Writer {
                             Ok(answer) if answer["ended"].is_string() => crate::diagnostic!(json!({
                                 "component": "identity_wait", "kind": "identity_wait.ended",
                                 "wait": id, "reason": answer["ended"], "device": worker_device,
+                                "spawn": answer["spawn"], "brief": answer["brief"],
                             })),
                             Ok(_) => {}
                             // Asked again at the next observation: a settle

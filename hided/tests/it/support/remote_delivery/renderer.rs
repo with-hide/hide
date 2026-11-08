@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
@@ -113,7 +113,11 @@ impl Renderer {
         // the socket while a concurrent snapshot write is still pending.
         self.send(9, b"event")?;
         let mut refused = None;
-        for _ in 0..64 {
+        // The daemon pushes a snapshot delta for every change it makes while
+        // this waits for the Pong, so the number of frames before it is the
+        // daemon's business and no bound; the wait is bounded by time.
+        let deadline = Instant::now() + READY_BOUND;
+        while Instant::now() < deadline {
             let (opcode, data) = match self.read_frame() {
                 Ok(frame) => frame,
                 Err(error) if closing_takes && refused.is_none() && ended(&error) => {
@@ -136,7 +140,7 @@ impl Renderer {
                 _ => bail!("unexpected private renderer event opcode"),
             }
         }
-        bail!("private renderer event receipt frame cap")
+        bail!("private renderer event receipt timed out")
     }
 
     fn send(&mut self, opcode: u8, bytes: &[u8]) -> Result<()> {

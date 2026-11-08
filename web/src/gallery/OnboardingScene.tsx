@@ -96,8 +96,13 @@ export const ONBOARDING_STATES = [
   "project-add",
   "start-panel",
   "start-panel-signed-out",
+  "start-panel-branches",
+  "start-panel-new-branch",
   "home-no-project",
   "home-no-agent",
+  "home-no-agent-work",
+  "home-device-connecting",
+  "home-device-not-connected",
   "settings-on",
   "settings-off",
   "settings-blocked",
@@ -302,8 +307,16 @@ function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
 
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
-  const projects = state === "import-start" || state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state === "home-no-project" ? [] : [
-    workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
+  const projects = state === "import-start" || state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state === "home-no-project" || state.startsWith("home-device") ? [] : [
+    workspace("my-app", {
+      path: "/work/my-app",
+      // The start panel's branch menu has a project with worktrees to list and a base to make a new branch from.
+      ...(state.startsWith("start-panel-") && state !== "start-panel-signed-out" ? { is_git: true, branches: ["main", "release/2.4"] } : {}),
+      checkouts: [
+        checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now),
+        ...(state.startsWith("start-panel-") && state !== "start-panel-signed-out" ? [checkout({ id: "my-app:login", workspace: "my-app", branch: "fix/login-error-message", age: 600 }, now), checkout({ id: "my-app:billing", workspace: "my-app", branch: "feat/billing-retry-with-a-rather-long-branch-name", age: 7200 }, now)] : []),
+      ],
+    }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
   const step = state === "agents-setup" ? "done" : state === "import-start" ? "project" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
@@ -338,8 +351,8 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" || state === "import-device" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit)],
-      focused_device_id: "local",
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" || state === "import-device" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit), ...(state.startsWith("home-device") ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "window", label: "window", kind: "remote", state: "connected", message: null, ssh_alias: "window", agent_count: 0, test: null, kit }] : [])],
+      focused_device_id: state.startsWith("home-device") ? "window" : "local",
       focused_checkout_id: null,
     },
     ui_state: {
@@ -351,7 +364,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : sshRemotes(state) },
+    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
 }
 
@@ -385,7 +398,9 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
   useMemo(() => {
     window.hideHost = sceneHost(system, permissionOf(state, system), update);
     useShellStore.setState({ connection: "live", rest: sceneRest(state, system), agents: [], revision: 1, mobile: SCENE_MOBILE } as never);
-    useUiStore.setState({ screen: { kind: "main" }, overviewOpen: false, mainView: "backlog" } as never);
+    // The Overview's Work tab is where an empty device, or one on its way, says so (UI_BEHAVIOR, Overview).
+    const device = state.startsWith("home-device") ? "window" : undefined;
+    useUiStore.setState({ screen: { kind: "main", ...(device ? { deviceId: device } : {}) }, overviewOpen: false, mainView: state === "home-no-agent-work" || device ? "work" : "backlog" } as never);
     useHerdrImportLater.getState().set(state === "import-later");
   }, [state, system, update]);
 
@@ -409,7 +424,9 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
     };
     if (state === "agents-setup") useSetupWalk.getState().open();
     if (state.startsWith("settings-")) useUiStore.getState().openSettings(page);
-    if (state.startsWith("start-panel")) useStartPanel.getState().open(false, { projectId: "my-app", kind: state === "start-panel" ? "claude" : "codex" });
+    if (state.startsWith("start-panel")) useStartPanel.getState().open(false, { projectId: "my-app", kind: state === "start-panel-signed-out" ? "codex" : "claude" });
+    if (state === "start-panel-new-branch") useStartPanel.getState().setTarget("worktree:local:/work/my-app");
+    if (state === "start-panel-branches") click('[data-start-branch][data-state="closed"]');
     // Effects run twice in development, so the toggle is pressed only while it is closed.
     if (state === "agents-changes") click('[data-first-run-what-changes][aria-expanded="false"]');
     // The pass that took the press has landed.

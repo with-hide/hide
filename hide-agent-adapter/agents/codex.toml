@@ -17,9 +17,9 @@ hooks = "codex"
 session = ["resume", "{session}"]
 
 [screen]
-version = "2026.11.07.1"
+version = "2026.11.08.1"
 min_engine_version = 3
-updated_at = "2026-11-07T00:00:00Z"
+updated_at = "2026-11-08T00:00:00Z"
 
 [[screen.rules]]
 id = "osc_title_blocked"
@@ -109,6 +109,24 @@ any = [
     { regex = ['enter\s+continue\s+·\s+esc\s+skip\s*\z'] },
   ] },
 ]
+
+# Added by Hide: a numbered list of choices drawn in place of the composer
+# (codex-rs/tui/src/bottom_pane/list_selection_view.rs, `build_rows`, the same
+# from 0.160.0 to 0.167.0), which every Codex menu that picks by number uses:
+# the Windows sandbox setup and its failure menu, the permissions and model
+# pickers. It takes a typed digit as its choice and Enter as its answer, so it
+# is a question whatever its words (with-hide/hide-private#717). Read by its
+# shape: the last `›` line is the selected row `› N. `, which the list keeps
+# however short the pane, and no `›` line follows it, which tells it from a
+# sent message above the composer. A draft in the composer that begins with
+# `1. ` has the same shape and reads as a question until it is sent.
+[[screen.rules]]
+id = "numbered_choice"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+visible_blocker = true
+regex = ['(?m)^› [0-9]+\. [^\n]*(?:\n[^›\n][^\n]*|\n)*\z']
 
 [[screen.rules]]
 id = "live_strong_blocker"

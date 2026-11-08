@@ -1,4 +1,4 @@
-import { scopeOccurrences, scopeRows, type AgentScope } from "./agentScope";
+import { scopeOccurrences, scopeRows, type AgentRef, type AgentScope } from "./agentScope";
 // All projects and Project Overview (PRD S6 D-02, B1-B3, B21): every registered
 // Project on every device, and one Project's Workspaces and agents, read from
 // the snapshot the core already publishes - the navigator for this machine,
@@ -9,7 +9,7 @@ import { scopeOccurrences, scopeRows, type AgentScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import type { TreeRow } from "./agentRow";
 import type { MessageKey } from "./i18n/catalogs";
-import { thisMachineKey } from "./devices";
+import { deviceConnected, thisMachineKey } from "./devices";
 import { translate } from "./i18n/client";
 import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
@@ -74,7 +74,8 @@ export function agentSections(scope: AgentScope, agents: AgentRow[]): AgentSecti
 }
 
 /** An agent row and, for a row on an SSH device, the device's name. */
-export type ListedAgent = { agent: AgentRow; device: string | null };
+/** `chip`: the name of the device a row stands on, drawn on it where the list is another device's (`elsewhereNeedsYou`). */
+export type ListedAgent = { agent: AgentRow; device: string | null; chip?: string };
 
 /**
  * Every current agent the snapshot carries (S6 B13, D-12): this machine's
@@ -95,6 +96,30 @@ export function allAgents(remote: RemoteStatus[] | undefined, localAgents: Agent
 /** One device's core-projected current rows, in their published order. */
 export function deviceListedAgents(remote: RemoteStatus[] | undefined, devices: Device[] | undefined, localAgents: AgentRow[], deviceId: string): ListedAgent[] {
   return allAgents(remote, localAgents, devices?.find((d) => d.id === deviceId)?.agent_scope, devices);
+}
+
+/**
+ * The Needs You rows of every connected device but `frontId`, each named for
+ * its chip, in the devices' order and each device's raised order (operator
+ * decision 2026-11-08): the sidebar's Needs You lists every device's, while
+ * the rest of the list stays the front device's. `shown` and `more` keep
+ * each device's own cap.
+ */
+export function elsewhereNeedsYou(rest: SnapshotRest | null, localAgents: AgentRow[], frontId: string): { shown: ListedAgent[]; more: ListedAgent[] } {
+  const devices = rest?.navigator?.devices ?? [];
+  const shown: ListedAgent[] = [];
+  const more: ListedAgent[] = [];
+  for (const device of devices) {
+    if (device.id === frontId || !deviceConnected(rest, device.id)) continue;
+    const raised = device.agent_scope.raised.find((group) => group.group === "needs_you");
+    if (!raised) continue;
+    const listed = deviceListedAgents(rest?.status?.remote, devices, localAgents, device.id);
+    const chip = machineName(devices, device.id, translate);
+    const drawn = (refs: AgentRef[]) => scopeOccurrences(refs, listed.map((row) => row.agent)).map((agent) => ({ ...listed.find((row) => row.agent === agent)!, agent: { ...agent, lineage_collapsed: true }, chip }));
+    shown.push(...drawn(raised.shown));
+    more.push(...drawn(raised.more));
+  }
+  return { shown, more };
 }
 
 /** A device's rows' key in `agentPlaces`: the name `allAgents` gives them, so a node's own rows in its window find their places too. */
@@ -166,7 +191,10 @@ function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
 /** `name`: the device as this window calls it (`machineName`). */
 function deviceAvailability(device: Device, status: RemoteStatus | undefined, name: string): DeviceAvailability {
   if (device.kind !== "remote") return { state: "ready" };
-  if (!status || status.state === "not_connected") return { state: "loading", text: translate("devices.state.connecting") };
+  if (!status) return { state: "loading", text: translate("devices.state.connecting") };
+  // `not_connected` is the device the sidebar and the title row already call 연결 안 됨, with 다시 연결:
+  // the Overview says the same instead of counting what it has not read.
+  if (status.state === "not_connected") return { state: "unavailable", text: translate("devices.rail.notConnected"), retry: "connect" };
   if (status.state !== "connected" && status.state !== "stale") {
     return { state: "unavailable", text: remoteStateText(status.state, name, translate), retry: status.state === "disabled" ? null : "connect" };
   }

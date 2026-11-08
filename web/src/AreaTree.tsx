@@ -80,6 +80,8 @@ export type AreaAdapter<I extends AreaItem> = {
   newTab: (areaId: string) => void;
   newTabLabel: string;
   newTabContent?: React.ReactNode;
+  /** A menu beside New tab offering what else a new tab can be; drawn only where an area has one. */
+  newTabMenu?: (areaId: string) => React.ReactNode;
   tabListLabel: string;
   actionsLabel: string;
   newTabShortcut?: string;
@@ -476,6 +478,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   // the zone's, which the bar sizes, so the tabs' own widths never feed back.
   const zone = useRef<HTMLDivElement>(null);
   const newTab = useRef<HTMLButtonElement>(null);
+  const newTabMenu = useRef<HTMLSpanElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const [fits, setFits] = useState<{ selected: TabFit; others: TabFit }>({ selected: "titled", others: "titled" });
   const tabCount = area.displays.length;
@@ -486,7 +489,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     if (!node || !list) return;
     const sizes = readTabStripSizes();
     // Fractional bounds, rounded down: the tabs fill the bar to its end and never overflow it by a sliver.
-    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes);
+    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes);
     // The widths go straight onto the tab list; only a change of fit renders
     // the bar again, so a resize costs a style write, not a render per pixel.
     // Both land before paint, so the frame never shows tabs overflowing.
@@ -551,6 +554,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
             {tree.adapter.newTabContent ?? <PlusIcon className="size-(--size-icon)" />}
           </button>
         </Hint>
+        {tree.adapter.newTabMenu ? <span ref={newTabMenu} className="flex shrink-0">{tree.adapter.newTabMenu(area.id)}</span> : null}
       </div>
       {switcher ? <AreaSwitcher current={area.id} /> : null}
       {tree.adapter.barEnd?.(area)}

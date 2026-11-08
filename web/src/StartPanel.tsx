@@ -1,4 +1,4 @@
-import { FolderIcon, HomeIcon, ServerIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, FolderIcon, GitBranchIcon, HomeIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { rememberedSelection, modelToSend, selectKind, type AgentSelection } from "./agentPicker";
@@ -6,11 +6,16 @@ import { AgentPicker } from "./components/agent-picker";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
 import { Kbd } from "./components/ui/kbd";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "./components/ui/command";
+import { Textarea } from "./components/ui/textarea";
+import { Hint } from "./components/ui/tooltip";
+import { DeviceChip } from "./components/device-chip";
 import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
 import { agentFailure, useStartPanel, startFailure, startRefusal } from "./startDraft";
 import { QuotedLine } from "./QuotedLine";
-import { resolveTarget, startTargets, type StartTarget } from "./startTargets";
+import { projectOf, resolveTarget, startTargets, type StartProject, type StartTarget, type StartTargets } from "./startTargets";
 import { windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
 import { restoreFocus } from "./terminals";
@@ -29,6 +34,8 @@ import { followStartedPane } from "./opening";
 // and width, no backdrop, the keyboard in the text box. What is written is the
 // new agent's first prompt; Enter or Start sends one `agent_start_in_checkout`
 // and the panel then follows only the answer that carries its request id.
+// Under the text, one row says where (the device when it is another one, the
+// project, the branch) and one says who (the agent and its model) and starts.
 
 /**
  * Follows the answer to the request the panel sent, whether or not the panel
@@ -104,9 +111,131 @@ export function StartPanelHost({ actions }: { actions: Actions }) {
 }
 
 /** A Home is this window's own machine's (the house) or another machine's (the server), the core's included on a node's window. */
-function TargetIcon({ target, own }: { target: StartTarget; own: string }) {
-  if (target.kind !== "home") return <FolderIcon aria-hidden="true" />;
-  return target.deviceId === own ? <HomeIcon aria-hidden="true" /> : <ServerIcon aria-hidden="true" />;
+function ProjectIcon({ project, own }: { project: StartProject; own: string }) {
+  if (!project.home) return <FolderIcon aria-hidden="true" />;
+  return project.deviceId === own ? <HomeIcon aria-hidden="true" /> : <ServerIcon aria-hidden="true" />;
+}
+
+/** A chip of the where row: a quiet button that names its value and opens its menu. */
+const CHIP = "h-auto max-w-full min-w-0 gap-xxs rounded-sm px-xs py-xxs text-caption font-normal";
+
+/**
+ * The project menu: each device's Home and projects, the window's own device
+ * first. Choosing one starts on its main checkout; a device that is not
+ * connected is listed and cannot be chosen.
+ */
+function ProjectPicker({ targets, project, target, own, disabled, onPick }: { targets: StartTargets; project: StartProject | null; target: StartTarget | null; own: string; disabled: boolean; onPick: (key: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.project")} data-start-target={target?.key ?? ""} data-start-project={project?.key ?? ""}>
+          {project ? <ProjectIcon project={project} own={own} /> : null}
+          <span className="truncate font-medium">{project?.label ?? t("shell.noTarget")}</span>
+          <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-(--size-picker-popover) p-none" data-start-project-menu="true">
+        <Command>
+          <CommandInput placeholder={t("startPanel.findProject")} />
+          <CommandList>
+            <CommandEmpty>{t("startPanel.noMatch")}</CommandEmpty>
+            {targets.groups.map((group, index) => (
+              <div key={group.deviceId} data-start-target-group={group.deviceId}>
+                {index > 0 ? <CommandSeparator /> : null}
+                <CommandGroup heading={group.connected ? group.deviceLabel : t("startPanel.deviceOffline", { device: group.deviceLabel })}>
+                  {group.projects.map((row) => (
+                    <CommandItem
+                      key={row.key}
+                      value={`${group.deviceLabel} ${row.label} ${row.key}`}
+                      disabled={row.disabled !== null}
+                      onSelect={() => {
+                        onPick(row.branches[0]!.key);
+                        setOpen(false);
+                      }}
+                      data-start-target-option={row.branches[0]!.key}
+                    >
+                      <ProjectIcon project={row} own={own} />
+                      <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                      {row.key === project?.key ? <CheckIcon aria-hidden="true" className="text-primary" /> : null}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </div>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * The branch menu of the chosen project: its main checkout (`기본`), the one in
+ * front (`지금`), its other checkouts, and a new branch Hide makes a worktree for.
+ */
+function BranchPicker({ project, target, currentKey, disabled, onPick }: { project: StartProject; target: StartTarget; currentKey: string | null; disabled: boolean; onPick: (key: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const shown = target.kind === "checkout" ? target.branch : "";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.branch")} data-start-branch={target.key}>
+          <GitBranchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+          <span className="truncate">{shown}</span>
+          <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-(--size-picker-popover) p-none" data-start-branch-menu="true">
+        <Command>
+          <CommandInput placeholder={t("startPanel.findBranch")} />
+          <CommandList>
+            <CommandEmpty>{t("startPanel.noMatch")}</CommandEmpty>
+            <CommandGroup>
+              {project.branches.map((row) => (
+                <CommandItem
+                  key={row.key}
+                  value={`${row.kind === "checkout" ? row.branch : row.label} ${row.key}`}
+                  onSelect={() => {
+                    onPick(row.key);
+                    setOpen(false);
+                  }}
+                  data-start-target-option={row.key}
+                >
+                  <GitBranchIcon aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">{row.kind === "checkout" ? row.branch : row.label}</span>
+                  {row.kind === "checkout" && row.primary ? <span className="text-caption text-muted-foreground">{t("startPanel.mainCheckout")}</span> : null}
+                  {row.key === currentKey ? <span className="text-caption text-muted-foreground">{t("startPanel.current")}</span> : null}
+                  {row.key === target.key ? <CheckIcon aria-hidden="true" className="text-primary" /> : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            {project.worktree ? (
+              <>
+                <CommandSeparator />
+                <CommandGroup forceMount>
+                  <CommandItem
+                    forceMount
+                    value={`new ${project.worktree.key}`}
+                    onSelect={() => {
+                      onPick(project.worktree!.key);
+                      setOpen(false);
+                    }}
+                    data-start-new-branch="true"
+                  >
+                    <PlusIcon aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{t("startPanel.newBranch")}</span>
+                  </CommandItem>
+                </CommandGroup>
+              </>
+            ) : null}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function StartPanel({ actions }: { actions: Actions }) {
@@ -123,7 +252,18 @@ function StartPanel({ actions }: { actions: Actions }) {
   const frontProjectId = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main" ? s.overview.projectId : null);
   const overviewProjectId = preset?.projectId ?? frontProjectId;
   const targets = useMemo(() => startTargets(rest, screen, t, overSettings, overviewProjectId), [rest, screen, t, overSettings, overviewProjectId]);
-  const target = resolveTarget(targets, chosen);
+  // A pick whose device stops answering drops out of that device's list; the
+  // panel keeps showing it, disabled, rather than moving the start elsewhere.
+  const held = useRef<{ target: StartTarget; project: StartProject | null } | null>(null);
+  const listed = resolveTarget(targets, chosen);
+  const lost = chosen !== null && listed?.key !== chosen && held.current?.target.key === chosen && targets.groups.find((group) => group.deviceId === held.current!.target.deviceId)?.connected === false;
+  const target: StartTarget | null = lost ? { ...held.current!.target, disabled: "not_connected" } : listed;
+  const project = lost ? held.current!.project : projectOf(targets, target);
+  useEffect(() => {
+    if (!lost && target) held.current = { target, project };
+  });
+  const own = windowDeviceId(rest?.navigator?.devices);
+  const offline = target?.disabled === "not_connected" ? targets.groups.find((group) => group.deviceId === target.deviceId) ?? null : null;
   const worktreeProject = target?.kind === "worktree" ? catalogWorkspaces(rest).find((workspace) => workspace.device_id === target.deviceId && workspace.path === target.repositoryRoot) ?? null : null;
   const initialBase = worktreeProject ? projectBaseBranch(rest, worktreeProject) : null;
   const [worktreeBranch, setWorktreeBranch] = useState("");
@@ -134,7 +274,7 @@ function StartPanel({ actions }: { actions: Actions }) {
     return preset?.kind ? selectKind(preset.kind, start) : rememberedSelection(start);
   });
   const surface = useRef<HTMLDivElement>(null);
-  const field = useRef<HTMLInputElement>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
   const previous = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const working = request !== null;
 
@@ -158,7 +298,7 @@ function StartPanel({ actions }: { actions: Actions }) {
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, []);
 
-  const canStart = target !== null && selection.kind !== "terminal" && !working && (target.kind !== "worktree" || (worktreeProject !== null && branchProblem(worktreeBranch) === null));
+  const canStart = target !== null && target.disabled === null && selection.kind !== "terminal" && !working && (target.kind !== "worktree" || (worktreeProject !== null && branchProblem(worktreeBranch) === null));
   const start = () => {
     if (!canStart || !target || selection.kind === "terminal") return;
     const id = startRequestId();
@@ -183,21 +323,23 @@ function StartPanel({ actions }: { actions: Actions }) {
       role="dialog"
       aria-label={t("commands.start_agent")}
       data-start-panel="true"
-      className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover text-body text-popover-foreground shadow-lg"
+      className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg"
     >
-      <input
+      <Textarea
         ref={field}
-        type="text"
+        bare
+        rows={1}
         value={text}
         autoComplete="off"
         spellCheck={false}
         aria-label={t("shell.firstInstruction")}
         placeholder={t("shell.instructionPrompt")}
         data-start-text="true"
-        className="h-(--size-control-lg) w-full bg-transparent px-md pt-md pb-md text-body text-foreground outline-none placeholder:text-muted-foreground"
+        className="field-sizing-content max-h-(--size-start-text-max) min-h-(--size-control-lg) overflow-y-auto px-md pt-md pb-sm"
         onChange={(event) => useStartPanel.getState().setText(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || composingKey(event)) return;
+          // Enter starts; Shift+Enter is a new line, and an Enter that ends a composition is neither.
+          if (event.key !== "Enter" || event.shiftKey || composingKey(event)) return;
           event.preventDefault();
           start();
         }}
@@ -208,35 +350,44 @@ function StartPanel({ actions }: { actions: Actions }) {
           {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
         </p>
       ) : null}
-      {target?.kind === "worktree" ? <div className="flex flex-col gap-sm px-md py-sm" data-start-worktree="true">
-        <p className="text-caption text-muted-foreground">{t("projectSettings.confirmWorktree")}</p>
-        <label className="text-body">{t("workspace.branch")}<Input value={worktreeBranch} disabled={working} onChange={(event) => setWorktreeBranch(event.target.value)} aria-label={t("workspace.branch")} /></label>
-        {worktreeBranch && branchProblem(worktreeBranch) ? <p role="alert" className="text-caption text-destructive">{t(branchProblem(worktreeBranch)!)}</p> : null}
-        <Select value={base} disabled={working || !worktreeProject} onValueChange={(branch) => setWorktreeBase({ project: target.key, branch })}><SelectTrigger aria-label={t("projectSettings.base")}><SelectValue /></SelectTrigger><SelectContent>{worktreeProject?.branches?.map((branch) => <SelectItem key={branch} value={branch}>{branch}</SelectItem>)}</SelectContent></Select>
-        {initialBase?.missing ? <p className="text-caption text-warning">{t("projectSettings.branchMissing", { branch: initialBase.missing, fallback: initialBase.branch })}</p> : null}
-      </div> : null}
-      <div className="flex items-center gap-xs border-t border-border px-sm py-sm">
-        <Select value={target?.key ?? ""} disabled={working || targets.groups.length === 0} onValueChange={(key) => useStartPanel.getState().setTarget(key)}>
-          <SelectTrigger aria-label={t("common.target")} className="min-w-0 flex-1" data-start-target={target?.key ?? ""}>
-            <SelectValue placeholder={t("shell.noTarget")} />
-          </SelectTrigger>
-          <SelectContent>
-            {targets.groups.map((group, index) => (
-              <SelectGroup key={group.deviceId} data-start-target-group={group.deviceId}>
-                {index > 0 ? <SelectSeparator className="bg-secondary" /> : null}
-                {group.items.map((item) => (
-                  <SelectItem key={item.key} value={item.key} disabled={item.disabled !== null} data-start-target-option={item.key}>
-                    <TargetIcon target={item} own={windowDeviceId(rest?.navigator?.devices)} />
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate">{item.label}</span>
-                      {item.disabled ? <span className="text-caption text-muted-foreground">{t("devices.rail.notConnected")}</span> : null}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ))}
-          </SelectContent>
-        </Select>
+      {offline ? (
+        <p role="status" data-start-offline={offline.deviceId} className="flex flex-wrap items-center gap-xs px-md pb-xs text-caption text-muted-foreground">
+          {t("startPanel.deviceOffline", { device: offline.deviceLabel })}
+          <Button variant="text" size="inline" onClick={() => actions.retryDevice(offline.deviceId)} data-start-reconnect={offline.deviceId}>{t("sidebar.reconnect")}</Button>
+        </p>
+      ) : null}
+      <div className="flex min-w-0 flex-wrap items-center gap-xs px-sm" data-start-where="true">
+        {target && target.deviceId !== own ? <DeviceChip variant="remote" label={targets.groups.find((group) => group.deviceId === target.deviceId)?.deviceLabel ?? ""} /> : null}
+        <ProjectPicker targets={targets} project={project} target={target} own={own} disabled={working || targets.groups.length === 0} onPick={(key) => useStartPanel.getState().setTarget(key)} />
+        {project && target && !project.home && target.kind !== "worktree" ? (
+          <BranchPicker project={project} target={target} currentKey={targets.currentKey} disabled={working} onPick={(key) => useStartPanel.getState().setTarget(key)} />
+        ) : null}
+        {project && target?.kind === "worktree" ? (
+          <span className="flex min-w-0 items-center gap-xs" data-start-worktree="true">
+            <Input
+              value={worktreeBranch}
+              disabled={working}
+              placeholder={t("startPanel.newBranchName")}
+              onChange={(event) => setWorktreeBranch(event.target.value)}
+              aria-label={t("workspace.branch")}
+              aria-invalid={worktreeBranch !== "" && branchProblem(worktreeBranch) !== null}
+              className="h-(--size-control-sm) w-(--size-start-branch-field) text-caption"
+              data-start-branch-name="true"
+            />
+            <span className="text-caption text-muted-foreground">{t("startPanel.from")}</span>
+            <Select value={base} disabled={working || !worktreeProject} onValueChange={(branch) => setWorktreeBase({ project: target.key, branch })}>
+              <SelectTrigger size="sm" aria-label={t("projectSettings.base")} className="w-auto min-w-0"><SelectValue /></SelectTrigger>
+              <SelectContent>{worktreeProject?.branches?.map((branch) => <SelectItem key={branch} value={branch}>{branch}</SelectItem>)}</SelectContent>
+            </Select>
+            <Hint label={t("startPanel.cancelNewBranch")}>
+              <Button variant="ghost" size="icon-xs" disabled={working} aria-label={t("startPanel.cancelNewBranch")} onClick={() => useStartPanel.getState().setTarget(project.branches[0]!.key)} data-start-cancel-new-branch="true"><XIcon /></Button>
+            </Hint>
+          </span>
+        ) : null}
+      </div>
+      {target?.kind === "worktree" && worktreeBranch && branchProblem(worktreeBranch) ? <p role="alert" className="px-md pt-xs text-caption text-destructive">{t(branchProblem(worktreeBranch)!)}</p> : null}
+      {target?.kind === "worktree" && initialBase?.missing ? <p className="px-md pt-xs text-caption text-warning">{t("projectSettings.branchMissing", { branch: initialBase.missing, fallback: initialBase.branch })}</p> : null}
+      <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm">
         <AgentPicker
           actions={actions}
           value={selection}
@@ -251,6 +402,7 @@ function StartPanel({ actions }: { actions: Actions }) {
             ) : null
           }
         />
+        <span className="flex-1" />
         <Kbd aria-hidden="true">⏎</Kbd>
         <Button size="default" disabled={!canStart} onClick={start} data-start-submit="true">
           {working ? t("shell.starting") : t("common.start")}

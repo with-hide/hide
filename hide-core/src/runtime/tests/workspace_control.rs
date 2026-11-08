@@ -1593,6 +1593,16 @@ fn checkout_caller_resolves_the_longest_registered_checkout_containing_its_cwd()
     };
     let checkout_offer = offered(&caller("k1", "/checkouts/b"));
     assert!(checkout_offer.contains(&"view.list"));
+    // The page commands are offered with `browser.open`, to every caller.
+    for page in [
+        "browser.open",
+        "browser.snapshot",
+        "browser.click",
+        "browser.fill",
+    ] {
+        assert!(checkout_offer.contains(&page), "{page}");
+        assert!(offered("pane-b").contains(&page), "{page}");
+    }
     for delivery in ["request.send", "inbox", "inbox.hook", "watch.assign"] {
         assert!(!checkout_offer.contains(&delivery), "{delivery}");
         assert!(offered("pane-b").contains(&delivery), "{delivery}");

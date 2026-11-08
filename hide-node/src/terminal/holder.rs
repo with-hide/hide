@@ -250,6 +250,7 @@ fn open_watched(
             Capability::Keys,
             Capability::Submit,
             Capability::Clipboard,
+            Capability::MouseOutside,
         ],
         Instant::now() + OPEN_LIMIT,
     )
@@ -267,6 +268,7 @@ fn open_watched(
     let mut writer = HolderWriter {
         stream: stream.duplicate(),
         size: found,
+        reads_outside: welcome.sends.contains(&Capability::MouseOutside),
     };
     if let Some(size) = size {
         writer.resize(size).map_err(|error| {
@@ -443,6 +445,10 @@ struct HolderWriter {
     /// The size the holder has: a resize to it is not sent, since the holder
     /// resizes its PTY, and signals its program, on every one it is sent.
     size: GridSize,
+    /// The holder reads a pointer past the grid's edge
+    /// ([`Capability::MouseOutside`]); an older one is told the grid's
+    /// nearest cell alone.
+    reads_outside: bool,
 }
 
 impl SessionWriter for HolderWriter {
@@ -513,7 +519,11 @@ impl SessionWriter for HolderWriter {
     }
 
     fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
-        write_client(&mut self.stream, &ClientMessage::Mouse(*mouse))
+        let mouse = hide_holder_protocol::Mouse {
+            outside: mouse.outside.filter(|_| self.reads_outside),
+            ..*mouse
+        };
+        write_client(&mut self.stream, &ClientMessage::Mouse(mouse))
     }
 
     fn release(&mut self) -> std::io::Result<()> {

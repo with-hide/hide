@@ -428,6 +428,15 @@ describe("a mission in Needs You (PRD mission-node-simple D-19, B14)", () => {
     expect(rows[0]).toEqual({ kind: "raised", group: "needs_you", agents: [], more: [], expanded: false, missions: [ask] });
   });
 
+  it("lists another device's Needs You rows after the front device's own, each device's fold behind 더 보기, and opens Needs You for them alone", () => {
+    const far = (id: string) => ({ agent: { pane_id: id } as AgentRow, device: "Mac mini", chip: "Mac mini" });
+    const elsewhere = { shown: [far("m1")], more: [far("m2")] };
+    const [needsYou] = listRows([], {}, [], null, [], [], elsewhere);
+    expect(needsYou).toMatchObject({ kind: "raised", group: "needs_you", missions: [] });
+    const raised = needsYou as Extract<typeof needsYou, { kind: "raised" }>;
+    expect([raised.agents.map((row) => row.chip), raised.more.map((row) => row.agent.pane_id)]).toEqual([["Mac mini"], ["m2"]]);
+  });
+
   it("leaves Needs You out with no mission and no agent in it", () => {
     expect(listRows([], {}, [], null, []).some((row) => row.kind === "raised")).toBe(false);
   });

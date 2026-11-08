@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { UpdateStatus } from "../../../web/src/host";
 import type { HostLog } from "./log";
-import { AppUpdates, chooseRelease, CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, macosLocation, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateChoices, type UpdaterLike, type UpdateSystem } from "./updater";
+import { AppUpdates, chooseRelease, CHECK_INTERVAL_MS, LOOK_AGAIN_AFTER_MS, FIRST_CHECK_DELAY_MS, macosLocation, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateChoices, type UpdaterLike, type UpdateSystem } from "./updater";
 
 const uploaded = (name: string) => ({ name, state: "uploaded" });
 
@@ -133,10 +133,11 @@ function harness(options: { system?: UpdateSystem | { off: "development" | "loca
   const saved: UpdateChoices[] = [];
   let releases: unknown = options.releases ?? [];
   let releasesError: Error | null = null;
+  let clock = 1_000;
   const log = { event: (event: string, fields: Record<string, unknown> = {}) => events.push([event, fields]) } as unknown as HostLog;
   const updates = new AppUpdates(options.system ?? "macos", "0.4.0", updater as unknown as UpdaterLike, {
     releases: async () => { if (releasesError) throw releasesError; return releases; },
-    now: () => 1_000,
+    now: () => clock,
     later: (run, ms) => { const timer = { run, ms, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true; }; },
     saveChoices: (choices) => { if (options.saveError) throw options.saveError; saved.push(choices); },
   }, log, { prerelease: options.prerelease ?? false, dismissed: options.dismissed ?? null, feedOverride: options.feedOverride ?? null });
@@ -146,6 +147,7 @@ function harness(options: { system?: UpdateSystem | { off: "development" | "loca
     updates, updater, events, timers, saved, seen,
     setReleases: (value: unknown[]) => { releases = value; },
     failReleases: (error: Error | null) => { releasesError = error; },
+    setNow: (ms: number) => { clock = ms; },
     phases: () => seen.map((status) => status.phase.kind),
   };
 }
@@ -327,6 +329,51 @@ describe("the updater's states (D-17 to D-21)", () => {
     expect(events[0]).toEqual(["update.check", { trigger: "launch", version: "0.4.0", prerelease: false }]);
     updates.stop();
     expect(timers[1]!.cancelled).toBe(true);
+  });
+
+  it("looks again when the operator comes back an hour after the last look, and replaces a ready update with a newer one", async () => {
+    const { updates, updater, events, setReleases, setNow } = harness({ releases: [release("v0.5.0")] });
+    // Before the launch look, coming back waits for it.
+    updates.returned();
+    expect(events).toEqual([]);
+    updater.available = "0.5.0";
+    const first = updates.check("launch");
+    await settle(() => updater.download !== null);
+    updater.download!.resolve([]);
+    await first;
+    expect(updates.status().phase).toEqual({ kind: "ready", version: "0.5.0" });
+
+    // A newer release came out while the app stayed open with 0.5.0 ready.
+    setReleases([release("v0.5.1"), release("v0.5.0")]);
+    updater.available = "0.5.1";
+    updater.download = null;
+    setNow(1_000 + LOOK_AGAIN_AFTER_MS - 1);
+    updates.returned();
+    await Promise.resolve();
+    expect(updater.download).toBeNull();
+    setNow(1_000 + LOOK_AGAIN_AFTER_MS);
+    updates.returned();
+    await settle(() => updater.download !== null);
+    expect(events.filter(([event]) => event === "update.check").at(-1)).toEqual(["update.check", { trigger: "return", version: "0.4.0", prerelease: false }]);
+    updater.download!.resolve([]);
+    await settle(() => updates.status().phase.kind === "ready");
+    expect(updates.status().phase).toEqual({ kind: "ready", version: "0.5.1" });
+  });
+
+  it("installs a ready update when the last window closes on macOS, and only then", async () => {
+    const idle = harness();
+    expect(idle.updates.installOnWindowClose()).toBe(false);
+    for (const system of ["macos", "windows"] as const) {
+      const { updates, updater, events } = harness({ system, releases: [release("v0.5.0")] });
+      updater.available = "0.5.0";
+      const check = updates.check("operator");
+      await settle(() => updater.download !== null);
+      updater.download!.resolve([]);
+      await check;
+      // Windows already quits with its last window; only macOS needs the answer.
+      expect(updates.installOnWindowClose()).toBe(system === "macos");
+      if (system === "macos") expect(events.at(-1)).toEqual(["update.install", { version: "0.5.0", trigger: "window_closed" }]);
+    }
   });
 
   it("never looks when off, and says why in the log", async () => {

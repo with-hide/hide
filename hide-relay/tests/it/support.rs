@@ -149,20 +149,23 @@ pub async fn next(socket: &mut Socket) -> Message {
         .expect("websocket failed")
 }
 pub async fn control(socket: &mut Socket) -> ServerMessage {
-    let Message::Text(text) = next(socket).await else {
-        panic!("expected control message")
+    let message = next(socket).await;
+    let Message::Text(text) = message else {
+        panic!("expected control message, got {message:?}")
     };
     ServerMessage::decode(&text).unwrap()
 }
 pub async fn binary(socket: &mut Socket) -> Vec<u8> {
-    let Message::Binary(bytes) = next(socket).await else {
-        panic!("expected opaque binary")
+    let message = next(socket).await;
+    let Message::Binary(bytes) = message else {
+        panic!("expected opaque binary, got {message:?}")
     };
     bytes.to_vec()
 }
 pub async fn closed(socket: &mut Socket, code: u16) {
-    let Message::Close(Some(frame)) = next(socket).await else {
-        panic!("expected close")
+    let message = next(socket).await;
+    let Message::Close(Some(frame)) = message else {
+        panic!("expected close, got {message:?}")
     };
     assert_eq!(u16::from(frame.code), code);
 }

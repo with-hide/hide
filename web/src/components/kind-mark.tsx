@@ -11,10 +11,16 @@ import { cn } from "../lib/utils";
 
 export type WorkKind = "mission" | "task";
 
-const LOOK: Record<WorkKind, { Icon: typeof WaypointsIcon; tone: string }> = {
-  mission: { Icon: WaypointsIcon, tone: "bg-kind-mission/15 text-kind-mission" },
-  task: { Icon: ListChecksIcon, tone: "bg-kind-task/15 text-kind-task" },
+const LOOK: Record<WorkKind, { Icon: typeof WaypointsIcon; tone: string; ink: string }> = {
+  mission: { Icon: WaypointsIcon, tone: "bg-kind-mission/15 text-kind-mission", ink: "text-kind-mission" },
+  task: { Icon: ListChecksIcon, tone: "bg-kind-task/15 text-kind-task", ink: "text-kind-task" },
 };
+
+/** The kind's mark alone, in its colour, where a row draws an agent's logo before its title (a mission's own Needs You row). */
+export function KindIcon({ kind, className }: { kind: WorkKind; className?: string }) {
+  const { Icon, ink } = LOOK[kind];
+  return <Icon aria-hidden="true" data-kind-icon={kind} className={cn("shrink-0", ink, className)} />;
+}
 
 /** The kind's mark and word: `미션` with the connected nodes, `태스크` with the checklist. */
 export function KindMark({ kind, className }: { kind: WorkKind; className?: string }) {

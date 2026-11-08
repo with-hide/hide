@@ -1869,9 +1869,9 @@ pub(crate) struct UnseenViewFact {
 /// seen: the newest, named and pressed, and how many there are (D-14).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LookSnapshot {
-    /// The group the row would be in with nothing to look at, which the
-    /// phone's and the desktop's notifications follow instead of Needs You
-    /// (D-13, B12).
+    /// The group the row would be in with nothing to look at, which tells
+    /// the notifications whether the row asks something of its own or only
+    /// has this to look at (status-model.md, A View to look at).
     pub group: String,
     pub count: u32,
     pub view_id: String,

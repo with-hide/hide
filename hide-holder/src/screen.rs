@@ -216,8 +216,7 @@ impl View {
         Ok(Self {
             top: bar.offset as u64,
             bottom: bar.total.saturating_sub(bar.len) as u64,
-            mouse: terminal.mouse_tracking_enabled()?
-                && !terminal.mode_get(hide_vt::MODE_MOUSE_SGR_PIXELS)?,
+            mouse: terminal.mouse_tracking_enabled()?,
             alternate: terminal.active_screen()? == hide_vt::ActiveScreen::Alternate,
         })
     }

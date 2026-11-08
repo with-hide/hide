@@ -58,6 +58,7 @@ export function projectRows(
   scope: AgentScope | null,
   openRaised: readonly string[] = [],
   missions: readonly MissionAsk[] = [],
+  elsewhere: { shown: readonly ListedAgent[]; more: readonly ListedAgent[] } = { shown: [], more: [] },
 ): ProjectRow[] {
   const rows: ProjectRow[] = [];
   const drawn = (refs: AgentRef[]) => scopeOccurrences(refs, listed.map(r => r.agent)).map(agent => {
@@ -65,11 +66,16 @@ export function projectRows(
     return { ...row, agent: { ...agent, lineage_collapsed: true } };
   });
   for (const raised of scope?.raised ?? []) {
-    rows.push({ kind: "raised", group: raised.group, agents: drawn(raised.shown), more: drawn(raised.more), expanded: openRaised.includes(raised.group), missions: raised.group === "needs_you" ? [...missions] : [] });
+    const needsYou = raised.group === "needs_you";
+    rows.push({
+      kind: "raised", group: raised.group, expanded: openRaised.includes(raised.group), missions: needsYou ? [...missions] : [],
+      // Needs You lists the other devices' rows after the front device's own, each past its own device's cap too.
+      agents: [...drawn(raised.shown), ...(needsYou ? elsewhere.shown : [])], more: [...drawn(raised.more), ...(needsYou ? elsewhere.more : [])],
+    });
   }
-  // A mission no row carries is Needs You on its own, with no agent raised beside it too (PRD mission-node-simple D-19, B14).
-  if (missions.length > 0 && !rows.some((row) => row.kind === "raised" && row.group === "needs_you")) {
-    rows.unshift({ kind: "raised", group: "needs_you", agents: [], more: [], expanded: false, missions: [...missions] });
+  // A mission no row carries is Needs You on its own, with no agent raised beside it too (PRD mission-node-simple D-19, B14), and so is another device's row.
+  if ((missions.length > 0 || elsewhere.shown.length + elsewhere.more.length > 0) && !rows.some((row) => row.kind === "raised" && row.group === "needs_you")) {
+    rows.unshift({ kind: "raised", group: "needs_you", agents: [...elsewhere.shown], more: [...elsewhere.more], expanded: openRaised.includes("needs_you"), missions: [...missions] });
   }
   const pinned = workspaces.filter((row) => row.pinned);
   const recent = workspaces.filter((row) => !row.pinned);

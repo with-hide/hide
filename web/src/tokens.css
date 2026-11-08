@@ -308,6 +308,9 @@
   --size-terminal-min: 540px;
   --size-terminal-ideal: 760px;
   --size-agent-children-popover: 280px;
+  --size-picker-popover: 320px;
+  --size-start-text-max: 160px;
+  --size-start-branch-field: 176px;
   --size-usage-popover: 320px;
   --size-pr-popover: 360px;
   --size-mission-node: 224px;

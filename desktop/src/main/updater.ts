@@ -4,14 +4,17 @@
 // ↑ button and its card beside Help, the dot on Help and the update at its
 // head, Settings > About) and the host relays it.
 //
-//   checks       at launch and every six hours, and when asked (D-17)
+//   checks       at launch and every six hours, when asked (D-17), and when
+//                the operator comes back to the app an hour or more after
+//                the last look, so a ready update is still the newest
 //   chooses      the highest release of with-hide/hide whose update file and
 //                file for this system are both up, stable only unless preview
 //                releases are on, never lower than this app (D-22, D-23)
 //   downloads    in the background from that release, checked against the
 //                sha512 its update file names; macOS also requires the same
 //                Developer ID signature (D-24)
-//   installs     on quit (macOS, Windows), or on Restart, which closes and
+//   installs     on quit (macOS, Windows; on macOS closing the last window
+//                quits to install a ready update), or on Restart, which closes and
 //                reopens only this window: the core and its agents keep
 //                running, and the reopened app replaces the core as it does
 //                today (D-18, D-19)
@@ -39,6 +42,8 @@ const RELEASE_DOWNLOADS = `https://github.com/${RELEASES_REPOSITORY}/releases/do
 /** The first look waits for the window and the core to settle. */
 export const FIRST_CHECK_DELAY_MS = 15_000;
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** Coming back to the app looks again once the last look is this old. */
+export const LOOK_AGAIN_AFTER_MS = 60 * 60 * 1000;
 const RELEASES_TIMEOUT_MS = 30_000;
 /** A release list is a few hundred KB; more is not GitHub's answer. */
 const RELEASES_BYTES_CAP = 8 * 1024 * 1024;
@@ -183,6 +188,8 @@ export class AppUpdates {
   private prerelease: boolean;
   private dismissed: string | null;
   private running: Promise<void> | null = null;
+  /** When the last look began; null until the launch look. */
+  private lookedAt: number | null = null;
   private cancelTimer: (() => void) | null = null;
   private installing = false;
   private stopped = false;
@@ -246,12 +253,36 @@ export class AppUpdates {
   }
 
   /** A check now; one already running is the answer. */
-  check(trigger: "launch" | "interval" | "operator"): Promise<void> {
+  check(trigger: "launch" | "interval" | "operator" | "return"): Promise<void> {
     if (!this.updater || typeof this.system !== "string") return Promise.resolve();
     this.running ??= this.run(trigger, this.system, this.updater).finally(() => {
       this.running = null;
     });
     return this.running;
+  }
+
+  /**
+   * The operator came back to the app (a window took the keyboard). A look an
+   * hour old or older is repeated, so the update that is ready, or about to
+   * be, is the newest release rather than one a later release passed while
+   * the app stayed open. Before the launch look nothing happens: that look
+   * waits for the window and the core to settle.
+   */
+  returned(): void {
+    if (this.lookedAt === null || this.io.now() - this.lookedAt < LOOK_AGAIN_AFTER_MS) return;
+    void this.check("return");
+  }
+
+  /**
+   * The last window closed on macOS, where the app would otherwise keep
+   * running with a ready update nobody installs. True when the caller should
+   * quit, which installs it (`autoInstallOnAppQuit`); the next launch is the
+   * new version. Any other system already quits with its last window.
+   */
+  installOnWindowClose(): boolean {
+    if (this.system !== "macos" || this.phase.kind !== "ready" || this.installing || this.stopped) return false;
+    this.log.event("update.install", { version: this.phase.version, trigger: "window_closed" });
+    return true;
   }
 
   /** Installs the ready update and reopens the app; nothing happens unless one is ready. */
@@ -303,6 +334,7 @@ export class AppUpdates {
 
   private async run(trigger: string, system: UpdateSystem, updater: UpdaterLike): Promise<void> {
     const ready = this.phase.kind === "ready" ? this.phase : null;
+    this.lookedAt = this.io.now();
     if (!ready) this.set({ kind: "checking" });
     this.log.event("update.check", { trigger, version: this.current, prerelease: this.prerelease });
     let version: string;

@@ -60,7 +60,7 @@ An empty, loading, disconnected, failed or stale catalog gives small feedback in
 Discovery never starts or stops a server, and an opened page retains the Browser View’s own connection failure and recovery controls.
 Hovering or focusing an icon shows its name in a tooltip; `Open server` has no chord.
 A right-click or the menu key on the path offers Show or Hide right lane and Copy Workspace path.
-An empty Agent group or draft offers an agent start and a separate `Start with terminal` action.
+An empty Agent group or draft offers an agent start, and under it a quiet `Start with terminal` in words.
 An area showing a delegated child still draws that tab's canvas even though the tab stays off the ordinary strip, so choosing the child from the sidebar opens its pane rather than an empty start surface.
 
 ### The window's top row
@@ -230,10 +230,11 @@ Ungroup moves the group's tabs in order to the end of the ungrouped active area 
 Undo restores the last ungrouping while its session-local receipt remains valid, until the next group mutation or the checkout's saved state is unloaded; Undo is shown only while it can act and does not survive restart.
 
 New tab opens one terminal immediately in the chosen area's bar, in the selected group, without an instruction field or provider picker.
+Beside an Agent area's New tab a `▾` opens a menu of what a new tab can be: `터미널` with the new tab chord, which is New tab itself, and `에이전트 시작…` with ⌘N, which opens the [Start panel](#start-panel); a View area has no such menu.
 The button, keyboard shortcut and checkout menu use this same behavior on this machine and connected devices.
 Previously saved drafts remain available to finish or close.
 An empty group creates its first draft when a start is requested.
-Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with a terminal icon and secondary `Start with terminal` button always visible beside that start flow.
+Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with `Start with terminal` always visible under that start flow as a text button with a terminal icon, quieter than Start.
 Terminal start needs neither an instruction nor an agent selection.
 The first start fills that draft's position with the live tab.
 Existing starts that add a pane to a live tab retain their progress, failure and recovery form; New tab remains the tab bar's creation entry point.
@@ -702,14 +703,14 @@ Web owners: `web/src/components/sleeping-session-row.tsx`, `web/src/sleeping-ses
 
 The sidebar is one list of operator-owned roots under projects and checkouts, with Needs You (`내 차례`) and Unread (`읽을 것`) raised above it.
 A root whose descendant is raised enters Needs You itself, at any depth, and the raised descendant never appears there on its own row; its second line is what to do, with no verb, name, count, PR or path.
-A mission whose node waits on the operator with no Conductor or worker row to carry it is its own Needs You row above the agent rows: the mission's title, `<node> · <why>` (`외 N건` for its other such nodes), and under it `이어받기` and the node's choices for its cause; the row opens the mission's map. The Overview's `나를 기다리는 것` lists the same mission first with the same line and buttons, also when the map draws no session; a map narrowed to one project lists and counts that project's missions only, and the whole map every one the scope names. The device's Needs You number (the sidebar's `내 차례 · N`, `개요 · 내 차례 N` and the device rail) counts it once with the agents, from the device scope's `mission_asks`; which raises the mission carries is the core's one rule (`item`: waits on the operator, no row carries it, the mission still asks, the node is not dropped), read by the count and the list alike, so a cancelled mission keeps its record and leaves both (`web/src/components/sidebar-mission-row.tsx`, `web/src/OverviewGraph.tsx`; core owners `hide-core/src/runtime/missions.rs` `on_row`, `item` and `publish_mission_asks`, `hide-core/src/agent_state/tally/scope.rs`; PRD mission-node-simple D-19).
+A mission whose node waits on the operator with no Conductor or worker row to carry it is its own Needs You row above the agent rows, in this list and in the 태스크 list's 내 차례 alike, laid out as the agent rows beside it: the turn mark, the mission's mark (`--kind-mission`, `KindIcon`) where an agent row draws its logo and only while the rows draw logos, the mission's title with how long its node has waited at the title line's end, `<node> · <why>` (`외 N건` for its other such nodes), the mission's project as the place line (left out where the group already names the project, and never made up when the catalog does not hold it), and under them `이어받기` and the node's choices for its cause, every line on the title's column; the row opens the mission's map. The Overview's `나를 기다리는 것` lists the same mission first with the same line and buttons, the mission's mark where an agent's logo stands and its project after the title as the agents' asks there show theirs, also when the map draws no session; a map narrowed to one project lists and counts that project's missions only, and the whole map every one the scope names. The device's Needs You number (the sidebar's `내 차례 · N`, `개요 · 내 차례 N` and the device rail) counts it once with the agents, from the device scope's `mission_asks`; which raises the mission carries is the core's one rule (`item`: waits on the operator, no row carries it, the mission still asks, the node is not dropped), read by the count and the list alike, so a cancelled mission keeps its record and leaves both (`web/src/components/sidebar-mission-row.tsx`, drawn by `web/src/sidebar.tsx` and `web/src/TaskLens.tsx`, `web/src/OverviewGraph.tsx`; core owners `hide-core/src/runtime/missions.rs` `on_row`, `item` and `publish_mission_asks`, `hide-core/src/agent_state/tally/scope.rs`; PRD mission-node-simple D-19).
 A node's choices are one part wherever they stand, 내 차례, the node's panel, this row and the Overview's `나를 기다리는 것` (`AttentionChoices`, `web/src/components/mission-attention.tsx`).
 First comes the pull request the raise is about with its mark and the reason the PRs list gives it (`충돌`, `머지 큐 · N번째 대기`, `CI 실패`, the core's `agent_scope.prs` row; the state's word only when the list holds no row), and a line of the node that failed and that reason does not already say (`리뷰 실패`), so the choice is made with the cause in view.
 The choices themselves and their order are the core's (`AttentionReason::choices`, sent as the raise's `choices`, and the core refuses any other): `Conductor에게 맡기기` first while a Conductor holds the mission and the raise is not its own failure, which settles the item and hands it to the Conductor, or `그대로 두기` for an unplanned pull request with no Conductor; then what the cause takes (`끝으로`, `노드에 붙이기`, `다시 진행`); and `노드 제외` last, which never sends on one press: the first turns it into `제외 확인` in place, a press elsewhere puts it back, and only the second press sends.
 The phone shows the same reason with the step's pull request mark and takes no choice.
 A root whose agent opened a View the operator has not looked at is in Needs You with the `볼 것` mark, an eye in the warning badge, and the line `볼 것 · <newest View>`, ending with ` · 외 N` for the others so a long name never cuts the count; pressing it brings its pane and that View forward, the lane showing the documents, and the mark goes once the operator looks at every such View, or each is closed (PRD unseen-agent-views B1-B3, B9, B13).
 A question, approval or block on the same row keeps its mark and line, which ends with `볼 것 N`, and the row stays in Needs You after it is answered while a View is still to look at (B11).
-`볼 것` counts with the operator's turns on badges and the rail and sends no push, notice or sound (B12).
+`볼 것` counts with the operator's turns on badges and the rail, and notifies as the row's other Needs You entries do (Agent notifications, below): one notice per open the operator has not looked at, `볼 것 · <newest View> · <project>` (operator decision 2026-11-08, replacing B12).
 What to do is the core's `detail`: the label's reply, else the first line of a native question waiting now in the agent's own words (up to 40 characters, `…` when cut), else the label's line, else the verb's own words (`답을 기다림`); a native question therefore reads as itself with Hide AI off and while the label still describes the turn's work ([status-model.md](status-model.md#task-identity)).
 An idle or done parent still owns its children, and a closed pane or ended parent agent makes them orphan roots.
 A parent waiting on a working descendant stays Working; a descendant that asks waits on its parent, so the parent keeps its own state, unread because the ask is news to it ([status-model.md](status-model.md#a-quiet-row-that-waits)).
@@ -1068,8 +1069,9 @@ It opens as a centered modal over a mounted Workspace, as large as the window al
 Its head is the title `Overview` and the device switch: every connected device as its rail tile and name, a device that does not answer marked `연결 안 됨`, and every other device's tooltip carrying `내 차례 N` (B2).
 With This Mac alone there is no switch, since there is nothing to choose.
 Choosing a device changes only what the Overview shows; the rail, the sidebar and the Workspace in front stay, and a project chip that was set clears.
-The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows.
-A device that does not answer dims the live Work, Projects and Backlog tabs, and their body holds `<device>에서 응답이 없어요 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows; a count is drawn only once the device has answered, so a device on its way or not answering shows the tabs' names alone.
+A device that does not answer, the core's `not_connected` among them, which the sidebar and the title row call `연결 안 됨`, dims the live Work, Projects and Backlog tabs, and their body holds `<device>에서 응답이 없어요 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+A device on its way (no status from it yet, its projects being read, or this machine's terminal engine connecting) holds in those tabs' place only a spinner and what it waits for, never an empty map or list drawn from records nobody has read.
 History keeps searching the core's retained requests for that device and marks its disconnected state in the view.
 Usage stays available because choosing a different device does not change the core machine that owns its ledger.
 The project chip at the row's right filters the four device views; changing the device clears it.
@@ -1085,9 +1087,9 @@ Native browser displays use the existing dialog still rules without reloading.
 Every tab, the device switch, the project chip, a row, a fold line and every button of the panel take the keyboard with a visible focus ring and an accessible name, and a state is written as a word (`묻는 중`, `일하는 중`) as well as drawn in its colour (B64).
 The Overview draws its first screen from the snapshot without waiting for any disk or GitHub read, and a closed Overview adds nothing to terminal output or key input (B63).
 
-The Home with no project shows `Add a project to start an agent.` and Add project with its chord (⇧⌘N); a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the button stands alone there.
+The Home with no project shows the factory owl, `일할 프로젝트를 추가하세요` (Add a project to work in) over `폴더나 Git 저장소를 고르면 에이전트가 그 안에서 일해요.`, and Add project with its chord (⇧⌘N); a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the button stands alone there (`EmptyWelcome`, `web/src/components/empty-welcome.tsx`).
 Under it a quiet `Try it on a practice screen first` opens the [Practice window](#practice-window).
-With projects and no agent, Work shows its empty state and the existing New agent route; the backlog remains available.
+With projects and no agent awake, Work shows the welcome described under [Work](#work); the backlog remains available.
 Before the first snapshot the shell's own connecting state shows instead.
 
 ### A device's tasks
@@ -1109,7 +1111,8 @@ Both views share All, My turn, Working and Unread results, with counts from cano
 Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
 The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
 A filter dims the sessions it does not match instead of removing them, so a filter never moves a circle; an excluded ancestor of a present session stays as dimmed context, and dimmed sessions never increase match counts.
-A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
+A filter with no match shows Show all sessions, distinct from no session awake and layout failure.
+With no session awake (none at all, or only sleeping ones while Include sleeping is off) there is nothing to filter or arrange, so the toolbar, the chips and the map give their place to the welcome: the agents owl, `에이전트에게 일을 맡겨 보세요` (Hand an agent some work), `<project>에서 시작` when exactly one project is in scope, and New agent with its chord (⌘N), which opens the start panel on that project, or on the panel's own default with several; with sleeping sessions, a quiet `잠든 세션 N개 보기` under it shows every session, as Show all sessions does, and a mission waiting on the operator stays listed under the welcome.
 A team folds into its root, and a project folds into one circle (PRD overview-main-map D-19).
 A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice.
 
@@ -1313,6 +1316,8 @@ The old copied Conversation history and its index remain removed; retained-reque
 ## Tasks, the 보기 slot and the PR list
 
 Moved to a private document: `docs/tasks-and-pr-list.md` in with-hide/hide-private.
+The 태스크 list's 내 차례 draws the missions that are their own Needs You item with the same row and choices as the 프로젝트 list's Needs You, counted in its head with the tasks; with-hide/hide-private `docs/tasks-and-pr-list.md`, 내 차례, says where they stand.
+Its 내 차례 lists every connected device's as the 프로젝트 list's Needs You does, by the same operator decision of 2026-11-08 ([Sidebar hierarchy](#sidebar-hierarchy) for the rule; `elsewhereTasks` in `web/src/taskList.ts`); the same private document says where they stand in each view.
 
 ## Explorer file management
 
@@ -1681,7 +1686,9 @@ Workspace disclosure persists across launches and hides only the nested agent ro
 The web shell draws the raised groups at the top of the Projects list as `Needs You · N` and then `Done · N`, each left out while empty: the agents of that group whose pane a listed project's checkout or the Home owns, in the core's order, on the Agents list's own row with its place line, drawn whatever their project, checkout or parent has folded, never unfolded themselves, and opened as the Agents row opens.
 A raised group draws at most its five (Needs You) or three (Done) most recent agents; the rest wait behind a `More N` fold row under them, styled as the inactive folds, which opens them below itself, and N in the group's heading stays the whole count.
 The fold is the page's own and starts closed on a fresh load, so the list returns to its short form; an agent folded there keeps its ⌥n number on its checkout row.
-A device's Projects list is its `Needs You · N` group, its `Done · N` group, then Pinned and the projects, then `No agents N` and `Inactive projects N`, and no row there names the device, since the whole list is that device's (with the rail rework of quick device-rail-badges).
+A device's Projects list is its `Needs You · N` group, its `Done · N` group, then Pinned and the projects, then `No agents N` and `Inactive projects N`, and no row of the device's own names the device, since the rest of the list is that device's (with the rail rework of quick device-rail-badges).
+Needs You lists every connected device's Needs You, not only the front device's (operator decision 2026-11-08, a first step that may change once devices keep cores of their own): after the front device's rows come each other connected device's, in the devices' order, its agent rows and its missions that are their own Needs You item, each wearing that device's chip (`DeviceChip`, the name `machineName` gives it) beside its title, and each device's rows past its own five behind the same `More N`; `N` counts them all, and pressing one opens that device's pane as its notification's click does (`openListedAgent`), or the mission's map.
+Those rows take no ⌥n number, which stays the front device's list; Done and everything below Needs You stay the front device's, and a device that is not connected adds nothing (`elsewhereNeedsYou` in `web/src/navigation.ts`, `useEveryDeviceMissionAsks` in `web/src/components/sidebar-mission-row.tsx`).
 An agent row's title is its identity label at both densities: the rolling task, or the provider's name when no task exists; the engine's agent name and a workspace label never become display copy.
 Worktrees with no agents folds worktrees with no unresolved agent, excluding primary, front, dirty, unpushed and already inactive checkouts and one holding a named tab the operator kept ([Agent areas](#agent-areas)); a worktree whose unresolved agents are all delegated children is in no fold and has no line (`session_folds.child_only`, same exclusions), because Worktrees with no agents would be false for it; Cleanup gathers agent worktrees and missing folders at the bottom without assuming they have no live pane.
 
@@ -1819,7 +1826,7 @@ A folder holding nothing, or only `.git` and a Finder `.DS_Store`, is what a cre
 
 Under the other ways the first view shows `가져올 수 있는 프로젝트` (`Projects to import`) once the chosen machine's node has answered, and nothing while it looks, when it found nothing, or when it could not be asked (PRD device-add-project D-09 to D-14, B20 to B29).
 The node gathers the folders every agent with a session reader worked in on that machine (Claude Code, Codex, OpenCode, Cursor, Grok, Pi, omp, Antigravity; an agent that gains one joins with no change), the projects Paseo keeps (`projects/projects.json` in `$PASEO_HOME` or `~/.paseo`, archived ones left out) and the workspaces Herdr saved (`session.json` in Herdr's config folder), and only reads them, so Paseo and Herdr keep working beside Hide.
-Each folder counts as the project a registration of it would add, so a repository worked in from linked worktrees and subfolders is one row, and home, a folder outside home, the home dotfiles repository, a folder that is gone and a project already added on that machine are not rows; the rows are those active in the last thirty days, newest first, at most twenty.
+Each folder counts as the project a registration of it would add, so a repository worked in from linked worktrees and subfolders is one row, and home, a folder outside home, the home dotfiles repository, a folder that is gone, a folder inside Hide's own `~/.hide` (where Desk and Hide AI run their agents; a Hide worktree there still counts for its repository) and a project already added on that machine are not rows; the rows are those active in the last thirty days, newest first, at most twenty.
 An ⓘ beside the heading says, on hover, where the rows come from and that those apps stay as they are.
 When the rows come from more than one source, a row of rounded chips under the heading, wrapping when they do not fit, reads `전체 N` (`All N`) and one chip per source, an agent's logo, its name and how many rows it named, the most first, the one shown filled; a chip shows that source's rows alone, and pressing it again, or `전체`, shows every row; a row two sources named counts in both.
 A row is a checkbox, the project's name over the folder it sits in (`~/projects` for `~/projects/app`, the whole `~/…` path on hover) in mono, its source marks at the right (the agent's logo, with its product name on hover, or `Paseo`, `Herdr` as an outline badge) and how long ago it was active; the whole row checks it.
@@ -1940,12 +1947,13 @@ A remote target never uses the core machine's login result; its kit reports inst
 A browser tab shows the agents step alone, with no progress bar, and Continue there ends the wizard, so the sidebar's invitation is its way into practice (Practice window, below); the notifications and start steps are the desktop app's (D-14, B26).
 The desktop app's Help > Set up Hide opens the same steps from the first as this window's own walk: the agents step starts from the agents switched on now and its Continue switches only the agents whose switch changed, the way Settings > Agents does; Escape and the close button end it, and a step not continued changes nothing (B45, B46).
 
-With Needs You on, the desktop app shows a notification when a root agent newly needs the operator (a question, an approval, a block or an error); Done independently enables new completions.
+With Needs You on, the desktop app shows a notification when a root agent newly needs the operator (a question, an approval, a block, an error, or a View it opened to look at); Done independently enables new completions.
 Both are sent only while no Hide window has the keyboard: its title is the root's row title (the provider when no task or proven native title exists), and with a second-line sentence its body is `<translated row status> · <exact sentence> · <project>` (D-09 to D-11, B31, B39, operator-approved update 2026-10-13).
 The sentence stays in its original language; without one the body is the row's word and the project (`Approval · <project>`), a frame with no status code says its section (`Needs You · <project>`, `Unread · <project>`), and an empty project omits its separator.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for the title priorities, native and inferred questions, counts and both notification channels in each mode.
 hided judges the changes with the phone push's rules (status-model.md, Row presentation and phone notifications), so a child's raise arrives on its root, the same state never notifies twice, an agent back within ten minutes is not announced again, and nothing already waiting when the app opened is announced (B32, B33).
-A click brings Hide forward and opens that agent's pane, on a device too; an agent the operator has seen takes its notification back, and a newer one for the same agent replaces it (B34, B35).
+A View to look at is one notification, `To look at · report.html · <project>` (`볼 것 · …` in Korean), naming the newest View: a second open while the row is still unseen sends nothing, an open again of a View already seen is news again, a turn that finishes with a View to look at sends that one notification and no Done, and a question, approval or block on the same row sends its own instead (operator decision 2026-11-08, [status-model.md](status-model.md#a-view-to-look-at)).
+A click brings Hide forward and opens that agent's pane, on a device too, and with a View to look at brings that View forward as pressing the row does; an agent the operator has seen takes its notification back, as a View looked at takes back its own, and a newer one for the same agent replaces it (B34, B35).
 On Windows a click on a notification in Action Center after Hide quit starts Hide and opens what it named once the shell is up, as a click while it runs does.
 The app icon sums root agents in every enabled notification group across every device and project the window shows: Needs You under its switch and unread Done under its own, including rows folded into `more`, and nothing at zero (operator decision 2026-10-18).
 Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
@@ -2040,9 +2048,9 @@ A tile carries at most one mark, notched into its top-right corner by a ring of 
 Working has no mark on the rail, since it is no reason to switch device; the 태스크 list counts it.
 A mark's digits are `--status-foreground`, white in Light and near-black in Dark.
 The counts come from the device's published `agent_scope` values; the browser does not rederive them.
-A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported.
+A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported; while the center already offers `다시 연결` for that device (its Work, Projects and Backlog body, or its Workspace's surface or stale line), the sidebar leaves its own out, so the same action is drawn once.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
-Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row there names the device.
+Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row of its own names the device, while Needs You also lists the other connected devices' rows, each with its device's chip ([Sidebar hierarchy](#sidebar-hierarchy), operator decision 2026-11-08).
 In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌥⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
 ⇧⌘ would have been the shorter chord, but macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so three tiles could never be reached; ⌘1-9 belongs to the tabs.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
@@ -2085,11 +2093,14 @@ Web owner: `web/src/StartPanel.tsx`, `web/src/startTargets.ts`, `web/src/startDr
 The start panel starts an agent supported by the shared adapter with a first instruction anywhere hide can reach (PRD home-device-rail D-17..D-22).
 It remains independent of the inline group/draft start: a successful start makes its own tab in the target checkout's selected group rather than consuming the draft whose form happens to be open.
 ⌘N opens it in the desktop app, where it is also File › Start agent; in a browser tab ⌘N stays the browser's and `에이전트 시작…` in ⌘K, found by typing, opens it, on every screen.
-It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its one-line text box, `에이전트에게 무엇을 요청할까요?`.
+It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its text box, `에이전트에게 무엇을 요청할까요?`, which grows with what is written to about six lines and then scrolls; Enter starts, Shift+Enter is a new line, and an Enter that ends an input method's composition does neither.
 Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's Home.
-Under the text are the target, the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, typed once the agent's screen takes input or handed to the CLI as its own argument where that is proven (ARCHITECTURE.md, the first prompt).
+Under the text are two rows: where, which is the device when the target is another device's (its chip in the other-device colour), the project and the branch; and who, which is the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, typed once the agent's screen takes input or handed to the CLI as its own argument where that is proven (ARCHITECTURE.md, the first prompt).
 The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's Home while the Overview with no project chip or Settings is; a device's surface in front makes that device the target's.
-The target menu lists the front device's Home and checkouts, then each other device's Home and checkouts prefixed with its name, with a separator between devices and a check on the chosen item; a device that is not connected is listed disabled with `연결 안 됨`.
+The project menu lists the front device's Home and projects, then each other device's under its name, with a separator between devices, a check on the chosen project and a search field; a device that is not connected is listed with `연결 안 됨` and its projects cannot be chosen.
+Choosing a project starts on its main checkout; the branch menu, drawn for a project and never for a Home, lists that project's checkouts by branch with its main checkout first, marked `기본`, then the checkout in front, marked `지금`, then the rest as the catalog lists them, with a search field and, for a Git project, `새 브랜치에서 시작…` at its end.
+`새 브랜치에서 시작…` puts a new branch's name field, its base (the project's saved base, else its default branch) and an `✕` where the branch chip was; the start then creates that worktree and starts the agent in it, and `✕` goes back to the project's main checkout.
+A target whose device stops answering after it was chosen stays chosen: the panel says `<device> · 연결 안 됨` with `다시 연결` and holds `시작` until the device answers, and never moves the start to another target.
 The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
 OpenCode's start takes no model, so with OpenCode chosen no model menu is drawn here or in a Factory's worker candidate, and a model remembered for it from before is not sent.
 While the catalog is being read or cannot be read, the model menu shows the remembered model or `CLI 기본값`, is disabled, and gives the reason in its tooltip; starting is never held back by it.
@@ -2149,6 +2160,7 @@ Hovering a weekly limit outlines the recent seven days, and a five-hour limit ou
 Only the chosen seven or thirty date buttons are mounted, and closing the popover removes them.
 
 Account limits follow the grass as compact rows without individual card borders.
+Each row is one line: a model's window under an account window (`└ Fable`) draws its reset countdown only where it differs from the account window's, and a name too long for the line is cut with an ellipsis and given whole on hover.
 Each visible agent has 5 hours and 7 days rows with a countdown, short inline bar and percent; model-specific limits are indented below their weekly row.
 Not-started windows say `Not started`, never 0%.
 Expired, not-offered and individually unreadable windows have no popover row; a whole malformed response makes the agent unavailable.
@@ -2596,6 +2608,8 @@ In the desktop app, an Updates row and a preview switch sit under the `hide` ver
 | Failed | `Couldn't check for updates` or `Couldn't update`, with the reason in the app's log | `Check again` |
 | Off | `Updates are off in development builds`, or on macOS `Move hide to Applications to get updates` for an app on the disk image or in a folder it cannot write | none |
 
+The updater also looks when a window of the app takes the keyboard an hour or more after its last look, so an app left open does not keep an update a later release has passed.
+On macOS, closing the last window while an update is ready quits the app, which installs it; the core and its agents keep running.
 A ready update stays ready while a later check looks; a newer release that check finds is downloaded in its place, so the row shows that download, the ↑ button, the dot and Help's update leave meanwhile, and they return with the newer version once it is ready, with its card opening once, since the updater keeps one pending update.
 `Get preview versions (rc)`, with a note that turning it off never goes back to a lower version, is off at first, kept in the desktop profile, and cannot be turned while updates are off.
 `Check for updates…` in the app menu (macOS) or the Help menu (Windows, Linux) opens About and looks at once.
@@ -2819,7 +2833,7 @@ When a relay device is unreachable, the list stays dimmed and the list, detail a
 The existing automatic reconnect resumes when the device answers.
 
 The first hosted pairing offers the home-screen hint until dismissed, once per browser storage, and keeps the existing 알림 켜기 action, denied-permission line and Safari-tab installation line.
-Each saved device owns its own notification subscription; tapping a notification selects that device and opens its agent even when another device was last shown.
+Each saved device owns its own notification subscription; tapping a notification selects that device and opens its agent even when another device was last shown, on 볼 것 while the agent has a View to look at, as its eye row does.
 The hosted app asks for no account, login or payment and loads no external script or analytics.
 The following Tailscale-specific address and transport guidance remains for the advanced direct connection; the list, conversation, reply, quick keys, start and wake behavior is common to both transports.
 

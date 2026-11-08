@@ -104,7 +104,7 @@ self.addEventListener("message", (event) => {
   if (!data || data.type !== "words" || !data.words || typeof data.words !== "object") return;
   const { needs_you, done, observer_unconfirmed, letter_undelivered } = data.words;
   if (!isWord(needs_you) || !isWord(done)) return;
-  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision", "subject_mission_attention", ...["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused"].map((reason) => `subject_mission_attention_${reason}`), "subject_input_unconfirmed_brief", "subject_input_unconfirmed_letter", "subject_input_unconfirmed_brief_held", "subject_input_unconfirmed_letter_held"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
+  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished", "look"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision", "subject_mission_attention", ...["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused"].map((reason) => `subject_mission_attention_${reason}`), "subject_input_unconfirmed_brief", "subject_input_unconfirmed_letter", "subject_input_unconfirmed_brief_held", "subject_input_unconfirmed_letter_held"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
   const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, ...statusWords });
   event.waitUntil(
     caches

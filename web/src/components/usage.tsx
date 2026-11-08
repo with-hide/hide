@@ -99,20 +99,28 @@ export function UsageWindows({ agent, cell, now, onOutline, compact = false }: {
     {cell.state === "unavailable" && cell.cause === "not_installed" ? <p>{t("usage.notInstalled", { command: agent })}</p> : null}
   </div>;
   const windows = WINDOW_ORDER.flatMap((kind) => cell.value.windows.filter((window) => window.kind === kind).sort((a, b) => Number(a.scope.kind === "model") - Number(b.scope.kind === "model")));
-  return windows.map((window) => <UsageLine key={`${window.kind}-${window.scope.kind === "model" ? window.scope.label : "all"}`} window={window} now={now} onOutline={onOutline} compact={compact} />);
+  // A model's window under its account window says its reset only where it
+  // differs from the line above: the same countdown twice only crowds the row.
+  const countdown = (window: WindowReading) => window.outcome.state === "open" ? resetCountdown(window.outcome.resets_at_s, now, t) : null;
+  const parentReset = new Map(windows.filter((window) => window.scope.kind !== "model").map((window) => [window.kind, countdown(window)]));
+  return windows.map((window) => {
+    const reset = countdown(window);
+    const shown = window.scope.kind === "model" && reset === parentReset.get(window.kind) ? null : reset;
+    return <UsageLine key={`${window.kind}-${window.scope.kind === "model" ? window.scope.label : "all"}`} window={window} reset={shown} now={now} onOutline={onOutline} compact={compact} />;
+  });
 }
 
-function UsageLine({ window, now, onOutline, compact }: { window: WindowReading; now: number; onOutline?: (window: UsageOutline) => void; compact: boolean }) {
+function UsageLine({ window, reset, now, onOutline, compact }: { window: WindowReading; reset: string | null; now: number; onOutline?: (window: UsageOutline) => void; compact: boolean }) {
   const { t } = useInterfaceTranslation();
   const percent = windowPercent(window, now);
   if (["expired", "not_offered", "unreadable"].includes(window.outcome.state) || (window.outcome.state === "open" && percent === null)) return null;
   const bucket = window.scope.kind === "model";
   return <div onMouseEnter={() => onOutline?.(window.kind === "monthly" ? null : window.kind)} onMouseLeave={() => onOutline?.(null)} className={cn("flex flex-col gap-xs", bucket && "pl-md")} data-usage-window-row={window.kind} data-usage-bucket={window.scope.kind === "model" ? window.scope.label : undefined}>
-    <div className="flex flex-wrap items-baseline gap-xs">
-      <span className="min-w-0 break-words text-caption font-medium text-subtle-foreground">{window.scope.kind === "model" ? `└ ${window.scope.label}` : windowLabel(window.kind, t)}</span>
-      {window.outcome.state === "open" ? <span className="font-mono text-micro text-muted-foreground" data-usage-reset="true">· {resetCountdown(window.outcome.resets_at_s, now, t)}</span> : null}
+    <div className="flex items-baseline gap-xs">
+      <span className="min-w-0 truncate text-caption font-medium text-subtle-foreground" title={window.scope.kind === "model" ? window.scope.label : undefined}>{window.scope.kind === "model" ? `└ ${window.scope.label}` : windowLabel(window.kind, t)}</span>
+      {reset ? <span className="shrink-0 whitespace-nowrap font-mono text-micro text-muted-foreground" data-usage-reset="true">· {reset}</span> : null}
       {compact && percent !== null ? <div aria-hidden="true" className="ml-auto h-xs w-(--size-control-lg) shrink-0 overflow-hidden rounded-full bg-border"><div className={cn("h-full rounded-full", FILL_TONE[usageTone(percent)])} style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }} /></div> : null}
-      <span className={cn(compact ? "font-mono text-caption font-semibold" : "ml-auto font-mono text-caption font-semibold", TEXT_TONE[usageTone(percent)])} data-usage-value="true">{percent !== null ? percentLabel(percent) : t("usage.notStarted")}</span>
+      <span className={cn(compact ? "shrink-0 font-mono text-caption font-semibold" : "ml-auto shrink-0 font-mono text-caption font-semibold", TEXT_TONE[usageTone(percent)])} data-usage-value="true">{percent !== null ? percentLabel(percent) : t("usage.notStarted")}</span>
     </div>
     {!compact && percent !== null ? <div aria-hidden="true" className="h-xs overflow-hidden rounded-full bg-border"><div className={cn("h-full rounded-full", FILL_TONE[usageTone(percent)])} style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }} /></div> : null}
   </div>;

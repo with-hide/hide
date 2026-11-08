@@ -474,6 +474,7 @@ A built-in agent's `[screen]` (`hide-agent-adapter/agents/<id>.toml`) reaches th
 `hide-agent-adapter/tests/it/screens.rs` evaluates every agent's rules against each of its captures, which are the real agent's screen as Herdr drew it, colours included, named `<idle|working|blocked>-<what>.ansi` for the state the operator saw (`.txt` for a screen taken as text alone from a terminal emulator); no rule matching reads as idle, as the engine reads it.
 For an agent whose start waits for a ready screen (`[start] ready`), every idle capture shows that rule except the ones named `idle-loading-<what>`, taken before the agent takes a line (`a_start_waits_for_the_ready_screen_only_until_the_agent_takes_a_line`).
 The first captures are the composer captures of `composer.rs` (an empty and a typed composer of six agents, all idle); a capture is never written from the rule it tests.
+A capture whose read is a known limit of a rule, not the state the operator saw, sits under `hide-agent-adapter/tests/fixtures/screen-limits/<id>/` with a test of its own that names the limit, such as a Codex draft that begins `1. `, which reads as the numbered menu it is drawn like (`a_codex_draft_that_begins_with_a_number_reads_as_a_question_until_it_is_sent`).
 The rule grammar, its limits and the evaluator have their own cases in `hide-screen-rules/tests/it/rules.rs`, taken from Herdr's manifest tests.
 
 ## Which lanes a pull request runs
@@ -614,6 +615,8 @@ A pull request that wants its desktop specs run on macOS before it merges can ru
 The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes) and on Linux only in the nightly.
 
 The remote mailbox lane runs `hided/tests/it/device_own_engine.rs`, a device of the core's own engine (PRD engine-bundle-3-core-owns B35): it stages the built `hide-holder` (the lane restores the vt lane's Zig inputs for it) beside the shipped `hided`, starts a pane by the node link's pane requests, proves a caller in another pane by that pane's holder record, ends the link and its node, and checks the next link's node finds the pane with the same process and that no file of Herdr's reached the account.
+Its asker program waits for the test before it asks the node's pane socket, and the test releases it once the node's proof of the pane says it runs: the holder writes a pane's record as running after its program started, and a program that asks in between is refused as a pane the node does not know yet, once, with no retry (with-hide/hide-private#503).
+Each test's loopback `sshd` (`hided/tests/it/support/sshd.rs`) chooses its port by binding port 0 and letting it go, so another test's server can take the port before this one binds; the server is ready only when its own log says `Server listening on 127.0.0.1 port N.`, never when a connection to the port succeeds, because that reaches whichever server holds it, and a server that lost the bind (`Address already in use`) is started again on another port (with-hide/hide-private#210); a restart on the same port reads only the log lines its own server wrote, since the log is appended to, and names a port another server took while it was down.
 Locally: `bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only`.
 
 ### WSL device lane
@@ -764,7 +767,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 8 | parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `web e2e` (Linux) | 8 | parallel daemon and web shell builds and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
@@ -890,6 +893,7 @@ A lane whose run has no key, such as a fork's, files nothing and still passes.
   Artifact downloads use the existing `gh` credentials, need gh 2.97 or newer, stop at the byte cap and a 45-second deadline, and reap the child process on every exit.
   Unsupported provenance, ambiguity, API refusal or a resource cap stops history filing with a warning and summary rather than guessing from partial evidence; a history notice cannot turn a failed lane green or block a passing lane.
   Local reporter regressions use fixture reports and mocked APIs, never live test issues or comments.
+- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0` so one failure fails the job), and a green job is the evidence.
 - At the deadline a flaky test is fixed or deleted.
   Whoever knows the cause opens the fix or the deletion; if nobody does, the issue goes to the operator.
   The deadline is not a timer that moves the test somewhere quieter, and a later flake on an issue past its deadline says so in its comment.

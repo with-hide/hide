@@ -17,11 +17,28 @@ on:
         description: The GitHub-hosted runner label.
         type: string
         required: true
+      repeat:
+        description: How many times the lane's tests run in the one job; 1 is the lane as `pr.yml` runs it.
+        type: string
+        default: '1'
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
+  # A hand run on a branch repeats the lane to show a flaky test fixed
+  # (docs/TESTING.md, Flaky tests): `gh workflow run remote-mailbox.yml
+  # --ref <branch> -f repeat=10`.
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: The GitHub-hosted runner label.
+        type: string
+        default: ubuntu-latest
+      repeat:
+        description: How many times the lane's tests run in the one job (nextest --stress-count).
+        type: string
+        default: '10'
 
 permissions:
   contents: read
@@ -30,7 +47,7 @@ jobs:
   mailbox:
     name: remote mailbox ${{ inputs.runner }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.repeat == '1' && 30 || 80 }}
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -51,14 +68,14 @@ jobs:
       - name: Install zsh and the SSH server
         # The fixture starts every pane's shell from SHELL=/bin/zsh, which the
         # Linux image lacks, and a device's tests run against the system's
-        # sshd. The mirror can stall (web-e2e.yml), so apt retries and gives
-        # up on a silent connection. macOS has both.
+        # sshd. The mirror can stall, so the packages are cached and fetched
+        # inside one time limit (.github/actions/apt-install). macOS has both.
         if: runner.os == 'Linux'
-        timeout-minutes: 5
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          sudo apt-get install -y --no-install-recommends zsh openssh-server
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh openssh-server
+          minutes: 3
       - name: A default key and a password account for the sign-in journeys
         # hided/tests/it/system_ssh.rs signs in with a key ssh finds by itself
         # in the runner account's own ~/.ssh, and as a second account with a
@@ -104,9 +121,15 @@ jobs:
         # keeps its process when the device's node ends with its link and a
         # new link's node finds it. The node contract's device links start
         # their holders from the built one too.
-        timeout-minutes: 20
+        timeout-minutes: ${{ inputs.repeat == '1' && 20 || 60 }}
+        env:
+          REPEAT: ${{ inputs.repeat }}
         run: |
-          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only
+          case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+          stress=()
+          # A repetition shows a fix only if one failure fails the job, so no retry.
+          if [ "$REPEAT" != 1 ]; then stress=(--stress-count "$REPEAT" --retries 0); fi
+          HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci ${stress[@]+"${stress[@]}"} -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only
       - name: Another account's hide <path> on a device's bridge
         # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only
         # as a process of the node's own account, by the kernel's answer about

@@ -153,7 +153,8 @@ pub enum Moves {
 }
 
 /// Every key in the state folder that names a machine, by file and JSON
-/// pointer pattern (`*` is every array element or object key), how the
+/// pointer pattern (`*` is every array element or object key, a number the
+/// array's element at that place), how the
 /// layer-1 conversion keeps it, and how a core move changes it. The contract
 /// tests hold a fully populated folder to this list in every shape (the
 /// owner's, a linked node's, a dialed device's), so a store that gains a
@@ -280,6 +281,12 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         "/detail/items/*/workspace_id",
         Mechanism::Owned,
         Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/detail/items/*/checkout_id",
+        Mechanism::Owned,
+        Moves::Checkout,
     ),
     (
         CORE_STATE,
@@ -477,6 +484,15 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Stays,
     ),
+    // A fork's source pane is the engine's own token, which a device's agent
+    // keeps as that device's raw pane id (the projection scopes only the
+    // parent), so it names no machine and `SleepScope` reads it either way.
+    (
+        CORE_STATE,
+        "/agent_sleep/records/*/fork_source",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
     (
         CORE_STATE,
         "/agent_sleep/dormant/*/node_id",
@@ -667,6 +683,8 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Whole,
     ),
+    // A start's effect keeps the engine's own ids (the raw workspace, seed
+    // tab and bound panes), which name no machine.
     (
         WORKSPACE_VIEWS,
         "/workspaces/*/agent_starts",
@@ -684,6 +702,40 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         "/workspaces/*/view_layout",
         Mechanism::Rewritten,
         Moves::Whole,
+    ),
+    // A pane move's receipt, kept without expiry, names its Workspace's
+    // machine and the public ids of the panes and tabs it was asked to move;
+    // its terminal, native workspace and result are the machine's own engine
+    // ids, which name no machine. Written only by builds that have node ids.
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/pane_moves/*/request/workspace/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/pane_moves/*/request/source/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/pane_moves/*/request/source/tab_id",
+        Mechanism::Owned,
+        Moves::Tab,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/pane_moves/*/request/destination/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/pane_moves/*/request/destination/tab_id",
+        Mechanism::Owned,
+        Moves::Tab,
     ),
     // A View's opener names its agent's machine at any depth of the layout
     // tree (`reown`, openers);
@@ -865,6 +917,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Whole,
     ),
+    // A plan step's spawn names the main's session, which is on a machine.
+    // Written only by builds that have node ids.
+    (
+        DELIVERY_LEDGER,
+        "/spawns/*/plan/parent_session/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
     // A promotion task names its card by number; a fold of Project Memory
     // that renumbered the card is read through (`reown`, promotion targets).
     (
@@ -952,7 +1012,8 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Moves::OwnPath("projects"),
     ),
     // A mission's project, its checkout and its nodes' paths are paths
-    // beside its `device_id`, and its workers are ledger ids: they stay.
+    // beside its `device_id`, and its workers are ledger ids: they stay. A
+    // node's remote check folder and a handover name their machine.
     (
         MISSIONS,
         "/missions/*/device_id",
@@ -982,6 +1043,24 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         "/missions/*/conductor/session/device_id",
         Mechanism::Rewritten,
         Moves::Device,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/nodes/*/remote_folder/0",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/handover/from/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/handover/from/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
     ),
     (
         COMPOSER_MARKS,
@@ -1506,7 +1585,8 @@ fn convert_workspace_views(value: &mut Value, node: &str, _: &BTreeMap<String, S
 }
 
 /// Calls `change` with every View opener's machine in one Workspace's
-/// layout, at any depth.
+/// layout, at any depth: the agent that opened a View last (`opener`) and
+/// every session that opened it (`openers`, PRD session-files D-10).
 pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
     fn walk(value: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
         match value {
@@ -1516,6 +1596,12 @@ pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -
                     if key == "opener" {
                         if let Some(device) = entry.get_mut("device_id") {
                             changed |= change(device);
+                        }
+                    } else if key == "openers" {
+                        for opener in entry.as_array_mut().into_iter().flatten() {
+                            if let Some(device) = opener.get_mut("device_id") {
+                                changed |= change(device);
+                            }
                         }
                     } else {
                         changed |= walk(entry, change);
@@ -1764,6 +1850,7 @@ mod tests {
                 "detail": {"items": [
                     {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
                     {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
+                    {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
                 ], "shown": true},
                 "sidebar_project": {"device_id": NODE, "workspace_id": "workspace:a"},
                 "overview_graph": {
@@ -1783,7 +1870,7 @@ mod tests {
                 "pane_terminal_sizes": {"w1:p1": {"cols": 80, "rows": 24}},
                 "agent_sleep": {
                     "stamps": {"w1:p1": {}},
-                    "records": {"w1:p1": {"parent_pane_id": "w1:p0", "cwd": root}},
+                    "records": {"w1:p1": {"parent_pane_id": "w1:p0", "fork_source": ["w1:p9", null], "cwd": root}},
                     "dormant": {"sleep-1": {"node_id": "local", "old_pane_id": "w1:p5", "cwd": root}},
                 },
                 "session_archive": archive,
@@ -1844,6 +1931,12 @@ mod tests {
                         "agent_phase": null, "recorded_at": 2, "seen_in_topology": false
                     }
                  },
+                 "pane_moves": {"move-1": {
+                    "request": {"request_id": "move-1", "workspace": {"device_id": NODE, "checkout_path": root},
+                                "source": {"pane_id": "w1:p1", "tab_id": "w1:t1", "area_id": "a1"},
+                                "destination": {"type": "pane", "tab_id": "w1:t2", "pane_id": "w1:p2", "area_id": "a1", "edge": "right"}},
+                    "terminal_id": "term_1", "workspace_id": "w1", "phase": "completed", "started_at": 1,
+                    "result_pane": "w1:p1", "result_tab": "w1:t3"}},
                  "tab_views": {"w1:t1": "d1"}, "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}},
                  "feedback": {"comments": [{"id": "c2", "recipient": {"device_id": "local"}, "shot": {"node": "local", "name": "shot.png"}}], "waiting": [{"to": {"device_id": "local"}}]}},
                 {"device_id": "mini", "path": "/srv/p"},
@@ -1874,7 +1967,9 @@ mod tests {
                 "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
                             "project": root, "session": "s1", "instance": "term_1"}],
                 "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini",
-                            "task": {"kind": "memory_promote", "target": "m1"}}],
+                            "task": {"kind": "memory_promote", "target": "m1"},
+                            "plan": {"plan": "1000", "step": "a", "attempt": 1,
+                                     "parent_session": {"device_id": NODE, "agent": "claude", "session_id": "s"}}}],
                 "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
                                     "owed": {"for": "fork", "origin": "agent-1"}}],
                 "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
@@ -1897,6 +1992,10 @@ mod tests {
                     "actor": {"pane_id": "w1:p1", "name": "conductor", "kind": "claude", "device_id": NODE},
                     "session": {"device_id": NODE, "agent": "claude", "session_id": "s"},
                 },
+                "nodes": [{"key": "a", "remote_folder": ["mini", "/srv/p"]}],
+                "handover": {"token": "0123456789abcdef", "at_unix_ms": 1, "from": {
+                    "pane_id": "w1:p1", "name": "conductor", "kind": "claude", "device_id": NODE,
+                }},
             }]}),
         );
 
@@ -1959,7 +2058,7 @@ mod tests {
     }
 
     /// Every value a pointer pattern reaches; `*` is each array element or
-    /// object value, `{key}` each object key.
+    /// object value, `{key}` each object key, a number an array's element.
     pub(super) fn reach(value: &Value, pattern: &str) -> Vec<Value> {
         let mut found = vec![value.clone()];
         for part in pattern.trim_start_matches('/').split('/') {
@@ -1975,7 +2074,12 @@ mod tests {
                         .as_object()
                         .map(|map| map.keys().cloned().map(Value::String).collect())
                         .unwrap_or_default(),
-                    key => value.get(key).cloned().into_iter().collect(),
+                    key => match (value, key.parse::<usize>()) {
+                        (Value::Array(items), Ok(at)) => {
+                            items.get(at).cloned().into_iter().collect()
+                        }
+                        _ => value.get(key).cloned().into_iter().collect(),
+                    },
                 })
                 .collect();
         }

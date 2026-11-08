@@ -1577,6 +1577,16 @@ pub(super) struct TerminalMousePayload {
     pub(super) row: u16,
     #[serde(default)]
     pub(super) modifiers: u8,
+    #[serde(default)]
+    pub(super) outside: Option<OutsideCell>,
+}
+
+/// The cell under the pointer when a held button dragged it past the pane's
+/// grid: a column or row below zero or past the last one.
+#[derive(Debug, Deserialize)]
+pub(super) struct OutsideCell {
+    pub(super) column: i32,
+    pub(super) row: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3793,6 +3803,7 @@ impl Runtime {
                     column: payload.column,
                     row: payload.row,
                     modifiers: payload.modifiers,
+                    outside: payload.outside.map(|cell| (cell.column, cell.row)),
                 });
                 false
             }

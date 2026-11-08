@@ -51,6 +51,8 @@ export function UsageScene({ params }: { params: URLSearchParams }) {
           { kind: "five_hour", scope: { kind: "all" }, outcome: adapter.id === "codex" && state !== "both-plans" && state !== "full" ? { state: "not_offered" } : state === "not-started" ? { state: "not_started" } : state === "expired" ? { state: "expired", reset_at_s: reset - 1 } : { state: "open", used_percent: 11, resets_at_s: reset + 11520 } },
           { kind: "weekly", scope: { kind: "all" }, outcome: { state: "open", used_percent: adapter.id === "codex" ? 76 : 81, resets_at_s: reset + 450000 } },
           ...(adapter.id === "claude-code" ? [{ kind: "weekly" as const, scope: { kind: "model" as const, label: "Fable" }, outcome: { state: "open" as const, used_percent: 42, resets_at_s: reset + 450000 } }] : []),
+          // A model name too long for the popover's line, under a window with the same reset.
+          ...(adapter.id === "antigravity" ? [{ kind: "weekly" as const, scope: { kind: "model" as const, label: "Claude and GPT models" }, outcome: { state: "open" as const, used_percent: 0, resets_at_s: reset + 450000 } }] : []),
         ] },
       },
     }));

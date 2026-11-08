@@ -1738,6 +1738,7 @@ impl Runtime {
             column: request.column,
             row: request.row,
             modifiers: request.modifiers,
+            outside: request.outside,
         });
     }
 }
@@ -1751,4 +1752,7 @@ pub(super) struct MouseRequest {
     pub(super) row: u16,
     /// crossterm's bitset, as `terminal_scroll` carries it.
     pub(super) modifiers: u8,
+    /// The cell under the pointer when a held button dragged it past the
+    /// grid's edge; `column` and `row` then name the grid's nearest cell.
+    pub(super) outside: Option<(i32, i32)>,
 }
