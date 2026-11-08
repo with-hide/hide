@@ -1042,7 +1042,12 @@ pub fn handle_with_progress(
             let root = open_root(&root)?;
             let relative = relative_path(&path)?;
             list::require_directory(root.dir(), &relative)?;
-            to_value(list::list(root.dir(), &relative, root.real_path())?)
+            to_value(list::list(
+                root.dir(),
+                &relative,
+                root.real_path(),
+                env.home.as_deref(),
+            )?)
         }
         Call::Stamps { root, folders } => {
             let root = open_root(&root)?;
@@ -1062,9 +1067,18 @@ pub fn handle_with_progress(
                 length,
             )?)
         }
-        Call::Index { root } => {
+        Call::Index { root, others } => {
             let root = open_root(&root)?;
-            to_value(index::walk(root.dir(), root.real_path()))
+            let others: Vec<PathBuf> = others
+                .iter()
+                .filter_map(|other| crate::root::native_absolute(other))
+                .collect();
+            to_value(index::walk(
+                root.dir(),
+                root.real_path(),
+                env.home.as_deref(),
+                &others,
+            ))
         }
         Call::OpenDocument { root, path } => {
             let root = open_root(&root)?;

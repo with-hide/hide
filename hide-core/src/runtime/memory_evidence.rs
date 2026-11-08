@@ -265,7 +265,7 @@ impl<'a> CheckoutFacts<'a> {
     fn name_fact(&mut self, name: &str) -> EvidenceFact {
         let names = self
             .names
-            .get_or_insert_with(|| match index_root(self.node, self.root) {
+            .get_or_insert_with(|| match index_root(self.node, self.root, Vec::new()) {
                 Ok(walked) => {
                     let set = walked
                         .paths

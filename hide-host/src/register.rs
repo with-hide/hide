@@ -207,9 +207,12 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
     })
 }
 
-/// Whether `path` leads to home itself, judged by identity.
-fn is_home(path: &Path, home: &Path) -> bool {
-    identity::below(path, home).is_some_and(|rest| rest.as_os_str().is_empty())
+/// Whether `path` leads to the account's home folder itself, judged by
+/// identity, so a link to home or another spelling of it is home too. The one
+/// answer the registration, the Explorer's listing, the file index, Home's
+/// links and the disk measurement ask (PRD home-folder-project).
+pub(crate) fn is_home(path: &Path, home: &Path) -> bool {
+    identity::same_file(path, home).unwrap_or(false)
 }
 
 /// The real path `path` leads to, links followed.

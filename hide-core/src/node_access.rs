@@ -147,9 +147,17 @@ const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
 pub fn index_root(
     channel: &(impl NodeLink + ?Sized),
     root: &str,
+    others: Vec<String>,
 ) -> Result<hide_node_link::index::Walked, LinkError> {
     let root_ref = pinned_root(channel, root, LIST_TIMEOUT)?;
-    let result = call_as(channel, Call::Index { root: root_ref }, INDEX_TIMEOUT);
+    let result = call_as(
+        channel,
+        Call::Index {
+            root: root_ref,
+            others,
+        },
+        INDEX_TIMEOUT,
+    );
     if let Err(LinkError::Refused(error)) = &result
         && error.code == ErrorCode::RootReplaced
     {
@@ -232,7 +240,7 @@ mod tests {
                 .all(|entry| !entry.name.contains('/') && entry.name != "..")
         );
 
-        let walked = index_root(&Hostile, "/r").unwrap();
+        let walked = index_root(&Hostile, "/r", Vec::new()).unwrap();
         assert_eq!(walked.paths.len(), hide_node_link::index::INDEX_CAP);
         assert!(walked.truncated);
         assert_eq!(walked.paths[0], "src/a.rs");

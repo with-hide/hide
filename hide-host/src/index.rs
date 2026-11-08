@@ -24,7 +24,13 @@ pub const DIRECTORY_CAP: usize = 50_000;
 /// the ignore rules are anchored at; nothing is read through it. The walk is
 /// the only place a checkout is read whole, so its caller runs it on a worker,
 /// never under the runtime lock.
-pub fn walk(root_dir: &Dir, root: &Path) -> Walked {
+///
+/// When the root is the account's home folder (`home`), the walk leaves out
+/// its top-level hidden names and app-data folder (`list::home_clutter`) and
+/// every folder in `others`, the other projects' roots, whose files the
+/// palette finds in their own project (PRD home-folder-project D-04, D-05).
+pub fn walk(root_dir: &Dir, root: &Path, home: Option<&Path>, others: &[PathBuf]) -> Walked {
+    let in_home = home.is_some_and(|home| crate::register::is_home(root, home));
     // Keep only the verified root handle open across siblings. A wide tree
     // must not consume one descriptor for every pending directory.
     let base = IgnoreRules::new(root).with_file(root_dir, root, ".git/info/exclude");
@@ -66,6 +72,12 @@ pub fn walk(root_dir: &Dir, root: &Path) -> Walked {
             if name == ".git" {
                 continue;
             }
+            if in_home
+                && relative_dir.as_os_str().is_empty()
+                && name.to_str().is_some_and(crate::list::home_clutter)
+            {
+                continue;
+            }
             let relative = relative_dir.join(name);
             let absolute = root.join(&relative);
             let Ok(kind) = entry.file_type() else {
@@ -76,6 +88,9 @@ pub fn walk(root_dir: &Dir, root: &Path) -> Walked {
                 continue;
             }
             if kind.is_dir() {
+                if in_home && others.contains(&absolute) {
+                    continue;
+                }
                 if directories + stack.len() >= DIRECTORY_CAP {
                     truncated = true;
                     continue;
@@ -173,7 +188,7 @@ mod tests {
     use super::*;
 
     fn build(root: &Path, opened: std::fs::File) -> Walked {
-        walk(&Dir::from_std_file(opened), root)
+        walk(&Dir::from_std_file(opened), root, None, &[])
     }
 
     fn open_test_dir(root: &Path) -> std::fs::File {
@@ -203,6 +218,51 @@ mod tests {
                 .any(|path| path == ".git" || path.starts_with(".git/"))
         );
         assert!(!data.truncated);
+    }
+
+    /// PRD home-folder-project B9: the home folder's index leaves out its
+    /// top-level hidden names, the app-data folder and another project's
+    /// folder; the same names deeper down, and any other root, are walked as
+    /// always.
+    #[test]
+    fn the_home_folder_leaves_out_its_clutter_and_other_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+        let write = |relative: &str| {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        };
+        write(".zshrc");
+        write(".config/tool/settings.json");
+        write("Documents/note.md");
+        write("Documents/.hidden/deep.md");
+        write("work/app/main.rs");
+        write("work/todo.txt");
+        // Linux keeps app data in hidden folders, which are left out already.
+        if let Some(app_data) = crate::list::APP_DATA_DIR {
+            write(&format!("{app_data}/cache.db"));
+        }
+
+        let others = [root.join("work/app")];
+        let walked = |home: Option<&Path>, others: &[PathBuf]| {
+            walk(&Dir::from_std_file(open_test_dir(&root)), &root, home, others).paths
+        };
+        assert_eq!(
+            walked(Some(&root), &others),
+            vec![
+                "Documents/.hidden/deep.md",
+                "Documents/note.md",
+                "work/todo.txt",
+            ]
+        );
+        // Another machine's home, or a project that is not home: all of it.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let all = walked(Some(elsewhere.path()), &others);
+        assert!(all.contains(&".zshrc".to_owned()) && all.contains(&"work/app/main.rs".to_owned()));
+        if let Some(app_data) = crate::list::APP_DATA_DIR {
+            assert!(all.contains(&format!("{app_data}/cache.db")));
+        }
     }
 
     #[test]

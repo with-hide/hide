@@ -3746,14 +3746,29 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     };
     let root_path = hide_platform::path::to_wire_lossy(&known);
     let walk_root = known.clone();
+    let (core, node, home) = (
+        Arc::clone(&state.core),
+        state.boundary.node().as_str().to_owned(),
+        state.boundary.home().to_path_buf(),
+    );
     let answer = state.index.query(
         state.boundary.node().as_str(),
         &root_path,
         &query,
         move || {
+            // The other projects of this machine, which the home project's
+            // walk leaves to their own (PRD home-folder-project D-05); asked
+            // here, on the walk's worker, once per walk.
+            let others: Vec<PathBuf> = core
+                .registered_paths(&node)?
+                .iter()
+                .filter_map(|path| hide_host::root::native_absolute(path))
+                .collect();
             Ok(hide_host::index::walk(
                 &cap_std::fs::Dir::from_std_file(opened),
                 &walk_root,
+                Some(&home),
+                &others,
             ))
         },
     );
@@ -3841,7 +3856,10 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
         let channel = core
             .node_link(&walk_device)
             .map_err(|message| log("link.not_connected", message))?;
-        hide_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+        let others = core
+            .registered_paths(&walk_device)
+            .map_err(|message| log("core.unavailable", message))?;
+        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
             log(
                 &hide_core::node_access::link_failure_code(&error),
                 error.to_string(),

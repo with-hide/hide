@@ -1053,7 +1053,9 @@ impl Boundary {
             .map_err(|_| Refusal::OutsideCheckout)?;
         let checkout = cap_std::fs::Dir::from_std_file(anchor);
         let listed = hide_host::list::require_directory(&checkout, relative)
-            .and_then(|()| hide_host::list::list(&checkout, relative, &registered.real_path))
+            .and_then(|()| {
+                hide_host::list::list(&checkout, relative, &registered.real_path, Some(&self.home))
+            })
             .map_err(|error| match error.code {
                 hide_host::ErrorCode::NotADirectory => Refusal::NotADirectory,
                 hide_host::ErrorCode::OutsideRoot | hide_host::ErrorCode::InvalidPath => {

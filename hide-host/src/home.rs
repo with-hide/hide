@@ -331,7 +331,7 @@ fn candidates(
         // The home folder as a project is never linked or listed here: its
         // link `~/hide/<user>` would lead back to the folder that holds Home
         // (PRD home-folder-project D-09).
-        if identity::below(path, user_home).is_some_and(|rest| rest.as_os_str().is_empty()) {
+        if crate::register::is_home(path, user_home) {
             skipped.push(HomeSkip {
                 target: to_wire_lossy(path),
                 reason: "home_folder".to_owned(),
