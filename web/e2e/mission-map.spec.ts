@@ -105,7 +105,8 @@ test("the Conductor's first plan shows on its pane, and the mission screen's map
     await expect(map).toBeVisible();
     await expect(page.locator("[data-workspace-screen]")).toHaveCount(0);
     await expect(map.locator("[data-mission-screen-detail-head]")).toContainText("이슈 정리");
-    await expect(page.locator("[data-mission-list] [data-mission-list-row]")).toHaveCount(1);
+    // The list beside the detail is drawn, not only present (its height once collapsed to nothing).
+    await expect(page.locator("[data-mission-list] [data-mission-list-row]")).toBeVisible();
     await expect(page.locator("[data-mission-screen-back]")).toHaveAttribute("data-mission-screen-back", opened.pane);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);

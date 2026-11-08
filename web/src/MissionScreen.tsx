@@ -437,7 +437,7 @@ function List({ groups, selected, connected, actions }: { groups: { group: Missi
   return (
     <div
       ref={box}
-      className="flex max-h-(--size-mission-popover) min-w-0 shrink-0 flex-col overflow-y-auto border-b border-border px-xs pb-sm missions-split:max-h-none missions-split:w-(--size-mission-list) missions-split:border-r missions-split:border-b-0"
+      className="flex max-h-(--size-mission-popover) min-w-0 shrink-0 flex-col overflow-y-auto border-b border-border px-xs pb-sm missions-split:max-h-[none] missions-split:w-(--size-mission-list) missions-split:border-r missions-split:border-b-0"
       onKeyDown={step}
       data-mission-list="true"
     >
