@@ -106,7 +106,7 @@ it("dims a resolved row whole and leads its hint with 해결됨 while the mark a
   const base = { agent_kind: "claude", mark: "quiet", group: "seen", status_code: "idle", activity: "stopped", changed_at_unix_ms: null, emphasized: false, unread: false } as const;
   const resolved: AgentRow = { ...legacyAgentRow({ id: "r", pane_id: "r", identity_label: "PR 정리", ...base }), resolved: { at_unix_ms: 1, source: "automatic" } };
   const open: AgentRow = legacyAgentRow({ id: "o", pane_id: "o", identity_label: "그대로", ...base });
-  const tree = { place: { depth: 0, last: true, rails: [] }, open: null, onToggle: () => {}, popover: null };
+  const tree = { place: { depth: 0, last: true, rails: [] }, fold: "0", open: null, onToggle: () => {}, popover: null };
   const row = (agent: AgentRow, slot: typeof tree | null = tree) => <SidebarAgentRow agent={agent} device={null} place={null} depth={0} tree={slot} selected={false} onOpen={() => {}} onOpenPullRequest={() => {}} inset="0" menu={menu} />;
   const { container, unmount } = await render(<ul>{row(resolved)}{row(open)}{row({ ...resolved, id: "x", pane_id: "x" }, null)}</ul>);
   try {
