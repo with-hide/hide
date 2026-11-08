@@ -560,7 +560,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask in 내 차례
     // also offers 치우기, which puts it away until the agent asks something new (needs-you-cleanup B15).
     if (root) entries.push(revisitEntry(agent, disabled, t));
-    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "unstar", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
+    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "put_away", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
