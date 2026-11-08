@@ -161,7 +161,12 @@ fn each_agent_with_hides_features_takes_its_identity_from_its_definition() {
             builtin(adapter.id).unwrap_or_else(|| panic!("{}: no definition", adapter.id));
         assert_eq!(definition.hooks, hooks, "{}", adapter.id);
         // The account read alone is the one the whole file holds.
-        assert_eq!(adapter.account_rule(), definition.account.as_ref(), "{}", adapter.id);
+        assert_eq!(
+            adapter.account_rule(),
+            definition.account.as_ref(),
+            "{}",
+            adapter.id
+        );
         assert_eq!(definition.name, adapter.label);
         assert_eq!(definition.executables, adapter.executables);
         assert_eq!(definition.aliases, adapter.aliases);
@@ -508,7 +513,8 @@ fn each_unusable_file_is_left_out_alone_with_one_line_naming_it() {
 /// and a copy or a built-in's screen file never moves an account.
 #[test]
 fn an_account_rule_names_every_place_and_only_its_own_variables() {
-    let head = "schema = 1\nid = \"acct\"\nname = \"A\"\nexecutables = [\"acct\"]\nhooks = \"none\"\n";
+    let head =
+        "schema = 1\nid = \"acct\"\nname = \"A\"\nexecutables = [\"acct\"]\nhooks = \"none\"\n";
     let all = |state: &str, skills: &str| {
         format!(
             "[account]\nby = \"folder\"\n[account.vars]\nACCT_HOME = {{ default = \"~/.acct\", profile = \"{{account}}\" }}\n[account.paths]\nhooks = false\nhook_trust = false\nplugins = false\nskills = {skills}\nfolder_trust = false\nsessions = \"{{ACCT_HOME}}/sessions\"\nlogin = false\nstate = {state}\nusage = false\n"
@@ -518,21 +524,24 @@ fn an_account_rule_names_every_place_and_only_its_own_variables() {
     let catalog = Catalog::read(vec![text("acct.toml", &format!("{head}{good}"))]);
     assert!(catalog.rejected.is_empty(), "{:?}", catalog.rejected);
     let cases: Vec<(String, &str)> = vec![
+        (good.replace("usage = false\n", ""), "not a definition file"),
+        (format!("{good}unknown = false\n"), "not a definition file"),
         (
-            good.replace("usage = false\n", ""),
-            "not a definition file",
+            all("\"shared\"", "false"),
+            "account.paths.state cannot be shared",
         ),
         (
-            format!("{good}unknown = false\n"),
-            "not a definition file",
+            all("true", "false"),
+            "account.paths.state is a place, or false for none",
         ),
-        (all("\"shared\"", "false"), "account.paths.state cannot be shared"),
-        (all("true", "false"), "account.paths.state is a place, or false for none"),
         (
             all("\"{OTHER_HOME}/x\"", "false"),
             "names {OTHER_HOME}, which .vars does not",
         ),
-        (all("\"~/../x\"", "false"), "holds a folder name that is not plain"),
+        (
+            all("\"~/../x\"", "false"),
+            "holds a folder name that is not plain",
+        ),
         (all("\"/abs\"", "false"), "does not start at ~"),
         (
             all("\"{account}/x\"", "false"),

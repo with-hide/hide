@@ -366,7 +366,9 @@ pub fn read_account(name: &str, text: &str) -> Result<Option<AccountRule>, Strin
         let line = error.lines().next().unwrap_or_default().to_owned();
         format!("{name}: not a definition file: {line}")
     })?;
-    only.account.map(|account| account_rule(name, account)).transpose()
+    only.account
+        .map(|account| account_rule(name, account))
+        .transpose()
 }
 
 /// The lines of a definition file's `[account]` and `[account.*]` tables.
@@ -501,7 +503,10 @@ pub enum PathRule {
     /// One template for every profile.
     Same(Template),
     /// A template for the built-in default profile and one for the others.
-    Split { default: Template, profile: Template },
+    Split {
+        default: Template,
+        profile: Template,
+    },
 }
 
 /// A definition's `[account]`: how its accounts are told apart, the
@@ -617,7 +622,9 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         ));
     }
     if file.by != By::None && file.vars.is_empty() {
-        return Err(fail(".vars names the variable that moves the account".into()));
+        return Err(fail(
+            ".vars names the variable that moves the account".into(),
+        ));
     }
     let declared: Vec<(String, bool)> = file
         .vars
@@ -671,9 +678,10 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         });
     }
     let forbid = file.forbid.map(|forbid| forbid.vars).unwrap_or_default();
-    if let Some(bad) = forbid.iter().find(|var| {
-        !valid_variable(var) || declared.iter().any(|(declared, _)| declared == *var)
-    }) {
+    if let Some(bad) = forbid
+        .iter()
+        .find(|var| !valid_variable(var) || declared.iter().any(|(declared, _)| declared == *var))
+    {
         return Err(fail(format!(
             ".forbid: {bad:?} is not a variable name apart from .vars"
         )));
@@ -754,7 +762,12 @@ enum Side {
 /// Read one place: `~`, `{account}` or `{NAME}` (a declared variable), then
 /// `/` and folder names. `declared` is each variable with whether it has a
 /// default; the variables' own templates name none.
-fn template(text: &str, declared: &[(String, bool)], side: Side, by: By) -> Result<Template, String> {
+fn template(
+    text: &str,
+    declared: &[(String, bool)],
+    side: Side,
+    by: By,
+) -> Result<Template, String> {
     let mut words = text.split('/');
     let head = words.next().unwrap_or_default();
     let base = if head == "~" {
@@ -811,7 +824,9 @@ fn template(text: &str, declared: &[(String, bool)], side: Side, by: By) -> Resu
 pub fn valid_variable(name: &str) -> bool {
     (1..=256).contains(&name.len())
         && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 /// A variable no definition or profile moves: the home itself and Hide's own.

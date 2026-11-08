@@ -427,13 +427,12 @@ fn global_sources(node: &dyn NodeLink, home: Option<&OperatorHome>) -> Vec<Sourc
             .map(|folder| format!("{folder}/{file}"))
             .expect("the agent keeps its own folder below the home")
     };
-    let codex_name = if codex.as_deref()
-        == Some(codex_agent.place_in(home, AccountPath::State).as_path())
-    {
-        below_home(codex_agent, "AGENTS.md")
-    } else {
-        "$CODEX_HOME/AGENTS.md".to_owned()
-    };
+    let codex_name =
+        if codex.as_deref() == Some(codex_agent.place_in(home, AccountPath::State).as_path()) {
+            below_home(codex_agent, "AGENTS.md")
+        } else {
+            "$CODEX_HOME/AGENTS.md".to_owned()
+        };
     let mut documents: Vec<Source> = Vec::new();
     for (folder, name, known_as) in [
         (claude, "CLAUDE.md", below_home(claude_code, "CLAUDE.md")),

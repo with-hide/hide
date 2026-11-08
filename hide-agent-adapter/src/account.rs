@@ -20,8 +20,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::definition::{
-    ACCOUNT_PART, AccountRule, Base, By, Definition, AccountPath, PathRule, Template, reserved_variable,
-    valid_variable,
+    ACCOUNT_PART, AccountPath, AccountRule, Base, By, Definition, PathRule, Template,
+    reserved_variable, valid_variable,
 };
 
 /// The most variables a profile adds to a start (PRD agent-profiles D-29).
@@ -156,7 +156,11 @@ pub enum Os {
 
 impl Os {
     pub const fn current() -> Self {
-        if cfg!(windows) { Self::Windows } else { Self::Unix }
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
     }
 }
 
@@ -225,12 +229,18 @@ pub enum Refusal {
     NoAccountHome,
     /// The node's own value of the variable is no absolute path, which the
     /// agent would read against a folder Hide does not share.
-    NodeVariable { variable: String },
+    NodeVariable {
+        variable: String,
+    },
     /// The agent's account cannot be moved; the definition says why.
-    AccountUnsupported { reason: String },
+    AccountUnsupported {
+        reason: String,
+    },
     /// A folder for an agent that names accounts, or a name for one that
     /// keeps them in folders.
-    AccountKind { by: By },
+    AccountKind {
+        by: By,
+    },
     AccountEmpty,
     /// The folder is no absolute path on the node's system (`~` included).
     AccountRelative,
@@ -238,13 +248,21 @@ pub enum Refusal {
     AccountIsDefault,
     /// A profile name holds what is not a letter, digit, `-`, `_` or `.`.
     AccountName,
-    TooManyVariables { limit: usize },
+    TooManyVariables {
+        limit: usize,
+    },
     /// A variable's name is not a name.
     VariableName,
     /// A variable the account, the home or Hide owns.
-    VariableReserved { key: String },
-    VariableRepeated { key: String },
-    VariableValue { key: String },
+    VariableReserved {
+        key: String,
+    },
+    VariableRepeated {
+        key: String,
+    },
+    VariableValue {
+        key: String,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -271,9 +289,9 @@ impl fmt::Display for Refusal {
             Self::TooManyVariables { limit } => {
                 write!(f, "a profile adds at most {limit} variables")
             }
-            Self::VariableName => f.write_str(
-                "a variable's name is not letters, digits and _ of at most 256 bytes",
-            ),
+            Self::VariableName => {
+                f.write_str("a variable's name is not letters, digits and _ of at most 256 bytes")
+            }
             Self::VariableReserved { key } => {
                 write!(f, "{key} is the account's, the home's or Hide's own")
             }
@@ -384,7 +402,10 @@ pub fn resolve_rule(
 /// such place of its own.
 pub fn default_folder(rule: &AccountRule, path: AccountPath) -> Option<Vec<String>> {
     let template = match rule.path(path) {
-        PathRule::Same(template) | PathRule::Split { default: template, .. } => template,
+        PathRule::Same(template)
+        | PathRule::Split {
+            default: template, ..
+        } => template,
         PathRule::Absent | PathRule::Shared => return None,
     };
     let mut parts = match &template.base {

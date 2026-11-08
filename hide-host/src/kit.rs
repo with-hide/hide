@@ -668,8 +668,9 @@ mod tests {
             for (variable, _) in agents.iter() {
                 node = node.with_variable(variable, started(variable));
             }
-            let account =
-                agent.resolve(&Profile::builtin_default(agent.id), &node).unwrap();
+            let account = agent
+                .resolve(&Profile::builtin_default(agent.id), &node)
+                .unwrap();
             locations.extend(
                 AccountPath::ALL
                     .into_iter()

@@ -359,11 +359,7 @@ fn a_folder_is_set_as_spelled_with_its_final_separator() {
     let folder = format!("{}/", absolute("/accounts/a").display());
     let account = resolve(
         claude,
-        &profile(
-            "claude-code",
-            Some(AccountRef::Folder(folder.clone())),
-            &[],
-        ),
+        &profile("claude-code", Some(AccountRef::Folder(folder.clone())), &[]),
         &node(),
     )
     .unwrap();
@@ -408,9 +404,7 @@ fn the_default_profile_follows_the_variables_its_node_honours() {
             codex,
             &profile(
                 "codex",
-                Some(AccountRef::Folder(
-                    elsewhere.to_string_lossy().into_owned()
-                )),
+                Some(AccountRef::Folder(elsewhere.to_string_lossy().into_owned())),
                 &[]
             ),
             &honoured
@@ -447,7 +441,12 @@ fn each_agent_refuses_an_account_it_cannot_run_in() {
     for agent in &AGENTS {
         let definition = builtin(agent.kind).unwrap();
         let refused = |account: AccountRef| {
-            resolve(definition, &profile(agent.kind, Some(account), &[]), &node()).unwrap_err()
+            resolve(
+                definition,
+                &profile(agent.kind, Some(account), &[]),
+                &node(),
+            )
+            .unwrap_err()
         };
         match agent.by {
             By::Folder => {
@@ -506,7 +505,10 @@ fn each_agent_refuses_an_account_it_cannot_run_in() {
         ("grok", ".grok"),
     ] {
         let folder = under(&home(), default).to_string_lossy().into_owned();
-        for spelling in [folder.clone(), format!("{folder}{}", std::path::MAIN_SEPARATOR)] {
+        for spelling in [
+            folder.clone(),
+            format!("{folder}{}", std::path::MAIN_SEPARATOR),
+        ] {
             assert_eq!(
                 resolve(
                     builtin(kind).unwrap(),
@@ -567,14 +569,15 @@ fn each_agent_refuses_the_variables_a_profile_may_not_set() {
         );
         let many: Vec<(String, String)> = (0..65).map(|n| (format!("V{n}"), "x".into())).collect();
         let many: Vec<(&str, &str)> = many.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        assert_eq!(
-            refused(&many),
-            Refusal::TooManyVariables { limit: 64 }
-        );
+        assert_eq!(refused(&many), Refusal::TooManyVariables { limit: 64 });
         let fine: Vec<(String, String)> = (0..64).map(|n| (format!("V{n}"), "x".into())).collect();
         let fine: Vec<(&str, &str)> = fine.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         let at_limit = resolve(definition, &profile(agent.kind, None, &fine), &node()).unwrap();
-        assert_eq!(at_limit.key, AccountKey::Default, "a wrapper profile keeps the default account");
+        assert_eq!(
+            at_limit.key,
+            AccountKey::Default,
+            "a wrapper profile keeps the default account"
+        );
         assert_eq!(at_limit.env.len(), 64);
     }
 }
@@ -589,7 +592,13 @@ fn windows_compares_variable_names_regardless_of_case() {
         let node = NodeEnv::new(Some(home())).on(os);
         resolve(codex, &profile("codex", None, env), &node)
     };
-    for key in ["codex_home", "Home", "userprofile", "hide_state_dir", "codex_sqlite_home"] {
+    for key in [
+        "codex_home",
+        "Home",
+        "userprofile",
+        "hide_state_dir",
+        "codex_sqlite_home",
+    ] {
         assert_eq!(
             on(Os::Windows, &[(key, "x")]),
             Err(Refusal::VariableReserved {
@@ -623,7 +632,11 @@ fn an_account_folder_is_absolute_on_the_nodes_system() {
         )
         .map(|account| account.key)
     };
-    for folder in [r"C:\accounts\codex", "C:/accounts/codex", r"\\server\share\codex"] {
+    for folder in [
+        r"C:\accounts\codex",
+        "C:/accounts/codex",
+        r"\\server\share\codex",
+    ] {
         assert_eq!(
             on(Os::Windows, folder),
             Ok(AccountKey::Folder(folder.to_owned())),
@@ -631,14 +644,22 @@ fn an_account_folder_is_absolute_on_the_nodes_system() {
         );
     }
     for folder in [r"C:codex", r"\codex", "/codex", "codex"] {
-        assert_eq!(on(Os::Windows, folder), Err(Refusal::AccountRelative), "{folder}");
+        assert_eq!(
+            on(Os::Windows, folder),
+            Err(Refusal::AccountRelative),
+            "{folder}"
+        );
     }
     assert_eq!(
         on(Os::Unix, "/accounts/codex"),
         Ok(AccountKey::Folder("/accounts/codex".to_owned()))
     );
     for folder in [r"C:\accounts\codex", "codex", r"\\server\share"] {
-        assert_eq!(on(Os::Unix, folder), Err(Refusal::AccountRelative), "{folder}");
+        assert_eq!(
+            on(Os::Unix, folder),
+            Err(Refusal::AccountRelative),
+            "{folder}"
+        );
     }
 }
 
@@ -656,12 +677,19 @@ fn a_profile_resolves_only_against_its_own_agent_and_says_no_value() {
     )
     .unwrap_err();
     let said = refusal.to_string();
-    assert!(said.contains("SECRETLY") && !said.contains("topsecret"), "{said}");
+    assert!(
+        said.contains("SECRETLY") && !said.contains("topsecret"),
+        "{said}"
+    );
     // A definition with no account keeps no folder, and runs only in the
     // default account.
     let gemini = builtin("gemini").unwrap();
     let account = resolve(gemini, &Profile::builtin_default("gemini"), &node()).unwrap();
-    assert!(AccountPath::ALL.into_iter().all(|path| account.place(path) == &Place::Absent));
+    assert!(
+        AccountPath::ALL
+            .into_iter()
+            .all(|path| account.place(path) == &Place::Absent)
+    );
     assert!(matches!(
         resolve(
             gemini,

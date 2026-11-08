@@ -188,7 +188,10 @@ mod tests {
     fn codex_home_key_is_codexs_account_variable() {
         let rule = AgentId::Codex.adapter().account_rule().unwrap();
         assert_eq!(
-            rule.vars.iter().map(|var| var.name.as_str()).collect::<Vec<_>>(),
+            rule.vars
+                .iter()
+                .map(|var| var.name.as_str())
+                .collect::<Vec<_>>(),
             [CODEX_HOME_KEY]
         );
     }

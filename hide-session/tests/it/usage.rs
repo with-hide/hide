@@ -547,10 +547,7 @@ fn usage_discovery_includes_subagents_and_archived_sessions_and_refuses_escape()
 #[test]
 fn usage_codex_cache_and_reasoning_are_not_added_twice() {
     let home = tempfile::tempdir().unwrap();
-    let path = home
-        .path()
-        .join(".codex/sessions")
-        .join("rollout.jsonl");
+    let path = home.path().join(".codex/sessions").join("rollout.jsonl");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, concat!(
         "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-a\",\"cwd\":\"/work/app\"}}\n",
@@ -619,10 +616,7 @@ fn usage_grok_parent_includes_children_and_partial_cost_is_unknown() {
 #[test]
 fn usage_codex_native_responses_exclude_inherited_records_and_repeated_notifications() {
     let home = tempfile::tempdir().unwrap();
-    let path = home
-        .path()
-        .join(".codex/sessions")
-        .join("rollout.jsonl");
+    let path = home.path().join(".codex/sessions").join("rollout.jsonl");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut records = vec![
         serde_json::json!({"type":"session_meta","payload":{"id":"child","forked_from_id":"parent"}}),
@@ -652,10 +646,7 @@ fn usage_codex_native_responses_exclude_inherited_records_and_repeated_notificat
 #[test]
 fn usage_codex_legacy_fork_is_reported_and_synthetic_totals_never_count() {
     let home = tempfile::tempdir().unwrap();
-    let path = home
-        .path()
-        .join(".codex/sessions")
-        .join("rollout.jsonl");
+    let path = home.path().join(".codex/sessions").join("rollout.jsonl");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let count = serde_json::json!({"type":"event_msg","ordinal":43,"timestamp":"2026-10-01T12:00:00Z",
         "payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10},
@@ -1362,10 +1353,7 @@ fn a_grok_summary_leaves_every_step_room_for_a_whole_record_or_is_refused() {
     // Two 256-byte witness windows, checked before and after the records.
     let largest = MIB - 4 * 256 - (line + 1);
     let home = tempfile::tempdir().unwrap();
-    let dir = home
-        .path()
-        .join(".grok/sessions")
-        .join("session");
+    let dir = home.path().join(".grok/sessions").join("session");
     fs::create_dir_all(&dir).unwrap();
     let updates = dir.join("updates.jsonl");
     // A 200 KiB record: under the line cap, so it must be read whole.
