@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import "../index.css";
 import "./mobile.css";
 import { App } from "./App";
-import { openDetail, start } from "./connection";
+import { openNoticed, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { openKey } from "./protocol";
 import { hostedPhone } from "./relayRuntime";
@@ -32,7 +32,7 @@ if ("serviceWorker" in navigator) {
   // A tapped notification while the app is open: the worker names the agent (B32).
   navigator.serviceWorker.addEventListener("message", (event: MessageEvent<{ type?: string; tag?: string }>) => {
     const key = event.data?.type === "open" && event.data.tag ? openKey(event.data.tag) : null;
-    if (key) openDetail(key);
+    if (key) openNoticed(key);
   });
 }
 

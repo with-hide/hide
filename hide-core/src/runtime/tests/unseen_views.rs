@@ -188,7 +188,7 @@ fn an_agents_open_while_the_operator_is_elsewhere_puts_its_row_in_needs_you_to_l
     let look = recipient.look.as_ref().unwrap();
     assert_eq!((look.count, look.view_id.as_str()), (1, view.as_str()));
     assert_eq!(look.label, "login.ts");
-    assert_eq!(look.group, "working", "notices follow the row without it");
+    assert_eq!(look.group, "working", "the row without it");
     // B12: it is counted as the operator's turn.
     let mut counts = crate::model::MarkCountsSnapshot::default();
     recipient.mark.count_into(&mut counts);
@@ -400,29 +400,47 @@ fn a_question_takes_the_mark_and_the_view_keeps_the_row_in_needs_you_after_it() 
 }
 
 #[test]
-fn a_view_to_look_at_sends_no_phone_or_desktop_notice() {
+fn a_view_to_look_at_is_one_notice_until_seen_and_a_block_keeps_its_own() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
     keyboard(&mut guard, Some("sender"));
     let rows = |runtime: &Runtime| json!({"navigator": {"agents": serde_json::to_value(&runtime.snapshot.navigator.agents).unwrap()}});
     let mut transitions = crate::agent_state::push::Transitions::default();
-    let seeded = crate::agent_state::phone::project(&rows(&guard), crate::node::TEST_NODE);
-    transitions.observe(&seeded);
-    open(&mut guard, "recipient", "src/login.ts");
-    assert_eq!(row(&guard, "recipient").group, "needs_you");
-    // B12, D-13: the notices follow the row as it would be without the View.
-    let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
-        &rows(&guard),
-        crate::node::TEST_NODE,
-    ));
-    assert!(notices.is_empty(), "{notices:?}");
-    // A block on the same row still calls the operator.
+    let mut judge = |runtime: &Runtime| {
+        transitions.observe(&crate::agent_state::phone::project(
+            &rows(runtime),
+            crate::node::TEST_NODE,
+        ))
+    };
+    judge(&guard);
+    // Operator decision 2026-11-08: the open notifies as `볼 것` with the
+    // View's name, once.
+    let view = open(&mut guard, "recipient", "src/login.ts");
+    let (notices, _) = judge(&guard);
+    assert_eq!(
+        notices
+            .iter()
+            .map(|n| (n.status_code.as_deref(), n.detail.as_deref()))
+            .collect::<Vec<_>>(),
+        [(Some("look"), Some("login.ts"))]
+    );
+    let second = open(&mut guard, "recipient", "src/report.md");
+    assert!(judge(&guard).0.is_empty(), "a second open while unseen");
+    // A block on the same row calls the operator with its own notice.
     blocked(&mut guard, true);
-    let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
-        &rows(&guard),
-        crate::node::TEST_NODE,
-    ));
+    let (notices, _) = judge(&guard);
     assert_eq!(notices.len(), 1);
+    assert_ne!(notices[0].status_code.as_deref(), Some("look"));
+    blocked(&mut guard, false);
+    assert_eq!(judge(&guard), (Vec::new(), Default::default()));
+    // Seeing both Views takes the notice back.
+    keyboard(&mut guard, Some("recipient"));
+    look_at(&mut guard, &view);
+    look_at(&mut guard, &second);
+    assert!(!unseen(&guard, &view) && !unseen(&guard, &second));
+    let (notices, cleared) = judge(&guard);
+    assert!(notices.is_empty());
+    assert_eq!(cleared.len(), 1);
 }
 
 #[test]

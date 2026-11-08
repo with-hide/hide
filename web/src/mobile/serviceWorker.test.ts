@@ -49,6 +49,15 @@ it("shows the row's status and exact sentence, replaces by the same tag and with
   expect(phone.closed).toEqual(["old", "old", "old", "old", "old"]);
 });
 
+it("words a View to look at as the eye with the View's name, and an older page's words as the section (status-model.md, A View to look at)", async () => {
+  const phone = phoneWorker();
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_look: "볼 것" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "look", detail: "report.html", place: "project" });
+  await phone.words({ needs_you: "내 차례", done: "읽을 것" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "look", detail: "report.html", place: "project" });
+  expect(phone.shown.map(({ body }) => body)).toEqual(["볼 것 · report.html · project", "내 차례 · report.html · project"]);
+});
+
 it("words a question the core asks for the agent from its subject, in the words the page posted (hide-plan B14)", async () => {
   const phone = phoneWorker();
   await phone.words({ needs_you: "Needs your attention", done: "Done", status_question: "Question", subject_plan_review: "Plan review · {{count}} steps" });
