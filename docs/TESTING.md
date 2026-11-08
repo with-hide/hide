@@ -256,11 +256,11 @@ The Windows fixture boundaries also preserve these requirements:
 - Delete a fixture's root only after every process that used it has confirmed exit; when exit cannot be confirmed, keep the root and name it in the error, as `desktop/e2e/fixture.ts` does.
   A signal is not a confirmed exit: a stopped process holds a SIGTERM pending, and one fixture `hided` outlived its worker that way for a day.
   `stopDaemon` ends a fixture `hided` through `hide stop`, which waits for the graceful stop and then ends the daemon's tree, and continues a stopped daemon first.
-  `desktop/e2e/fixture.ts`'s `AggregateError` is the reference for reporting several cleanup failures at once.
-- A native desktop spec ends with `finishNative` (`desktop/e2e/native-teardown.ts`), never with an `AggregateError` over its body and its teardown.
+  `desktop/e2e/fixture.ts` reports several cleanup failures of its own as one `AggregateError`, which a native spec reports as one failed step (below).
+- A native desktop spec ends with `finishNative` (`desktop/e2e/native-teardown.ts`), never with its own `AggregateError` over its body and its teardown.
   It runs each named step (close the app, stop the stack) after the one before whether or not that one failed, throws the first failure itself and appends every later one with its step's name.
   Six specs once threw `AggregateError: native task list fixture or teardown failed`: the flaky report and the history classifier read the error's first line and its located `expect` diagnostic, both of which sat in a nested error, so four issues (with-hide/hide-private#515, #291, #130, #537) named no cause until someone opened the job log.
-  A failure a spec records and goes on from is named by its step with `inStep`.
+  A failure a spec records and goes on from is named by its step with `inStep`, which also spells out the inner messages of an `AggregateError` such as the fixture's.
 
 ## Writing a Playwright e2e test
 

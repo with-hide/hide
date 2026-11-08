@@ -245,7 +245,12 @@ export async function splitPane(control: HidedControl, tab: string, cwd: string,
   return created;
 }
 
-/** The phases of an operation on a tab's geometry line that the engine has not yet settled (`geometry_tab_busy`, `hide-core/src/runtime/operations.rs`). */
+/**
+ * The phases of an operation on a tab's geometry line that the engine has not yet settled.
+ * This pairs with `geometry_tab_busy` and `geometry_in_flight` in `hide-core/src/runtime/operations.rs`
+ * (queued; transmitting, awaiting_topology), whose phase names are the wire's `phase`; a phase added or
+ * renamed there is added or renamed here, or `splitPane` stops waiting for it.
+ */
 const GEOMETRY_PENDING = new Set(["queued", "preparing", "transmitting", "awaiting_topology"]);
 
 /** Whether the core's geometry line of `tab` is empty: each split, close or move asked of it is confirmed, refused or given up. */

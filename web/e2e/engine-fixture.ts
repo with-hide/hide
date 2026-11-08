@@ -382,11 +382,19 @@ async function parentOnItsSession(control: HidedControl, pane: string, runAs: (p
       // A pane the core can name but has no ledger record for is refused
       // `participant_unavailable`, which is past the observation a spawn needs;
       // only `agent_pane_required` says the observation is not laid yet.
-      return answer.status === 0 || answer.out.includes('"participant_unavailable"');
+      return answer.status === 0 || refusalCode(answer.out) === "participant_unavailable";
     }, { message: `the core to name ${pane} as a caller`, timeout: 30_000 }).toBe(true);
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nthe last answer of \`agent show here\`: ${last}`, { cause: error });
   }
+}
+
+/** The `error.code` of a failed `hide` answer (`{"ok":false,"error":{"code":...}}`), or undefined when the output is not that. */
+function refusalCode(out: string): string | undefined {
+  try {
+    const code = (JSON.parse(out) as { error?: { code?: unknown } }).error?.code;
+    return typeof code === "string" ? code : undefined;
+  } catch { return undefined; }
 }
 
 /** Waits until every agent of `panes` reads its terminal and rests, then gives the first the keyboard. */

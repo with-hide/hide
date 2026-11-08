@@ -39,3 +39,11 @@ test("a failure the body recorded and went on from is named by its step and rank
 test("a thrown value that is no Error is still reported with its text", async () => {
   expect(await message(finishNative(["plain"], [["stop the stack", () => { throw new Error("late"); }]]))).toContain("plain");
 });
+
+test("a step that failed with an AggregateError spells out the messages inside it", async () => {
+  const stop = new AggregateError([new Error("hided did not stop"), new Error("holder 12 still running")], "fixture cleanup incomplete");
+  const text = await message(finishNative([], [["stop the stack", () => { throw stop; }]]));
+  expect(text).toContain("stop the stack: fixture cleanup incomplete");
+  expect(text).toContain("hided did not stop");
+  expect(text).toContain("holder 12 still running");
+});

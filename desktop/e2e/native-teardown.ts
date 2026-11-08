@@ -10,7 +10,14 @@ export type TeardownStep = readonly [step: string, run: () => unknown];
  * from (a capture that did not land) with this, so the report names the side.
  */
 export function inStep(step: string, error: unknown): Error {
-  return new Error(`${step}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  return new Error(`${step}: ${describe(error)}`, { cause: error });
+}
+
+/** An error's message, and for an `AggregateError` (the fixture's own report of several cleanup failures) each inner message too: the cause is in them. */
+function describe(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  if (!(error instanceof AggregateError)) return error.message;
+  return `${error.message}\n${error.errors.map((inner) => `  - ${describe(inner)}`).join("\n")}`;
 }
 
 /**

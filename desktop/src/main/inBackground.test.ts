@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { inBackground } from "./inBackground";
 
 const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -8,6 +8,7 @@ describe("inBackground", () => {
   const record = (reason: unknown) => { rejections.push(reason); };
   process.on("unhandledRejection", record);
   afterEach(() => { rejections.length = 0; });
+  afterAll(() => { process.off("unhandledRejection", record); });
 
   it("hands the response to the caller", async () => {
     const answered = vi.fn();
