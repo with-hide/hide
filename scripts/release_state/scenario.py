@@ -520,9 +520,9 @@ class Scenario:
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("remains item in the detail slot", self.remains)
             self.step("sleeping device agent", self.sleep)
-            self.step("a Home started on the core and the device", self.old_home)
             self.step("agent started from the start panel", self.start_panel)
             self.step("archived session", self.archive)
+            self.step("a Home started on the core and the device", self.old_home)
             # Let the core write what it holds in memory before it stops.
             time.sleep(5)
         except Stop:
