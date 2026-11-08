@@ -14,7 +14,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { initGithubRepository } from "./github-remote";
-import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { focusTab, newTab, openProject, openWorktree, withControl, type OpenedProject } from "./daemon-actions";
 import { startEngine } from "./engine-fixture";
 import { setAgentState, startAgentInProject } from "./fixture-agents";
 import { startHided } from "./hided-fixture";
@@ -28,7 +28,7 @@ test.describe.configure({ timeout: 180_000 });
  * A project on a private engine and hided with the fake `gh`, the sidebar on
  * its PR list; `agentOn` starts a working agent in a worktree of that branch.
  */
-async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
+async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string }; project: OpenedProject }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -70,7 +70,7 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     await showSidebarPrs(page);
     const work = page.locator("[data-sidebar-prs]");
     await expect(work.locator("[data-pr-group]").first()).toBeVisible({ timeout: 30_000 });
-    await fn({ gh, work, sent, last, daemon });
+    await fn({ gh, work, sent, last, daemon, project });
   } finally {
     daemon?.stop();
     engine.stop();
@@ -220,6 +220,34 @@ test("all four extra questions failing still lists every pull request and names 
     },
     { failing: ["account", "review_requests", "merge_queue"], teamAsk: true },
   );
+});
+
+// Operator decision 2026-11-08: a 보기 slot item belongs to the Agent tab that was in front when it
+// opened. Another tab in front, here the checkout's second, shows no card and no slot button of the
+// first tab's; back in the first tab the card is there as it was.
+test("the card stays with the Agent tab it was opened in and does not follow to another tab", async ({ page }) => {
+  await openWork(page, async ({ work, daemon, project }) => {
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(1);
+    await screenshot(page, "work-pr-card-first-tab-light");
+
+    const second = await withControl(daemon, async (control) => {
+      const created = await newTab(control, project, "second");
+      await focusTab(control, project, created.tab);
+      return created;
+    });
+    // The page draws the tab the core shows a few frames after it says so.
+    for (let frame = 0; frame < 20; frame += 1) await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+    await screenshot(page, "work-pr-card-second-tab-light");
+    await expect(page.locator('aside[data-lane="detail"]')).toHaveCount(0);
+    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(0);
+
+    await withControl(daemon, (control) => focusTab(control, project, project.tab));
+    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(1);
+    expect(second.tab).not.toBe(project.tab);
+  });
 });
 
 test("the card opens in the 보기 slot and Merge goes out on the head it showed", async ({ page }) => {
