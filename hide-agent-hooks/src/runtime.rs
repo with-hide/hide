@@ -1,8 +1,10 @@
 //! Which agent runtimes Hide instruments, and the vocabulary it writes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use hide_agent_adapter::AccountPath;
+
+use crate::account::AccountAt;
 
 use serde::{Deserialize, Serialize};
 
@@ -349,21 +351,23 @@ impl AgentRuntime {
         }
     }
 
-    /// The directory whose presence means this runtime is set up on this Mac:
-    /// the default account's own folder (`AccountPath::State`) for a node
-    /// that honours no variable, whatever `CODEX_HOME` the launching shell
-    /// carries.
+    /// The directory whose presence means this runtime is set up in the
+    /// account: its own folder (`AccountPath::State`). For a home, that is
+    /// the default account's for a node that honours no variable, whatever
+    /// `CODEX_HOME` the launching shell carries.
     ///
     /// Hide installs nothing for a runtime the operator does not use: writing
     /// `~/.codex/hooks.json` on a machine with no Codex would create a file
     /// for a tool that is not there.
-    pub fn home_directory(self, home: &Path) -> PathBuf {
-        self.dialect().adapter().place_in(home, AccountPath::State)
+    pub fn home_directory<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        at.into()
+            .place(self.dialect().adapter(), AccountPath::State)
     }
 
     /// The file whose `hooks` object Hide appends to.
-    pub fn config_path(self, home: &Path) -> PathBuf {
-        self.dialect().adapter().place_in(home, AccountPath::Hooks)
+    pub fn config_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        at.into()
+            .place(self.dialect().adapter(), AccountPath::Hooks)
     }
 
     /// The file that keeps this runtime's folder trust, found from the same
@@ -374,16 +378,15 @@ impl AgentRuntime {
     /// the older `.config.json` in its folder while that file has content,
     /// which Claude Code then reads instead (its `getGlobalClaudeFile`);
     /// Codex's is the `config.toml` in its folder, which only Codex writes.
-    pub fn trust_path(self, home: &Path) -> PathBuf {
+    pub fn trust_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        let at = at.into();
         if self == Self::ClaudeCode {
-            let legacy = self.home_directory(home).join(".config.json");
+            let legacy = self.home_directory(at).join(".config.json");
             if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
                 return legacy;
             }
         }
-        self.dialect()
-            .adapter()
-            .place_in(home, AccountPath::FolderTrust)
+        at.place(self.dialect().adapter(), AccountPath::FolderTrust)
     }
 }
 
@@ -468,6 +471,7 @@ impl HookEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn the_marker_is_found_with_its_version_and_only_for_hides_own_entries() {

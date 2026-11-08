@@ -16,7 +16,7 @@ fn install(
     home: &Path,
     helper: &Path,
 ) -> Result<InstallOutcome, InstallFailure> {
-    install_any(agent, home, helper)
+    install_any(agent, home.into(), helper)
 }
 
 struct Fixture {
@@ -919,7 +919,7 @@ fn a_retired_agent_gets_no_new_hook_and_its_old_entry_comes_out() {
         let failure = super::install(agent, fixture.home(), &fixture.helper);
         assert!(failure.is_err(), "{agent:?}");
         assert!(!agent.config_path(fixture.home()).exists(), "{agent:?}");
-        install_any(agent, fixture.home(), &fixture.helper).unwrap();
+        install_any(agent, fixture.home().into(), &fixture.helper).unwrap();
         let removed = remove(agent, fixture.home(), None).unwrap();
         assert_eq!(
             removed.removed_entries,

@@ -19,6 +19,7 @@ use hide_shell::quote::POWERSHELL_QUOTES;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::account::AccountAt;
 use crate::route::HookTarget;
 use crate::runtime::{AgentRuntime, HookEvent, hook_source_id, marker_version_in};
 
@@ -112,11 +113,16 @@ const HOOKS_KEY: &str = "hooks";
 
 /// Judges one runtime's entries of the installation `install` without
 /// changing anything; another installation's entries are not looked at.
-pub fn status(runtime: AgentRuntime, home: &Path, install: Option<&str>) -> HookStatus {
-    if !runtime.home_directory(home).is_dir() {
+pub fn status<'h>(
+    runtime: AgentRuntime,
+    at: impl Into<AccountAt<'h>>,
+    install: Option<&str>,
+) -> HookStatus {
+    let at = at.into();
+    if !runtime.home_directory(at).is_dir() {
         return HookStatus::RuntimeAbsent;
     }
-    let path = runtime.config_path(home);
+    let path = runtime.config_path(at);
     let document = match read_document(&path) {
         Ok(Some(document)) => document,
         Ok(None) => return HookStatus::NotInstalled,
@@ -178,13 +184,13 @@ pub fn status(runtime: AgentRuntime, home: &Path, install: Option<&str>) -> Hook
 /// `helper` is the absolute path of the `hide-agent-hooks` executable the
 /// hook will run. It is written into the command verbatim, so the caller
 /// hands the path of the bundle that is actually running.
-pub fn install<'a>(
+pub fn install<'a, 'h>(
     runtime: AgentRuntime,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: impl Into<HookTarget<'a>>,
 ) -> Result<InstallOutcome, InstallFailure> {
     let helper = helper.into();
-    let path = runtime.config_path(home);
+    let path = runtime.config_path(at);
     let mut document =
         read_document(&path)?.unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
     let before = document.value.clone();
@@ -213,13 +219,13 @@ pub fn install<'a>(
 }
 
 /// Whether each owned entry is exactly the command this target installs.
-pub fn matches_install<'a>(
+pub fn matches_install<'a, 'h>(
     runtime: AgentRuntime,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: impl Into<HookTarget<'a>>,
 ) -> bool {
     let helper = helper.into();
-    let Ok(Some(document)) = read_document(&runtime.config_path(home)) else {
+    let Ok(Some(document)) = read_document(&runtime.config_path(at)) else {
         return false;
     };
     runtime.events().all(|event| {
@@ -239,13 +245,14 @@ pub fn matches_install<'a>(
 
 /// A generated entry for this helper at a previous state route is stale;
 /// arbitrary edits are not permission for the kit to replace the entry.
-pub fn matches_helper(
+pub fn matches_helper<'h>(
     runtime: AgentRuntime,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: &Path,
     install: Option<&str>,
 ) -> bool {
-    let Ok(Some(document)) = read_document(&runtime.config_path(home)) else {
+    let at = at.into();
+    let Ok(Some(document)) = read_document(&runtime.config_path(at)) else {
         return false;
     };
     let mut state = None;
@@ -282,10 +289,10 @@ pub fn matches_helper(
         // The entries are this helper's at another route, named for this
         // installation or written by a build that named none.
         Some(state) => HookTarget::new(helper, &state).is_ok_and(|target| {
-            matches_install(runtime, home, target)
+            matches_install(runtime, at, target)
                 || install
                     .and_then(|install| target.of_install(install).ok())
-                    .is_some_and(|target| matches_install(runtime, home, target))
+                    .is_some_and(|target| matches_install(runtime, at, target))
         }),
         // This version always installs a route. Removing it is an edit;
         // older unbound versions are upgraded by the marker-version check.
@@ -295,12 +302,12 @@ pub fn matches_helper(
 
 /// Takes out only the entries carrying Hide's marker that are the
 /// installation `install`'s ([`hook_is_mine`]).
-pub fn remove(
+pub fn remove<'h>(
     runtime: AgentRuntime,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     install: Option<&str>,
 ) -> Result<RemoveOutcome, InstallFailure> {
-    let path = runtime.config_path(home);
+    let path = runtime.config_path(at);
     let Some(mut document) = read_document(&path)? else {
         return Ok(RemoveOutcome {
             changed: false,
@@ -720,13 +727,14 @@ fn installed_helper(hooks: &Map<String, Value>, install: Option<&str>) -> Option
 /// The helper Hide's entries in `runtime`'s file name, when there are any.
 /// The kit compares it with the helper it would install, so an entry left by
 /// an app at another path is replaced rather than taken as current.
-pub fn installed_helper_path(
+pub fn installed_helper_path<'h>(
     runtime: AgentRuntime,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     install: Option<&str>,
 ) -> Option<String> {
-    let document = read_document(&runtime.config_path(home)).ok()??;
-    let hooks = hooks_object(&document, &runtime.config_path(home)).ok()??;
+    let path = runtime.config_path(at);
+    let document = read_document(&path).ok()??;
+    let hooks = hooks_object(&document, &path).ok()??;
     installed_helper(hooks, install)
 }
 
