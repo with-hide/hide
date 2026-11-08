@@ -142,6 +142,17 @@ fn a_practice_chapter_counts_its_start_and_end_once() {
     assert_eq!(statistics.take(), [practice(PracticeStage::Finished)]);
     assert!(practice_event(&mut runtime, "first-agent", 9, true));
     assert_eq!(statistics.take(), []);
+    // A flow that was folded into another sends nothing; the one it was folded into counts.
+    assert!(practice_event(&mut runtime, "screen", 9, true));
+    assert_eq!(statistics.take(), []);
+    assert!(practice_event(&mut runtime, "agents", 0, false));
+    assert_eq!(
+        statistics.take(),
+        [Event::Practice {
+            chapter: PracticeChapter::Agents,
+            stage: PracticeStage::Started
+        }]
+    );
 }
 
 /// A chapter id outside `^[a-z0-9-]{1,32}$` and a step past 255 are refused

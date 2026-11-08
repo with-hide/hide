@@ -13,7 +13,7 @@ const PR = { type: { input: FIELD, text: `#${PR_NUMBER}` } };
 // words is the palette's own ⏎, which opens the row it highlights.
 export default chapter<FindModel>({
   id: "find",
-  number: 6,
+  number: 5,
   version: 2,
   world: FIND_WORLD,
   quest: true,

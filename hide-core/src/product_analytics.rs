@@ -76,11 +76,8 @@ pub enum MissionOutcome {
 pub enum PracticeChapter {
     Mission,
     Overview,
-    Screen,
-    Switch,
+    Agents,
     Find,
-    Follow,
-    Delegate,
     Plan,
     Project,
 }
@@ -90,11 +87,8 @@ impl PracticeChapter {
         Some(match id {
             "mission" => Self::Mission,
             "overview" => Self::Overview,
-            "screen" => Self::Screen,
-            "switch" => Self::Switch,
+            "agents" => Self::Agents,
             "find" => Self::Find,
-            "follow" => Self::Follow,
-            "delegate" => Self::Delegate,
             "plan" => Self::Plan,
             "project" => Self::Project,
             _ => return None,
@@ -261,11 +255,8 @@ impl Event {
                     match chapter {
                         PracticeChapter::Mission => "mission",
                         PracticeChapter::Overview => "overview",
-                        PracticeChapter::Screen => "screen",
-                        PracticeChapter::Switch => "switch",
+                        PracticeChapter::Agents => "agents",
                         PracticeChapter::Find => "find",
-                        PracticeChapter::Follow => "follow",
-                        PracticeChapter::Delegate => "delegate",
                         PracticeChapter::Plan => "plan",
                         PracticeChapter::Project => "project",
                     },

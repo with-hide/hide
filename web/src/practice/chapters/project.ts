@@ -6,7 +6,7 @@ import { laneDrawn, PROJECT_WORLD, showsTool, type ProjectModel } from "../world
 
 export default chapter<ProjectModel>({
   id: "project",
-  number: 7,
+  number: 6,
   version: 3,
   world: PROJECT_WORLD,
   quest: true,

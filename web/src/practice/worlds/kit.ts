@@ -7,7 +7,7 @@
 import type { AgentGroup, AgentLayout } from "../../agentLayout";
 import type { AgentScope, AgentTreeScope, ProjectTasksScope } from "../../agentScope";
 import type { PaneMoveIntent } from "../../paneMove";
-import type { AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, SuggestionsSection, Workspace } from "../../snapshot";
+import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, Workspace } from "../../snapshot";
 import type { CoreEvent, WorldSnapshot } from "../world";
 
 export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
@@ -242,6 +242,49 @@ function workingState(since: number): AgentState {
     line: null, branch_badge: null, bucket: "working", attention_rank: 3, link_rank: 1, search_tone: "working", subtree: "working", link: "working",
     descendant_asking: 0, verb: "working", request_todo: false, request_since: since,
     session: { group: "working", line: null, unfinished: false }, ask: null, tree_rank: 1,
+  };
+}
+
+const tone = (kind: StatusTone["kind"], read = false): StatusTone => ({ kind, read });
+
+/**
+ * A row's state as the core states it (`row_state`), for the five ways a row
+ * stands in a practice: working, asking (a question or approval), done (a
+ * root's unread result), quiet (a finished child or a read result) and look (a
+ * finished agent whose View waits to be looked at, which stands in Needs You).
+ */
+export function rowState(kind: "working" | "asking" | "done" | "quiet" | "look", root: boolean, since: number, extra: Partial<AgentState> = {}): AgentState {
+  const base = { ...workingState(since), root };
+  if (kind === "asking" || kind === "look") {
+    Object.assign(base, {
+      attention: true, needs_you: true, title_emphasized: true, asking: kind === "asking", working: false,
+      chip_tone: tone("warning"), mark_tone: tone("warning"), bucket: "turn", attention_rank: 1, link_rank: 0, search_tone: "attention", subtree: "waiting", link: kind === "asking" ? "question" : "idle",
+      verb: kind === "asking" ? "answer" : "result", session: { group: "needs_you", line: null, unfinished: false }, tree_rank: 0,
+    } satisfies Partial<AgentState>);
+  }
+  if (kind === "done") {
+    Object.assign(base, {
+      title_emphasized: root, working: false,
+      chip_tone: tone("success"), mark_tone: tone("success"), bucket: "turn", attention_rank: 2, link_rank: 2, search_tone: "done", subtree: "unread", link: "idle",
+      verb: "result", session: { group: "done", line: null, unfinished: false }, tree_rank: 2,
+    } satisfies Partial<AgentState>);
+  }
+  if (kind === "quiet") {
+    Object.assign(base, {
+      working: false,
+      chip_tone: tone("subtle"), mark_tone: tone("subtle"), bucket: "resting", attention_rank: 4, link_rank: 2, search_tone: "muted", subtree: "quiet", link: "idle",
+      verb: "idle", session: { group: "idle", line: null, unfinished: false }, tree_rank: 3,
+    } satisfies Partial<AgentState>);
+  }
+  return { ...base, ...extra };
+}
+
+/** The request a row shows: the operator's, or, with `from`, the named agent's. */
+export function rowRequest(text: string, summary: string, at: number, from: string | null, extra: Partial<AgentRequest> = {}): AgentRequest {
+  return {
+    verb: "working", verb_since_unix_ms: at, later_by: null, pull_requests: [], request_summary: summary,
+    request: { text, cut: false, images: 0, at_unix_ms: at, sender: from ? { kind: "named", name: from } : { kind: "operator" } },
+    ...extra,
   };
 }
 

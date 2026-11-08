@@ -47,6 +47,11 @@ export type PracticeStep<M = unknown> = {
    * stays done, however the learner closes it afterwards.
    */
   shown?: string;
+  /**
+   * With `done`: the step is over only once the palette its result opened has closed again, ⏎ on a row or Esc. While
+   * it is up the guide stays on this step and says only how to use the palette, never the next step's card.
+   */
+  afterClose?: true;
   /** Done by the world on its own (`PracticeWorld.later`), an agent finishing its turn: ⏎ does nothing and the button says it waits. */
   wait?: true;
   /**
@@ -63,8 +68,10 @@ export type PracticePreviewKind = "mission" | "zones" | "split" | "switch" | "ro
 export type PracticeChapter<M = unknown> = {
   /** The catalog prefix (`practice.<id>.title`, `practice.<id>.<step>.title`) and the chapter's file name. */
   id: string;
-  /** Where the chapter stands in the list; the next chapter is the next number there is. */
+  /** The flow's number as the list shows it; the next flow is the next number there is. */
   number: number;
+  /** The flow its end card leads on to when that is not the next one in the list (the mission, where a newcomer starts, leads to the first flow). */
+  next?: string;
   /** Bumped when the steps change, so a learner's progress on the old steps reads as changed. */
   version: number;
   world: PracticeWorld<M>;

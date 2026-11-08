@@ -27,7 +27,10 @@ function listed(modules: Record<string, PracticeChapter>): PracticeChapter[] {
 
 export const CHAPTERS: readonly PracticeChapter[] = listed(files);
 
-/** The chapter after `chapter` in the list, or null after the last. */
+/** The chapter `chapter` leads on to: the one it names, else the one after it in the list, or null after the last. */
 export function nextChapter(chapter: PracticeChapter): PracticeChapter | null {
-  return CHAPTERS[CHAPTERS.indexOf(chapter) + 1] ?? null;
+  if (chapter.next === undefined) return CHAPTERS[CHAPTERS.indexOf(chapter) + 1] ?? null;
+  const named = CHAPTERS.find((row) => row.id === chapter.next);
+  if (!named) throw new Error(`Practice chapter ${chapter.id} leads on to ${chapter.next}, which no chapter is`);
+  return named;
 }

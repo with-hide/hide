@@ -34,7 +34,7 @@ export type ShellAnswer = {
 /** The window's hello and the steps it reaches; the shell's ask to play a chapter in a window that is already open. */
 export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress) | { kind: "play"; chapter: string };
 
-/** The chapter a newcomer starts on: 0, handing over a mission (`chapters/mission.ts`). */
+/** The chapter a newcomer starts on: handing over a mission (`chapters/mission.ts`). */
 export const FIRST_CHAPTER = "mission";
 
 /**

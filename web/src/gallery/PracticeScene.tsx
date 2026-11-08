@@ -7,7 +7,7 @@ import { requireInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { CHAPTERS, nextChapter } from "../practice/chapters";
 import { freshShell, PracticeHub } from "../practice/PracticeApp";
-import type { PracticeProgress } from "../practice/channel";
+import { FIRST_CHAPTER, type PracticeProgress } from "../practice/channel";
 import { standInHost } from "../practice/mount";
 import { PracticePlayer } from "../practice/PracticePlayer";
 import { PALETTE_HIDE_CLASS } from "../theme";
@@ -15,7 +15,7 @@ import { PALETTE_HIDE_CLASS } from "../theme";
 export type PracticeSceneParams = { chapter: number; hub: boolean; theme: "light" | "dark"; system: "mac" | "pc"; language: InterfaceLanguage };
 
 export function practiceSceneParams(params: URLSearchParams): PracticeSceneParams {
-  const chapter = Number(params.get("chapter") ?? "0");
+  const chapter = Number(params.get("chapter") ?? CHAPTERS.find((row) => row.id === FIRST_CHAPTER)!.number);
   if (!CHAPTERS.some((row) => row.number === chapter)) throw new Error(`Unknown practice chapter ${chapter}`);
   return { chapter, hub: params.get("view") === "hub", theme: params.get("theme") === "light" ? "light" : "dark", system: params.get("sys") === "pc" ? "pc" : "mac", language: requireInterfaceLanguage(params.get("lang") ?? "en") };
 }
@@ -23,13 +23,13 @@ export function practiceSceneParams(params: URLSearchParams): PracticeSceneParam
 const NO_CHOICES = {};
 const ignore = () => {};
 
-/** The list as a learner partway through sees it: chapter 0 seen, chapter 4 stopped partway, chapter 2 seen on older steps. */
+/** The list as a learner partway through sees it: the mission seen, the step-by-step flow stopped partway, the overview seen on older steps. */
 function sampleProgress(): PracticeProgress {
-  const at = (number: number) => CHAPTERS.find((row) => row.number === number)!;
+  const at = (id: string) => CHAPTERS.find((row) => row.id === id)!;
   return {
-    [at(0).id]: { version: at(0).version, step: at(0).steps.length - 1, finished: true },
-    [at(4).id]: { version: at(4).version, step: 4, finished: false },
-    [at(2).id]: { version: at(2).version - 1, step: 3, finished: true },
+    [at("mission").id]: { version: at("mission").version, step: at("mission").steps.length - 1, finished: true },
+    [at("plan").id]: { version: at("plan").version, step: 4, finished: false },
+    [at("overview").id]: { version: at("overview").version - 1, step: 3, finished: true },
   };
 }
 
