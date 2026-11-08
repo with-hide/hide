@@ -378,7 +378,10 @@ fn the_detail_slot_stays_with_the_agent_tab_it_was_opened_in() {
         "detail_open",
         serde_json::json!({"item": cost})
     ));
-    assert_eq!(runtime.snapshot.ui_state.detail.items, [cost.clone()]);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items,
+        std::slice::from_ref(&cost)
+    );
     assert_eq!(
         runtime.snapshot.ui_state.detail_home.as_deref(),
         Some("w-order:t1")
@@ -405,7 +408,10 @@ fn the_detail_slot_stays_with_the_agent_tab_it_was_opened_in() {
         "detail_open",
         serde_json::json!({"item": worktrees})
     ));
-    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees.clone()]);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items,
+        std::slice::from_ref(&worktrees)
+    );
 
     // Back in the first tab its card is there as it was; a click on the
     // tab's own pane keeps it.
