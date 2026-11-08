@@ -296,14 +296,18 @@ fn the_agents_switch_reinstall_and_removal_reach_every_account() {
     assert_eq!(hide_hooks(&settings), 0);
 }
 
-/// Each file a pass may write, with its bytes and its modification time.
-fn written(paths: &[PathBuf]) -> Vec<(PathBuf, Option<(Vec<u8>, std::time::SystemTime)>)> {
+/// A file as a pass would leave it: its bytes, and which file it is, which
+/// every write the kit makes changes, since each replaces the file whole.
+type Seen = Option<(Vec<u8>, hide_platform::fs::identity::FileId)>;
+
+/// Each file a pass may write, as it is now.
+fn written(paths: &[PathBuf]) -> Vec<(PathBuf, Seen)> {
     paths
         .iter()
         .map(|path| {
             let seen = std::fs::read(path)
                 .ok()
-                .map(|bytes| (bytes, std::fs::metadata(path).unwrap().modified().unwrap()));
+                .map(|bytes| (bytes, hide_platform::fs::identity::file_id(path).unwrap()));
             (path.clone(), seen)
         })
         .collect()
@@ -355,7 +359,6 @@ fn a_released_account_keeps_its_pieces_in_the_default_account_and_a_second_pass_
         ];
         let once = written(&files);
 
-        std::thread::sleep(std::time::Duration::from_millis(20));
         let second = apply(&fixture.target, &Scope::automatic());
 
         assert!(second.refused.is_none(), "{second:?}");

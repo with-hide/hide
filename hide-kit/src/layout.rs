@@ -227,6 +227,12 @@ pub fn global_instruction(state_dir: &Path) -> PathBuf {
 /// Its name, the global instruction guard's (`hide_agent_hooks::global_guard`).
 pub const GLOBAL_INSTRUCTION: &str = hide_agent_hooks::global_guard::FILE_NAME;
 
+/// The machine's agent profiles, owned by the node that runs on it (PRD
+/// agent-profiles D-04; `hide_host::profiles`).
+pub fn agent_profiles(state_dir: &Path) -> PathBuf {
+    state_dir.join("agent-profiles.json")
+}
+
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
 

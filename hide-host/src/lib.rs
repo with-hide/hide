@@ -44,6 +44,7 @@ pub mod pane_holders;
 pub mod pane_peer;
 pub mod panes;
 pub mod ports;
+pub mod profiles;
 pub mod project;
 pub mod register;
 pub mod reporting;

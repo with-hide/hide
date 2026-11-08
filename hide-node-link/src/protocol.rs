@@ -357,7 +357,12 @@ use crate::error::HostError;
 /// the other projects of the node (`others`) so the home project's walk
 /// skips them, and Home never links it; a helper on 84 would refuse the
 /// home folder as a project, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 85;
+/// 86: a node keeps its machine's agent profiles (`ProfileList`,
+/// `ProfileApply`, `ProfileInstall`, PRD agent-profiles D-04) and its kit
+/// installs into each profile's account; a helper on 85 would refuse the
+/// calls, so it upgrades, and a node the core still admits on an older
+/// protocol answers them unrun, which the core reads as no profiles there.
+pub const PROTOCOL_VERSION: u32 = 86;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -784,6 +789,27 @@ pub enum Call {
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,
+    },
+    /// The machine's agent profiles (`crate::profiles::ProfileList`), each
+    /// with its pieces as the kit judges them; `values` adds each variable's
+    /// value, for the screen that edits a profile.
+    ProfileList {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        values: bool,
+    },
+    /// Changes the machine's profiles and installs or takes out the pieces
+    /// of the accounts it touches (`crate::profiles::ProfileApplied`).
+    /// `expected_version` is the list's version the caller changes; a list
+    /// that has moved since is refused as a conflict.
+    ProfileApply {
+        /// Named `change` because a call's own tag is `op`.
+        change: crate::profiles::ProfileOp,
+        expected_version: u64,
+    },
+    /// Reinstall of one profile's pieces, even those the operator took out;
+    /// answers the list.
+    ProfileInstall {
+        id: hide_agent_adapter::ProfileId,
     },
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
@@ -1356,6 +1382,9 @@ impl Call {
             | Self::WorktreeRemove { .. }
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
+            | Self::ProfileList { .. }
+            | Self::ProfileApply { .. }
+            | Self::ProfileInstall { .. }
             | Self::HookDiagnosis
             | Self::OwedConfirmations { .. }
             | Self::HerdrSave
