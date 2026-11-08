@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import "../chapters";
 import chapter from "../chapters/agents";
 import type { CoreEvent } from "../world";
-import { AGENTS_WORLD, LEAD, REV, type AgentsModel } from "./agents";
+import { AGENTS_WORLD, KID, LEAD, REV, type AgentsModel } from "./agents";
 
 const doneAt = (id: string, model: AgentsModel) => chapter.steps.find((step) => step.id === id)!.done!(model);
 const typedInto = (pane_id: string, text: string): CoreEvent => ({ kind: "key", payload: { pane_id, bytes_base64: btoa(text) } });
@@ -77,5 +77,18 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
     const frames = AGENTS_WORLD.snapshot(AGENTS_WORLD.initial(), Date.now()).frames!;
     expect(frames.changes!.entries.map((entry) => entry.relative_path)).toContain("src/payment/timeout.ts");
     expect(doneAt("changes", apply(AGENTS_WORLD.initial(), { kind: "workspace_view", payload: { tool: "explorer" } }))).toBe(true);
+  });
+  it("starts a child under the lead when the lead is given a job, and the lead then waits on it", () => {
+    const seen = apply(looking(), focus(REV, { reveal_unseen: true }));
+    // Words to the lead before the reviewer was looked at start nothing.
+    expect(AGENTS_WORLD.panes(apply(looking(), typedInto(LEAD, "more\r")))).not.toContain(KID);
+    const model = apply(seen, typedInto(LEAD, "Add the export button\r"));
+    expect(doneAt("job", model)).toBe(true);
+    expect(AGENTS_WORLD.panes(model)).toContain(KID);
+    const lead = row(model, LEAD);
+    expect(lead.wait).toBe("children");
+    expect(lead.lineage_child_pane_ids).toEqual([KID]);
+    expect(row(model, KID)).toMatchObject({ delegated: true, lineage_parent_pane_id: LEAD });
+    expect(cards(model).find((card) => card.root === LEAD)!.members).toEqual([LEAD, KID]);
   });
 });

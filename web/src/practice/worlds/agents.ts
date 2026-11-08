@@ -14,7 +14,7 @@ import type { ProjectTasksScope } from "../../agentScope";
 import type { AgentRow, ChangesSnapshot, EditorDocumentSnapshot, EditorTabSnapshot, LayoutNode, PaneHeader, RecentClosed, ViewDisplaySnapshot } from "../../snapshot";
 import type { DirectoryList } from "../../store";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab } from "./kit";
+import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, withLineage, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 const ROOT = `/work/${PLACE.project}`;
@@ -25,21 +25,25 @@ const MINUTE = 60_000;
 export const LEAD = "lead";
 export const DOCS = "docs";
 export const REV = "rev";
+/** The agent the lead starts for part of its job: its child, in a tab of its own. */
+export const KID = "kid";
+const KID_TAB = "t4";
 
-type Role = "lead" | "docs" | "rev";
-const SESSION: Record<Role, string> = { lead: "practice-lead", docs: "practice-docs", rev: "practice-rev" };
-const TITLE: Record<Role, string> = { lead: "Fix the checkout timeout", docs: "Update the API docs", rev: "Review the checkout fix" };
+type Role = "lead" | "docs" | "rev" | "kid";
+const SESSION: Record<Role, string> = { lead: "practice-lead", docs: "practice-docs", rev: "practice-rev", kid: "practice-kid" };
+const TITLE: Record<Role, string> = { lead: "Fix the checkout timeout", docs: "Update the API docs", rev: "Review the checkout fix", kid: "Add the export button" };
 
-const roleOf = (pane: PracticePane): Role | null => (["lead", "docs", "rev"] as const).find((role) => SESSION[role] === pane.agent?.session_id) ?? null;
+const roleOf = (pane: PracticePane): Role | null => (["lead", "docs", "rev", "kid"] as const).find((role) => SESSION[role] === pane.agent?.session_id) ?? null;
 const paneOf = (model: AgentsModel, role: Role) => model.panes.find((pane) => roleOf(pane) === role) ?? null;
 
 /**
  * Where the script stands: 0 before the learner's words to the lead, 1 the
  * reviewer started, 2 the docs agent finished, 3 the reviewer asking, 4 the
  * learner's answer given and the reviewer at work, 5 the reviewer finished with
- * a View to look at, 6 the View looked at.
+ * a View to look at, 6 the View looked at, 7 the lead given a job of its own
+ * and its child started for part of it.
  */
-export type AgentsStage = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type AgentsStage = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 /** How long each of the agents' own turns takes before the next stage, by the stage it ends. */
 export const BEATS: Partial<Record<AgentsStage, number>> = { 1: 2200, 2: 2200, 4: 2800 };
@@ -117,6 +121,17 @@ function startReviewer(model: AgentsModel): AgentsModel {
     panes: [...model.panes, rev],
     tabs: model.tabs.map((tab) => (panesOf(tab.root).includes(LEAD) ? { ...tab, root: { type: "split", direction: "right", ratio: 0.5, first: tab.root, second: { type: "pane", pane_id: REV } } as LayoutNode, zoomed: false } : tab)),
     recent: [...model.recent, REV],
+  };
+}
+
+/** The child the lead starts for part of a job: a delegated agent in a tab of its own, which Hide keeps off the strip. */
+function startKid(model: AgentsModel): AgentsModel {
+  const kid: PracticePane = { id: KID, title: TITLE.kid, agent: placeholder("kid", KID, "codex", false) };
+  return {
+    ...model,
+    panes: [...model.panes, kid],
+    tabs: [...model.tabs, { id: KID_TAB, name: null, root: { type: "pane", pane_id: KID }, focused: KID, zoomed: false }],
+    groups: model.groups.map((group) => (group.id === null ? { ...group, tabs: [...group.tabs, KID_TAB] } : group)),
   };
 }
 
@@ -207,6 +222,7 @@ function submit(model: AgentsModel, paneId: string): AgentsModel {
   if (!text) return cleared;
   const role = roleOf(model.panes.find((pane) => pane.id === paneId)!);
   if (role === "lead" && model.stage === 0) return to({ ...startReviewer(cleared), said: [...model.said, text] }, 1);
+  if (role === "lead" && model.stage === 6) return to({ ...startKid(cleared), said: [...model.said, text] }, 7);
   if (role === "rev" && model.stage === 3) return to({ ...cleared, answer: text }, 4);
   return role === "lead" ? { ...cleared, said: [...model.said, text] } : cleared;
 }
@@ -292,7 +308,15 @@ function rowOf(model: AgentsModel, role: Role, paneId: string, nowMs: number): A
   const stage = model.stage;
   const base = { pane_id: paneId, identity_label: TITLE[role], session_id: SESSION[role] };
   if (role === "lead") {
-    return agent({ ...base, agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "3m", requires_close_confirmation: true, state: rowState("working", true, nowMs - 3 * MINUTE), request: request("lead", nowMs - 3 * MINUTE) });
+    const lead = agent({ ...base, agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "3m", requires_close_confirmation: true, state: rowState("working", true, nowMs - 3 * MINUTE), request: request("lead", nowMs - 3 * MINUTE) });
+    if (stage < 7) return lead;
+    // With a child at work the lead waits on it: the line says `자식 기다림 · 자식 1개 작업 중`, and the row folds the child under it (status-model.md, A quiet row that waits).
+    const line = { text: "", mode: "waiting" as const, tone: { kind: "working" as const, read: true } };
+    return { ...lead, mark: "waiting", status_code: "waiting", wait: "children", lineage_child_pane_ids: [KID], lineage_collapsed: true, direct_child_counts: KID_COUNTS, descendant_counts: KID_COUNTS, state: { ...lead.state, waits_on_children: true, line, subtree: "waiting" } };
+  }
+  if (role === "kid") {
+    const kid = agent({ ...base, agent_kind: "codex", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1s", delegated: true, lineage_parent_pane_id: LEAD, lineage_path_pane_ids: [LEAD], lineage_depth: 1, state: rowState("working", false, nowMs), request: request("kid", nowMs) });
+    return kid;
   }
   if (role === "docs") {
     const at = nowMs - 8 * MINUTE;
@@ -317,6 +341,8 @@ function rowOf(model: AgentsModel, role: Role, paneId: string, nowMs: number): A
   return agent({ ...common, group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1m", state: rowState("working", true, at) });
 }
 
+const KID_COUNTS = { error: 0, approval: 0, question: 0, working: 1, done: 0 };
+
 const REVIEW_VIEW = "view-review";
 const REVIEW_FILE = "review-notes.md";
 const REVIEW_PATH = `${ROOT}/${REVIEW_FILE}`;
@@ -334,6 +360,7 @@ function headerOf(model: AgentsModel, role: Role | null): PaneHeader {
     if (model.stage >= 5) return { working: false, notice: null, band: null, request: { text: TITLE.rev, images: 0 }, finished: true, progress: "The review notes are ready" };
     return { working: true, notice: null, band: null, request: { text: TITLE.rev, images: 0 }, progress: "Reading src/payment/timeout.ts" };
   }
+  if (role === "kid") return { working: true, notice: null, band: null, request: { text: TITLE.kid, images: 0 }, progress: "Writing src/export/button.tsx" };
   return { working: false, notice: null, band: null };
 }
 
@@ -347,7 +374,7 @@ function tasks(model: AgentsModel, nowMs: number): ProjectTasksScope {
   const stage = model.stage;
   const rev = stage === 3 ? card("rev", "needs_you", 0, model.looked ? { read: true } : {}) : stage === 5 ? card("rev", "needs_you", 0) : stage === 6 ? card("rev", "resting", 0) : card("rev", "working", 1);
   const docs = card("docs", stage >= 2 ? "done" : "working", stage >= 2 ? 1 : 8);
-  const cards = [...rev.filter((one) => one.state === "needs_you"), ...card("lead", "working", 3), ...rev.filter((one) => one.state !== "needs_you"), ...docs];
+  const cards = [...rev.filter((one) => one.state === "needs_you"), ...card("lead", "working", 3).map((one) => (model.stage >= 7 ? { ...one, members: [...one.members, KID] } : one)), ...rev.filter((one) => one.state !== "needs_you"), ...docs];
   return { cards, needs_you: cards.filter((one) => one.state === "needs_you").length, recency: at(0) };
 }
 
@@ -431,13 +458,16 @@ function snapshot(model: AgentsModel, nowMs: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model: desk }], PLACE.project, nowMs);
   const navigator = drawn.rest.navigator!;
   const scope = { ...navigator.devices![0]!.agent_scope, tasks: tasks(model, nowMs) };
+  // The lead's child is drawn under it in the lists, as the core draws a delegated child.
+  const lineage = model.stage >= 7 ? withLineage(drawn.rest, LEAD, [KID]) : drawn.rest;
+  const kids = lineage.navigator!;
   return {
     ...drawn,
     rest: {
-      ...drawn.rest,
-      navigator: { ...navigator, devices: navigator.devices!.map((device) => ({ ...device, agent_scope: scope })), changes_root_path: ROOT },
-      ui_state: { ...drawn.rest.ui_state, sidebar_lens: "tasks", recent_pane_ids: model.recent, expanded_paths: model.expanded },
-      workspace_view: viewOf(model, drawn.rest.workspace_view!),
+      ...lineage,
+      navigator: { ...kids, devices: kids.devices!.map((device) => ({ ...device, agent_scope: { ...device.agent_scope, tasks: scope.tasks } })), changes_root_path: ROOT },
+      ui_state: { ...lineage.ui_state, sidebar_lens: "tasks", recent_pane_ids: model.recent, expanded_paths: model.expanded },
+      workspace_view: viewOf(model, lineage.workspace_view!),
       recent_closed: recentClosed(model),
       terminal: { headers },
     },
@@ -465,7 +495,7 @@ function leadScreen(model: AgentsModel, cols: number): string {
   ];
   if (model.stage >= 1) {
     rows.push(...said(model.said[0]!), `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --beside --name reviewer …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.rev} beside this pane`);
-    for (const later of model.said.slice(1)) rows.push(...said(later), `${CLAUDE}●${RESET} Noted.`);
+    model.said.slice(1).forEach((later, at) => rows.push(...said(later), ...(model.stage >= 7 && at === 0 ? [`${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --parent here --name export …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.kid}, waiting for it`] : [`${CLAUDE}●${RESET} Noted.`])));
   }
   rows.push("", `${CLAUDE}✻ ${DIM}Working… (esc to interrupt)${RESET}`, "", rule(cols), `${DIM}>${RESET} ${model.draftIn === paneOf(model, "lead")?.id ? model.draft : ""}`, rule(cols));
   return rows.join("\r\n");
@@ -488,6 +518,10 @@ function revScreen(model: AgentsModel, cols: number): string {
   return rows.join("\r\n");
 }
 
+function kidScreen(cols: number): string {
+  return ["", `${CODEX}✻${RESET} ${BOLD}Codex${RESET}`, `  ${DIM}~/${PLACE.project} · ${PLACE.branch}${RESET}`, ...said("Add the export button to the orders page"), `${DIM}•${RESET} Editing src/export/button.tsx…`, "", rule(cols), `${DIM}›${RESET} `].join("\r\n");
+}
+
 export const AGENTS_WORLD: PracticeWorld<AgentsModel> = {
   initial,
   apply,
@@ -502,6 +536,6 @@ export const AGENTS_WORLD: PracticeWorld<AgentsModel> = {
   screen: (model, paneId, cols) => {
     const pane = model.panes.find((row) => row.id === paneId)!;
     const role = roleOf(pane);
-    return role === "lead" ? leadScreen(model, cols) : role === "docs" ? docsScreen(model) : role === "rev" ? revScreen(model, cols) : shellScreen(PLACE);
+    return role === "lead" ? leadScreen(model, cols) : role === "docs" ? docsScreen(model) : role === "rev" ? revScreen(model, cols) : role === "kid" ? kidScreen(cols) : shellScreen(PLACE);
   },
 };

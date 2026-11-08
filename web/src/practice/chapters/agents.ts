@@ -2,7 +2,7 @@
 // for in words, opened beside it, what lands in Needs You (a question)
 // and what goes to Unread (finished work), a file an agent opened for the
 // learner to look at, closing an agent and reopening it, the keyboard going
-// back to the agent used before, and the files the lead changed.
+// back to the agent used before, a child the lead starts for part of a job, and the files the lead changed.
 
 import { chapter } from "../chapter";
 import { AGENTS_WORLD, inReviewer, LEAD, REV, reopenedAsClosed, showsExplorer, type AgentsModel } from "../worlds/agents";
@@ -16,7 +16,7 @@ const say = (pane: string, text: string) => ({ type: { pane, text } });
 export default chapter<AgentsModel>({
   id: "agents",
   number: 2,
-  version: 3,
+  version: 4,
   world: AGENTS_WORLD,
   quest: true,
   preview: "rows",
@@ -38,6 +38,9 @@ export default chapter<AgentsModel>({
     { id: "look", quest: true, target: REVIEWER_ROW, side: "right", gesture: { click: true }, done: (model) => model.viewed },
     // Pressing the row opened what the agent opened in Documents; the step names it and what it can show.
     { id: "viewer", target: '[data-lane-tool="documents"]', side: "left" },
+    // A job given to the lead: it starts a child for part of it, which sits under the lead in the list, unlike the reviewer started beside.
+    { id: "job", quest: true, target: pane(LEAD), side: "inside", gesture: say(LEAD, "Add the export button. Split it up and hand parts out"), done: (model) => model.stage >= 7 },
+    { id: "child", target: row(LEAD), side: "right" },
     { id: "changes", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: showsExplorer },
   ],
 });
