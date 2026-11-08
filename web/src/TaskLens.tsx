@@ -247,7 +247,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
           <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
-            {band.missions.map((ask) => <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />)}
+            {band.missions.map((ask) => <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />)}
             {rows(band.trees)}
           </ul>
         </Fragment>

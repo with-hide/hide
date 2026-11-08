@@ -8,7 +8,8 @@ import { markWords, rowAccessibleName } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { askWhat } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { MissionAskChoices, MissionAskLine, useMissionAsks } from "./components/sidebar-mission-row";
+import { KindIcon } from "./components/kind-mark";
+import { MissionAskChoices, MissionAskLine, useMissionAsks, useMissionPlace } from "./components/sidebar-mission-row";
 import type { MissionAsk } from "./missions";
 import { Button } from "./components/ui/button";
 import { Kbd } from "./components/ui/kbd";
@@ -512,8 +513,10 @@ function ProjectColumn({ deviceId, projectId, model, query, setQuery, hidden, to
 /** A mission waiting on the operator with no row to carry it, as the Overview lists it. */
 function OverviewMissionAsk({ ask, actions }: { ask: MissionAsk; actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  const place = useMissionPlace(ask);
+  // The mission's mark stands where an agent's logo does on the asks under it, and its project where theirs is.
   return <div className="og-ask" data-graph-mission-ask={ask.mission.id}>
-    <Button variant="text" size="inline" className="og-ask-who flex justify-start font-normal" aria-label={[ask.mission.title, t("mission.attention"), ask.node.title].join(", ")} onClick={() => actions.openMission(ask.mission.id)}><StatusMark mark="turn" /><span>{ask.mission.title}</span></Button>
+    <Button variant="text" size="inline" className="og-ask-who flex justify-start font-normal" aria-label={[ask.mission.title, t("mission.attention"), ask.node.title, place].filter(Boolean).join(", ")} onClick={() => actions.openMission(ask.mission.id)}><KindIcon kind="mission" className="size-(--size-agent-badge-compact)" /><span>{ask.mission.title}</span>{place ? <small>{place}</small> : null}</Button>
     <p><MissionAskLine ask={ask} /></p>
     <MissionAskChoices ask={ask} actions={actions} />
   </div>;

@@ -223,6 +223,13 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
   const mission = container.querySelector<HTMLElement>("[data-mission-ask]")!;
   expect(mission.getAttribute("data-mission-ask")).toBe("mission-1");
   expect([...mission.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["이어받기", "끝으로"]);
+  // It reads as a task row does: how long it has waited, and its project where a 상태별 row names it.
+  expect(mission.querySelector("[data-mission-ask-elapsed]")).not.toBeNull();
+  expect(mission.querySelector("[data-mission-ask-place]")?.textContent ?? null).toBe(view === "status" ? "herdr-ide" : null);
+  // The mission's mark stands in the logo's place only while the rows draw their logos.
+  expect(mission.querySelector('[data-kind-icon="mission"]')).toBeNull();
+  await act(async () => useShellStore.setState({ rest: { ...rest, ui_state: { ...rest.ui_state!, agent_logo_mode: "shown" } } }));
+  expect(container.querySelector('[data-mission-ask] [data-kind-icon="mission"]')).not.toBeNull();
   if (view === "status") {
     expect(heads(container)).toEqual(["내 차례2", "작업 중1"]);
     // The mission row stands first in 내 차례, and the arrow keys reach it as a row.
