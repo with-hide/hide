@@ -11,6 +11,9 @@ import { RevisitStar, starred } from "./components/revisit-mark";
 import { MissionAskChoices, MissionAskLine, useMissionAsks } from "./components/sidebar-mission-row";
 import type { MissionAsk } from "./missions";
 import { Button } from "./components/ui/button";
+import { Kbd } from "./components/ui/kbd";
+import { EmptyWelcome } from "./components/empty-welcome";
+import { commandLabel } from "./shortcutLabels";
 import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
 import { between, cloud, communicationLines, exchangeLines, lineageLines, projectAccent, teamOutline, turnLines, type Area, type Orb } from "./overviewGraphLines";
 import { Hint } from "./components/ui/tooltip";
@@ -406,20 +409,36 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     teams: [...new Set([...[...points].flatMap(([id, point]) => point.team !== id ? [point.team] : []), ...model.quietBranches.keys()])].flatMap((root) => { const key = sessionKeyOf(root); return key ? [key] : []; }),
   });
   const resetLayout = () => { layout.reset(); cameraInitialized.current = false; actions.changeOverviewGraph({ kind: "reset_places", scope }); };
+  // With no session awake there is nothing to filter or arrange: the map gives its place to the one next step.
+  const awake = model.allAgents.filter((row) => graphActivity(row.agent) !== "resting").length;
+  const inScope = projectId ? projects.filter((project) => project.workspace.id === projectId) : projects;
+  const startsIn = inScope.length === 1 ? inScope[0] : undefined;
+  const startChord = commandLabel("start_agent");
+  const showEvery = () => actions.changeOverviewGraph({ kind: "focus", focus: "all", include_resting: true });
   const showList = mode === "list" || layout.phase === "failed" || !size;
   return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase}>
-    <div className="og-toolbar">
-      <div><h2>{t("overviewGraph.title")}</h2></div>
-      <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
-    </div>
-    <div className="og-filters">
-      <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
-      <label><input type="checkbox" checked={includeResting} onChange={(event) => setIncludeResting(event.target.checked)} />{t("overviewGraph.includeResting")}</label>
-    </div>
-    {model.limited ? <p className="og-notice" role="status">{t("overviewGraph.limit", { count: LAYOUT_NODE_LIMIT })}</p> : null}
-    {model.agents.length > 0 && layout.phase === "loading" && mode === "graph" ? <p className="og-notice" role="status">{t("overviewGraph.loading")}</p> : null}
-    {model.agents.length > 0 && layout.phase === "failed" && mode === "graph" ? <div className="og-notice" role="status"><span>{t("overviewGraph.failed")}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>{t("overviewGraph.retry")}</Button></div> : null}
-    {model.agents.length === 0 ? <div className="og-empty"><p>{t(model.allAgents.length > 0 ? "overviewGraph.filteredEmpty" : "overviewGraph.empty")}</p>{model.allAgents.length > 0 ? <Button variant="outline" size="sm" onClick={() => actions.changeOverviewGraph({ kind: "focus", focus: "all", include_resting: true })}>{t("overviewGraph.resetFilters")}</Button> : null}<Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
+    {awake === 0 && model.agents.length === 0 ? (
+      <EmptyWelcome pose="agents" title={t("overviewGraph.welcome")} detail={startsIn ? t("overviewGraph.welcomeWhere", { project: startsIn.workspace.label }) : undefined} data-graph-welcome="true">
+        <span className="flex items-center gap-sm">
+          <Button onClick={() => actions.openStartPanel(startsIn?.workspace.id)} data-graph-welcome-action="start_agent">{t("overviewGraph.newAgent")}</Button>
+          {startChord ? <Kbd aria-hidden="true">{startChord}</Kbd> : null}
+        </span>
+        {model.allAgents.length > 0 ? <Button variant="ghost" size="sm" onClick={showEvery} data-graph-welcome-action="show_resting">{t("overviewGraph.showResting", { count: model.allAgents.length })}</Button> : null}
+      </EmptyWelcome>
+    ) : <>
+      <div className="og-toolbar">
+        <div><h2>{t("overviewGraph.title")}</h2></div>
+        <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
+      </div>
+      <div className="og-filters">
+        <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
+        <label><input type="checkbox" checked={includeResting} onChange={(event) => setIncludeResting(event.target.checked)} />{t("overviewGraph.includeResting")}</label>
+      </div>
+      {model.limited ? <p className="og-notice" role="status">{t("overviewGraph.limit", { count: LAYOUT_NODE_LIMIT })}</p> : null}
+      {model.agents.length > 0 && layout.phase === "loading" && mode === "graph" ? <p className="og-notice" role="status">{t("overviewGraph.loading")}</p> : null}
+      {model.agents.length > 0 && layout.phase === "failed" && mode === "graph" ? <div className="og-notice" role="status"><span>{t("overviewGraph.failed")}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>{t("overviewGraph.retry")}</Button></div> : null}
+      {model.agents.length === 0 ? <div className="og-empty"><p>{t("overviewGraph.filteredEmpty")}</p><Button variant="outline" size="sm" onClick={showEvery}>{t("overviewGraph.resetFilters")}</Button><Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
+    </>}
     {/* A mission no row carries waits on the operator with no session drawn too (PRD mission-node-simple B14). */}
     {model.agents.length === 0 ? <OverviewMissionAsks deviceId={scopedDevice} projectId={projectId} actions={actions} /> : null}
     {model.agents.length > 0 ? <div className="og-stage">
