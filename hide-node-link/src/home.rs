@@ -18,4 +18,9 @@ pub struct HomeRetired {
     /// Entries the marker listed that now hold something else, left as the
     /// operator's.
     pub changed: Vec<String>,
+    /// Why the cleanup of a folder Hide made (its marker was found) could not
+    /// finish, when it could not: the folder is still there, and a later call
+    /// retries. Failures before the marker was found are errors of the call.
+    #[serde(default)]
+    pub failure: Option<String>,
 }

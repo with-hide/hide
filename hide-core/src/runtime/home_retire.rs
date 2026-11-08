@@ -153,12 +153,15 @@ impl Runtime {
     }
 
     /// The helper's answer. A folder Hide made that stays becomes the
-    /// ordinary project `hide`, saved before the helper is asked to remove its
-    /// marker (`settle`), so a stop in between is asked again with the same
-    /// answer; a folder that is gone takes the registration with it; a folder
-    /// with no marker changes nothing (B8). A failure of a helper that tried
-    /// leaves the project as the ordinary `hide` project and only the log
-    /// hears of it, and the next launch asks again (B11).
+    /// ordinary project `hide`; the helper is asked to remove its marker
+    /// (`settle`) only once a save that holds the name has finished, so a stop
+    /// in between is asked again with the same answer. A folder that is gone
+    /// takes the registration with it; a folder with no marker changes
+    /// nothing (B8). A cleanup the helper began on a folder it found Hide's
+    /// marker in, and could not finish, leaves the ordinary `hide` project and
+    /// only the log hears of it; the next launch asks again (B11). A failure
+    /// before the marker was found says nothing about the folder, so the
+    /// registration is not touched.
     pub(crate) fn ingest_home_retired(
         &mut self,
         device: &str,
@@ -168,14 +171,9 @@ impl Runtime {
         let retired = match retired {
             Ok(retired) => retired,
             Err(error) => {
-                if matches!(error, LinkError::Refused(_)) {
-                    // The helper tried and could not finish: not asked again
-                    // this launch, and the project is the one the operator
-                    // keeps working in.
-                    self.rename_old_homes(device);
-                    self.persist_ui_state();
-                } else {
-                    // A link that dropped is asked again when it is back.
+                // A refusal is not asked again this launch; a link that
+                // dropped is asked again when it is back.
+                if !matches!(error, LinkError::Refused(_)) {
                     self.home_retiring.remove(device);
                 }
                 self.log_home_retire_failure(device, "home.retire_failed", &error.to_string());
@@ -193,14 +191,16 @@ impl Runtime {
                 "name": name,
             }));
         }
+        if let Some(failure) = &retired.failure {
+            self.log_home_retire_failure(device, "home.retire_failed", failure);
+            self.rename_old_homes(device);
+            self.persist_ui_state();
+            return;
+        }
         if retired.kept && retired.marked && !settle {
             self.rename_old_homes(device);
-            // Saved before the marker goes: the answer is not lost to a stop.
+            self.home_settling.insert(device.to_owned());
             self.persist_ui_state();
-            let keep_empty = self.home_kept_open(device).unwrap_or(true);
-            if !self.ask_home_retire(device, keep_empty, true) {
-                self.home_retiring.remove(device);
-            }
             return;
         }
         let settled: Vec<String> = self
@@ -216,6 +216,7 @@ impl Runtime {
             .home_retire
             .retain(|retirement| retirement.device_id != device);
         self.home_retiring.remove(device);
+        self.home_settling.remove(device);
         if retired.kept {
             if retired.marked {
                 for registration_id in &settled {
@@ -231,6 +232,46 @@ impl Runtime {
         }
         if !removed {
             self.persist_ui_state();
+        }
+    }
+
+    /// A save finished, holding `saved`: a device whose old Home was renamed
+    /// and whose saved state holds the name (or the registration gone) may now
+    /// have its marker removed. A failed save settles nothing; a later one
+    /// that holds the name does.
+    pub(super) fn acknowledge_home_rename(
+        &mut self,
+        saved: &crate::model::UiStateSnapshot,
+        saved_ok: bool,
+    ) {
+        if !saved_ok || self.home_settling.is_empty() {
+            return;
+        }
+        let devices: Vec<String> = self.home_settling.iter().cloned().collect();
+        for device in devices {
+            let named = saved
+                .home_retire
+                .iter()
+                .filter(|retirement| retirement.device_id == device)
+                .all(|retirement| {
+                    saved
+                        .workspace_registrations
+                        .iter()
+                        .find(|registration| registration.id == retirement.registration_id)
+                        .is_none_or(|registration| registration.label != OLD_HOME_LABEL)
+                });
+            let pending = saved
+                .home_retire
+                .iter()
+                .any(|retirement| retirement.device_id == device);
+            if !named || !pending {
+                continue;
+            }
+            self.home_settling.remove(&device);
+            let keep_empty = self.home_kept_open(&device).unwrap_or(true);
+            if !self.ask_home_retire(&device, keep_empty, true) {
+                self.home_retiring.remove(&device);
+            }
         }
     }
 

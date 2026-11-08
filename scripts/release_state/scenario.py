@@ -434,18 +434,33 @@ class Scenario:
         ids = []
         for device in (False, True):
             known = {row.get("id") for row in self.home_rows(self.daemon.snapshot())}
-            self.send("agent_start_in_checkout", {"home": True, "provider": "claude", "request_id": self.rid("home"),
-                                                  **({"device_id": self.device} if device else {})})
+            rows = None
+            # The core runs one task operation at once, so a start sent while
+            # the one before is still opening its pane is refused as busy; it
+            # is sent again until it is taken.
+            for _ in range(12):
+                seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+                self.send("agent_start_in_checkout", {"home": True, "provider": "claude", "request_id": self.rid("home"),
+                                                      **({"device_id": self.device} if device else {})})
 
-            def registered(rest):
-                fresh = [row for row in self.home_rows(rest) if row.get("id") not in known]
-                error = (rest.get("status") or {}).get("last_error") or {}
-                if fresh:
-                    return fresh
-                if "home" in str(error.get("kind")) or "invalid" in str(error.get("kind")):
-                    return error
-                return None
-            rows = self.wait(registered, "the Home registration", 120)
+                def registered(rest):
+                    fresh = [row for row in self.home_rows(rest) if row.get("id") not in known]
+                    error = (rest.get("status") or {}).get("last_error") or {}
+                    if fresh:
+                        return fresh
+                    if error == seen:
+                        return None
+                    if "busy" in str(error.get("kind")):
+                        return "busy"
+                    if "home" in str(error.get("kind")) or "invalid" in str(error.get("kind")):
+                        return error
+                    return None
+                rows = self.wait(registered, "the Home registration", 30)
+                if rows != "busy":
+                    break
+                time.sleep(5)
+            if rows == "busy" or rows is None:
+                raise Stop("the Home start stayed busy")
             if isinstance(rows, dict):
                 raise NotInRelease(rows)
             ids.extend(row.get("id") for row in rows)

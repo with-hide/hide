@@ -1801,6 +1801,10 @@ pub struct Runtime {
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
     /// The devices whose old Home retirement is with their helper now.
     home_retiring: HashSet<String>,
+    /// Devices whose old Home was renamed to `hide` and is waiting for a save
+    /// that holds the name before its helper is asked to remove the marker
+    /// (`home_retire.rs`).
+    home_settling: HashSet<String>,
     /// The catalog and root index most recently accepted from the sync
     /// coordinator, reused when a later precomputation arrives stale so the
     /// reconcile never rebuilds under the runtime lock.
@@ -2596,6 +2600,7 @@ impl Runtime {
             pane_move_preview: Default::default(),
             task_pane_shell: None,
             home_retiring: HashSet::new(),
+            home_settling: HashSet::new(),
             last_accepted_catalog: None,
             catalog_paths,
             catalog_from_coordinator: false,

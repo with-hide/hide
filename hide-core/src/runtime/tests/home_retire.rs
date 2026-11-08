@@ -526,6 +526,50 @@ fn an_old_home_with_an_open_pane_stays_as_the_hide_project() {
     assert!(!Path::new(&home).join(".hide-home.json").exists());
 }
 
+/// B10: the helper is asked to remove the marker only after a save that holds
+/// the project's new name has finished. A save that fails settles nothing, so
+/// a stop then leaves the marker and asks the first call again; the next save
+/// that holds the name lets the marker go.
+#[test]
+fn the_marker_goes_only_after_a_save_holding_the_new_name_finished() {
+    let machine = machine();
+    let home = old_home(&machine);
+    std::fs::write(Path::new(&home).join("notes.md"), "mine").unwrap();
+    let (shared, id) = runtime_with_old_home(&machine, &home, false);
+    let good = shared.lock().unwrap().state_path.clone();
+    let blocker = machine.user_home.join("blocker");
+    std::fs::write(&blocker, "a file, not a folder").unwrap();
+    shared.lock().unwrap().state_path = blocker.join("state.json");
+    shared.lock().unwrap().request_home_retirements();
+    wait_for("the first call", || {
+        machine.asked.load(std::sync::atomic::Ordering::SeqCst) == 1
+    });
+    wait(&shared, "the project named hide", |runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .any(|registration| registration.id == id && registration.label == "hide")
+    });
+    // The save failed: no second call, and the marker is still there.
+    wait(&shared, "the failed save", |runtime| {
+        !runtime.state_save_active && !runtime.state_save_pending
+    });
+    assert_eq!(machine.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(Path::new(&home).join(".hide-home.json").exists());
+    // A save that works holds the name, and only then is the marker removed.
+    shared.lock().unwrap().state_path = good;
+    shared.lock().unwrap().persist_ui_state();
+    wait_for("the second call", || {
+        machine.asked.load(std::sync::atomic::Ordering::SeqCst) == 2
+    });
+    wait(&shared, "the retirement's answer", |runtime| {
+        runtime.snapshot.ui_state.home_retire.is_empty()
+    });
+    assert!(!Path::new(&home).join(".hide-home.json").exists());
+}
+
 /// B8: a `~/hide` with no marker is not Hide's: nothing on disk or in the
 /// registration changes, and the answer settles the pending entry.
 #[test]
