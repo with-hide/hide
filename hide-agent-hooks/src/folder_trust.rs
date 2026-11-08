@@ -651,8 +651,11 @@ mod antigravity {
 
     const KEY: &str = "trustedWorkspaces";
 
+    /// agy's folder trust in its account (`AccountPath::FolderTrust`).
     pub(super) fn settings_path(home: &Path) -> PathBuf {
-        crate::antigravity::app_data(home).join("settings.json")
+        hide_agent_adapter::AgentId::Antigravity
+            .adapter()
+            .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
     }
 
     fn entries<'a>(

@@ -110,11 +110,6 @@ pub fn valid_conversation(id: &str) -> bool {
         })
 }
 
-/// agy's own folder of conversations, under the account's home.
-pub fn app_data(home: &Path) -> PathBuf {
-    home.join(hide_session::antigravity::FOLDER)
-}
-
 /// The transcript agy writes for `conversation`. The path is built from the
 /// id rather than read from the payload's `transcriptPath`, so a hook never
 /// opens a file outside agy's own folder.

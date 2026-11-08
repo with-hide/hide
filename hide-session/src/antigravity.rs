@@ -15,10 +15,6 @@ use serde_json::Value;
 use crate::source::facts::Header;
 use crate::{ConversationEvent, DiscoveryBudget, EventKind, LineResult, ReadRefusal, SessionError};
 
-/// agy's own folder under the home folder.
-pub const FOLDER: &str = ".gemini/antigravity-cli";
-/// The folder of agy's conversation folders.
-pub const SESSIONS: &str = ".gemini/antigravity-cli/brain";
 /// A conversation's transcript, below its folder.
 const TRANSCRIPT: [&str; 3] = [".system_generated", "logs", "transcript_full.jsonl"];
 const DATABASE: &str = "conversation_summaries.db";
@@ -38,6 +34,32 @@ const REASONS: crate::sqlite::Reasons = crate::sqlite::Reasons {
     work: "antigravity_db_work_capacity",
 };
 
+/// The folder of agy's conversation folders below the home: its account's
+/// `sessions` place. agy keeps no account of its own (`by = "none"`), so the
+/// place is the same below every home.
+fn sessions() -> &'static Path {
+    static SESSIONS: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    SESSIONS.get_or_init(|| {
+        let adapter = hide_agent_adapter::AgentId::Antigravity.adapter();
+        adapter
+            .account_rule()
+            .and_then(|rule| {
+                hide_agent_adapter::default_folder(rule, hide_agent_adapter::AccountPath::Sessions)
+            })
+            .expect("agy's definition keeps its sessions below the home")
+            .iter()
+            .collect()
+    })
+}
+
+/// agy's own folder below the home: the one its conversation folders sit in,
+/// beside its index and its conversation stores.
+fn app() -> &'static Path {
+    sessions()
+        .parent()
+        .expect("agy's conversation folders sit in its own folder")
+}
+
 /// agy names a conversation by a lowercase UUID.
 pub fn valid_id(id: &str) -> bool {
     id.len() == 36
@@ -54,7 +76,7 @@ pub fn valid_id(id: &str) -> bool {
 pub fn transcript(home: &Path, id: &str) -> PathBuf {
     TRANSCRIPT
         .iter()
-        .fold(home.join(SESSIONS).join(id), |path, name| path.join(name))
+        .fold(directory(home, id), |path, name| path.join(name))
 }
 
 /// The conversation id a transcript path names.
@@ -68,7 +90,7 @@ pub(crate) fn id_of(path: &Path) -> Option<&str> {
 
 /// Conversation `id`'s own folder.
 pub(crate) fn directory(home: &Path, id: &str) -> PathBuf {
-    home.join(SESSIONS).join(id)
+    home.join(sessions()).join(id)
 }
 
 /// The conversation folder a transcript path lies in.
@@ -78,7 +100,8 @@ pub(crate) fn directory_of(path: &Path) -> Option<&Path> {
 
 /// The home folder a transcript path lies in.
 fn home_of(path: &Path) -> Option<&Path> {
-    path.ancestors().nth(TRANSCRIPT.len() + 4)
+    path.ancestors()
+        .nth(TRANSCRIPT.len() + 1 + sessions().components().count())
 }
 
 /// `path` resolved, refused unless it is exactly a conversation's
@@ -87,8 +110,8 @@ pub(crate) fn checked_path(
     home: &Path,
     path: &Path,
 ) -> std::result::Result<PathBuf, crate::RootRefusal> {
-    let checked = crate::native_file::checked_path_under(home, Path::new(SESSIONS), path)?;
-    let root = hide_platform::fs::identity::canonical(&home.join(SESSIONS))
+    let checked = crate::native_file::checked_path_under(home, sessions(), path)?;
+    let root = hide_platform::fs::identity::canonical(&home.join(sessions()))
         .map_err(|_| crate::RootRefusal::Outside)?;
     let relative = checked
         .strip_prefix(root)
@@ -166,8 +189,8 @@ fn with_index<T>(
 ) -> std::result::Result<T, ReadRefusal> {
     crate::sqlite::with_read(
         home,
-        Path::new(FOLDER),
-        &home.join(FOLDER).join(DATABASE),
+        app(),
+        &home.join(app()).join(DATABASE),
         &REASONS,
         SQL_STEPS,
         read,
@@ -209,8 +232,8 @@ pub(crate) struct IndexBusy;
 pub(crate) fn checkout(home: &Path, id: &str) -> std::result::Result<Option<PathBuf>, IndexBusy> {
     let found = crate::sqlite::with_read(
         home,
-        Path::new(FOLDER),
-        &home.join(FOLDER).join(DATABASE),
+        app(),
+        &home.join(app()).join(DATABASE),
         &REASONS,
         SQL_STEPS,
         |db| {
@@ -343,7 +366,7 @@ pub(crate) fn worked_folders(
     home: &Path,
     since_unix_ms: u64,
 ) -> std::result::Result<Vec<(PathBuf, u64)>, String> {
-    if std::fs::symlink_metadata(home.join(FOLDER).join(DATABASE))
+    if std::fs::symlink_metadata(home.join(app()).join(DATABASE))
         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     {
         return Ok(Vec::new());
@@ -427,7 +450,7 @@ pub(crate) fn confirm_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> R
         return Err(anyhow!("session_route_unconfirmed"));
     }
     let store = home
-        .join(FOLDER)
+        .join(app())
         .join("conversations")
         .join(format!("{id}.db"));
     if !std::fs::symlink_metadata(store).is_ok_and(|metadata| metadata.is_file()) {
@@ -600,7 +623,7 @@ mod tests {
         let path = transcript(home.path(), id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"").unwrap();
-        let index = home.path().join(FOLDER).join(DATABASE);
+        let index = home.path().join(app()).join(DATABASE);
         Connection::open(&index)
             .unwrap()
             .execute_batch(include_str!(
