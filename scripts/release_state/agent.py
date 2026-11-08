@@ -1,6 +1,7 @@
-"""A stand-in Claude Code for a release-state container, started as `claude`.
+"""The stand-in agents of a release-state container, started as `claude` or
+`pi` (`agent.c` passes the name it was started as first).
 
-It reports its session through the release's own hook program as Claude Code
+As `claude` it reports its session through the release's own hook program as Claude Code
 does (SessionStart, then UserPromptSubmit and Stop around each turn), keeps a
 minimal Claude transcript under `~/.claude/projects/`, and draws Claude's
 prompt box so the engine reads it as waiting for input.
@@ -14,6 +15,8 @@ A line typed into it that starts with `!` is run as a shell command with the
 pane's environment, the way an agent runs `hide ...`; its result is appended
 to `/tmp/release-state-agents/<session>.jsonl` for the scenario to read. Any
 other line is a prompt: recorded and answered with an empty turn.
+
+As `pi` it does what Pi with Hide's extension does in a pane (`pi_main`).
 """
 
 import json
@@ -113,7 +116,9 @@ def print_mode(argv):
 
 
 def main():
-    argv = sys.argv[1:]
+    persona, argv = sys.argv[1], sys.argv[2:]
+    if persona == "pi":
+        return pi_main(argv)
     if "--version" in argv or "-v" in argv:
         print(VERSION)
         return 0
@@ -173,6 +178,91 @@ def main():
         prompt_box()
     hook("SessionEnd", reason="other")
     return 0
+
+
+# The extension's version, which the released helper answers only when it is
+# its own: `hide_agent_hooks::pi_extension::VERSION` in 1.2.3 and 1.2.4.
+PI_EXTENSION = 15
+PI_VERSION = "1.0.4"
+
+
+def pi_main(argv):
+    """A stand-in Pi 1.0.4 with Hide's extension, for the sleep that closes
+    the pane (Pi's dormant sleep): Pi's session file in its default folder
+    for the checkout (`~/.pi/agent/sessions/--<cwd>--/<time>_<id>.jsonl`,
+    a version 3 header naming the id and cwd, then the turns as messages),
+    which the release's own reader proves the session by; the session and
+    each turn told to the release's helper as Hide's extension tells it
+    (`hide-agent-hooks pi session|turn`, the file's path as the session);
+    and Pi's idle screen. `--session <id>` resumes that session's file.
+    A line typed into it is a prompt, a line starting with `!` run as
+    `agent.py` runs it."""
+    if "--version" in argv or "-v" in argv:
+        print(PI_VERSION)
+        return 0
+    hooks = next((str(path) for path in HOOKS if path.exists()), None)
+    if hooks is None:
+        print("no hook program", file=sys.stderr)
+        return 1
+    cwd = os.getcwd()
+    folder = Path.home() / ".pi/agent/sessions" / ("--" + cwd.lstrip("/").replace("/", "-") + "--")
+    folder.mkdir(parents=True, exist_ok=True)
+    resumed = argv[argv.index("--session") + 1] if "--session" in argv[:-1] else None
+    session = resumed or str(uuid.uuid4())
+    found = sorted(folder.glob(f"*_{session}.jsonl")) if resumed else []
+    if found:
+        transcript = found[0]
+    else:
+        transcript = folder / (time.strftime("%Y-%m-%dT%H-%M-%S-000Z", time.gmtime()) + f"_{session}.jsonl")
+        with transcript.open("w") as file:
+            file.write(json.dumps(dict(type="session", version=3, id=session, timestamp=stamp(), cwd=cwd)) + "\n")
+    results = Path("/tmp/release-state-agents") / f"{session}.jsonl"
+    results.parent.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "PATH": ":".join(PATH_EXTRA + [os.environ.get("PATH", "/usr/bin:/bin")])}
+    parent = [None]
+
+    def helper(operation, **fields):
+        subprocess.run([hooks, "pi", operation], input=json.dumps(dict(version=PI_EXTENSION, **fields)),
+                       text=True, capture_output=True, timeout=30, env=env)
+
+    def record(role, text):
+        entry = uuid.uuid4().hex[:8]
+        message = dict(role=role, content=[dict(type="text", text=text)], timestamp=int(time.time() * 1000))
+        if role == "assistant":
+            message.update(provider="stand-in", model="stand-in", stopReason="stop")
+        with transcript.open("a") as file:
+            file.write(json.dumps(dict(type="message", id=entry, parentId=parent[0], timestamp=stamp(),
+                                       message=message)) + "\n")
+        parent[0] = entry
+
+    def idle_screen():
+        rule = "─" * 40
+        print(f"{rule}\n\n{rule}\n~/{Path(cwd).name} (main)\n$0.000 0.0%/200k (auto)    stand-in", flush=True)
+
+    helper("session", session_id=str(transcript))
+    idle_screen()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        helper("turn", session_id=str(transcript), turn="working")
+        record("user", line)
+        if line.startswith("!"):
+            command = line[1:].strip()
+            done = subprocess.run(["bash", "-c", command], text=True, capture_output=True, env=env, cwd=cwd)
+            with results.open("a") as file:
+                file.write(json.dumps(dict(command=command, rc=done.returncode, out=done.stdout, err=done.stderr)) + "\n")
+            print(f"$ {command}\n{done.stdout}{done.stderr}[rc={done.returncode}]", flush=True)
+            record("assistant", f"ran it: rc={done.returncode}")
+        else:
+            record("assistant", "noted")
+        helper("turn", session_id=str(transcript), turn="done")
+        idle_screen()
+    return 0
+
+
+def stamp():
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
 
 
 if __name__ == "__main__":

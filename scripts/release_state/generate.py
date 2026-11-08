@@ -113,7 +113,7 @@ OPERATOR_SETTINGS = json.dumps({
 
 def setup(tag, work, names):
     image, network, core, device = names
-    for name in ("Dockerfile", "agent.py", "claude.c"):
+    for name in ("Dockerfile", "agent.py", "agent.c"):
         shutil.copy(HERE / name, work / name)
     (work / "settings.json").write_text(OPERATOR_SETTINGS)
     docker("build", "-q", "-t", image, str(work))
