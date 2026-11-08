@@ -186,6 +186,17 @@ it("narrows to the project the chip chose, leaves the project's name off its row
   expect(sent.filter((event) => event.kind === "sidebar_project_set").map((event) => event.payload)).toEqual([{ project: null }]);
 });
 
+it("narrowed to another project, leaves the mission out of 내 차례 and counts it in the other projects' +N", async () => {
+  const agents = [row("ask", {}, { group: "needs_you" })];
+  const rest = withMissionAsk(snapshot(agents, [card("ask", "needs_you", "site-main")]), "local", Date.UTC(2026, 10, 1));
+  rest.navigator!.workspaces![1]!.agent_scope = { ...emptyScope(), tasks: { cards: [card("ask", "needs_you", "site-main")], needs_you: 1, recency: "" } };
+  rest.ui_state = { ...rest.ui_state!, sidebar_project: { device_id: "local", workspace_id: "site" } };
+  const { container } = await render(rest, agents);
+  expect(rows(container)).toEqual(["ask"]);
+  expect(container.querySelector("[data-mission-ask]")).toBeNull();
+  expect(container.querySelector("[data-sidebar-project-elsewhere]")?.textContent).toBe("+1");
+});
+
 it("in 프로젝트별 draws one group per project, the asking project first, with no project name on the rows and a state label over each band (B6; status-marks B32)", async () => {
   const agents = [row("a"), row("b", {}, { group: "needs_you" }), row("c"), row("d")];
   const cards = [card("a", "working", "hide-main"), card("b", "needs_you", "site-main"), card("c", "done", "hide-main"), card("d", "waiting", "hide-main")];

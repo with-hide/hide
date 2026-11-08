@@ -5,6 +5,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { MissionTakeOver } from "../MissionTakeOver";
 import { cn } from "../lib/utils";
 import { missionAsks, projectAsks, type MissionAsk } from "../missions";
+import type { SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { AskLine } from "./agent-tree";
 import { AttentionChoices } from "./mission-attention";
@@ -22,6 +23,13 @@ export function useMissionAsks(deviceId: string | null | undefined, projectId: s
   const ids = useShellStore((s) => (deviceId ? deviceScope(s.rest, deviceId)?.mission_asks : undefined));
   const missions = useShellStore((s) => (s.rest?.missions?.failed ? null : s.rest?.missions?.items) ?? null);
   return useMemo(() => (missions && ids ? projectAsks(missionAsks(missions, ids), projectId) : []), [missions, ids, projectId]);
+}
+
+/** `useMissionAsks` read once from a snapshot, for a count drawn outside a render's subscription. */
+export function deviceMissionAsks(rest: SnapshotRest | null, deviceId: string): MissionAsk[] {
+  const missions = rest?.missions?.failed ? null : rest?.missions?.items;
+  const ids = deviceScope(rest, deviceId)?.mission_asks;
+  return missions && ids ? missionAsks(missions, ids) : [];
 }
 
 /** The line a carried ask reads, for the mission's oldest waiting node: `확인 필요 · <node> · <why>`, `외 N건`. */
