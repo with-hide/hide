@@ -643,6 +643,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         status_working: "작업 중",
         status_done: "끝남",
         status_idle: "쉬는 중",
+        status_look: "볼 것",
         status_unknown: "상태 모름",
         status_waiting: "대기",
         status_stopped: "멈춤",
