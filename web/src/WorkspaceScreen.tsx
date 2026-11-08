@@ -1,3 +1,4 @@
+import { useOffersReconnect } from "./centerReconnect";
 import { ServerIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -412,6 +413,8 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
   const session = status?.session ?? null;
   const front = useShellStore((s) => s.rest?.workspace_view);
   const view = useMemo(() => remoteView(session, front), [session, front]);
+  // The reconnect below, in the empty surface or the stale band, is the one the sidebar then leaves out.
+  useOffersReconnect(device && !deviceAwayLine(device, name, t).toRow && canRetryDevice(device, status ?? undefined) && (!view || status?.state !== "connected") ? device.id : null);
   if (!device) return null;
   const connected = status?.state === "connected";
   const away = deviceAwayLine(device, name, t);

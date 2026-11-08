@@ -1,3 +1,4 @@
+import { useCenterReconnect } from "./centerReconnect";
 import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
@@ -337,11 +338,13 @@ function useFocusRowPane(): string | null {
   return useMemo(() => (workspaceScreen ? sidebarFocusPane(focusedPaneId, agents, drawn) : null), [workspaceScreen, focusedPaneId, agents, drawn]);
 }
 
-/** A selected device the core cannot read: its name, why, and the one way to try again, with the last tree left out (PRD home-device-rail B8, B9). */
+/** A selected device the core cannot read: its name, why, and the way to try again unless the center already offers it, with the last tree left out (PRD home-device-rail B8, B9). */
 function DisconnectedDevice({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const deviceId = useShellStore((s) => frontDeviceId(s.rest));
   const label = useShellStore((s) => machineName(s.rest?.navigator?.devices, frontDeviceId(s.rest), t));
+  // The center's own reconnect for this device is the one; a second here would be the same action twice.
+  const centerOffers = useCenterReconnect((s) => (s.shown[deviceId] ?? 0) > 0);
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-sm px-md text-center" data-device-disconnected={deviceId}>
       <ServerIcon aria-hidden="true" className="size-(--size-icon-lg) text-subtle-foreground" />
@@ -351,10 +354,12 @@ function DisconnectedDevice({ actions }: { actions: Actions }) {
       <span role="status" className="text-caption text-muted-foreground">
         {t("devices.state.unavailable")}
       </span>
-      <Button variant="secondary" size="sm" data-device-reconnect={deviceId} onClick={() => actions.retryDevice(deviceId)}>
-        <RefreshCwIcon aria-hidden="true" />
-        {t("sidebar.reconnect")}
-      </Button>
+      {centerOffers ? null : (
+        <Button variant="secondary" size="sm" data-device-reconnect={deviceId} onClick={() => actions.retryDevice(deviceId)}>
+          <RefreshCwIcon aria-hidden="true" />
+          {t("sidebar.reconnect")}
+        </Button>
+      )}
     </div>
   );
 }
