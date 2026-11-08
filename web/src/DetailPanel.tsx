@@ -26,8 +26,8 @@ import { useShellStore } from "./store";
 // software-factory-conductor D-14), a session's plan (PRD hide-plan B11),
 // a project's worktrees or cost (PRD lane-two-columns B30, B31), or a
 // Hide AI branch's card (PRD hide-ai-branch-first-apply B4), a
-// window's and no checkout's, so
-// it stays when the Agent tab or the checkout changes. The core keeps what
+// the front Agent tab's: each tab keeps its own and
+// another tab in front shows its own or none. The core keeps what
 // it holds and its history; this draws the item in front under the slot's
 // head of ←, its name, GitHub for a card, and ✕.
 

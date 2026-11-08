@@ -347,3 +347,121 @@ fn the_detail_slot_keeps_the_newest_twenty_items_and_reopening_one_moves_it_forw
     assert_eq!(items.last(), Some(&record(5)));
     assert_eq!(items.iter().filter(|item| **item == record(5)).count(), 1);
 }
+
+/// The slot belongs to the Agent tab it was opened in (operator decision
+/// 2026-11-08): another tab in front shows its own slot or none, coming back
+/// finds the card as it was, and a closed tab takes its slot with it.
+#[test]
+fn the_detail_slot_stays_with_the_agent_tab_it_was_opened_in() {
+    let checkout_path = "/private/tmp/hide-slot-per-tab";
+    let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
+    runtime.ingest_session(Ok(tab_order_payload(
+        checkout_path,
+        &tabs,
+        &tabs,
+        "w-order:t1",
+    )));
+    let cost = DetailItem::Cost {
+        workspace_id: "workspace:order".into(),
+    };
+    let worktrees = DetailItem::Worktrees {
+        workspace_id: "workspace:order".into(),
+    };
+    let front = |runtime: &mut Runtime, tab: &str| {
+        assert!(runtime.dispatch_json(&operator_focus_event(&format!("{tab}:p"))));
+    };
+
+    front(&mut runtime, "w-order:t1");
+    assert!(event(
+        &mut runtime,
+        "detail_open",
+        serde_json::json!({"item": cost})
+    ));
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [cost.clone()]);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_home.as_deref(),
+        Some("w-order:t1")
+    );
+
+    // Another tab in front: no card of its own, so none shows; the first
+    // tab's card is kept for it.
+    front(&mut runtime, "w-order:t2");
+    assert_eq!(
+        runtime.snapshot.ui_state.detail,
+        crate::model::DetailSlot::default(),
+        "the other tab's card never follows"
+    );
+    assert!(
+        !event(
+            &mut runtime,
+            "detail_show",
+            serde_json::json!({"shown": true})
+        ),
+        "the rail's 보기 has nothing of this tab's to bring forward"
+    );
+    assert!(event(
+        &mut runtime,
+        "detail_open",
+        serde_json::json!({"item": worktrees})
+    ));
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees.clone()]);
+
+    // Back in the first tab its card is there as it was; a click on the
+    // tab's own pane keeps it.
+    front(&mut runtime, "w-order:t1");
+    front(&mut runtime, "w-order:t1");
+    let slot = &runtime.snapshot.ui_state.detail;
+    assert_eq!(
+        (slot.items.as_slice(), slot.shown),
+        ([cost.clone()].as_slice(), true)
+    );
+    front(&mut runtime, "w-order:t2");
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees]);
+
+    // A tab that closes takes its slot, and nothing is re-homed to another.
+    let remaining = ["w-order:t1", "w-order:t3"];
+    let mut closed = tab_order_payload(checkout_path, &remaining, &remaining, "w-order:t1");
+    closed.focused_pane_id = None;
+    runtime.ingest_session(Ok(closed));
+    front(&mut runtime, "w-order:t1");
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
+    assert!(
+        runtime.snapshot.ui_state.detail_tabs.is_empty(),
+        "the closed tab's slot is gone: {:?}",
+        runtime.snapshot.ui_state.detail_tabs
+    );
+}
+
+/// A slot an older build kept window-wide attaches to the tab in front when
+/// the first event arrives, and stays there.
+#[test]
+fn a_window_wide_detail_slot_from_an_older_build_attaches_to_the_front_tab() {
+    let checkout_path = "/private/tmp/hide-slot-per-tab-old";
+    let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    let cost = DetailItem::Cost {
+        workspace_id: "workspace:order".into(),
+    };
+    // As a launch loads it: a slot, and no tab it belongs to yet.
+    runtime.snapshot.ui_state.detail.open(cost.clone());
+    assert_eq!(runtime.snapshot.ui_state.detail_home, None);
+    let tabs = ["w-order:t1", "w-order:t2"];
+    runtime.ingest_session(Ok(tab_order_payload(
+        checkout_path,
+        &tabs,
+        &tabs,
+        "w-order:t2",
+    )));
+
+    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_home.as_deref(),
+        Some("w-order:t2")
+    );
+    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail,
+        crate::model::DetailSlot::default()
+    );
+}

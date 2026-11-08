@@ -845,7 +845,7 @@ impl Runtime {
 
     /// The tab the front Workspace shows and whether it is delegated: Hide's
     /// choice on this machine, the one the node's engine has in front on a node.
-    fn front_visible_tab(&self, key: &WorkspaceKey) -> Option<(String, bool)> {
+    pub(super) fn front_visible_tab(&self, key: &WorkspaceKey) -> Option<(String, bool)> {
         if key.0 == self.node.as_str() {
             let tab_id = self.focused_visible_tab_id()?;
             let delegated = self

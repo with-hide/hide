@@ -1,9 +1,13 @@
 //! The sidebar's lens, 태스크 view option and project, and the lane's 보기
 //! slot (PRD sidebar-task-lens D-10, D-11, D-25, D-48, D-50): one
-//! window-level UI value each, kept in `core-state.json` with the rest of the UI state. The slot
-//! holds a pull request's card or a session's record, belongs to no checkout
-//! and no Agent tab, and starts the read of what it shows on the event that
-//! opens it, so one operator action is one event.
+//! UI value each (the slot one per Agent tab), kept in `core-state.json` with
+//! the rest of the UI state. The slot
+//! holds a pull request's card or a session's record, belongs to the Agent
+//! tab that was in front when it was opened (`ui_state.detail_home`), and
+//! starts the read of what it shows on the event that opens it, so one
+//! operator action is one event. `ui_state.detail` is always the front tab's
+//! slot: another tab coming in front swaps its own in (`sync_detail_home`),
+//! so every reader and the wire see one slot.
 
 use super::*;
 use crate::model::{
@@ -284,7 +288,7 @@ impl Runtime {
             return false;
         }
         if detail.shown == shown {
-            // The slot is the window's: shown, it may still stand in a
+            // The slot is the front tab's: shown, it may still stand in a
             // checkout whose own lane is closed, or behind a stacked lane's
             // tool, and the button brings it forward (B22, B11, B19).
             if shown {
@@ -329,21 +333,90 @@ impl Runtime {
         }
     }
 
-    /// Takes out of the slot the items whose subject is gone (a deleted
-    /// session's plan, a mission no longer kept); a slot this empties is
-    /// left as ✕ leaves it, what stood under the slot in the viewing column
+    /// Takes out of every tab's slot the items whose subject is gone (a
+    /// deleted session's plan, a mission no longer kept); a slot this empties
+    /// is left as ✕ leaves it, what stood under the slot in the viewing column
     /// or the column closed (lane-two-columns B13). Whether anything was
     /// taken.
     pub(super) fn drop_detail_items(&mut self, keep: impl Fn(&DetailItem) -> bool) -> bool {
-        let slot = &mut self.snapshot.ui_state.detail;
-        let had = slot.items.len();
-        slot.items.retain(|item| keep(item));
-        if slot.items.len() == had {
+        let state = &mut self.snapshot.ui_state;
+        let mut taken = false;
+        for slot in std::iter::once(&mut state.detail).chain(state.detail_tabs.values_mut()) {
+            let had = slot.items.len();
+            slot.items.retain(|item| keep(item));
+            if slot.items.len() == had {
+                continue;
+            }
+            taken = true;
+            if slot.items.is_empty() {
+                slot.shown = false;
+            }
+        }
+        state.detail_tabs.retain(|_, slot| !slot.items.is_empty());
+        if taken {
+            self.persist_ui_state();
+        }
+        taken
+    }
+
+    /// Keeps `ui_state.detail` the slot of the Agent tab in front (operator
+    /// decision 2026-11-08): the slot a tab opened stays with it while the
+    /// operator clicks about inside the tab, another tab in front shows its
+    /// own slot or none, and a tab that closed takes its slot with it. With
+    /// no Workspace in front nothing moves. After a launch, a slot kept
+    /// window-wide by an older build attaches to the tab then in front.
+    /// Whether anything changed.
+    pub(super) fn sync_detail_home(&mut self) -> bool {
+        let Some(front) = self
+            .front_workspace_key()
+            .and_then(|key| self.front_visible_tab(&key))
+            .map(|(tab_id, _delegated)| tab_id)
+        else {
+            return false;
+        };
+        // The tabs the catalog carries now; before it carries any (a launch
+        // before the session arrives) no slot is judged closed.
+        let open: BTreeSet<&str> = self
+            .catalog_workspaces()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter_map(|tab| tab.id.as_deref())
+            .collect();
+        let judge = !open.is_empty();
+        let gone = |tab: &str| judge && !open.contains(tab);
+        let state = &self.snapshot.ui_state;
+        let stale: Vec<String> = state
+            .detail_tabs
+            .keys()
+            .filter(|tab| gone(tab))
+            .cloned()
+            .collect();
+        let home_gone = state.detail_home.as_deref().is_some_and(gone);
+        let home_moved = state.detail_home.as_deref() != Some(front.as_str());
+        if stale.is_empty() && !home_moved {
             return false;
         }
-        if slot.items.is_empty() {
-            slot.shown = false;
+        let state = &mut self.snapshot.ui_state;
+        for tab in &stale {
+            state.detail_tabs.remove(tab);
         }
+        if !home_moved {
+            self.persist_ui_state();
+            return true;
+        }
+        let before = state.detail.top().cloned();
+        match state.detail_home.replace(front.clone()) {
+            // The first tab in front adopts the slot as it was loaded.
+            None => {}
+            Some(home) => {
+                let leaving = std::mem::take(&mut state.detail);
+                if !home_gone && leaving != crate::model::DetailSlot::default() {
+                    state.detail_tabs.insert(home, leaving);
+                }
+                state.detail = state.detail_tabs.remove(&front).unwrap_or_default();
+            }
+        }
+        self.read_detail_top(before.as_ref(), false);
         self.persist_ui_state();
         true
     }
