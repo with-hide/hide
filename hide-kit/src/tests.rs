@@ -15,6 +15,7 @@ use stand_ins::program;
 mod agent_cases;
 mod codex_trust_cases;
 mod herdr_cases;
+mod profile_cases;
 mod retired_cases;
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
@@ -143,6 +144,7 @@ impl Fixture {
             retirement_projects: Vec::new(),
             legacy: Vec::new(),
             stop: Arc::default(),
+            profiles: None,
         };
         Self {
             _dir: dir,

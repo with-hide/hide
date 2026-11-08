@@ -1251,6 +1251,27 @@ The two coexist once both installations run a build with this rule.
 An installation still on an earlier build treats every Hide entry, plugin file, the `hide` link and the whole record as its own, and can take the other's away until it updates.
 What stays shared: the skill stubs and the folder trust Hide records for Grok, agy, Pi and Codex, so switching one of those agents off in one installation removes the trust recorded for both, and the next start Hide makes trusts the folder again.
 
+### Profile accounts
+
+A profile whose account is not its agent's default ([ARCHITECTURE.md](ARCHITECTURE.md#agent-profiles-and-accounts)) gets the agent's pieces in that account too: its hook (the entries in the hook file, Grok's and agy's hook files, or the plugin or extension script) and, for an agent that keeps its skills in its own folder (Claude Code), Hide's skill stubs.
+The skill folder every agent shares (`~/.agents/skills`) is the default account's alone, so a profile adds nothing there.
+Every place comes from `hide_agent_adapter::resolve` for a node that honours none of the agent's variables, and the hook code takes it as an `AccountAt` (`hide-agent-hooks/src/account.rs`), so neither crate names an account folder.
+A pass takes the profiles from the node's profile file ([ARCHITECTURE.md](ARCHITECTURE.md#the-nodes-profile-file)), the ones in use and the ones being removed (`KitTarget::profiles`), and answers each profile's place and pieces (`ProfileReport`, `hide-kit/src/targets.rs`).
+
+The kit record keeps what each installation put in an account by target.
+The default account's pieces stay in `installed`, where every earlier build reads and writes them, and the built-in default profile refers to them for good, so no profile's removal takes them out.
+Every other account is a target under the installation's `targets`, keyed by the agent and the agent's own folder there (the `state` place) as the file system names it, with the pieces put there and the profiles that refer to it.
+Profiles whose folders are one folder, however each spells it, are one target: it is installed into once, its pieces come out when the last profile that refers to it goes, and the record forgets it once they are out.
+A target whose pieces could not all come out stays recorded with no profile, and the next pass tries again; the profile being removed reports why meanwhile.
+A profile whose folder is the default account's by another spelling, such as a link to `~/.claude`, is the default account's, which only the agent's switch changes.
+A record from before profiles has no `targets` and reads as the default target alone, so an upgrade writes nothing new into it; an earlier build drops `targets` when it saves, and the next pass of this build finds Hide's pieces in place and records them again.
+
+Every rule of the default account holds in a profile account: only Hide's marked entries and unedited files are written or taken out, by the same code with its source check, link keeping and atomic replacement; a piece the operator took out stays out until a Reinstall asks for it (of the agent's part, or of that profile, `ProfileInstall`); switching the agent off takes its pieces out of every account and switching it on puts them back; removing the device takes them out of every target the record holds.
+Hide writes in a profile account only while every folder from the one the profile named down to the agent's own folder is a real folder, not a link, that belongs to this account and that no other account can change; otherwise each piece reads Failed with that reason and nothing is written.
+The default account keeps the checks it always had, so an account whose `~/.claude` is group-writable, as a Linux umask of 002 leaves it, is not refused by an update.
+Codex's trust of Hide's entries is asked of the account's own Codex, in that account's `config.toml`, as for the default account.
+Taking a profile account's pieces out leaves its folder trust alone: Hide records folder trust only in the default account.
+
 ## Testing
 
 The operator's real `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/hooks.json` and `~/.codex/config.toml` are never a test target.

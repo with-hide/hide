@@ -15,9 +15,10 @@
 //! until the next pass or Reinstall.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use hide_agent_hooks::account::AccountAt;
 use hide_agent_hooks::codex_trust::{
     HookEntry, TrustFailure, TrustFailureKind, TrustOutcome, trust_own_hooks,
 };
@@ -40,6 +41,17 @@ fn memory() -> std::sync::MutexGuard<'static, BTreeMap<PathBuf, String>> {
 /// asked of a machine with no Codex, and a Codex with no hook trust says
 /// nothing (D-07).
 pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> {
+    ensure_at(target, AccountAt::Home(&target.home), &target.home, herdr)
+}
+
+/// [`ensure`] for the Codex account `at`, remembered by `key`: the home for
+/// the default account, a profile account's folder for its own.
+pub(crate) fn ensure_at(
+    target: &KitTarget,
+    at: AccountAt<'_>,
+    key: &Path,
+    herdr: &[HookEntry],
+) -> Option<String> {
     let helper = target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME);
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target = match hide_agent_hooks::route::HookTarget::new(&helper, &state)
@@ -47,34 +59,38 @@ pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> 
     {
         Ok(target) => target,
         Err(reason) => {
-            memory().insert(target.home.clone(), reason.to_owned());
+            memory().insert(key.to_path_buf(), reason.to_owned());
             return Some(reason.to_owned());
         }
     };
     let reason = match target.codex.as_ref() {
         None => None,
-        Some(codex) => match trust_own_hooks(codex, &target.home, hook_target, herdr, &target.stop)
-        {
+        Some(codex) => match trust_own_hooks(codex, at, hook_target, herdr, &target.stop) {
             TrustOutcome::Unsupported | TrustOutcome::Trusted { .. } => None,
             // Hide is quitting: the pass is abandoned, so nothing is said of
             // the part and nothing is remembered.
             TrustOutcome::Failed(failure) if failure.kind == TrustFailureKind::Stopped => {
                 return None;
             }
-            TrustOutcome::Failed(failure) => Some(reason(&target.home, &failure)),
+            TrustOutcome::Failed(failure) => Some(reason(key, &failure)),
         },
     };
     let mut remembered = memory();
     match &reason {
-        Some(reason) => remembered.insert(target.home.clone(), reason.clone()),
-        None => remembered.remove(&target.home),
+        Some(reason) => remembered.insert(key.to_path_buf(), reason.clone()),
+        None => remembered.remove(key),
     };
     reason
 }
 
 /// The reason the last pass left, for a read that asks Codex nothing.
 pub(crate) fn remembered(target: &KitTarget) -> Option<String> {
-    memory().get(&target.home).cloned()
+    remembered_at(&target.home)
+}
+
+/// [`remembered`] for the account remembered by `key` ([`ensure_at`]).
+pub(crate) fn remembered_at(key: &Path) -> Option<String> {
+    memory().get(key).cloned()
 }
 
 fn reason(home: &std::path::Path, failure: &TrustFailure) -> String {

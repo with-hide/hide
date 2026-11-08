@@ -12,6 +12,7 @@
 //! lock as the render snapshot and drag the FFI boundary into the tests that
 //! matter most here (PRD D-47).
 
+pub mod account;
 pub mod antigravity;
 pub mod antigravity_trust;
 pub mod basic;

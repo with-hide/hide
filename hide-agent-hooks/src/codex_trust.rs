@@ -44,6 +44,7 @@ use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::account::AccountAt;
 use crate::install::{codex_command, hook_matcher};
 use crate::runtime::AgentRuntime;
 #[cfg(test)]
@@ -169,37 +170,39 @@ impl TrustFailure {
     }
 }
 
-/// Records Codex's trust for the entries Hide wrote in `home`'s
-/// `~/.codex/hooks.json`, where `helper` is the helper those entries run.
+/// Records Codex's trust for the entries Hide wrote in the account's
+/// `hooks.json` (`at`: the default account under a home, or a profile's),
+/// where `helper` is the helper those entries run.
 /// Writes nothing when every such entry is already trusted or when the file
 /// holds none (the same check twice leaves `config.toml` alone).
 ///
 /// `herdr` is what the kit recorded Herdr's integration added to that file
 /// (empty unless the kit installed it); each is trusted as exactly the entry
 /// the kit saw Herdr write.
-pub fn trust_own_hooks<'a>(
+pub fn trust_own_hooks<'a, 'h>(
     codex: &Program,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
     stop: &AtomicBool,
 ) -> TrustOutcome {
-    trust_own_hooks_within(codex, home, helper, herdr, stop, Limits::DEFAULT)
+    trust_own_hooks_within(codex, at, helper, herdr, stop, Limits::DEFAULT)
 }
 
 /// [`trust_own_hooks`] with the bounds named, for a caller (a test) that
 /// needs a Codex that does not answer to be given up on sooner.
-pub fn trust_own_hooks_within<'a>(
+pub fn trust_own_hooks_within<'a, 'h>(
     codex: &Program,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
     stop: &AtomicBool,
     limits: Limits,
 ) -> TrustOutcome {
-    let hooks_json = AgentRuntime::Codex.config_path(home);
+    let at = at.into();
+    let hooks_json = AgentRuntime::Codex.config_path(at);
     let expected = expected_entries(helper, herdr);
-    let mut session = match Session::start(codex, home, stop, limits) {
+    let mut session = match Session::start(codex, at, stop, limits) {
         Ok(Started::Ready(session)) => session,
         Ok(Started::Unsupported) => return TrustOutcome::Unsupported,
         Err(failure) => return TrustOutcome::Failed(failure),
@@ -499,7 +502,7 @@ enum Started<'a> {
 
 impl<'a> Session<'a> {
     /// Starts the app-server and completes the handshake. Codex is run with the
-    /// account's home and its own `.codex` named outright, in an environment
+    /// account's home and the account's own folder named outright, in an environment
     /// built rather than inherited (the login variables and nothing else), so a `CODEX_HOME` the launching shell
     /// carried never redirects whose hooks are trusted; its `PATH` is the one
     /// it was found on, so a script that runs `node` finds it. The working
@@ -512,17 +515,18 @@ impl<'a> Session<'a> {
     /// starts, speaks, and then fails stays a failure.
     fn start(
         codex: &Program,
-        home: &Path,
+        at: AccountAt<'_>,
         stop: &'a AtomicBool,
         limits: Limits,
     ) -> Result<Started<'a>, TrustFailure> {
+        let home = at.home();
         let mut command = Command::new(codex.path());
         hide_platform::process::restrict_to_login_environment(&mut command);
         command
             .arg("app-server")
             .current_dir(home)
             .env(hide_platform::host::HOME_VARIABLE, home)
-            .env("CODEX_HOME", AgentRuntime::Codex.home_directory(home))
+            .env("CODEX_HOME", AgentRuntime::Codex.home_directory(at))
             .env("PATH", codex.search())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -961,7 +965,7 @@ fn project_session<'a>(
     home: &Path,
     stop: &'a AtomicBool,
 ) -> Result<Session<'a>, crate::install::InstallFailure> {
-    match Session::start(codex, home, stop, Limits::DEFAULT) {
+    match Session::start(codex, AccountAt::Home(home), stop, Limits::DEFAULT) {
         Ok(Started::Ready(session)) => Ok(session),
         Ok(Started::Unsupported) => Err(config_failure(
             home,

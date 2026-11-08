@@ -567,6 +567,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
+            profiles: Vec::new(),
             refused: None,
         },
     );

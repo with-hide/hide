@@ -376,6 +376,12 @@ impl AgentAdapter {
         self.declaration.basic()
     }
 
+    /// The agent's declaration, which resolves a profile's account
+    /// (`hide_agent_adapter::AgentAdapter::resolve`).
+    pub(crate) fn declaration(&self) -> &'static hide_agent_adapter::AgentAdapter {
+        self.declaration
+    }
+
     /// The documented ways of installing the CLI Hide can tell apart, each
     /// with its update command.
     pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
@@ -694,7 +700,12 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
 /// ones Hide wrote; an edited stub only when the operator asked for it again
 /// (`reinstall`), and an operator's file never.
 pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Result<(), String> {
-    let root = dir.path(home);
+    install_skill_in(&dir.path(home), reinstall)
+}
+
+/// [`install_skill`] for any skills folder: a profile account's own.
+pub(crate) fn install_skill_in(root: &Path, reinstall: bool) -> Result<(), String> {
+    let root = root.to_path_buf();
     for skill in SKILLS {
         let write = match skill.observe_in(&root) {
             SkillObserved::Missing | SkillObserved::Stale => true,
