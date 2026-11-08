@@ -15,6 +15,28 @@ hooks = "pi"
 [resume]
 session = ["--session", "{session}"]
 
+# Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts).
+[account]
+by = "folder"
+
+[account.vars]
+PI_CODING_AGENT_DIR = { default = "~/.pi/agent", profile = "{account}" }
+
+[account.paths]
+hooks = false
+hook_trust = false
+plugins = "{PI_CODING_AGENT_DIR}/extensions"
+skills = "shared"
+folder_trust = "{PI_CODING_AGENT_DIR}/trust.json"
+sessions = "{PI_CODING_AGENT_DIR}/sessions"
+login = "{PI_CODING_AGENT_DIR}/auth.json"
+state = "{PI_CODING_AGENT_DIR}"
+usage = false
+
+[account.forbid]
+vars = ["PI_CODING_AGENT_SESSION_DIR"]
+
 [screen]
 version = "2026.10.01.1"
 min_engine_version = 1

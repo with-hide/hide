@@ -40,7 +40,7 @@
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
-use hide_agent_adapter::AgentId;
+use hide_agent_adapter::{AccountPath, AgentId};
 use hide_shell::Syntax;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -247,11 +247,13 @@ impl GuidanceAgent {
             Self::Kiro => home.join(".kiro"),
             Self::Augment => home.join(".augment"),
             Self::Junie => home.join(".junie"),
-            // A declared agent's folder is its declaration's, in the install
-            // scope (`hide_agent_adapter::HomeScope::Install`).
-            Self::Cursor => AgentId::Cursor.adapter().install_home(home),
-            Self::Grok => AgentId::Grok.adapter().install_home(home),
-            Self::Antigravity => AgentId::Antigravity.adapter().install_home(home),
+            // Retired Cursor keeps no account (PRD agent-profiles D-25).
+            Self::Cursor => home.join(".cursor"),
+            // A declared agent's folder is its default account's.
+            Self::Grok => AgentId::Grok.adapter().place_in(home, AccountPath::State),
+            Self::Antigravity => AgentId::Antigravity
+                .adapter()
+                .place_in(home, AccountPath::State),
         }
     }
 
@@ -320,13 +322,18 @@ impl GuidanceAgent {
             Self::Junie => Layout::event_map(folder.join("config.json"), true),
             // Grok merges every `~/.grok/hooks/*.json`, so Hide's is a file of
             // its own beside the other tools' files.
-            Self::Grok => Layout::event_map(folder.join("hooks").join("hide.json"), true),
+            Self::Grok => Layout::event_map(
+                AgentId::Grok.adapter().place_in(home, AccountPath::Hooks),
+                true,
+            ),
             // agy reads one global `hooks.json` whose top-level keys are
             // named blocks; Hide's is `hide` (Herdr's was `herdr`). Hide creates
             // the file when agy has none and deletes it again only when
             // nothing is left in it.
             Self::Antigravity => Layout {
-                path: folder.join("hooks.json"),
+                path: AgentId::Antigravity
+                    .adapter()
+                    .place_in(home, AccountPath::Hooks),
                 shape: Shape::NamedBlock { block: "hide" },
                 own_file: true,
             },

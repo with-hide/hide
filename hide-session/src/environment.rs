@@ -33,7 +33,7 @@ pub const REGISTRY: [VariableSpec; 3] = [
         key: "XDG_DATA_HOME",
         required: false,
         shape: "absolute UTF-8 directory path, at most 4096 bytes, without controls or parent components",
-        absent_behavior: "OpenCode's database is read from HOME/.local/share/opencode when it is absent or blank; an invalid value refuses every OpenCode read",
+        absent_behavior: "OpenCode's database is read at its default account's place below HOME when it is absent or blank; an invalid value refuses every OpenCode read",
     },
 ];
 

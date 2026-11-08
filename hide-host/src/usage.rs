@@ -309,13 +309,18 @@ fn claude_usage_api() -> Result<Value, LimitFailure> {
 
 /// The bytes of Claude Code's login: on macOS the keychain item it keeps,
 /// and otherwise, or on macOS when there is no such item, the
-/// `.credentials.json` Claude Code writes in `~/.claude`.
+/// `.credentials.json` Claude Code writes in its default account's folder
+/// (`AccountPath::Usage`).
 fn claude_login(home: &Path) -> Result<Vec<u8>, LimitFailure> {
     #[cfg(target_os = "macos")]
     if let Some(bytes) = claude_keychain_item()? {
         return Ok(bytes);
     }
-    read_credentials(&home.join(".claude").join(".credentials.json"))
+    read_credentials(
+        &hide_agent_adapter::AgentId::ClaudeCode
+            .adapter()
+            .place_in(home, hide_agent_adapter::AccountPath::Usage),
+    )
 }
 
 /// Claude Code's keychain item for the login account, read through

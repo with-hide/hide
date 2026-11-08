@@ -96,7 +96,7 @@ pub(crate) fn directory(cwd: &Path) -> Result<String> {
 }
 
 pub(crate) fn checked_path(home: &Path, path: &Path) -> Result<PathBuf> {
-    let checked = crate::native_file::checked_path_under(home, SESSIONS, path)
+    let checked = crate::native_file::checked_path_under(home, Path::new(SESSIONS), path)
         .map_err(|_| invalid("cursor_path_unconfirmed"))?;
     let root = hide_platform::fs::identity::canonical(&home.join(SESSIONS))
         .map_err(|_| invalid("cursor_path_unconfirmed"))?;
@@ -183,7 +183,7 @@ fn marks(home: &Path, path: &Path) -> Result<Vec<Option<FileMark>>> {
     ] {
         match std::fs::symlink_metadata(&candidate) {
             Ok(_) => {
-                crate::native_file::checked_path_under(home, SESSIONS, &candidate)
+                crate::native_file::checked_path_under(home, Path::new(SESSIONS), &candidate)
                     .map_err(|_| invalid("cursor_source_linked"))?;
                 result.push(Some(mark(&candidate)?));
             }
@@ -1144,7 +1144,7 @@ fn root_contains(root: &Path, id: &str, budget: &mut crate::DiscoveryBudget) -> 
                  budget: &mut crate::DiscoveryBudget|
      -> Result<()> {
         budget.directory()?;
-        crate::native_file::checked_path_under(root, "", path)
+        crate::native_file::checked_path_under(root, Path::new(""), path)
             .map_err(|_| invalid("cursor_launch_root_unconfirmed"))?;
         let folder = hide_platform::fs::open_dir_nofollow(path)
             .map_err(|_| invalid("cursor_launch_root_unconfirmed"))?;

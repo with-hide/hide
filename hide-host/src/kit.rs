@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn every_kit_location_follows_the_home_the_platform_names() {
         use crate::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
-        use hide_agent_adapter::{ADAPTERS, HomeScope};
+        use hide_agent_adapter::{ADAPTERS, AccountPath, NodeEnv, Profile};
         let dir = tempfile::tempdir().unwrap();
         let own = dir.path().join("own");
         let account = dir.path().join("account");
@@ -661,13 +661,20 @@ mod tests {
         locations.extend(
             hide_agent_hooks::runtime::AgentRuntime::ALL.map(|runtime| runtime.config_path(&home)),
         );
-        // Each agent's folder as the agent itself reads it in a pane.
+        // Each agent's places as Hide reads them for a pane there: its
+        // default account, following the variables the start step sets.
         for agent in ADAPTERS {
-            let value = agent.home_variable.and_then(started);
-            locations.push(
-                agent
-                    .home(Some(&home), value.as_deref(), HomeScope::Read)
-                    .unwrap(),
+            let mut node = NodeEnv::new(Some(home.clone()));
+            for (variable, _) in agents.iter() {
+                node = node.with_variable(variable, started(variable));
+            }
+            let account = agent
+                .resolve(&Profile::builtin_default(agent.id), &node)
+                .unwrap();
+            locations.extend(
+                AccountPath::ALL
+                    .into_iter()
+                    .filter_map(|path| account.path(path).map(Path::to_path_buf)),
             );
         }
         for location in locations {

@@ -22,6 +22,30 @@ ready = "model_line_idle"
 [resume]
 session = ["-s", "{session}"]
 
+# Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts): OpenCode moves only with all three XDG folders.
+[account]
+by = "folder"
+
+[account.vars]
+XDG_CONFIG_HOME = { default = "~/.config", profile = "{account}/config" }
+XDG_DATA_HOME = { default = "~/.local/share", profile = "{account}/data" }
+XDG_STATE_HOME = { default = "~/.local/state", profile = "{account}/state" }
+
+[account.paths]
+hooks = false
+hook_trust = false
+plugins = "{XDG_CONFIG_HOME}/opencode/plugins"
+skills = "shared"
+folder_trust = false
+sessions = "{XDG_DATA_HOME}/opencode/opencode.db"
+login = false
+state = "{XDG_CONFIG_HOME}/opencode"
+usage = false
+
+[account.forbid]
+vars = ["OPENCODE_CONFIG_DIR", "OPENCODE_DB"]
+
 [screen]
 version = "2026.11.05.1"
 min_engine_version = 1

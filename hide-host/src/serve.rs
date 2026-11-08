@@ -906,20 +906,25 @@ pub const HOME_FOLDER_VARIABLES: &[&str] = &[
     "ZDOTDIR",
 ];
 
-/// Each agent's own home variable with its folder below the home, its parts
-/// joined by `/` (`CODEX_HOME`, `.codex`), from the agent declarations. Under
-/// a home of the node's own it is set to that folder, made private, rather
-/// than cleared: an agent need not take its home from the variables the
-/// start step replaces (Codex 0.166 on Windows reads the profile folder
-/// Windows keeps for the account, and wrote its trust table into the
-/// account's own `config.toml`, 2026-11-04).
+/// Each agent account variable an agent definition marks `isolated_home`,
+/// with its default folder below the home, its parts joined by `/`
+/// (`CODEX_HOME`, `.codex`). Under a home of the node's own it is set to that
+/// folder, made private, rather than cleared: an agent need not take its home
+/// from the variables the start step replaces (Codex 0.166 on Windows reads
+/// the profile folder Windows keeps for the account, and wrote its trust
+/// table into the account's own `config.toml`, 2026-11-04).
 pub fn agent_home_variables() -> Vec<(&'static str, String)> {
     hide_agent_adapter::ADAPTERS
         .iter()
-        .filter_map(|agent| {
-            agent
-                .home_variable
-                .map(|variable| (variable, agent.folder.join("/")))
+        .filter_map(|agent| agent.account_rule())
+        .flat_map(|rule| &rule.vars)
+        .filter(|var| var.isolated_home)
+        .map(|var| {
+            let default = var
+                .default
+                .as_ref()
+                .expect("the definition reader gives an isolated variable a default");
+            (var.name.as_str(), default.parts.join("/"))
         })
         .collect()
 }

@@ -351,7 +351,7 @@ fn usage_opencode_wal_reader_role() {
 #[test]
 fn usage_rewritten_file_rescans_and_large_batches_resume_without_loss() {
     let home = tempfile::tempdir().unwrap();
-    let root = home.path().join(hide_session::CLAUDE_SESSIONS);
+    let root = home.path().join(".claude/projects");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("rewrite.jsonl");
     fs::write(&path, CLAUDE).unwrap();
@@ -403,7 +403,7 @@ fn usage_rewritten_file_rescans_and_large_batches_resume_without_loss() {
 #[test]
 fn usage_read_resumes_torn_records_without_persisting_their_body() {
     let home = tempfile::tempdir().unwrap();
-    let root = home.path().join(hide_session::CLAUDE_SESSIONS);
+    let root = home.path().join(".claude/projects");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("session.jsonl");
     let split = CLAUDE.len() - 20;
@@ -451,7 +451,7 @@ fn usage_read_resumes_torn_records_without_persisting_their_body() {
 #[test]
 fn usage_native_identity_survives_file_copy_and_streaming_updates() {
     let home = tempfile::tempdir().unwrap();
-    let root = home.path().join(hide_session::CLAUDE_SESSIONS);
+    let root = home.path().join(".claude/projects");
     fs::create_dir_all(&root).unwrap();
     let a = root.join("a.jsonl");
     let b = root.join("b.jsonl");
@@ -470,7 +470,7 @@ fn usage_native_identity_survives_file_copy_and_streaming_updates() {
 #[test]
 fn usage_oversized_record_advances_in_bounded_steps_and_reports_its_loss() {
     let home = tempfile::tempdir().unwrap();
-    let root = home.path().join(hide_session::CLAUDE_SESSIONS);
+    let root = home.path().join(".claude/projects");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("large.jsonl");
     let mut bytes = vec![b'x'; 2 * 1024 * 1024 + 3];
@@ -517,7 +517,7 @@ fn usage_discovery_includes_subagents_and_archived_sessions_and_refuses_escape()
     let home = tempfile::tempdir().unwrap();
     let child = home
         .path()
-        .join(hide_session::CLAUDE_SESSIONS)
+        .join(".claude/projects")
         .join("project/session/subagents/agent-a.jsonl");
     fs::create_dir_all(child.parent().unwrap()).unwrap();
     fs::write(&child, CLAUDE).unwrap();
@@ -547,10 +547,7 @@ fn usage_discovery_includes_subagents_and_archived_sessions_and_refuses_escape()
 #[test]
 fn usage_codex_cache_and_reasoning_are_not_added_twice() {
     let home = tempfile::tempdir().unwrap();
-    let path = home
-        .path()
-        .join(hide_session::CODEX_SESSIONS)
-        .join("rollout.jsonl");
+    let path = home.path().join(".codex/sessions").join("rollout.jsonl");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, concat!(
         "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-a\",\"cwd\":\"/work/app\"}}\n",
@@ -573,7 +570,7 @@ fn usage_grok_parent_includes_children_and_partial_cost_is_unknown() {
         .join("tests/fixtures/usage/grok-parent-child");
     let mut events = Vec::new();
     for name in ["parent", "child"] {
-        let dir = home.path().join(hide_session::GROK_SESSIONS).join(name);
+        let dir = home.path().join(".grok/sessions").join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::copy(
             fixture.join(format!("{name}-summary.json")),
@@ -602,7 +599,7 @@ fn usage_grok_parent_includes_children_and_partial_cost_is_unknown() {
         ),
         (14_544, 819, 90_752, Some(658), Some(79_378))
     );
-    let dir = home.path().join(hide_session::GROK_SESSIONS).join("parent");
+    let dir = home.path().join(".grok/sessions").join("parent");
     let original = fs::read_to_string(dir.join("updates.jsonl")).unwrap();
     for flag in ["usageIsIncomplete", "costIsPartial"] {
         let mut record: serde_json::Value = serde_json::from_str(&original).unwrap();
@@ -619,10 +616,7 @@ fn usage_grok_parent_includes_children_and_partial_cost_is_unknown() {
 #[test]
 fn usage_codex_native_responses_exclude_inherited_records_and_repeated_notifications() {
     let home = tempfile::tempdir().unwrap();
-    let path = home
-        .path()
-        .join(hide_session::CODEX_SESSIONS)
-        .join("rollout.jsonl");
+    let path = home.path().join(".codex/sessions").join("rollout.jsonl");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut records = vec![
         serde_json::json!({"type":"session_meta","payload":{"id":"child","forked_from_id":"parent"}}),
@@ -652,10 +646,7 @@ fn usage_codex_native_responses_exclude_inherited_records_and_repeated_notificat
 #[test]
 fn usage_codex_legacy_fork_is_reported_and_synthetic_totals_never_count() {
     let home = tempfile::tempdir().unwrap();
-    let path = home
-        .path()
-        .join(hide_session::CODEX_SESSIONS)
-        .join("rollout.jsonl");
+    let path = home.path().join(".codex/sessions").join("rollout.jsonl");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let count = serde_json::json!({"type":"event_msg","ordinal":43,"timestamp":"2026-10-01T12:00:00Z",
         "payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10},
@@ -1362,10 +1353,7 @@ fn a_grok_summary_leaves_every_step_room_for_a_whole_record_or_is_refused() {
     // Two 256-byte witness windows, checked before and after the records.
     let largest = MIB - 4 * 256 - (line + 1);
     let home = tempfile::tempdir().unwrap();
-    let dir = home
-        .path()
-        .join(hide_session::GROK_SESSIONS)
-        .join("session");
+    let dir = home.path().join(".grok/sessions").join("session");
     fs::create_dir_all(&dir).unwrap();
     let updates = dir.join("updates.jsonl");
     // A 200 KiB record: under the line cap, so it must be read whole.
