@@ -2373,7 +2373,7 @@ impl Runtime {
             home_real: environment
                 .home_path
                 .as_deref()
-                .and_then(|home| std::fs::canonicalize(home).ok()),
+                .and_then(|home| hide_platform::fs::identity::canonical(home).ok()),
             home_path: environment.home_path,
             codex_home: environment.codex_home,
             remote_connections: HashMap::new(),

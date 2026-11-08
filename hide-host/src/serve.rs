@@ -1017,7 +1017,7 @@ pub fn handle_with_progress(
             home_real: env
                 .home
                 .as_deref()
-                .and_then(|home| std::fs::canonicalize(home).ok())
+                .and_then(|home| hide_platform::fs::identity::canonical(home).ok())
                 .as_deref()
                 .map(crate::root::wire),
             machine_identity: match hide_platform::host::machine_id() {
