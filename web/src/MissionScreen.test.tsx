@@ -175,6 +175,8 @@ describe("a project chip while a mission shows (B10)", () => {
     const { q, press } = await mount({ place: { selected: "mission-1" } });
     await press(q('[data-mission-project-chip="w"]'));
     expect(q("[data-mission-screen-detail]")?.dataset.missionScreenDetail).toBe("mission-1");
+    await press(q('[data-mission-project-chip="all"]'));
+    expect(q("[data-mission-screen-detail]")?.dataset.missionScreenDetail).toBe("mission-1");
     await press(q('[data-mission-project-chip="w2"]'));
     expect(q("[data-mission-screen-view]")?.dataset.missionScreenView).toBe("table");
     expect(q("[data-mission-screen-count]")?.dataset.missionScreenCount).toBe("1");
