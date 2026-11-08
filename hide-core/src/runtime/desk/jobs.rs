@@ -889,6 +889,8 @@ impl Runtime {
             // Something on the agent's screen took Hide's input: a stop the
             // operator clears, as a block is.
             (Some(crate::model::AskSubject::InputUnconfirmed { .. }), _) => DeskAskKind::Blocked,
+            // A step only a person takes holds the job as a block does.
+            (Some(crate::model::AskSubject::HumanTurn { .. }), _) => DeskAskKind::Blocked,
             (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
             (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
             (None, _) => DeskAskKind::Question,

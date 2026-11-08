@@ -285,6 +285,59 @@ pub const COMMANDS: &[Spec] = &[
             "ambiguous_participant",
         ],
     },
+    // The caller declares that its next step is one only a person can take
+    // (PRD ask-human): its lineage root stands in the operator's Needs You
+    // until the operator presses Done, which sends the caller a letter.
+    Spec {
+        words: &["agent", "ask-human"],
+        arguments: &[
+            Arg {
+                name: "kind",
+                value: OneOf(&["auth", "permission"]),
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "where",
+                value: Text,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["ask_human"],
+        refusals: &[
+            "human_kind_unknown",
+            "human_place_required",
+            "human_place_too_long",
+            "agent_pane_required",
+            "participant_unavailable",
+            "participant_ended",
+            "participant_session_changed",
+            "ambiguous_participant",
+        ],
+    },
+    // Takes the caller's declaration down; `nothing_to_clear` when there
+    // is none, which is no failure.
+    Spec {
+        words: &["agent", "ask-human", "--clear"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["ask_human"],
+        refusals: &[
+            "agent_pane_required",
+            "participant_unavailable",
+            "participant_ended",
+            "participant_session_changed",
+            "ambiguous_participant",
+        ],
+    },
     // The answer is the registration as it ended with what became of its
     // pane (`closed`, `kept`, `gone`, `other_agent`, `left`) and of its
     // conversation (`archived`, `archive_full`, `none`); `--keep-pane` ends

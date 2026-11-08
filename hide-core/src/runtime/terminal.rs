@@ -707,6 +707,9 @@ impl Runtime {
     /// The engine's own status is the delivery observation's; a pane with none is
     /// judged from its row, where only a resting agent's wait is the plan's.
     pub(super) fn record_operator_submit(&self, pane_id: &str) {
+        // Whatever the Enter answers, the operator spoke to the agent, which
+        // takes its person's turn down (PRD ask-human D-08, B22).
+        self.human_turn_spoke(pane_id);
         let Some(services) = self.label_services.as_ref() else {
             return;
         };

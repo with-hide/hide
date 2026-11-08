@@ -407,6 +407,15 @@ pub mod phone {
         /// carries for the receiver to word. Used only by notice transport.
         #[serde(skip)]
         pub subject: Option<AskSubject>,
+        /// The person's turn the row leads with (`SidebarAgentSnapshot::
+        /// human_turn`, PRD ask-human), which the phone draws with Done.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub human_turn: Option<Value>,
+        /// Every declaration on the row and the ones raised to it, so a new
+        /// one is announced once even while the row already stands in Needs
+        /// You (B5, B17). Used only by notice transport.
+        #[serde(skip)]
+        pub human_turns: std::collections::BTreeSet<String>,
         pub status_code: String,
         pub demand: String,
         /// Present while the agent's process is ended and its pane holds a
@@ -1012,7 +1021,37 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .filter(|text| !text.is_empty())
                     .map(str::to_owned),
-                subject: subject_of(agent.get("ask_subject")),
+                // A person's turn a descendant raised is what the root's
+                // notice says (B13).
+                subject: agent
+                    .get("raised")
+                    .and_then(Value::as_array)
+                    .and_then(|raised| raised.first())
+                    .and_then(|lead| subject_of(lead.get("subject")))
+                    .filter(|subject| {
+                        matches!(subject, AskSubject::HumanTurn { .. })
+                            && agent.pointer("/human_turn/own").and_then(Value::as_bool)
+                                == Some(false)
+                    })
+                    .or_else(|| subject_of(agent.get("ask_subject"))),
+                human_turn: agent
+                    .get("human_turn")
+                    .filter(|lead| !lead.is_null())
+                    .cloned(),
+                human_turns: std::iter::once(agent.get("ask_subject"))
+                    .chain(
+                        agent
+                            .get("raised")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .map(|ask| ask.get("subject")),
+                    )
+                    .filter_map(|subject| match subject_of(subject)? {
+                        AskSubject::HumanTurn { id, .. } => Some(id),
+                        _ => None,
+                    })
+                    .collect(),
                 status_code: str_of(agent, "status_code").to_owned(),
                 demand: agent
                     .get("demand")

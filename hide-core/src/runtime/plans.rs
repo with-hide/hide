@@ -58,9 +58,12 @@ pub(crate) struct PlanRuntime {
     /// None once a sync laid rows from other questions, so the next
     /// refresh relays every row set whatever it reads.
     asked: Option<Vec<CoreAsk>>,
-    /// The plan book's, the mission book's and the typed inputs' edit
-    /// `asked` was read at.
-    made_asks_at: (u64, u64, u64),
+    /// The plan book's, the mission book's, the typed inputs' and the
+    /// declared person's turns' edit `asked` was read at.
+    made_asks_at: (u64, u64, u64, u64),
+    /// Moves whenever the ledger's declared person's turns change
+    /// (`Ledger::human_turns`, PRD ask-human), so the rows are laid again.
+    pub(crate) human_edit: u64,
     /// Typed input shown to the operator on its pane's row
     /// (`typed_input::input_asks`), as the doorbell's last pass found it,
     /// and an edit that moves whenever it changes.
@@ -120,6 +123,9 @@ struct Laid {
     turn: hide_session::turns::UserTurnFact,
     subject: AskSubject,
     demand: String,
+    /// The row's own question a person's turn was laid over, given back
+    /// when the turn is lifted (PRD ask-human D-07).
+    own_turn: Option<hide_session::turns::UserTurnFact>,
 }
 
 /// The plans the shell draws, one per pane whose session has one (B7).
@@ -826,17 +832,16 @@ impl Runtime {
     /// compares it. A plan or mission edit that asks nothing new costs one
     /// pass over the books, not over the rows.
     pub(super) fn refresh_plan_reviews(&mut self) -> bool {
-        if self.plans.edit == self.plans.made_asks_at.0
-            && self.missions.book_edit == self.plans.made_asks_at.1
-            && self.plans.input_edit == self.plans.made_asks_at.2
-        {
-            return false;
-        }
-        self.plans.made_asks_at = (
+        let at = (
             self.plans.edit,
             self.missions.book_edit,
             self.plans.input_edit,
+            self.plans.human_edit,
         );
+        if at == self.plans.made_asks_at {
+            return false;
+        }
+        self.plans.made_asks_at = at;
         let asks = self.core_asks();
         if self.plans.asked.as_ref() == Some(&asks) {
             return false;
@@ -900,7 +905,7 @@ impl Runtime {
             if agent.user_turn.as_ref() == Some(&laid.turn)
                 && agent.ask_subject.as_ref() == Some(&laid.subject)
             {
-                agent.user_turn = None;
+                agent.user_turn = laid.own_turn;
                 agent.ask_subject = None;
                 agent.laid_since_unix_ms = None;
                 agent.laid_more = 0;
@@ -926,23 +931,34 @@ impl Runtime {
             return;
         }
         for agent in agents.iter_mut() {
-            if agent.user_turn.is_some()
-                || agent.activity == "working"
-                || crate::agent_state::demand_of(agent) != crate::agent_state::AgentDemand::None
-            {
-                continue;
-            }
+            let own_demand = agent.user_turn.is_some()
+                || crate::agent_state::demand_of(agent) != crate::agent_state::AgentDemand::None;
             let session = row_session(device, agent);
             // Oldest first, as `core_asks` sorts them.
-            let mut mine = asks.iter().filter(|(asked, ..)| match asked {
-                Asked::Session(asked) => session.as_ref() == Some(asked),
-                Asked::Pane(pane) => *pane == agent.pane_id,
-            });
-            let Some((asked, since, subject)) = mine.next() else {
+            let mine: Vec<&CoreAsk> = asks
+                .iter()
+                .filter(|(asked, ..)| match asked {
+                    Asked::Session(asked) => session.as_ref() == Some(asked),
+                    Asked::Pane(pane) => *pane == agent.pane_id,
+                })
+                .collect();
+            // A person's turn the agent declared is laid whatever the row
+            // does, and leads its other asks, its own included (PRD
+            // ask-human D-07, D-21); every other question waits for a row
+            // at rest that asks nothing of its own.
+            let human = mine
+                .iter()
+                .position(|(_, _, subject)| matches!(subject, AskSubject::HumanTurn { .. }));
+            let lead = match human {
+                Some(at) => at,
+                None if own_demand || agent.activity == "working" => continue,
+                None => 0,
+            };
+            let Some(&(asked, since, subject)) = mine.get(lead) else {
                 continue;
             };
-            let (asked, since, subject, more) =
-                (asked.clone(), *since, subject.clone(), mine.count());
+            let more = mine.len() - 1 + usize::from(human.is_some() && own_demand);
+            let (asked, since, subject) = (asked.clone(), *since, subject.clone());
             // The question holds the row as a native one does; it carries
             // no words, only its subject.
             let turn = hide_session::turns::UserTurnFact {
@@ -956,6 +972,7 @@ impl Runtime {
                     turn: turn.clone(),
                     subject: subject.clone(),
                     demand: std::mem::replace(&mut agent.demand, "question".to_owned()),
+                    own_turn: agent.user_turn.take(),
                 },
             );
             agent.user_turn = Some(turn);
@@ -1018,13 +1035,43 @@ impl Runtime {
             .iter()
             .map(|(pane, since, subject)| (Asked::Pane(pane.clone()), *since, subject.clone()));
         let attentions = self.mission_attention_asks();
+        let humans = self.human_turn_asks();
         let mut asks: Vec<_> = reviews
             .chain(decisions)
             .chain(inputs)
             .chain(attentions)
+            .chain(humans)
             .collect();
         asks.sort_by_key(|(_, since, _)| *since);
         asks
+    }
+
+    /// The person's turns live agents declared (PRD ask-human), each on
+    /// the pane its registration runs in now, a device's included.
+    fn human_turn_asks(&self) -> Vec<CoreAsk> {
+        let Ok(ledger) = self.delivery_state() else {
+            return Vec::new();
+        };
+        ledger
+            .human_turns
+            .iter()
+            .filter_map(|(agent, turn)| {
+                let record = ledger
+                    .agents
+                    .iter()
+                    .find(|record| &record.id == agent && !record.ended)?;
+                Some((
+                    Asked::Pane(record.actor.pane_id.clone()),
+                    turn.declared_at_unix_ms,
+                    AskSubject::HumanTurn {
+                        id: turn.id.clone(),
+                        kind: turn.kind,
+                        place: turn.place.clone(),
+                        device: self.device_label(&record.actor.device_id),
+                    },
+                ))
+            })
+            .collect()
     }
 
     /// The mission nodes that wait on the operator (PRD mission-node-simple

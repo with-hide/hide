@@ -50,6 +50,7 @@ mod herdr_import;
 mod hide_notes;
 mod home;
 mod hosts;
+mod human_turn;
 mod inbound;
 mod issues;
 mod kit;

@@ -242,7 +242,26 @@ impl Waiting {
             letter_id: None,
             spawn_id: None,
             text: None,
+            human: None,
         }
+    }
+
+    /// The person's turn `turn` the agent declared, which outranks
+    /// whatever else it waits on (PRD ask-human D-21, B7).
+    pub(crate) fn human(turn: &crate::coordination::human_turn::HumanTurn) -> Self {
+        let mut waiting = Self::on(
+            WaitCause::HumanTurn,
+            Some(OPERATOR),
+            Some(turn.declared_at_unix_ms),
+        );
+        waiting.text = Some(
+            format!("{} · {}", turn.kind.as_str(), turn.place)
+                .chars()
+                .take(TEXT_CHARS)
+                .collect(),
+        );
+        waiting.human = Some(turn.clone());
+        waiting
     }
 }
 
@@ -271,6 +290,7 @@ fn waiting(
         let cause = match escalation.cause {
             Cause::ChildBlocked => demand().unwrap_or(WaitCause::Approval),
             Cause::InputUnconfirmed => WaitCause::InputUnconfirmed,
+            Cause::HumanTurn => WaitCause::HumanTurn,
             Cause::Draft => WaitCause::Draft,
             Cause::ParentBlocked => WaitCause::ParentBlocked,
             Cause::BellExhausted => WaitCause::BellExhausted,
@@ -304,6 +324,16 @@ fn waiting(
                     .iter()
                     .find_map(|(input, _)| input.request_id.clone())
                     .filter(|_| waiting.spawn_id.is_none());
+                waiting
+            }
+            AskSubject::HumanTurn { place, kind, .. } => {
+                let mut waiting = Waiting::on(WaitCause::HumanTurn, None, None);
+                waiting.text = Some(
+                    format!("{} · {place}", kind.as_str())
+                        .chars()
+                        .take(TEXT_CHARS)
+                        .collect(),
+                );
                 waiting
             }
         };

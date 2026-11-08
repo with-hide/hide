@@ -177,6 +177,48 @@ fn raised_leads(agent: &SidebarAgentSnapshot) -> bool {
     }
 }
 
+/// The person's turn the row leads with: its own declaration, or the lead
+/// raised one (raises sort a person's turn first), whichever was declared
+/// first (PRD ask-human D-20).
+fn human_lead(agent: &SidebarAgentSnapshot) -> Option<crate::model::HumanTurnLead> {
+    use crate::model::{AskSubject, HumanTurnLead};
+    let own = match &agent.ask_subject {
+        Some(AskSubject::HumanTurn {
+            id, kind, place, ..
+        }) => Some(HumanTurnLead {
+            id: id.clone(),
+            kind: *kind,
+            place: place.clone(),
+            pane_id: agent.pane_id.clone(),
+            title: agent.identity_label.clone(),
+            device_id: crate::address::pane_device(&agent.pane_id).map(str::to_owned),
+            since_unix_ms: agent.laid_since_unix_ms,
+            own: true,
+        }),
+        _ => None,
+    };
+    let raised = agent.raised.first().and_then(|lead| match &lead.subject {
+        Some(AskSubject::HumanTurn {
+            id, kind, place, ..
+        }) => Some(HumanTurnLead {
+            id: id.clone(),
+            kind: *kind,
+            place: place.clone(),
+            pane_id: lead.raised_pane_id.clone(),
+            title: lead.origin_title.clone(),
+            device_id: crate::address::pane_device(&lead.raised_pane_id).map(str::to_owned),
+            since_unix_ms: lead.since_unix_ms,
+            own: false,
+        }),
+        _ => None,
+    });
+    match (own, raised) {
+        (Some(own), Some(raised)) if raised.since_unix_ms < own.since_unix_ms => Some(raised),
+        (Some(own), _) => Some(own),
+        (None, raised) => raised,
+    }
+}
+
 fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     // A block is not asked of the operator in a verb: its row draws the
     // cause instead (agent-blocked-state B1).
@@ -187,7 +229,12 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     // Everything else that waits on the operator under this root is counted
     // behind the lead, `외 N건` (D-13).
     let total = agent.raised.len() + usize::from(own.is_some()) + agent.laid_more;
-    if let Some(verb) = own.filter(|_| !raised_leads(agent)) {
+    // A person's turn leads whatever else waits (PRD ask-human D-21).
+    let own_leads = match &agent.human_turn {
+        Some(lead) => lead.own,
+        None => !raised_leads(agent),
+    };
+    if let Some(verb) = own.filter(|_| own_leads) {
         return Some(Ask {
             verb,
             what: agent.detail.clone(),
@@ -792,6 +839,11 @@ pub fn group_of(agent: &SidebarAgentSnapshot) -> AgentGroup {
 /// Called again whenever the read axis moves, so the derived values can never
 /// describe a different read state than the row they sit on.
 pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
+    agent.human_turn = human_lead(agent);
+    // A person's turn holds the operator's row in Needs You until it is
+    // settled, read or not, working or not (PRD ask-human D-07, B11); a
+    // delegated child's rises to its root instead.
+    let human = agent.human_turn.is_some() && ownership_of(agent) != Ownership::Delegated;
     let (demand, activity, unread) = axes_of(agent);
     let waiting = agent.wait.is_some();
     let group = agent_group_for(
@@ -804,7 +856,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         waiting,
         !agent.unseen_views.is_empty(),
     );
-    let group = if !agent.raised.is_empty() {
+    let group = if !agent.raised.is_empty() || human {
         AgentGroup::NeedsYou
     } else {
         group
@@ -814,7 +866,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         // Where the row would stand with nothing to look at: what a phone or
         // desktop notification follows, which a View never sends (PRD
         // unseen-agent-views D-13, B12).
-        if !agent.raised.is_empty() {
+        if !agent.raised.is_empty() || human {
             return AgentGroup::NeedsYou;
         }
         agent_group_for(
@@ -861,6 +913,8 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         let line = match subject {
             crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
             crate::model::AskSubject::MissionAttention { node, .. } => first_line_cut(node),
+            // A surface that does not know a person's turn says where.
+            crate::model::AskSubject::HumanTurn { place, .. } => first_line_cut(place),
             crate::model::AskSubject::PlanReview { .. }
             | crate::model::AskSubject::InputUnconfirmed { .. } => None,
         };
@@ -1129,12 +1183,17 @@ pub mod push {
     /// only seeds it: nothing that was already waiting is announced.
     #[derive(Default)]
     pub struct Transitions {
-        last: Option<BTreeMap<AgentKey, Effective>>,
+        last: Option<BTreeMap<AgentKey, Seen>>,
         /// Agents that left the list, with their state and when: a device that
         /// reconnects, or a list that was briefly empty, brings them back in the
         /// state they had, which is no transition (and no second notice).
-        vanished: BTreeMap<AgentKey, (Effective, std::time::Instant)>,
+        vanished: BTreeMap<AgentKey, (Seen, std::time::Instant)>,
     }
+
+    /// What a root was last seen as: its state and the person's turns
+    /// declared on it or raised to it (PRD ask-human), so a new declaration
+    /// is announced once even while the state stays Needs You.
+    type Seen = (Effective, BTreeSet<String>);
 
     /// How long a vanished agent's state is kept for its return.
     pub const VANISHED_TTL: Duration = Duration::from_secs(10 * 60);
@@ -1160,9 +1219,9 @@ pub mod push {
             at: std::time::Instant,
         ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
             let now = effective(projection);
-            let states: BTreeMap<AgentKey, Effective> = now
+            let states: BTreeMap<AgentKey, Seen> = now
                 .iter()
-                .map(|(key, (state, ..))| (key.clone(), *state))
+                .map(|(key, (state, agent))| (key.clone(), (*state, agent.human_turns.clone())))
                 .collect();
             let Some(last) = self.last.replace(states) else {
                 return (Vec::new(), BTreeSet::new());
@@ -1170,12 +1229,13 @@ pub mod push {
             let mut notices = Vec::new();
             let mut seen = BTreeSet::new();
             for (key, (state, agent)) in &now {
-                let before = last
+                let (before, declared) = last
                     .get(key)
-                    .copied()
+                    .cloned()
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
-                    .unwrap_or(Effective::Other);
-                if before == *state {
+                    .unwrap_or((Effective::Other, BTreeSet::new()));
+                let declared_now = !agent.human_turns.is_subset(&declared);
+                if before == *state && !(declared_now && *state == Effective::NeedsYou) {
                     continue;
                 }
                 if let Some(announced) = state.announced() {
@@ -1200,11 +1260,11 @@ pub mod push {
             }
             for (key, before) in &last {
                 if !now.contains_key(key) {
-                    self.vanished.insert(key.clone(), (*before, at));
+                    self.vanished.insert(key.clone(), (before.clone(), at));
                 }
             }
             // An agent gone for good: its notification is closed on the next push.
-            self.vanished.retain(|key, (before, since)| {
+            self.vanished.retain(|key, ((before, _), since)| {
                 let expired = at.duration_since(*since) >= VANISHED_TTL;
                 if expired && matches!(before, Effective::NeedsYou | Effective::Done) {
                     seen.insert(key.clone());

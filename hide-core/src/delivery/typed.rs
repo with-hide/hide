@@ -283,7 +283,8 @@ pub(crate) fn notice_body(
     // operator sets how much agents approve in Settings > Agents.
     let trust = "Answering a trust or approval screen for it is your call: Hide does not check \
                  consent, and the operator sets how much agents may approve in Settings > Agents. \
-                 Leave a login to the operator.";
+                 A sign-in or a permission is the operator's: the agent at it declares it with \
+                 `hide agent ask-human`.";
     let read = format!("read its screen with `hide pane read {pane}`");
     let answer = format!(
         "Answer the screen with `hide pane send {pane} --key <name>` (esc, enter, up, down, \

@@ -426,6 +426,11 @@ pub struct Ledger {
     /// letter awaiting intake, so the letters bound them.
     #[serde(default)]
     pub node_clocks: BTreeMap<String, NodeClock>,
+    /// The operator's turn each live registration declared (PRD ask-human),
+    /// by registration id: at most one per agent, so the registrations
+    /// bound it. Left out of the file while there are none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub human_turns: BTreeMap<String, crate::coordination::human_turn::HumanTurn>,
 }
 
 impl Default for Ledger {
@@ -440,6 +445,7 @@ impl Default for Ledger {
             identity_waits: Vec::new(),
             spawn_placement_revision: 0,
             node_clocks: BTreeMap::new(),
+            human_turns: BTreeMap::new(),
         }
     }
 }

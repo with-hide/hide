@@ -1024,7 +1024,9 @@ impl Runtime {
         })
     }
 
-    fn device_label(&self, device: &str) -> Option<String> {
+    /// A device's name as the operator registered it; none for the core's
+    /// own machine.
+    pub(super) fn device_label(&self, device: &str) -> Option<String> {
         (device != self.node.as_str()).then(|| {
             self.snapshot
                 .ui_state

@@ -80,6 +80,8 @@ mod herdr_import;
 mod hide_ai_devices;
 #[path = "tests/home.rs"]
 mod home;
+#[path = "tests/human_turn.rs"]
+mod human_turn;
 #[path = "tests/inbound.rs"]
 mod inbound;
 #[path = "tests/issues.rs"]
