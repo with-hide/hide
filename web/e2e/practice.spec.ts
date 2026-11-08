@@ -318,6 +318,27 @@ test("the first chapter ends by asking what next, and Use Hide now closes the pr
   });
 });
 
+// The ⌘K step is done by what the palette showed, but the guide waits for it to close: opening it explains nothing of
+// the next step over the open search.
+test("the search step stays while the palette is open and moves on when it closes", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await playFromList(practice, "overview");
+    await pressTo(practice, "overview", 3);
+    const layer = practice.locator('[data-practice-chapter="overview"] [data-practice-layer]');
+    await expect(layer).toHaveAttribute("data-practice-step", "search");
+    await drawn(practice);
+    await practice.keyboard.press("Enter");
+    await expect(practice.locator("[data-palette]")).toBeVisible();
+    // The palette asked the core for sessions, which finished the step's work; the guide still names this step.
+    await practice.waitForTimeout(1500);
+    await expect(layer).toHaveAttribute("data-practice-step", "search");
+    await expect(layer.locator(".pc-bubble")).toContainText(/Esc/);
+    await practice.keyboard.press("Escape");
+    await expect(practice.locator("[data-palette]")).toHaveCount(0);
+    await expect(layer).toHaveAttribute("data-practice-step", "center");
+  });
+});
+
 test("the chapter list leads back to Hide, and a finished chapter stops on its end card", async ({ page }) => {
   await withPractice(page, async (practice) => {
     await playFromList(practice, "overview");
@@ -327,11 +348,11 @@ test("the chapter list leads back to Hide, and a finished chapter stops on its e
     await expect(practice).toHaveTitle(/Practice Hide|Hide 연습/);
     // The last step's button finishes the chapter on its end card, which lists the tasks and leads back to the list.
     await playFromList(practice, "overview");
-    await pressTo(practice, "overview", 8);
+    await pressTo(practice, "overview", 9);
     await practice.keyboard.press("Enter");
     const end = practice.locator('[data-practice-chapter="overview"] [data-practice-end]');
     await expect(end).toBeVisible();
-    await expect(end.locator("li")).toHaveCount(3);
+    await expect(end.locator("li")).toHaveCount(4);
     await end.locator("[data-practice-end-hub]").click();
     await expect(practice.locator('[data-practice-hub-chapter="overview"]')).toHaveAttribute("data-status", "done");
   });

@@ -411,8 +411,18 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     seen.current = model;
     // While a palette or a switcher the shell opened is up, the change came from its own keys, not the step's chord.
     if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
-    if (step.done?.(model)) finished();
+    if (!step.done?.(model)) return;
+    // A step done by what a palette showed waits for the palette to close; the effect below moves on then.
+    if (step.afterClose && shellLayerOpen(useUiStore.getState())) setClosing(true);
+    else finished();
   }, [finished, model, step]);
+  const [closing, setClosing] = useState(false);
+  useLayoutEffect(() => setClosing(false), [index]);
+  useEffect(() => {
+    if (!closing || palette) return;
+    setClosing(false);
+    finished();
+  }, [closing, finished, palette]);
   // A step that opens on its scene keeps the guide out until the scene has been seen; a step the coach replays is no news.
   const [scene, setScene] = useState(false);
   useLayoutEffect(() => {
@@ -604,8 +614,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         {place.arrow ? <div className="pc-arrow" style={place.arrow} /> : null}
         <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
         <h3>{words("title")}</h3>
-        <p>{words("text")}</p>
-        {via ? <div className="pc-via">{via}</div> : null}
+        <p>{palette && step.afterClose ? say("practice.palette.line") : words("text")}</p>
+        {via && !(palette && step.afterClose) ? <div className="pc-via">{via}</div> : null}
         <div className="pc-row">
           {/* Leaving is always where the eye is, a stuck step included; it goes back to the real Hide, and the chapter list keeps where it stopped. */}
           <button type="button" className="pc-exit" onClick={onLeave} data-practice-exit>{say("practice.exit")}</button>
