@@ -3192,6 +3192,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** A session's plan, large in the lane's 보기 slot (PRD hide-plan B11); the keyboard stays in the terminal. */
     openPlan(session: import("./snapshot").WorkSession) {
       leaveMissionsForSlot();
+      if (ui().screen?.kind === "missions") return diagnostic("plan_open: no Workspace in front to draw the slot");
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session } } });
     },
     /**

@@ -132,6 +132,7 @@ export function MissionScreen({ actions }: { actions: Actions }) {
         connected={connected}
         projects={projects}
         projectId={projectId}
+        selectedProject={selected?.mission.workspace_id ?? null}
         returnPane={place.returnPane}
         actions={actions}
       />
@@ -157,12 +158,14 @@ export function MissionScreen({ actions }: { actions: Actions }) {
  * `미션 · <device> · N개`, the device's `연결 안 됨` while it does not
  * answer, and the project chips, `모든 프로젝트` first.
  */
-function Head({ device, count, connected, projects, projectId, returnPane, actions }: {
+function Head({ device, count, connected, projects, projectId, selectedProject, returnPane, actions }: {
   device: string;
   count: number | null;
   connected: boolean;
   projects: readonly MissionProject[];
   projectId: string | null;
+  /** The project of the mission the detail shows, if any. */
+  selectedProject: string | null;
   returnPane: string | null;
   actions: Actions;
 }) {
@@ -192,7 +195,12 @@ function Head({ device, count, connected, projects, projectId, returnPane, actio
             className="min-w-0"
             aria-label={t("missionScreen.projects")}
             value={projectId ?? ""}
-            onValueChange={(value) => useUiStore.getState().setMissions({ projectId: value === "" ? null : value, scroll: 0 })}
+            onValueChange={(value) => {
+              const next = value === "" ? null : value;
+              // A chip that leaves out the mission the detail shows returns to its table, so the list never loses the mission it shows (B10).
+              const keeps = selectedProject === null || next === null || next === selectedProject;
+              useUiStore.getState().setMissions({ projectId: next, scroll: 0, ...(keeps ? {} : { selected: null }) });
+            }}
           >
             <ToggleGroupItem variant="pill" size="sm" value="" data-mission-project-chip="all">{t("missionScreen.allProjects")}</ToggleGroupItem>
             {projects.map((project) => (

@@ -170,6 +170,17 @@ describe("a mission's detail (B10, B11, B22, D-16)", () => {
   });
 });
 
+describe("a project chip while a mission shows (B10)", () => {
+  it("returns to the chip's table when the chip leaves the mission out, and keeps the detail when it holds it", async () => {
+    const { q, press } = await mount({ place: { selected: "mission-1" } });
+    await press(q('[data-mission-project-chip="w"]'));
+    expect(q("[data-mission-screen-detail]")?.dataset.missionScreenDetail).toBe("mission-1");
+    await press(q('[data-mission-project-chip="w2"]'));
+    expect(q("[data-mission-screen-view]")?.dataset.missionScreenView).toBe("table");
+    expect(q("[data-mission-screen-count]")?.dataset.missionScreenCount).toBe("1");
+  });
+});
+
 describe("the head's way back (B14)", () => {
   it("names the pane a chip opened it from and goes back to it", async () => {
     const agent = { pane_id: "w1:p4", identity_label: "hide-private P0", device_id: "mac" } as unknown as AgentRow;
