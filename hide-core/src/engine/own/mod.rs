@@ -28,8 +28,8 @@ use std::time::Instant;
 
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
-    HolderError, HolderKey, HolderScroll, HolderStart, PaneFacts, PaneHolders, PaneInput,
-    StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderKey, HolderRenewal, HolderScroll, HolderStart, PaneFacts, PaneHolders,
+    PaneInput, RENEWAL_LOST, RENEWAL_UNSETTLED, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 use super::keys::PaneKey;
@@ -612,7 +612,16 @@ impl OwnEngine<'_> {
     /// Publishes a start provisionally so early hooks have their identity,
     /// then withdraws only proven non-delivery of that same attempt.
     /// An unanswered write may already have reached the program.
-    fn type_agent_start(&self, pane: &str, agent: agents::PaneAgent, line: &str) -> Answer<()> {
+    /// `wakes` types the line as the sleep of the pane's agent does
+    /// ([`OwnEngine::type_sleep_input`]): a wake's start into a pane whose
+    /// agent is asleep.
+    fn type_agent_start(
+        &self,
+        pane: &str,
+        agent: agents::PaneAgent,
+        line: &str,
+        wakes: bool,
+    ) -> Answer<()> {
         let start = {
             let mut topology = self.topology();
             if agent
@@ -629,7 +638,12 @@ impl OwnEngine<'_> {
         };
         self.give_rules(pane);
         self.changed();
-        let result = self.type_bytes(pane, format!("{line}\r").into_bytes());
+        let line = PaneInput::Bytes(format!("{line}\r").into_bytes());
+        let result = if wakes {
+            self.type_sleep_input(pane, line)
+        } else {
+            self.type_input(pane, line)
+        };
         let not_delivered = matches!(&result, Err(EngineError::Refused { .. }));
         let withdrawn = self
             .topology()
@@ -1080,6 +1094,17 @@ impl OwnEngine<'_> {
         self.shared.holders.input(pane, input).map_err(holder_error)
     }
 
+    /// [`OwnEngine::type_input`] as the sleep of the pane's agent types: its
+    /// end and its wake, the only input a pane whose agent is asleep takes
+    /// (`PaneHolders::sleeper_input`).
+    fn type_sleep_input(&self, pane: &str, input: PaneInput) -> Answer<()> {
+        self.known(pane)?;
+        self.shared
+            .holders
+            .sleeper_input(pane, input)
+            .map_err(holder_error)
+    }
+
     /// The folders a program other than its shell works in, in a pane whose
     /// holder runs, as its machine observes them, so a folder a program has
     /// moved to is guarded as the folder the pane started in is; `None` when
@@ -1136,6 +1161,84 @@ impl OwnEngine<'_> {
             foreground_pids,
             foreground_names,
         })
+    }
+
+    /// [`Engine::renew_holder`], as a wake asks it before an agent starts
+    /// again in `pane` (with-hide/hide-private#646): its node compares the
+    /// holder's version folder with its own build's and renews a shell alone
+    /// in a pane whose agent is asleep, the pane's turn held there against a
+    /// close or another renewal. The new holder's start is one of the
+    /// engine's starts, under their cap. A pane its node says no holder of
+    /// the renewal runs ([`RENEWAL_LOST`], [`RENEWAL_UNSETTLED`]) is marked
+    /// as a pane a restore could not start; every other refusal, an answer
+    /// that never came included, leaves the pane as its node has it, and the
+    /// wake types nothing.
+    pub(super) fn renew(&self, pane: &str, cwd: Option<&str>) -> Answer<HolderRenewal> {
+        // A start under way, a restore's restart of the pane included, is
+        // waited for: its holder is the one judged.
+        self.ready(pane)?;
+        let mut turn = self.shared.starts.reserve()?;
+        turn.enter()?;
+        let start = {
+            let topology = self.topology();
+            let held = topology.pane(pane)?;
+            if held.closing {
+                return Err(refused("pane_closing", format!("pane {pane} is closing")));
+            }
+            if held.failed.is_some() || held.starting.as_ref().is_some_and(|s| !s.started()) {
+                return Err(refused(
+                    "pane_not_running",
+                    format!("pane {pane}'s holder is not running"),
+                ));
+            }
+            if held.command.is_some() {
+                return Ok(HolderRenewal::Kept {
+                    code: "pane_runs_program".to_owned(),
+                    message: format!("pane {pane} runs a program of its own, not a shell"),
+                });
+            }
+            let cwd = cwd.unwrap_or(&held.cwd).to_owned();
+            start_request(pane, None, &cwd, held.env.clone(), None)
+        };
+        let renewed = self.shared.holders.renew(&start).map_err(holder_error);
+        if let Err(EngineError::Refused { code, message }) = &renewed
+            && (code == RENEWAL_LOST || code == RENEWAL_UNSETTLED)
+        {
+            if let Ok(held) = self.topology().pane_mut(pane)
+                && !held.closing
+            {
+                held.failed = Some(message.clone());
+            }
+            self.changed();
+        }
+        crate::diagnostic!(match &renewed {
+            Ok(HolderRenewal::Current) => serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.holder_current",
+                "pane_id": pane,
+            }),
+            Ok(HolderRenewal::Renewed { from, to }) => serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.holder_renewed",
+                "pane_id": pane,
+                "from": from,
+                "to": to,
+            }),
+            Ok(HolderRenewal::Kept { code, message }) => serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.holder_kept",
+                "pane_id": pane,
+                "code": code,
+                "message": message,
+            }),
+            Err(error) => serde_json::json!({
+                "component": "own_engine",
+                "kind": "engine.holder_renewal_refused",
+                "pane_id": pane,
+                "message": error.to_string(),
+            }),
+        });
+        renewed
     }
 }
 
@@ -2090,6 +2193,14 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(())
     }
 
+    fn send_sleep_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
+        self.check()?;
+        for input in typed_keys(keys)? {
+            self.type_sleep_input(pane, input)?;
+        }
+        Ok(())
+    }
+
     /// The text as it is, then Enter encoded for the program's keyboard
     /// modes, as Herdr submits text.
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
@@ -2222,6 +2333,11 @@ impl<'g> Engine for OwnEngine<'g> {
         Ok(PreparedStart::new(launch, line))
     }
 
+    fn renew_holder(&self, _wait: Wait, pane: &str, cwd: Option<&str>) -> Answer<HolderRenewal> {
+        self.check()?;
+        self.renew(pane, cwd)
+    }
+
     fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
         self.check()?;
         let launch = start.launch();
@@ -2269,6 +2385,7 @@ impl<'g> Engine for OwnEngine<'g> {
                 agents::started_session(definition, &argv, launch.wakes),
             ),
             &line,
+            launch.wakes,
         )?;
         Ok(StartedAgent {
             pane_id: pane.to_owned(),
@@ -2493,6 +2610,12 @@ mod tests {
         /// does. The time each ask was given, in order.
         processes_held: (Mutex<bool>, Condvar),
         processes_within: Mutex<Vec<Duration>>,
+        /// What each renewal answers, in order; `Current` once they are
+        /// spent. The starts renewals were asked with.
+        renewals: Mutex<std::collections::VecDeque<Result<HolderRenewal, HolderError>>>,
+        renewed: Mutex<Vec<HolderStart>>,
+        /// The panes each input typed as the sleep's own went to, in order.
+        sleep_typed: Mutex<Vec<String>>,
         /// How many of the next process asks about each pane are lost, as a
         /// node's ask is that never comes back.
         processes_lost: Mutex<BTreeMap<String, usize>>,
@@ -2701,6 +2824,15 @@ mod tests {
             }
         }
 
+        fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+            self.renewed.lock().unwrap().push(start.clone());
+            self.renewals
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Ok(HolderRenewal::Current))
+        }
+
         fn terminate(&self, pane: &str) -> Result<(), HolderError> {
             let hold = {
                 let mut hold = self.terminate_hold.lock().unwrap();
@@ -2783,6 +2915,11 @@ mod tests {
                 })?,
             })
         }
+        fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+            self.sleep_typed.lock().unwrap().push(pane.to_owned());
+            self.input(pane, input)
+        }
+
         fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
             let hold = self.input_hold.lock().unwrap().take();
             if let Some((began, finish)) = hold {
@@ -3491,6 +3628,127 @@ mod tests {
         );
     }
 
+    fn restore_error(engine: &OwnEngine<'_>, pane: &str) -> Option<String> {
+        engine
+            .session(WAIT)
+            .unwrap()
+            .panes
+            .into_iter()
+            .find(|projected| projected.pane_id == pane)
+            .expect("the pane keeps its place")
+            .restore_error
+    }
+
+    /// with-hide/hide-private#646: a wake asks the pane's node to renew its
+    /// holder with the shell start the pane runs, in the folder the agent
+    /// works in; a pane the node kept on its earlier holder runs as it did,
+    /// as does one whose node's answer never came, and one the node says no
+    /// holder of the renewal runs (lost, or its earlier holder's close
+    /// unsettled) is marked as a pane whose terminal could not start, which
+    /// no wake renews again.
+    #[test]
+    fn a_renewal_asks_with_the_panes_shell_and_one_that_left_no_holder_marks_the_pane() {
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        let first = holders
+            .started()
+            .into_iter()
+            .find(|start| start.pane == pane)
+            .unwrap();
+        let renewed = HolderRenewal::Renewed {
+            from: "v79-earlier".to_owned(),
+            to: "v79-current".to_owned(),
+        };
+        let kept = HolderRenewal::Kept {
+            code: "pane_busy".to_owned(),
+            message: "the shell runs a program".to_owned(),
+        };
+        holders.renewals.lock().unwrap().extend([
+            Ok(renewed.clone()),
+            Ok(HolderRenewal::Current),
+            Ok(kept.clone()),
+            Err(HolderError::Unreachable {
+                message: "the device's answer never came".to_owned(),
+            }),
+            Err(HolderError::Refused {
+                code: RENEWAL_LOST.to_owned(),
+                message: "the holder did not start".to_owned(),
+            }),
+        ]);
+
+        assert_eq!(
+            engine.renew_holder(WAIT, &pane, Some("/w/agent")).unwrap(),
+            renewed
+        );
+        assert_eq!(
+            engine.renew_holder(WAIT, &pane, None).unwrap(),
+            HolderRenewal::Current
+        );
+        let asked = holders.renewed.lock().unwrap().clone();
+        assert_eq!(
+            asked
+                .iter()
+                .map(|start| (
+                    start.pane.as_str(),
+                    start.program.clone(),
+                    start.cwd.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (pane.as_str(), None, "/w/agent"),
+                (pane.as_str(), None, first.cwd.as_str())
+            ]
+        );
+        assert!(asked.iter().all(|start| start.env == first.env));
+
+        assert_eq!(engine.renew_holder(WAIT, &pane, None).unwrap(), kept);
+        assert_eq!(restore_error(&engine, &pane), None, "the pane runs on");
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+        assert!(engine.renew_holder(WAIT, &pane, None).is_err());
+        assert_eq!(restore_error(&engine, &pane), None, "the pane runs on");
+        engine.read_pane(WAIT, &pane, "recent", 1).unwrap();
+
+        match engine.renew_holder(WAIT, &pane, None) {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, RENEWAL_LOST),
+            other => panic!("expected the lost renewal, got {other:?}"),
+        }
+        assert!(
+            restore_error(&engine, &pane).is_some_and(|why| why.contains("did not start")),
+            "the pane is marked"
+        );
+        match engine.renew_holder(WAIT, &pane, None) {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, "pane_not_running"),
+            other => panic!("expected the marked pane's refusal, got {other:?}"),
+        }
+        assert_eq!(holders.renewed.lock().unwrap().len(), 5, "not asked again");
+
+        // A close that did not settle marks a pane as a lost renewal does.
+        let (_, _, unsettled) = engine
+            .create_workspace(WAIT, "/u", "u", true, Env::new())
+            .unwrap();
+        engine.read_pane(WAIT, &unsettled, "recent", 1).unwrap();
+        holders
+            .renewals
+            .lock()
+            .unwrap()
+            .push_back(Err(HolderError::Refused {
+                code: RENEWAL_UNSETTLED.to_owned(),
+                message: "the close did not finish".to_owned(),
+            }));
+        match engine.renew_holder(WAIT, &unsettled, None) {
+            Err(EngineError::Refused { code, .. }) => assert_eq!(code, RENEWAL_UNSETTLED),
+            other => panic!("expected the unsettled renewal, got {other:?}"),
+        }
+        assert!(
+            restore_error(&engine, &unsettled).is_some_and(|why| why.contains("did not finish")),
+            "the pane is marked"
+        );
+    }
+
     fn moves(engine: &OwnEngine<'_>) -> (Vec<String>, Option<(String, bool)>) {
         let session = engine.session(WAIT).unwrap();
         (
@@ -4153,6 +4411,41 @@ mod tests {
             engine.start_agent(WAIT, &start).unwrap();
             assert_eq!(holders.typed(&pane), line, "windows: {windows}");
         }
+    }
+
+    /// with-hide/hide-private#646: a wake's start and the sleep's quit keys
+    /// are typed as the sleep's own input, the only input a pane whose agent
+    /// is asleep takes; any other start or key is ordinary input, which such
+    /// a pane refuses.
+    #[test]
+    fn a_wakes_start_and_the_sleeps_keys_are_the_sleeps_own_input() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let wake = engine
+            .prepare_start(AgentLaunch {
+                wakes: true,
+                ..launch(&pane, "worker", "claude", &[])
+            })
+            .unwrap();
+        engine.start_agent(WAIT, &wake).unwrap();
+        assert_eq!(holders.typed(&pane), "claude\r");
+        assert_eq!(
+            *holders.sleep_typed.lock().unwrap(),
+            std::slice::from_ref(&pane)
+        );
+        engine.send_sleep_keys(WAIT, &pane, &["ctrl+c"]).unwrap();
+        assert_eq!(holders.sleep_typed.lock().unwrap().len(), 2);
+        engine.send_keys(WAIT, &pane, &["ctrl+c"]).unwrap();
+        engine.submit_text(WAIT, &pane, "ls").unwrap();
+        assert_eq!(
+            holders.sleep_typed.lock().unwrap().len(),
+            2,
+            "ordinary input is not the sleep's"
+        );
     }
 
     /// D-19, B17, B18: a start types its definition's line into the idle

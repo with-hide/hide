@@ -161,6 +161,16 @@ pub(super) enum Typist {
     Operator,
     /// The core's own engine: a letter, a prompt, a command it types.
     Engine,
+    /// The core's own engine putting the pane's agent to sleep or waking
+    /// it: the only input a pane takes while it is asleep.
+    Sleeper,
+}
+
+impl Typist {
+    /// The core's own engine, as anything but the operator.
+    pub(super) fn engine(self) -> bool {
+        self != Self::Operator
+    }
 }
 
 /// The keys a pane can still be given at `now`, in order; those held longer

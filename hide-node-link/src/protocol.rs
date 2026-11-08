@@ -341,11 +341,18 @@ use crate::error::HostError;
 /// from its agents' sessions and Paseo's and Herdr's lists, for Add a
 /// project on any device (PRD device-add-project D-09); a helper on 81
 /// would refuse it, so it upgrades (81 is taken by an open change).
-/// 83: `owed_confirmations` hands the core the letter confirmations a pane's
+/// 83 (81 was held for this change while 82 landed first): a node renews a
+/// pane's holder from this build's version folder
+/// (`holders::PaneCall::Renew`, with-hide/hide-private#646), which the core
+/// asks before it wakes an agent in the pane, and takes only the sleep's own
+/// input (`holders::PaneCall::SleeperInput`) into a pane whose agent is
+/// asleep; a helper on an earlier protocol would refuse both calls, so it
+/// upgrades.
+/// 84: `owed_confirmations` hands the core the letter confirmations a pane's
 /// hooks could not send in time (`hide_agent_hooks::owed::take`), which the
 /// core asks once the pane rests (`docs/delivery.md`, A confirmation that
-/// missed its hook); a helper on 82 would refuse it, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 83;
+/// missed its hook); a helper on 83 would refuse it, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 84;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

@@ -708,6 +708,13 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("send_keys", json!({"pane": pane, "keys": keys}))
     }
 
+    fn send_sleep_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
+        self.ask(
+            "send_keys",
+            json!({"pane": pane, "keys": keys, "sleep": true}),
+        )
+    }
+
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.ask("submit_text", json!({"pane": pane, "text": text}))
     }
@@ -763,6 +770,15 @@ impl<'g> Engine for FakeEngine<'g> {
         )?;
         let line = launch.kind.len() + launch.args.iter().map(|arg| arg.len() + 1).sum::<usize>();
         Ok(PreparedStart::new(launch, line))
+    }
+
+    fn renew_holder(
+        &self,
+        _wait: Wait,
+        pane: &str,
+        cwd: Option<&str>,
+    ) -> Answer<hide_node_link::holders::HolderRenewal> {
+        self.ask("renew_holder", json!({"pane": pane, "cwd": cwd}))
     }
 
     fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
