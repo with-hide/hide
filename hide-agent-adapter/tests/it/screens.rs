@@ -109,11 +109,11 @@ fn a_start_waits_for_the_ready_screen_only_until_the_agent_takes_a_line() {
 /// way a menu's selected row is, so it reads as a question until it is sent,
 /// and Hide holds letters and automatic input for that pane meanwhile (it
 /// holds them for a draft anyway). The same list once sent reads idle
-/// (`screens/codex/idle-numbered-message-sent.ansi`).
+/// (`screens/codex/idle-numbered-message-sent.txt`).
 #[test]
 fn a_codex_draft_that_begins_with_a_number_reads_as_a_question_until_it_is_sent() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/screen-limits/codex/numbered-draft.ansi");
+        .join("tests/fixtures/screen-limits/codex/numbered-draft.txt");
     let text = screen_text(&std::fs::read_to_string(path).unwrap());
     let rules = &builtin("codex").unwrap().screen.as_ref().unwrap().rules;
     let detection = rules.evaluate(Input::screen(&text)).unwrap();

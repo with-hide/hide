@@ -310,6 +310,22 @@ pub(crate) fn reserve(
     Ok(json!(wait))
 }
 
+/// The answer of a wait that ended with nothing registered, for the log of
+/// its settle (`lineage`), never for a caller: why it ended, and for a
+/// spawn's wait the spawn and what became of its brief
+/// (`SpawnRecord::brief_state`), so an agent that ended before it took its
+/// brief is told from one that ended after.
+fn ended(ledger: &Ledger, wait: &IdentityWait, reason: &str) -> Value {
+    let mut answer = json!({"ended": reason});
+    if let Owed::Spawn { spawn } = &wait.owed {
+        answer["spawn"] = json!(spawn);
+        if let Some(record) = ledger.spawns.iter().find(|record| &record.id == spawn) {
+            answer["brief"] = json!(record.brief_state());
+        }
+    }
+    answer
+}
+
 /// Applies `settle` to wait `id` in one transaction: a bind registers the
 /// agent as owed and ends the wait; a bind the ledger refuses, and every
 /// end, ends the wait with that reason, so nothing is retried for an agent
@@ -326,8 +342,8 @@ pub(crate) fn apply(
     };
     let record = match settle {
         Settle::End(reason) => {
-            ledger.identity_waits.remove(index);
-            return Ok(json!({"ended": reason}));
+            let wait = ledger.identity_waits.remove(index);
+            return Ok(ended(ledger, &wait, reason));
         }
         Settle::Bind(record) => record,
     };
@@ -340,8 +356,8 @@ pub(crate) fn apply(
             Ok(json!({"bound": agent}))
         }
         Err(reason) => {
-            ledger.identity_waits.remove(index);
-            Ok(json!({"ended": reason}))
+            let wait = ledger.identity_waits.remove(index);
+            Ok(ended(ledger, &wait, &reason))
         }
     }
 }
@@ -381,12 +397,22 @@ fn bind(
                 },
                 now,
             )?;
-            super::apply(
-                ledger,
-                &parent,
-                &Mutation::Complete { id: spawn.clone() },
-                now,
-            )?;
+            // A spawn whose brief is still to be typed is completed by the
+            // same command asked again, which types it once and then binds
+            // this same child; completing it here would answer that command
+            // from the record with the brief never typed.
+            let brief_pending = ledger
+                .spawns
+                .iter()
+                .any(|record| &record.id == spawn && record.brief_pending());
+            if !brief_pending {
+                super::apply(
+                    ledger,
+                    &parent,
+                    &Mutation::Complete { id: spawn.clone() },
+                    now,
+                )?;
+            }
             ledger
                 .spawns
                 .iter()

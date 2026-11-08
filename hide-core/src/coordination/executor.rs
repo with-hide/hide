@@ -214,9 +214,11 @@ fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: Str
     let Command::Spawn { parent, intent, .. } = command else {
         return code;
     };
-    if !super::INCOMPLETE_SPAWN.contains(&code.as_str()) {
+    let (bare, cause) = super::split_refusal(&code);
+    if !super::INCOMPLETE_SPAWN.contains(&bare) {
         return code;
     }
+    let (bare, cause) = (bare.to_owned(), cause.map(str::to_owned));
     let Ok(ledger) = state(client) else {
         return code;
     };
@@ -235,12 +237,13 @@ fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: Str
     match found {
         Some(spawn) => {
             let spawn = spawn_ref(spawn, &actor.device_id);
-            super::refusal(
-                &code,
-                &json!({"id": spawn.id, "pane": spawn.pane}).to_string(),
-            )
+            let mut detail = json!({"id": spawn.id, "pane": spawn.pane});
+            if let Some(cause) = cause {
+                detail["cause"] = json!(cause);
+            }
+            super::refusal(&bare, &detail.to_string())
         }
-        None => code,
+        None => bare,
     }
 }
 
@@ -362,24 +365,78 @@ fn wait_native_identity(
 }
 /// Waits until the engine reports the agent `name` in `pane` ready for input
 /// (`BRIEF_READY_WAIT`, ending by the spawn's `answer_by`), the moment the
-/// spawn's brief may be typed. An agent that never takes input in that time
-/// is `brief_not_submitted`: nothing was typed, and the same command waits
-/// again.
+/// spawn's brief may be typed. An agent that does not take input in that
+/// time is `brief_not_submitted`: nothing was typed, and the same command
+/// waits again (or starts the agent once more, when it ended). The answer's
+/// detail and the log say why (`NotReady::cause`): a question on its screen,
+/// an agent that ended, one not ready, or one the engine could not read.
 fn brief_ready(
     engine: &dyn Engine,
     spawn: &str,
     pane: &str,
     name: &str,
     answer_by: Instant,
-) -> Result<(), String> {
+) -> Result<(), BriefNotReady> {
     use crate::delivery::ladder::NotReady;
     crate::delivery::ladder::ready(engine, pane, name, brief_wait(answer_by)).map_err(|not| {
-        match not {
-            NotReady::Request(message) => message,
-            NotReady::Unread(detail) => brief_refused(spawn, pane, "brief.agent_unread", detail),
-            NotReady::Late(detail) => brief_refused(spawn, pane, "brief.agent_not_ready", detail),
+        let kind = match &not {
+            NotReady::Request(_) => return BriefNotReady::Refused(not.detail()),
+            NotReady::Unread(_) => "brief.agent_unread",
+            NotReady::Late(_) | NotReady::Asking(_) => "brief.agent_not_ready",
+            NotReady::Ended(_) => "brief.agent_ended",
+        };
+        let cause = not.cause().unwrap_or("unread");
+        let reason = brief_refused_because(spawn, pane, kind, cause, not.detail());
+        if cause == "agent_ended" {
+            BriefNotReady::Ended(reason)
+        } else {
+            BriefNotReady::Running(reason)
         }
     })
+}
+
+/// Has the core wait for the session of spawn `spawn`'s agent in `pane` on
+/// `device` and bind it as the spawn's child (`identity_wait`); asking again
+/// answers the same wait.
+#[allow(clippy::too_many_arguments)]
+fn await_identity(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    device: &str,
+    pane: &str,
+    name: &str,
+    kind: &str,
+    spawn: &str,
+) -> Result<(), String> {
+    mutate(
+        client,
+        authority,
+        actor,
+        Mutation::AwaitIdentity {
+            wait: super::identity_wait::IdentityWait {
+                id: String::new(),
+                machine: device.to_owned(),
+                pane: pane.to_owned(),
+                name: name.to_owned(),
+                kind: kind.to_owned(),
+                owed: super::identity_wait::Owed::Spawn {
+                    spawn: spawn.to_owned(),
+                },
+            },
+        },
+    )
+    .map(drop)
+}
+
+/// Why a spawn's brief was not typed, as `brief_ready` answers it.
+enum BriefNotReady {
+    /// The engine refused the read itself; the code as it came.
+    Refused(String),
+    /// The agent still runs: it asks a question, or is not ready yet.
+    Running(String),
+    /// The agent ended before it took its brief.
+    Ended(String),
 }
 
 fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String {
@@ -387,6 +444,23 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
         "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
     }));
     "brief_not_submitted".to_owned()
+}
+
+/// `brief_refused` for a brief whose agent did not take input, with the
+/// cause in the log and in the refusal's detail, which the spawn's answer
+/// carries as its `cause` (`incomplete_spawn`).
+fn brief_refused_because(
+    spawn: &str,
+    pane: &str,
+    kind: &str,
+    cause: &str,
+    detail: String,
+) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "cause": cause,
+        "detail": detail,
+    }));
+    super::refusal("brief_not_submitted", cause)
 }
 
 /// The program the engine starts `kind` by (the definition's first
@@ -1596,7 +1670,28 @@ fn spawn(
                     }));
                 }
             }
-            brief_ready(engine.as_ref(), &reserved.id, pane, name, answer_by)?;
+            match brief_ready(engine.as_ref(), &reserved.id, pane, name, answer_by) {
+                Ok(()) => {}
+                Err(BriefNotReady::Refused(code) | BriefNotReady::Ended(code)) => return Err(code),
+                // The agent runs on with its brief untyped: the core watches
+                // it as the spawn's (`identity_wait`), so its end is logged
+                // with the brief it never took, and it is bound if the
+                // operator gives it a turn of their own. The same command
+                // still types the brief once (`identity_wait::bind`).
+                Err(BriefNotReady::Running(code)) => {
+                    await_identity(
+                        client,
+                        authority,
+                        actor,
+                        &child_device,
+                        pane,
+                        name,
+                        kind,
+                        &reserved.id,
+                    )?;
+                    return Err(code);
+                }
+            }
             let pane_key = if on_node {
                 pane.to_owned()
             } else {
@@ -1690,22 +1785,15 @@ fn spawn(
                 // The agent rests without a session (Codex and OpenCode 2
                 // report theirs at their first turn): the core binds it when
                 // the engine shows one, and the caller hears it has not yet.
-                mutate(
+                await_identity(
                     client,
                     authority,
                     actor,
-                    Mutation::AwaitIdentity {
-                        wait: super::identity_wait::IdentityWait {
-                            id: String::new(),
-                            machine: child_device.clone(),
-                            pane: pane.into(),
-                            name: name.clone(),
-                            kind: kind.clone(),
-                            owed: super::identity_wait::Owed::Spawn {
-                                spawn: reserved.id.clone(),
-                            },
-                        },
-                    },
+                    &child_device,
+                    pane,
+                    name,
+                    kind,
+                    &reserved.id,
                 )?;
                 return Err(reason);
             }

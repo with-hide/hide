@@ -1065,9 +1065,17 @@ fn run(
                     "agent_id":id,"from_pane_id":from.pane_id}));
             }
             for (record, reason) in &ended {
+                // A spawn's child says what became of its brief when it ends
+                // (`SpawnRecord::brief_state`): an agent that ended with its
+                // brief unconfirmed is told from one that took it.
+                let spawn = candidate
+                    .spawns
+                    .iter()
+                    .find(|spawn| spawn.child.as_ref() == Some(&record.id));
                 crate::diagnostic!(json!({"component":"coordination","kind":"agent.ended",
                     "agent_id":record.id,"machine":record.machine,"pane_id":record.pane,
-                    "reason":reason.reason()}));
+                    "reason":reason.reason(),"spawn":spawn.map(|spawn| &spawn.id),
+                    "brief":spawn.map(|spawn| spawn.brief_state())}));
             }
         }
         if saved.is_ok() && changed {

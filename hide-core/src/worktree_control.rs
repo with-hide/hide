@@ -1717,7 +1717,7 @@ fn type_first_prompt(
     name: &str,
     prompt: &str,
 ) -> Launch {
-    use crate::delivery::ladder::{self, Delivered, InputTarget, NotReady};
+    use crate::delivery::ladder::{self, Delivered, InputTarget};
     let failed = |detail: String| {
         crate::diagnostic!(json!({
             "component": "task_operation", "kind": "agent.prompt_not_typed", "id": id,
@@ -1731,9 +1731,7 @@ fn type_first_prompt(
         ))
     };
     if let Err(not) = ladder::ready(engine, pane_id, name, crate::coordination::BRIEF_READY_WAIT) {
-        return failed(match not {
-            NotReady::Request(detail) | NotReady::Unread(detail) | NotReady::Late(detail) => detail,
-        });
+        return failed(not.detail());
     }
     let target = InputTarget {
         kind: kind.to_owned(),

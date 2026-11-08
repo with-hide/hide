@@ -689,6 +689,39 @@ pub struct SpawnRecord {
     pub reserved_at_unix_ms: u64,
 }
 
+impl SpawnRecord {
+    /// Whether the spawn has a brief it has not submitted yet.
+    pub(crate) fn brief_pending(&self) -> bool {
+        self.brief.is_some() && !self.briefed
+    }
+
+    /// What became of the spawn's brief, as the log of its agent's end says
+    /// it: `none` without one, `not_typed` before it was submitted,
+    /// `confirmed` once the agent recorded it, else how it went in with no
+    /// record of it yet (`typed`, `launched`, `queued`, `lost`, each
+    /// `_unconfirmed`). Never "undelivered" for input that may have arrived.
+    pub(crate) fn brief_state(&self) -> &'static str {
+        use crate::delivery::typed::SendRoute;
+        if self.brief.is_none() {
+            return "none";
+        }
+        if !self.briefed {
+            return "not_typed";
+        }
+        match &self.brief_input {
+            Some(input) if input.confirmed_at_unix_ms.is_some() => "confirmed",
+            Some(input) => match input.route {
+                SendRoute::Typed => "typed_unconfirmed",
+                SendRoute::Launch => "launched_unconfirmed",
+                SendRoute::Channel => "queued_unconfirmed",
+                SendRoute::Lost => "lost_unconfirmed",
+            },
+            // A record an earlier build wrote before typed input was kept.
+            None => "typed_unconfirmed",
+        }
+    }
+}
+
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
