@@ -1426,7 +1426,6 @@ fn read_record_is_released_and_not_raised_by_a_checkout_switch() {
             path: root_a.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         },
         WorkspaceRegistration {
             primary_checkout_id: None,
@@ -1435,7 +1434,6 @@ fn read_record_is_released_and_not_raised_by_a_checkout_switch() {
             path: root_b.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         },
     ];
     runtime.rebuild_catalog();
@@ -1570,7 +1568,6 @@ fn a_remote_pane_left_in_the_selection_does_not_block_local_projection() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let local_pane = pane("wL:p1", checkout_path);
     let selected_workspace = workspace(
@@ -2197,7 +2194,6 @@ fn read_record_reaches_the_pane_tree_and_not_only_the_agent_rows() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     }];
     runtime.rebuild_catalog();
     let checkout_id =

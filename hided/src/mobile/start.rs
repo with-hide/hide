@@ -1,7 +1,8 @@
 //! Starting an agent from the phone (PRD home-device-rail D-24, D-25).
 //!
 //! The start sheet reads a catalog built from the core's snapshot: every
-//! device's Home and checkouts as targets, the two agent kinds with the
+//! device's checkouts as targets (none for a device with no project: the
+//! sheet then says to add one on the computer), the two agent kinds with the
 //! models the provider catalog lists, and the choice the last start
 //! remembered. A target travels as an id; the folder it names stays here in
 //! `Catalog::routes` and never reaches the phone. `start_agent` resolves the
@@ -19,8 +20,8 @@ use serde_json::{Value, json};
 /// The agent kinds a phone may start; `terminal` is a desktop-only start.
 pub const KINDS: [&str; hide_agent_adapter::START_KINDS.len()] = hide_agent_adapter::START_KINDS;
 /// How long a start may wait for the core's creation receipt: longer than a
-/// device's Home sync (30 s) plus opening its tab, so a slow start is not
-/// reported as lost while it still runs.
+/// opening its tab on a slow device, so a slow start is not reported as lost
+/// while it still runs.
 pub const ANSWER_LIMIT: Duration = Duration::from_secs(90);
 /// How many start request ids per phone are remembered to refuse a repeat.
 const REMEMBERED_STARTS: usize = 64;
@@ -37,12 +38,11 @@ const REPEAT_POLL: Duration = Duration::from_millis(100);
 /// One place a start can go, as the phone sees it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Target {
-    /// `home:<device_id>` for a device's Home, else the checkout's id.
+    /// The checkout's id.
     pub id: String,
     pub device_id: String,
-    /// The place on the device (`project · branch`, or a folder's name);
-    /// `None` is the device's Home, which the phone names in its language.
-    pub place: Option<String>,
+    /// The place on the device (`project · branch`, or a folder's name).
+    pub place: String,
     /// The device's name; `None` is the core's own machine, which the phone
     /// names in its language from the catalog's `core_platform`.
     pub device_label: Option<String>,
@@ -54,8 +54,7 @@ pub struct Target {
 struct Route {
     /// `None` is this Mac.
     device_id: Option<String>,
-    /// `None` is the device's Home.
-    checkout_path: Option<String>,
+    checkout_path: String,
 }
 
 /// What the start sheet reads; equal catalogs are not sent twice.
@@ -156,7 +155,7 @@ impl Catalog {
         workspaces: &[&Value],
     ) {
         let route_device = (!local).then(|| device_id.to_owned());
-        let push = |catalog: &mut Self, id: String, place: Option<String>, path: Option<String>| {
+        let push = |catalog: &mut Self, id: String, place: String, path: String| {
             if catalog.targets.len() >= MAX_TARGETS {
                 hide_core::diagnostic!(json!({
                     "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
@@ -181,11 +180,7 @@ impl Catalog {
                 connected,
             });
         };
-        push(self, home_id(device_id), None, None);
         for workspace in workspaces {
-            if workspace.get("is_home").and_then(Value::as_bool) == Some(true) {
-                continue;
-            }
             let checkouts = array_of(workspace.get("checkouts"));
             let folder = workspace.get("is_git").and_then(Value::as_bool) != Some(true)
                 && checkouts.len() == 1;
@@ -209,7 +204,7 @@ impl Catalog {
                         .unwrap_or_else(|| str_of(checkout, "label"));
                     format!("{} · {branch}", str_of(workspace, "label"))
                 };
-                push(self, id.to_owned(), Some(label), Some(path.to_owned()));
+                push(self, id.to_owned(), label, path.to_owned());
             }
         }
     }
@@ -224,10 +219,6 @@ impl Catalog {
             "remembered": self.remembered,
         })
     }
-}
-
-fn home_id(device_id: &str) -> String {
-    format!("home:{device_id}")
 }
 
 /// How the core answered one start request.
@@ -372,10 +363,7 @@ fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str
     if let Some(device_id) = &route.device_id {
         payload["device_id"] = json!(device_id);
     }
-    match &route.checkout_path {
-        Some(path) => payload["checkout_path"] = json!(path),
-        None => payload["home"] = json!(true),
-    }
+    payload["checkout_path"] = json!(route.checkout_path);
     Ok(json!({
         "schema_version": crate::state_file::SCHEMA_VERSION,
         "kind": "agent_start_in_checkout",
@@ -604,8 +592,6 @@ mod tests {
                     {"id": "off", "label": "off", "kind": "remote", "state": "disabled"},
                 ],
                 "workspaces": [
-                    {"id": "w-home", "label": "hide", "is_home": true, "path": "/Users/example/hide",
-                     "checkouts": [{"id": "c-home", "path": "/Users/example/hide", "label": "hide"}]},
                     {"id": "w1", "label": "hide", "is_git": true, "path": "/Users/example/projects/hide",
                      "checkouts": [
                         {"id": "c1", "path": "/Users/example/projects/hide", "label": "main", "branch": "main"},
@@ -631,26 +617,19 @@ mod tests {
     }
 
     #[test]
-    fn targets_are_this_mac_first_then_devices_with_home_leading_each() {
+    fn targets_are_this_mac_first_then_devices_and_no_device_has_a_home_target() {
         let catalog = Catalog::of(&rest(), "local");
         let ids: Vec<_> = catalog.targets.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["home:local", "c1", "c2", "c4", "home:mini", "rc1"]);
-        let places: Vec<_> = catalog.targets.iter().map(|t| t.place.as_deref()).collect();
+        assert_eq!(ids, ["c1", "c2", "c4", "rc1"]);
+        let places: Vec<_> = catalog.targets.iter().map(|t| t.place.as_str()).collect();
         assert_eq!(
             places,
-            [
-                None,
-                Some("hide · main"),
-                Some("hide · prd/a"),
-                Some("notes"),
-                None,
-                Some("contong · main")
-            ]
+            ["hide · main", "hide · prd/a", "notes", "contong · main"]
         );
         assert_eq!(catalog.targets[0].device_label, None);
         assert_eq!(catalog.core_platform.as_deref(), Some("windows x86_64"));
         assert_eq!(catalog.frame()["core_platform"], "windows x86_64");
-        assert_eq!(catalog.targets[4].device_label.as_deref(), Some("mini"));
+        assert_eq!(catalog.targets[3].device_label.as_deref(), Some("mini"));
         assert!(catalog.targets.iter().all(|target| target.connected));
     }
 
@@ -662,7 +641,7 @@ mod tests {
         let mini = catalog
             .targets
             .iter()
-            .find(|t| t.id == "home:mini")
+            .find(|t| t.id == "rc1")
             .unwrap();
         assert!(!mini.connected);
     }
@@ -688,10 +667,9 @@ mod tests {
         let empty = Catalog::of(&json!({}), "local").frame();
         assert_eq!(empty["remembered"], json!({"kind": null, "models": {}}));
         assert_eq!(empty["kinds"][0]["models"], json!([]));
-        assert_eq!(
-            empty["targets"].as_array().unwrap().len(),
-            1,
-            "This Mac's Home is always a target"
+        assert!(
+            empty["targets"].as_array().unwrap().is_empty(),
+            "a device with no project has no target"
         );
     }
 
@@ -725,14 +703,11 @@ mod tests {
     }
 
     #[test]
-    fn home_targets_carry_home_and_no_folder() {
+    fn the_old_home_target_ids_lead_nowhere() {
         let catalog = Catalog::of(&rest(), "local");
-        let local = event(&request("home:local", None), &catalog).unwrap();
-        assert_eq!(local["payload"]["home"], true);
-        assert!(local["payload"].get("device_id").is_none());
-        assert!(local["payload"].get("checkout_path").is_none());
-        let remote = event(&request("home:mini", None), &catalog).unwrap();
-        assert_eq!(remote["payload"]["device_id"], "mini");
+        for old in ["home:local", "home:mini"] {
+            assert_eq!(event(&request(old, None), &catalog).unwrap_err(), "unknown_target");
+        }
     }
 
     #[test]

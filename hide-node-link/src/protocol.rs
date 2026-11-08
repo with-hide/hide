@@ -357,7 +357,11 @@ use crate::error::HostError;
 /// the other projects of the node (`others`) so the home project's walk
 /// skips them, and Home never links it; a helper on 84 would refuse the
 /// home folder as a project, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 85;
+/// 86: `home_retire` replaces `home_sync` (PRD retire-hide-home): the core no
+/// longer keeps a Home folder, and asks each helper once to remove what
+/// Hide's marker lists in `~/hide`; a helper on 85 would refuse the call, so
+/// it upgrades first and keeps its `~/hide` until then.
+pub const PROTOCOL_VERSION: u32 = 86;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -671,11 +675,12 @@ pub enum Call {
         name: String,
         kind: crate::browse::NewFolderKind,
     },
-    /// Makes this host's Hide Home folder (`~/hide`) hold one link per
-    /// project in `projects` and nothing Hide did not make
-    /// (`hide_host::home::sync`).
-    HomeSync {
-        projects: Vec<String>,
+    /// Retires this host's old Hide Home folder (`~/hide`) once: removes the
+    /// entries Hide's marker lists as its own and, unless something else is
+    /// there or `keep_empty`, the folder (`hide_host::home::retire`).
+    /// Repeating it changes nothing more.
+    HomeRetire {
+        keep_empty: bool,
     },
     /// A branch measured against `base` in the repository at `root`
     /// (`hide_host::branch_merge::facts`): how far ahead, whether it is in
@@ -1341,7 +1346,7 @@ impl Call {
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
-            | Self::HomeSync { .. }
+            | Self::HomeRetire { .. }
             | Self::HomeList { .. }
             | Self::ImportableProjects { .. }
             | Self::NewFolderTarget { .. }

@@ -1988,6 +1988,7 @@ impl Runtime {
         fetched: Result<RemoteSessionSnapshot, SessionFetchError>,
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
+        self.request_home_retirements();
         changed | self.complete_look()
     }
 
@@ -2519,6 +2520,8 @@ impl Runtime {
         self.ingesting_session = true;
         let changed = self.apply_session_update(fetched, precomputed, focus_check, pass);
         self.ingesting_session = false;
+        // The projects are known now: an old Home waiting on them is asked.
+        self.request_home_retirements();
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
         let pumped = self.pump_geometry_queues();
@@ -4942,18 +4945,6 @@ impl Runtime {
             launch,
             resume_reference: None,
         });
-    }
-
-    /// Adds CLI arguments learned after the task began (a Home start's
-    /// linked folders, known once its helper answered).
-    pub(super) fn extend_task_agent_args(&mut self, id: u64, args: Vec<String>) {
-        if let Some(launch) = self
-            .task_agent_launch
-            .as_mut()
-            .filter(|launch| launch.task == id)
-        {
-            launch.args.extend(args);
-        }
     }
 
     /// The agent the task's worker should now start: the created pane, the

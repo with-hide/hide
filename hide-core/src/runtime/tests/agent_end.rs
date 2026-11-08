@@ -696,7 +696,6 @@ fn list_worktrees(runtime: &mut Runtime) {
             path: PATH.into(),
             device_id: DEVICE.into(),
             pinned: false,
-            home: false,
         });
     runtime.device_facts.insert(
         DEVICE.into(),

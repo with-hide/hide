@@ -1251,7 +1251,6 @@ impl Runtime {
         let with_rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
         let projects = self
             .catalog_workspaces()
-            .filter(|workspace| !workspace.is_home)
             // A project is named by a path, as `@project(<path> <name>)`
             // promises Desk's agent, which hands it to `--repo`: its primary
             // checkout's, or the project's own for a folder with none.

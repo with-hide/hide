@@ -1051,7 +1051,6 @@ fn a_checkout_switch_keeps_the_other_checkouts_retained_and_released_entries() {
             path: path.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         })
         .to_vec();
     runtime.rebuild_catalog();

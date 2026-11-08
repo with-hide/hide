@@ -3043,9 +3043,8 @@ impl Runtime {
     }
 
     pub(super) fn persist_ui_state(&mut self) {
-        // Every registration change is persisted here, which is when a Home's
-        // links follow it (PRD home-device-rail D-06).
-        self.request_home_link_syncs();
+        // A pending retirement of an old Home is asked as soon as it can be.
+        self.request_home_retirements();
         // ...and when a machine's protections follow it (PRD agent-guardrails B11).
         self.refresh_guardrail_policies();
         if let Err(message) = self.write_ui_state() {

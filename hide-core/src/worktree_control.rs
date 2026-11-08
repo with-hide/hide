@@ -2080,84 +2080,39 @@ fn task_node(
     })
 }
 
-/// How long the helper may take to bring a Home in step: a stat per
-/// project and a link each, at most [`hide_node_link::home::MAX_LINKS`].
-const HOME_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the helper may take to retire the old Home: one stat per entry its
+/// marker lists, at most a search of the agents' session stores, and the
+/// folder.
+const HOME_RETIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A Home start or a new tab in Home (PRD home-device-rail D-04): the
-/// device's registered projects its Home links, and the helper that makes
-/// them.
-pub struct HomeStartRequest {
-    pub id: u64,
-    pub device_id: String,
-    pub projects: Vec<String>,
-    pub host: Arc<dyn crate::node_access::NodeLink>,
-}
-
-/// Brings the device's Home in step with its projects, then opens a tab in
-/// it and starts the task's agent there. The disk work runs on the helper,
-/// off the runtime lock; the lock is taken only to publish each step.
-pub fn spawn_home_start(target: TabTarget, request: HomeStartRequest) -> Result<(), String> {
-    thread::Builder::new()
-        .name("hide-core-home-start".into())
-        .spawn(move || {
-            let HomeStartRequest {
-                id,
-                device_id,
-                projects,
-                host,
-            } = request;
-            let synced = sync_home(host.as_ref(), &projects);
-            let Some(runtime) = target.runtime.upgrade() else {
-                return;
-            };
-            let tab = match runtime.lock() {
-                Ok(mut guard) => guard.ingest_home_start_sync(id, &device_id, &projects, synced),
-                Err(_) => return,
-            };
-            drop(runtime);
-            target.notifier.notify();
-            if let Some(tab) = tab {
-                open_tab_and_start_agent(&target, &tab);
-            }
-        })
-        .map(|_| ())
-        .map_err(|error| format!("Home start worker could not be started: {error}"))
-}
-
-/// Brings a device's Home links in step after its registrations changed
-/// (D-06). Nothing reaches the screen: the answer is the diagnostic log's.
-pub fn spawn_home_link_sync(
+/// Asks a device's helper to retire its old Home (PRD retire-hide-home D-03),
+/// off the runtime lock; the answer is the registration's to settle.
+pub fn spawn_home_retire(
     runtime: Weak<Mutex<Runtime>>,
+    notifier: crate::handle::ChangeNotifier,
     device_id: String,
-    projects: Vec<String>,
+    keep_empty: bool,
     host: Arc<dyn crate::node_access::NodeLink>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("hide-core-home-link-sync".into())
+        .name("hide-core-home-retire".into())
         .spawn(move || {
-            let synced = sync_home(host.as_ref(), &projects);
+            let retired: Result<hide_node_link::home::HomeRetired, _> =
+                crate::node_access::call_as(
+                    host.as_ref(),
+                    hide_node_link::protocol::Call::HomeRetire { keep_empty },
+                    HOME_RETIRE_TIMEOUT,
+                );
             if let Some(runtime) = runtime.upgrade()
                 && let Ok(mut guard) = runtime.lock()
             {
-                guard.ingest_home_link_sync(&device_id, &projects, synced);
+                guard.ingest_home_retired(&device_id, retired);
+                drop(guard);
+                notifier.notify();
             }
         })
         .map(|_| ())
-        .map_err(|error| format!("Home link sync worker could not be started: {error}"))
-}
-
-fn sync_home(
-    host: &dyn crate::node_access::NodeLink,
-    projects: &[String],
-) -> Result<hide_node_link::home::HomeSynced, crate::node_access::LinkError> {
-    crate::node_access::call_as(
-        host,
-        hide_node_link::protocol::Call::HomeSync {
-            projects: projects.to_vec(),
-        },
-        HOME_SYNC_TIMEOUT,
-    )
+        .map_err(|error| format!("Home retire worker could not be started: {error}"))
 }
 
 fn create_checkout_tab(
@@ -3202,7 +3157,6 @@ mod tests {
             session_workspace_ids: vec!["w-purpose".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -3416,7 +3370,6 @@ mod tests {
             session_workspace_ids: vec!["w-purpose".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -3545,7 +3498,6 @@ mod tests {
             session_workspace_ids: vec!["w-outer".to_owned(), "w-authority".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "outer".to_owned(),
@@ -3613,7 +3565,6 @@ mod tests {
             session_workspace_ids: vec!["w-first".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -4555,34 +4506,30 @@ mod tests {
     fn a_first_prompt_rides_the_start_only_where_the_agent_declares_it() {
         // OpenCode takes no model, so its start names none; Pi asks no
         // permission question, so full access adds nothing to it.
-        for (kind, prompt, extra_roots, model, full_access) in [
+        for (kind, prompt, model, full_access) in [
             (
                 "claude",
                 &["--", "-fix the tests"][..],
-                true,
                 Some("fixture-model"),
                 &crate::agent_permission::CLAUDE_FULL_ACCESS[..],
             ),
             (
                 "codex",
                 &["--", "-fix the tests"][..],
-                true,
                 Some("fixture-model"),
                 &crate::agent_permission::CODEX_FULL_ACCESS[..],
             ),
             (
                 "grok",
                 &["--", "-fix the tests"][..],
-                false,
                 Some("fixture-model"),
                 &["--always-approve"],
             ),
-            ("opencode", &[][..], false, None, &["--auto"]),
-            ("pi", &[][..], false, Some("fixture-model"), &[]),
+            ("opencode", &[][..], None, &["--auto"]),
+            ("pi", &[][..], Some("fixture-model"), &[]),
             (
                 "omp",
                 &["--", "-fix the tests"][..],
-                true,
                 Some("fixture-model"),
                 &["--auto-approve"],
             ),
@@ -4595,15 +4542,11 @@ mod tests {
                 replies.extend(typed_replies(kind));
             }
             let server = server(replies);
-            let mut args = crate::runtime::agent_choice::agent_arguments(
+            let args = crate::runtime::agent_choice::agent_arguments(
                 Some(kind),
                 model,
                 &crate::agent_permission::AgentPermission::Full,
             );
-            args.extend(crate::runtime::agent_choice::directory_arguments(
-                Some(kind),
-                &["/work/my app".into()],
-            ));
             let outcome = launch_with_prompt(
                 &*server,
                 Some(&Starts(StartForm::Program)),
@@ -4633,9 +4576,6 @@ mod tests {
             assert_eq!(methods_of(&requests), methods, "{kind}");
             let mut expected: Vec<&str> = full_access.to_vec();
             expected.extend(model.into_iter().flat_map(|m| ["--model", m]));
-            if extra_roots {
-                expected.extend(["--add-dir", "/work/my app"]);
-            }
             if !typed {
                 expected.extend(prompt.iter().copied());
             }

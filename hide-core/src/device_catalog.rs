@@ -651,7 +651,6 @@ pub(crate) fn apply_registrations(
             .find(|registration| registration.id == project.id);
         project.registered = registration.is_some();
         project.pinned = registration.is_some_and(|registration| registration.pinned);
-        project.is_home = registration.is_some_and(|registration| registration.home);
     }
     for registration in &registrations {
         if session
@@ -684,7 +683,6 @@ pub(crate) fn apply_registrations(
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: registration.pinned,
-            is_home: registration.home,
             checkouts: vec![CheckoutSnapshot {
                 id: checkout_id(target, &registration.path),
                 next_tab_label: crate::model::next_tab_label(std::iter::empty()),

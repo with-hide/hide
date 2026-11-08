@@ -535,7 +535,6 @@ fn a_stale_precomputed_catalog_keeps_the_last_accepted_one() {
             path: cwd.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         }],
         workspaces: Vec::new(),
         paths: Default::default(),
@@ -1146,7 +1145,6 @@ fn workspace_creation_failures_retire_inflight_and_keep_partial_registration_vis
         path: partial_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     runtime
         .workspace_creations_in_flight
@@ -1803,7 +1801,6 @@ fn pinning_an_unregistered_row_registers_and_pins_it_in_one_event() {
             path: alpha.path.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: true,
-            home: false,
         }]
     );
     let pinned = row(&runtime, "hide-context-alpha");
@@ -2912,7 +2909,6 @@ fn a_registration_the_engine_already_has_a_workspace_for_is_listed_once() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     }];
 
     let catalog = workspace::build_catalog(
@@ -3100,7 +3096,6 @@ fn closing_the_last_projected_pane_leaves_an_empty_checkout_without_an_error() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let previous_workspace = workspace(
         &workspace_id,
@@ -3181,7 +3176,6 @@ fn a_foreign_stale_projection_is_not_mistaken_for_checkout_pane_retirement() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let previous_workspace = workspace(
         &workspace_id,

@@ -34,9 +34,6 @@ impl Runtime {
         let Some((workspace, checkout)) = self.catalog_checkout(workspace_id, checkout_id) else {
             return;
         };
-        if workspace.is_home {
-            return;
-        }
         let branch = checkout.branch.as_deref().unwrap_or(&checkout.label);
         if self
             .snapshot

@@ -15,7 +15,6 @@ fn registration(device: &str, path: &str) -> WorkspaceRegistration {
         path: path.into(),
         device_id: device.into(),
         pinned: false,
-        home: false,
     }
 }
 

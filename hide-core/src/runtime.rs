@@ -48,7 +48,7 @@ pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_import;
 mod hide_notes;
-mod home;
+mod home_retire;
 mod hosts;
 mod human_turn;
 mod inbound;
@@ -1799,8 +1799,8 @@ pub struct Runtime {
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
-    /// Each device's Home link sync: the set last sent and whether it runs.
-    home_links: HashMap<String, home::HomeLinkState>,
+    /// The devices whose old Home retirement is with their helper now.
+    home_retiring: HashSet<String>,
     /// The catalog and root index most recently accepted from the sync
     /// coordinator, reused when a later precomputation arrives stale so the
     /// reconcile never rebuilds under the runtime lock.
@@ -2595,7 +2595,7 @@ impl Runtime {
             pane_move_saves: Vec::new(),
             pane_move_preview: Default::default(),
             task_pane_shell: None,
-            home_links: HashMap::new(),
+            home_retiring: HashSet::new(),
             last_accepted_catalog: None,
             catalog_paths,
             catalog_from_coordinator: false,

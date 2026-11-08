@@ -950,7 +950,6 @@ impl Runtime {
             confirm_only: false,
             checkout_path: Some(key.1.clone()),
             device_id: Some(key.0.clone()),
-            home: false,
             provider: opener.provider.clone(),
             prompt: None,
             model: None,

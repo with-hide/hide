@@ -53,7 +53,6 @@ impl Runtime {
                     workspace.remote_target_id.is_none()
                         && workspace.device_id == device
                         && workspace.path == root
-                        && !workspace.is_home
                 })
                 .ok_or("project_settings_project_missing");
         }
@@ -76,7 +75,7 @@ impl Runtime {
                 session
                     .workspaces
                     .iter()
-                    .find(|workspace| workspace.path == root && !workspace.is_home)
+                    .find(|workspace| workspace.path == root)
             })
             .ok_or("project_settings_project_missing")
     }
@@ -397,9 +396,7 @@ impl Runtime {
             .navigator
             .workspaces
             .iter_mut()
-            .filter(|project| {
-                project.device_id == device && project.path == root && !project.is_home
-            })
+            .filter(|project| project.device_id == device && project.path == root)
         {
             project.label = registrations
                 .iter()

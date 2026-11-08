@@ -675,7 +675,7 @@ impl Runtime {
 
     pub(super) fn link_projects(&self) -> Vec<ProjectFacts> {
         self.catalog_workspaces()
-            .filter(|workspace| workspace.is_git && !workspace.is_home && !workspace.temporary)
+            .filter(|workspace| workspace.is_git && !workspace.temporary)
             .map(|workspace| {
                 let project = self.catalog_github_project(workspace);
                 let prs = project
@@ -1068,7 +1068,7 @@ impl Runtime {
             .filter(|directory| !directory.as_os_str().is_empty())?;
         let projects = self
             .catalog_workspaces()
-            .filter(|workspace| workspace.is_git && !workspace.is_home && !workspace.temporary)
+            .filter(|workspace| workspace.is_git && !workspace.temporary)
             .map(|workspace| crate::links::query::ScopeProject {
                 key: hide_project::project_id(&workspace.device_id, Path::new(&workspace.path)),
                 workspace_id: workspace.id.clone(),

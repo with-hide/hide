@@ -532,7 +532,6 @@ struct PlaceInput {
     task_facts: TaskInput,
     device: String,
     project: String,
-    home: bool,
     pull_requests: Vec<crate::model::PullRequestSnapshot>,
     tasks: Vec<crate::tasks::TaskSnapshot>,
     repository: Option<String>,
@@ -756,7 +755,6 @@ impl Cache {
                     },
                     device: p.device_id.clone(),
                     project: p.id.clone(),
-                    home: p.is_home,
                     pull_requests: p.pull_requests.clone(),
                     tasks: p.tasks.tasks.clone(),
                     repository: p.home_issues.repository.clone(),
@@ -1031,12 +1029,7 @@ impl Cache {
                         .expect("global checkout tree projected");
                 }
             }
-            let overview: Vec<_> = device
-                .projects
-                .iter()
-                .copied()
-                .filter(|p| !p.is_home)
-                .collect();
+            let overview: Vec<_> = device.projects.to_vec();
             let scoped_members = members(&overview, &device.listed);
             overall_members.extend(scoped_members.iter().cloned());
             overall_projects.extend(overview.iter().copied());
@@ -1061,11 +1054,9 @@ impl Cache {
                 for checkout in &project.checkouts {
                     for pane in checkout.tabs.iter().flat_map(|t| &t.panes) {
                         drawn.insert(pane.id.as_str());
-                        if !project.is_home {
-                            owners
-                                .entry(pane.id.clone())
-                                .or_insert_with(|| checkout.id.clone());
-                        }
+                        owners
+                            .entry(pane.id.clone())
+                            .or_insert_with(|| checkout.id.clone());
                     }
                 }
             }
@@ -1127,9 +1118,7 @@ impl Cache {
                             .or_insert_with(|| Place {
                                 project_id: project.id.clone(),
                                 checkout_id: checkout.id.clone(),
-                                kind: if project.is_home {
-                                    "home"
-                                } else if folder {
+                                kind: if folder {
                                     "folder"
                                 } else {
                                     "checkout"
