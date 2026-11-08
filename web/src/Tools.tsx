@@ -29,7 +29,7 @@ import type { MessageKey } from "./i18n/catalogs";
 // The right lane and its tool rail (PRD lane-two-columns D-01, D-02, D-07;
 // PRD right-lane D-05, D-08): the lane is two columns, the viewing column at
 // the agents' side showing the checkout's documents (the View areas) or the
-// window's 보기 slot (PRD sidebar-task-lens D-50), and the tool column beside
+// front tab's 보기 slot (PRD sidebar-task-lens D-50), and the tool column beside
 // the rail showing one tool, the Project tool (D-14), the Project's Memory,
 // Explorer (the file tree) or Changes (History). The rail at the body's right edge has the viewing
 // column's buttons above a rule and the tools below it; each brings its

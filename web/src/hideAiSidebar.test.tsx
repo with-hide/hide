@@ -130,7 +130,7 @@ function Row({ row, place, tree }: { row: AgentRow; place: string | null; tree?:
       <ul>
         <SidebarAgentRow
           agent={row} device={null} place={place} depth={0} selected={false} onOpen={() => {}} onOpenPullRequest={() => {}} inset="0"
-          tree={tree ? { place: { depth: 0, chain: [], last: true } as never, open: null, onToggle: () => {}, popover: null } : null}
+          tree={tree ? { place: { depth: 0, chain: [], last: true } as never, fold: "0", open: null, onToggle: () => {}, popover: null } : null}
           menu={MENU}
         />
       </ul>

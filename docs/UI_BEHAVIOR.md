@@ -150,7 +150,10 @@ When several tabs request the same file during its read, they share the read and
 A buffer opened through another path before the read answers retains its draft and save state, and the pending GUI displays still open in their requesting tabs.
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
 Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
-A new checkout in front changes the documents and the Explorer to that checkout's; the 보기 slot, the window's, stays, and its rail button opens that checkout's lane when it is closed (B22).
+A new checkout in front changes the documents and the Explorer to that checkout's.
+The 보기 slot belongs to the Agent tab that was in front when its item was opened: it stays while that tab is in front, also when the operator clicks another pane of the tab, and another tab in front, in this checkout or another, shows its own slot or none, so the lane is the checkout's documents or Explorer as it stands, the rail's 보기 button brings back only the front tab's own slot, and ⌘E opens the lane with that slot when the tab has one.
+Back in the tab its card is there as it was, with its ← history; a closed tab takes its slot with it, and a slot saved window-wide by an older build attaches to the tab in front on the first event after the launch.
+With no Workspace in front the Overview's own panel opens the items as before (B22).
 
 ⌘⇧P shows and focuses the sidebar.
 `Toggle device rail` has no default chord either and is bound the same way; it shows or hides the device rail.
@@ -1575,7 +1578,8 @@ Changing it moves the home glyph and first position together without moving focu
 A checkout row's `Set as default checkout` sets it; the item is disabled with its reason on the checkout that already is the default, a plain folder, a checkout whose folder is missing, a project without a registration (pin it first), and a device's checkout, which is read-only for this action.
 Remote catalogs still derive home from Git-root facts and do not yet display the primary checkout stored by the remote core.
 Open, draft, merged, and closed pull requests keep their own lifecycle shapes and colors; they draw once a window is attached, without any other screen open, and a restart draws the previous run's answer muted as stale until the first read replaces it; stale GitHub data mutes only the icon, an unavailable GitHub lookup falls back to the branch glyph, and a missing folder colors its branch glyph as danger and omits the age.
-In the web shell every row reads on the left and ends the same way on the right: its time or its status badge (a project or folder row has neither, and a GitHub project's row ends in its repository's mark instead), then a fold slot kept at rest, so nothing moves when a control shows and the times and badges of checkout and agent rows end on one column while their chevrons stand on another.
+In the web shell every row reads on the left and ends the same way on the right: its time or its status badge (a project or folder row has neither, and a GitHub project's row ends in its repository's mark instead), then a fold slot kept at rest, so nothing moves when a control shows and the times and badges of checkout and agent rows end on one column while checkout chevrons stand on another.
+An agent root's chevron stands at its left instead, as a task's does in the 태스크 list, centered on its tab's guide, the column of the checkout's glyph or of its group's briefcase.
 A folded chevron is always shown; an unfolded one shows under the pointer, while focus is inside the row, while its menu is open, and always on an input with no hover.
 Under the pointer or keyboard focus a project or folder row shows `+` and `⋯` in a slot that keeps their width at rest, so the name never shortens when they show and they leave when the pointer does.
 `+` (`Start agent in <project>`) opens the start panel aimed at the project's main checkout, or the folder itself; where that checkout cannot take an agent the panel picks its target by its own rule and the operator can change it there.

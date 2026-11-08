@@ -101,7 +101,7 @@ pub struct WorkspaceView {
     /// moment, not a close.
     pub open: bool,
     /// Whether the viewing column shows the checkout's documents, the View
-    /// areas (D-01, D-04). The window's 보기 slot, while it is shown, stands
+    /// areas (D-01, D-04). The front tab's 보기 slot, while it is shown, stands
     /// in front of them; the rail's document button brings them back.
     pub documents: bool,
     /// The tool column's tool, or `None` while there is no tool column.
@@ -358,7 +358,7 @@ impl WorkspaceView {
     }
 
     /// Whether the viewing column holds the View areas: the lane is open
-    /// with the documents shown, whether or not the window's 보기 slot
+    /// with the documents shown, whether or not the front tab's 보기 slot
     /// stands in front of them.
     pub fn shows_documents(&self) -> bool {
         self.open && self.documents
