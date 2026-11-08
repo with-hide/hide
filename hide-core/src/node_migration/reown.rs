@@ -1053,8 +1053,9 @@ pub(super) enum Slot<'a> {
 }
 
 /// Calls `visit` for each slot `parts` reach (`*` is each array element or
-/// object value, `{key}` the object's keys); a value slot answering `true`
-/// is removed from the array or object holding it.
+/// object value, `{key}` the object's keys, a number the array's element at
+/// that place); a value slot answering `true` is removed from the array or
+/// object holding it.
 pub(super) fn walk(
     value: &mut Value,
     parts: &[&str],
@@ -1101,6 +1102,16 @@ pub(super) fn walk(
             Ok(false)
         }
         key => {
+            // A number is the place in a tuple field (`remote_folder/0`).
+            if let Value::Array(items) = value {
+                let Some(entry) = key.parse::<usize>().ok().and_then(|at| items.get_mut(at)) else {
+                    return Ok(false);
+                };
+                if walk(entry, rest, visit)? && rest.is_empty() {
+                    return Err(format!("place {key} of a list cannot be cleared"));
+                }
+                return Ok(false);
+            }
             let Value::Object(map) = value else {
                 return Ok(false);
             };
@@ -1510,6 +1521,7 @@ mod tests {
                 "detail": {"items": (0..3).flat_map(|index| [
                     json!({"kind": "pull_request", "workspace_id": registrations[index], "number": 7}),
                     json!({"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}}),
+                    json!({"kind": "remains", "workspace_id": registrations[index], "checkout_id": checkouts[index]}),
                 ]).collect::<Vec<_>>(), "shown": true},
                 "sidebar_project": {"device_id": devices[1], "workspace_id": registrations[1]},
                 "overview_graph": {
@@ -1543,7 +1555,7 @@ mod tests {
                     "stamps": keyed("pane", json!({})),
                     "records": Value::Object(panes.iter().enumerate().map(|(index, pane)| (
                         pane.clone(),
-                        json!({"parent_pane_id": panes[index], "cwd": M_ROOT}),
+                        json!({"parent_pane_id": panes[index], "fork_source": ["w9:p9", null], "cwd": M_ROOT}),
                     )).collect()),
                     "dormant": {"sleep-1": {"node_id": M, "old_pane_id": panes[0], "cwd": M_ROOT}},
                 },
@@ -1578,17 +1590,27 @@ mod tests {
                 "active_area": "a1", "next_id": 3, "canvases": {"a2": tab},
             })
         };
+        // A receipt of a pane moved on each machine, with its public ids.
+        let pane_move = |index: usize| {
+            json!({"move-1": {
+                "request": {"request_id": "move-1", "workspace": {"device_id": devices[index], "checkout_path": M_ROOT},
+                            "source": {"pane_id": panes[index], "tab_id": tabs[index], "area_id": "a1"},
+                            "destination": {"type": "tab", "tab_id": tabs[index], "pane_id": panes[index], "area_id": "a2"}},
+                "terminal_id": "term_1", "workspace_id": "w1", "phase": "completed", "started_at": 1,
+                "result_pane": "w1:p1", "result_tab": "w1:t3",
+            }})
+        };
         write(
             WORKSPACE_VIEWS,
             json!({"schema_version": 3, "workspaces": [
-                {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]),
+                {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "pane_moves": pane_move(0),
                  "tab_views": {tabs[0].clone(): "d1"},
                  "view_layout": {"root": {"split": {"id": "s1", "first": {"area": {"id": "a1", "displays": [{"id": "d1", "opener": {"device_id": M, "terminal_id": "t1"}}]}},
                      "second": {"area": {"id": "a2", "displays": [{"id": "d2", "opener": {"device_id": ALIAS, "terminal_id": "t2"}}, {"id": "d3", "opener": {"device_id": X, "terminal_id": "t3"}}]}}}}},
                  "feedback": {"comments": feedback_comments, "waiting": feedback_waiting}},
-                {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]),
+                {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]), "pane_moves": pane_move(1),
                  "tab_views": {tabs[1].clone(): "d2"}, "view_layout": {}},
-                {"device_id": X, "path": X_ROOT, "agent_layout": layout(&tabs[2]),
+                {"device_id": X, "path": X_ROOT, "agent_layout": layout(&tabs[2]), "pane_moves": pane_move(2),
                  "tab_views": {tabs[2].clone(): "d3"}, "view_layout": {}},
             ]}),
         );
@@ -1600,9 +1622,7 @@ mod tests {
                 "moved": {"device:mini": {"w2:p1": {"owner": "mini"}}},
             }),
         );
-        write(
-            DELIVERY_LEDGER,
-            json!({
+        let mut ledger = json!({
                 "version": 1, "next_id": 9,
                 "letters": (0..3).map(|index| json!({
                     "sender": actor(index), "recipient": actor((index + 1) % 3),
@@ -1627,8 +1647,18 @@ mod tests {
                     ALIAS: {"connected_ms": 600_000, "since": null},
                     X: {"connected_ms": 60_000, "since": null},
                 },
-            }),
-        );
+        });
+        // Each machine's session is the main of a plan step's spawn.
+        for (index, spawn) in ledger["spawns"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            spawn["plan"] = json!({"plan": "1000", "step": "a", "attempt": 1,
+                "parent_session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}});
+        }
+        write(DELIVERY_LEDGER, ledger);
         write(
             LOCAL_ISSUES,
             json!({"version": 1, "projects": {M_ROOT: [{"number": 1}]}, "devices": {ALIAS: {C_ROOT: [{"number": 2}]}}}),
@@ -1640,6 +1670,8 @@ mod tests {
                 "id": format!("mission-{}", index + 1), "device_id": devices[index],
                 "workspace_id": registrations[index], "project": ([M_ROOT, C_ROOT, X_ROOT][index]),
                 "conductor": {"actor": actor(index), "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},
+                "nodes": [{"key": "a", "remote_folder": [devices[(index + 1) % 3], "/srv/review"]}],
+                "handover": {"token": "0123456789abcdef", "at_unix_ms": 1, "from": actor(index)},
             })).collect::<Vec<_>>()}),
         );
         write(MARKER_FILE, json!({"version": 1, "node": M}));
