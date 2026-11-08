@@ -920,7 +920,10 @@ async fn registration_refusals_are_answered_by_hided() {
         // confirmation before anything there is read (PRD wsl-device B15).
         (wire(outside.path()), "needs_confirmation"),
         (wire(&outside.path().join("nope")), "needs_confirmation"),
-        (wire(&home), "home_root"),
+        // Home itself is asked about too, in its own words (PRD
+        // home-folder-project D-02); a folder holding home never registers.
+        (wire(&home), "needs_confirmation"),
+        (wire(home.parent().unwrap()), "home_root"),
         ("relative/path".to_owned(), "invalid_path"),
     ];
     for (path, reason) in cases {
@@ -933,6 +936,12 @@ async fn registration_refusals_are_answered_by_hided() {
         assert_eq!(refused["type"], "path_refused", "{path}");
         assert_eq!(refused["payload"]["reason"], reason, "{path}");
         assert_eq!(refused["payload"]["kind"], "create_workspace");
+        // Only home itself is flagged as home.
+        assert_eq!(
+            refused["payload"].get("home") == Some(&json!(true)),
+            path == wire(&home),
+            "{path}"
+        );
     }
     // A confirmation names one path: another path's is no confirmation, and
     // a confirmed path is then answered by what is there (B18). A confirmed
@@ -2043,7 +2052,8 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
     for (path, reason) in [
         (wire(&home.join("projects").join("gone")), "not_found"),
         (wire(outside.path()), "needs_confirmation"),
-        (wire(&home), "home_root"),
+        // An agent's `hide <home>` is never the operator's answer.
+        (wire(&home), "needs_confirmation"),
         // The dialog's own registration, refused by the core: no pane
         // holder can start for its first pane here.
         (

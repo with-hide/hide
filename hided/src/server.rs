@@ -4500,6 +4500,11 @@ fn register(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Value>
             frame["payload"]["confirm"] = Value::String(hide_platform::path::to_wire_lossy(&root));
             Some(frame)
         }
+        Err(Unregistrable::ConfirmHome) => {
+            let mut frame = refused(kind, &raw, Refusal::NeedsConfirmation);
+            frame["payload"]["home"] = Value::Bool(true);
+            Some(frame)
+        }
     }
 }
 

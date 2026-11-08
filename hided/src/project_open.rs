@@ -95,7 +95,8 @@ fn admit(
     let unconfirmed = match boundary.resolve_registration(raw, None) {
         Ok(real) => return Ok((hide_platform::path::to_wire_lossy(&real), Unheld::Register)),
         Err(Unregistrable::Refused(Refusal::NeedsConfirmation))
-        | Err(Unregistrable::ConfirmProject(_)) => Refusal::NeedsConfirmation,
+        | Err(Unregistrable::ConfirmProject(_))
+        | Err(Unregistrable::ConfirmHome) => Refusal::NeedsConfirmation,
         Err(Unregistrable::Refused(refusal)) => return Err(refusal),
     };
     let held = match boundary

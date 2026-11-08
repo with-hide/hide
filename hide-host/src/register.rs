@@ -11,7 +11,10 @@
 //!
 //! A folder under home is registered when it resolves to a directory still
 //! under home: a symlink under home that leads out of it is refused, even
-//! confirmed. Home and any folder holding it are never a project, nor is a
+//! confirmed. Home itself is a project only with the operator's confirmation
+//! (`Unregistrable::ConfirmHome`, the same one-time question a folder outside
+//! home gets), and only when it is no Git repository. A folder holding home
+//! is never a project, nor is a
 //! folder of a repository that holds home (dotfiles kept in `~/.git`), and a
 //! network share is no project's identity, whether it is written or a link
 //! leads there. A registration adds the project the folder belongs to (the
@@ -47,7 +50,7 @@ pub struct Judged {
 pub enum Unregistrable {
     /// Not an absolute path without `.` or `..`.
     InvalidPath,
-    /// Home itself, or a folder holding it.
+    /// A folder holding home (home itself is [`Unregistrable::ConfirmHome`]).
     HomeRoot,
     /// A folder in a Git repository that holds home (dotfiles kept in
     /// `~/.git`): its project would be that repository, named here.
@@ -57,6 +60,8 @@ pub enum Unregistrable {
     /// Outside home without the operator's confirmation: of the folder
     /// (`None`), or of the project outside home it belongs to (its root).
     NeedsConfirmation(Option<PathBuf>),
+    /// Home itself without the operator's confirmation of it.
+    ConfirmHome,
     NotFound,
     NotADirectory,
     /// The folder or its project could not be read; the sentence says why.
@@ -87,7 +92,7 @@ pub fn judge_with(
     if !identity::on_a_local_volume(path) {
         return Err(Unregistrable::OutsideHome);
     }
-    if identity::holds(path, home) {
+    if !is_home(path, home) && identity::holds(path, home) {
         return Err(Unregistrable::HomeRoot);
     }
     let confirmed = confirmed.filter(|confirmed| plain_absolute(confirmed));
@@ -115,17 +120,22 @@ pub fn judge_with(
     if !identity::on_a_local_volume(&real) {
         return Err(Unregistrable::OutsideHome);
     }
-    if identity::holds(&real, home) {
+    let real_is_home = is_home(&real, home);
+    if !real_is_home && identity::holds(&real, home) {
         return Err(Unregistrable::HomeRoot);
     }
-    if written_inside && !inside(&real) {
+    if written_inside && !real_is_home && !inside(&real) {
         return Err(Unregistrable::OutsideHome);
     }
     let (root, is_git) = project_root(&real)?;
     if !identity::on_a_local_volume(&root) {
         return Err(Unregistrable::OutsideHome);
     }
-    if identity::holds(&root, home) {
+    let root_is_home = is_home(&root, home);
+    // Home as a folder is a project; home as a Git repository (dotfiles kept
+    // in `~/.git`) and any repository above it would put every file of home
+    // under one repository's reads.
+    if identity::holds(&root, home) && !(root_is_home && !is_git) {
         return Err(Unregistrable::ProjectHoldsHome(root));
     }
     // The operator confirms the project a registration adds: a confirmation
@@ -133,6 +143,9 @@ pub fn judge_with(
     let confirms_root =
         confirmed == Some(root.as_path()) || (confirmed == Some(path) && root == real);
     if (!written_inside || !inside(&root)) && !confirms_root {
+        if root_is_home {
+            return Err(Unregistrable::ConfirmHome);
+        }
         return Err(Unregistrable::NeedsConfirmation(
             (root.as_path() != path).then_some(root),
         ));
@@ -165,6 +178,9 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
                 ErrorCode::OutsideRoot,
                 format!("{shown} leads out of the home folder {home} or to a network path, so it cannot be a project"),
             ),
+            Unregistrable::ConfirmHome => HostError::home_needs_confirmation(format!(
+                "{shown} is the home folder {home}; adding it needs the operator's confirmation"
+            )),
             Unregistrable::NeedsConfirmation(None) => HostError::needs_confirmation(
                 None,
                 format!("{shown} is outside the home folder {home}; adding it needs the operator's confirmation"),
@@ -189,6 +205,11 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
         root: crate::root::wire(&judged.root),
         is_git: judged.is_git,
     })
+}
+
+/// Whether `path` leads to home itself, judged by identity.
+fn is_home(path: &Path, home: &Path) -> bool {
+    identity::below(path, home).is_some_and(|rest| rest.as_os_str().is_empty())
 }
 
 /// The real path `path` leads to, links followed.
