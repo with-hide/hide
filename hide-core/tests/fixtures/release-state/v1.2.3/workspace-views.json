@@ -1,0 +1,199 @@
+{
+  "schema_version": 5,
+  "workspaces": [
+    {
+      "device_id": "c0de0000000000000000000000000001",
+      "path": "/home/me/core-proj",
+      "open": true,
+      "documents": true,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794122682313,
+      "made_unix_ms": 1794122616956,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "d2",
+            "displays": [
+              {
+                "id": "d2",
+                "path": "/home/me/core-proj/README.md",
+                "kind": "file",
+                "committed": null,
+                "preview": false,
+                "last_focused_unix_ms": 1794122657981,
+                "opener": {
+                  "device_id": "c0de0000000000000000000000000001",
+                  "terminal_id": "h1:p1",
+                  "session": "a24cdd0c6ef518eb9cd6a7dad7caf26b60347c0de60461828f2de1d8df20840a",
+                  "resume": "43020e8a-226f-437e-b974-5a86c5162b1c",
+                  "provider": "claude",
+                  "name": "Claude"
+                },
+                "openers": [
+                  {
+                    "device_id": "c0de0000000000000000000000000001",
+                    "terminal_id": "h1:p1",
+                    "session": "a24cdd0c6ef518eb9cd6a7dad7caf26b60347c0de60461828f2de1d8df20840a",
+                    "resume": "43020e8a-226f-437e-b974-5a86c5162b1c",
+                    "provider": "claude",
+                    "name": "Claude"
+                  }
+                ],
+                "unseen": {
+                  "opened_unix_ms": 1794122657981
+                }
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 3
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "h1:t1",
+            "displays": [
+              {
+                "id": "h1:t1",
+                "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {}
+    },
+    {
+      "device_id": "de510000000000000000000000000002",
+      "path": "/home/remote/dev-proj",
+      "open": true,
+      "documents": true,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794122684319,
+      "made_unix_ms": 1794122619950,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "d2",
+            "displays": [
+              {
+                "id": "d2",
+                "path": "/home/remote/dev-proj/notes.md",
+                "kind": "file",
+                "committed": null,
+                "preview": false,
+                "last_focused_unix_ms": 1794122655536,
+                "opener": {
+                  "device_id": "de510000000000000000000000000002",
+                  "terminal_id": "h1:p2",
+                  "session": "80074e988fe199cd473f2c99f647261a6e74304fa38652bc3d2027eea3ee81a0",
+                  "resume": "2273da03-5461-44aa-b207-9d38db39a8ee",
+                  "provider": "claude",
+                  "name": "Claude"
+                },
+                "openers": [
+                  {
+                    "device_id": "de510000000000000000000000000002",
+                    "terminal_id": "h1:p1",
+                    "session": "96081a49c90d0068245a1d9927eca18da58ece6d87b4a72a76894df05b1b6ccf",
+                    "resume": "45e6dd6f-fca5-4aa2-82cf-3861979cd889",
+                    "provider": "claude",
+                    "name": "Claude"
+                  },
+                  {
+                    "device_id": "de510000000000000000000000000002",
+                    "terminal_id": "h1:p2",
+                    "session": "80074e988fe199cd473f2c99f647261a6e74304fa38652bc3d2027eea3ee81a0",
+                    "resume": "2273da03-5461-44aa-b207-9d38db39a8ee",
+                    "provider": "claude",
+                    "name": "Claude"
+                  }
+                ],
+                "unseen": {
+                  "opened_unix_ms": 1794122656727
+                }
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 3
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "remote:de510000000000000000000000000002:tab:h1:t1",
+            "displays": [
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h1:t1",
+                "focused": 1794122661930
+              },
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h1:t2",
+                "focused": 1794122661915
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "pane_moves": {
+        "release-state-move-17": {
+          "request": {
+            "request_id": "release-state-move-17",
+            "workspace": {
+              "device_id": "de510000000000000000000000000002",
+              "checkout_path": "/home/remote/dev-proj"
+            },
+            "group_id": null,
+            "source": {
+              "pane_id": "remote:de510000000000000000000000000002:pane:h1:p3",
+              "tab_id": "remote:de510000000000000000000000000002:tab:h1:t1",
+              "area_id": "a1"
+            },
+            "destination": {
+              "type": "tab",
+              "tab_id": "remote:de510000000000000000000000000002:tab:h1:t2",
+              "pane_id": "remote:de510000000000000000000000000002:pane:h1:p2",
+              "area_id": "a1"
+            }
+          },
+          "terminal_id": "h1:p3",
+          "workspace_id": "h1",
+          "phase": "completed",
+          "started_at": 1794122661904,
+          "message": null,
+          "target_terminal": "h1:p2",
+          "new_tab_slot": false,
+          "result_pane": "h1:p3",
+          "result_tab": "h1:t2"
+        }
+      },
+      "agent_starts": {}
+    }
+  ]
+}

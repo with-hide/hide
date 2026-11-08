@@ -1,0 +1,248 @@
+{
+  "schema_version": 5,
+  "workspaces": [
+    {
+      "device_id": "c0de0000000000000000000000000001",
+      "path": "/home/me/core-proj",
+      "open": true,
+      "documents": true,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794122512017,
+      "made_unix_ms": 1794122448793,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "d2",
+            "displays": [
+              {
+                "id": "d2",
+                "path": "/home/me/core-proj/README.md",
+                "kind": "file",
+                "committed": null,
+                "preview": false,
+                "last_focused_unix_ms": 1794122487647,
+                "opener": {
+                  "device_id": "c0de0000000000000000000000000001",
+                  "terminal_id": "h1:p1",
+                  "session": "841d8d39bcdb81d7a63f45cfb6d8144d54facedc0c0fa5cbfbe698754c8ecc78",
+                  "resume": "0ee62aec-8955-4fe9-ab06-381608e582fc",
+                  "provider": "claude",
+                  "name": "Claude"
+                },
+                "openers": [
+                  {
+                    "device_id": "c0de0000000000000000000000000001",
+                    "terminal_id": "h1:p1",
+                    "session": "841d8d39bcdb81d7a63f45cfb6d8144d54facedc0c0fa5cbfbe698754c8ecc78",
+                    "resume": "0ee62aec-8955-4fe9-ab06-381608e582fc",
+                    "provider": "claude",
+                    "name": "Claude"
+                  }
+                ],
+                "unseen": {
+                  "opened_unix_ms": 1794122487647
+                }
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 3
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "h1:t1",
+            "displays": [
+              {
+                "id": "h1:t1",
+                "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {}
+    },
+    {
+      "device_id": "mini",
+      "path": "/home/remote/dev-proj",
+      "open": true,
+      "documents": true,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794122514025,
+      "made_unix_ms": 1794122449670,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "d2",
+            "displays": [
+              {
+                "id": "d2",
+                "path": "/home/remote/dev-proj/notes.md",
+                "kind": "file",
+                "committed": null,
+                "preview": false,
+                "last_focused_unix_ms": 1794122485265,
+                "opener": {
+                  "device_id": "mini",
+                  "terminal_id": "h1:p2",
+                  "session": "8237c93f4e4b62ce3ff78b96025ffaa48bb2cc8f23a68a4aed7342ae5b4faf8a",
+                  "resume": "e3222a33-e053-4e76-b8f4-8694c3db6568",
+                  "provider": "claude",
+                  "name": "Claude"
+                },
+                "openers": [
+                  {
+                    "device_id": "mini",
+                    "terminal_id": "h1:p1",
+                    "session": "23619d7b821b678cad453d266463fb3f2971db64d7e9d0b6204d96afc632a1fa",
+                    "resume": "22e9a234-dc91-4be2-96c3-b0f0f33e36f5",
+                    "provider": "claude",
+                    "name": "Claude"
+                  },
+                  {
+                    "device_id": "mini",
+                    "terminal_id": "h1:p2",
+                    "session": "8237c93f4e4b62ce3ff78b96025ffaa48bb2cc8f23a68a4aed7342ae5b4faf8a",
+                    "resume": "e3222a33-e053-4e76-b8f4-8694c3db6568",
+                    "provider": "claude",
+                    "name": "Claude"
+                  }
+                ],
+                "unseen": {
+                  "opened_unix_ms": 1794122486435
+                }
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 3
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "remote:mini:tab:h1:t1",
+            "displays": [
+              {
+                "id": "remote:mini:tab:h1:t1",
+                "focused": 1794122491636
+              },
+              {
+                "id": "remote:mini:tab:h1:t2",
+                "focused": 1794122491626
+              },
+              {
+                "id": "remote:mini:tab:h1:t3",
+                "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "pane_moves": {
+        "release-state-move-17": {
+          "request": {
+            "request_id": "release-state-move-17",
+            "workspace": {
+              "device_id": "mini",
+              "checkout_path": "/home/remote/dev-proj"
+            },
+            "group_id": null,
+            "source": {
+              "pane_id": "remote:mini:pane:h1:p3",
+              "tab_id": "remote:mini:tab:h1:t1",
+              "area_id": "a1"
+            },
+            "destination": {
+              "type": "tab",
+              "tab_id": "remote:mini:tab:h1:t2",
+              "pane_id": "remote:mini:pane:h1:p2",
+              "area_id": "a1"
+            }
+          },
+          "terminal_id": "h1:p3",
+          "workspace_id": "h1",
+          "phase": "completed",
+          "started_at": 1794122491619,
+          "message": null,
+          "target_terminal": "h1:p2",
+          "new_tab_slot": false,
+          "result_pane": "h1:p3",
+          "result_tab": "h1:t2"
+        }
+      },
+      "agent_starts": {}
+    },
+    {
+      "device_id": "mini",
+      "path": "/home/remote/.hide/worktrees/dev-proj/plan-child",
+      "open": false,
+      "documents": false,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 0,
+      "made_unix_ms": 1794122516361,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": null,
+            "displays": []
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "remote:mini:tab:h2:t2",
+            "displays": [
+              {
+                "id": "remote:mini:tab:h2:t2",
+                "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {}
+    }
+  ]
+}
