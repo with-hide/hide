@@ -1506,7 +1506,8 @@ fn convert_workspace_views(value: &mut Value, node: &str, _: &BTreeMap<String, S
 }
 
 /// Calls `change` with every View opener's machine in one Workspace's
-/// layout, at any depth.
+/// layout, at any depth: the agent that opened a View last (`opener`) and
+/// every session that opened it (`openers`, PRD session-files D-10).
 pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
     fn walk(value: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
         match value {
@@ -1516,6 +1517,12 @@ pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -
                     if key == "opener" {
                         if let Some(device) = entry.get_mut("device_id") {
                             changed |= change(device);
+                        }
+                    } else if key == "openers" {
+                        for opener in entry.as_array_mut().into_iter().flatten() {
+                            if let Some(device) = opener.get_mut("device_id") {
+                                changed |= change(device);
+                            }
                         }
                     } else {
                         changed |= walk(entry, change);

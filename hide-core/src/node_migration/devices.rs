@@ -1401,6 +1401,31 @@ mod tests {
     }
 
     #[test]
+    fn every_session_that_opened_a_view_takes_the_machine_id_with_its_device() {
+        // A View keeps the agent that opened it last and every session that
+        // opened it (PRD session-files D-10); a renaming that moved only the
+        // first left the alias in the second and held the device for good.
+        let dir = folder();
+        let state = dir.path();
+        let mut views = read(state, WORKSPACE_VIEWS);
+        views["workspaces"][0]["view_layout"]["root"]["area"]["displays"][0]["openers"] = json!([
+            {"device_id": ALIAS, "terminal_id": "t1"},
+            {"device_id": NODE, "terminal_id": "t9"},
+        ]);
+        write_json(state, WORKSPACE_VIEWS, views);
+
+        let outcome = name_devices(state, &node()).unwrap();
+        assert!(outcome.held.is_empty(), "{outcome:?}");
+        let renamed = (ALIAS.to_owned(), MACHINE.to_owned());
+        assert_eq!(outcome.renamed, vec![renamed]);
+        let views = read(state, WORKSPACE_VIEWS);
+        let display = &views["workspaces"][0]["view_layout"]["root"]["area"]["displays"][0];
+        assert_eq!(display["opener"]["device_id"], MACHINE);
+        assert_eq!(display["openers"][0]["device_id"], MACHINE);
+        assert_eq!(display["openers"][1]["device_id"], NODE);
+    }
+
+    #[test]
     fn a_device_whose_machine_is_the_core_is_held() {
         let dir = folder();
         let mut core = read(dir.path(), CORE_STATE);
