@@ -362,7 +362,14 @@ use crate::error::HostError;
 /// installs into each profile's account; a helper on 85 would refuse the
 /// calls, so it upgrades, and a node the core still admits on an older
 /// protocol answers them unrun, which the core reads as no profiles there.
-pub const PROTOCOL_VERSION: u32 = 86;
+/// 87: a node answers how a start of one of its profiles runs there
+/// (`ProfileLaunch`, PRD agent-profiles D-26): the profile's variables and
+/// program, checked on that machine, and the `hide` beside the node that
+/// starts it (`hide agent exec`); a helper on 86 would refuse the call, so
+/// it upgrades, and a node the core still admits on an older protocol
+/// answers it unrun, which the core reads as a machine that starts only each
+/// agent's built-in default profile.
+pub const PROTOCOL_VERSION: u32 = 87;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -810,6 +817,16 @@ pub enum Call {
     /// answers the list. Named `profile` because a request's own `id` sits
     /// beside a call's fields on the wire.
     ProfileInstall {
+        profile: hide_agent_adapter::ProfileId,
+    },
+    /// How a start of the agent `kind` with the profile `profile` runs on
+    /// this machine (`crate::profiles::ProfileStart`): refused when the
+    /// profile is gone, being removed or another agent's, when its account or
+    /// variables no longer resolve here, or when its program is not found.
+    /// The built-in default profile is never asked: it starts as the agent
+    /// always has.
+    ProfileLaunch {
+        kind: String,
         profile: hide_agent_adapter::ProfileId,
     },
     /// Whether the node's account has Hide's agent hooks in place, read from
@@ -1386,6 +1403,7 @@ impl Call {
             | Self::ProfileList { .. }
             | Self::ProfileApply { .. }
             | Self::ProfileInstall { .. }
+            | Self::ProfileLaunch { .. }
             | Self::HookDiagnosis
             | Self::OwedConfirmations { .. }
             | Self::HerdrSave
@@ -1768,6 +1786,10 @@ mod tests {
             },
             Call::ProfileInstall {
                 profile: ProfileId("p-wire-probe".into()),
+            },
+            Call::ProfileLaunch {
+                kind: "claude-code".into(),
+                profile: ProfileId("p-1".into()),
             },
         ];
         for call in calls {

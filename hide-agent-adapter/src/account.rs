@@ -113,7 +113,8 @@ pub struct LaunchTarget {
 
 /// An account's identity: the value set into the agent's account variable,
 /// as set, or none for the default. Two profiles with one key are one account.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AccountKey {
     Default,
     Folder(String),

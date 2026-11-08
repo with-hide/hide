@@ -31,7 +31,7 @@ use crate::error::{ErrorCode, HostError, HostResult};
 use crate::serve::Env;
 use hide_node_link::profiles::{
     ListedProfile, MAX_PROFILES, ProfileApplied, ProfileField, ProfileList, ProfileOp,
-    ProfileRefusal,
+    ProfileProgram, ProfileRefusal, ProfileStart,
 };
 
 const FORMAT: u32 = 1;
@@ -228,6 +228,149 @@ pub fn install(env: &Env, id: ProfileId) -> HostResult<ProfileList> {
     let judged = judge(env, Some(BTreeSet::from([id])));
     let file = settle(&place.file, &judged)?;
     Ok(listed(&file, judged, false))
+}
+
+/// How a start of `kind` with the profile `id` runs on this machine (PRD
+/// agent-profiles D-26, D-27, B22): the profile as the file holds it now,
+/// resolved as it was checked when it was added, its program found, and the
+/// `hide` beside this node, which the start line runs. A profile that is
+/// gone is `NotFound`, so its caller can say which one and how to start
+/// with another; one being removed, another agent's, or whose program is not
+/// here is refused with a reason that names it.
+pub fn launch(env: &Env, kind: &str, id: &ProfileId) -> HostResult<ProfileStart> {
+    let own = std::env::current_exe().map_err(|error| {
+        HostError::new(
+            ErrorCode::Unsupported,
+            format!("This machine cannot start a profile's agent: its node's program is unknown ({error})"),
+        )
+    })?;
+    launch_beside(env, kind, id, &own)
+}
+
+/// [`launch`] by the node whose program is `own`.
+fn launch_beside(env: &Env, kind: &str, id: &ProfileId, own: &Path) -> HostResult<ProfileStart> {
+    let place = place(env)?;
+    let file = read(&place.file)?;
+    let stored = file
+        .profiles
+        .iter()
+        .find(|stored| stored.profile.id == *id)
+        .filter(|_| !id.is_default())
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::NotFound,
+                format!("This machine has no profile {}", id.0),
+            )
+        })?;
+    let profile = &stored.profile;
+    if stored.removing {
+        return Err(HostError::new(
+            ErrorCode::Conflict,
+            format!("The profile {} is being removed", profile.name),
+        ));
+    }
+    let adapter = hide_agent_adapter::adapter(kind)
+        .filter(|adapter| adapter.id == profile.kind)
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("The profile {} is not one of {kind}'s", profile.name),
+            )
+        })?;
+    let account = adapter
+        .resolve(profile, &NodeEnv::new(Some(place.home.clone())))
+        .map_err(|refusal| {
+            HostError::new(
+                ErrorCode::InvalidRequest,
+                format!("The profile {} cannot start here: {refusal}", profile.name),
+            )
+        })?;
+    let program = profile
+        .program
+        .as_deref()
+        .map(|program| {
+            program_start(program).ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::NotFound,
+                    format!(
+                        "The profile {} runs {program}, which is not a program this machine finds",
+                        profile.name
+                    ),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(ProfileStart {
+        name: profile.name.clone(),
+        account: account.key,
+        version: profile.version,
+        env: account.env,
+        program,
+        exec: exec_command(own)?,
+    })
+}
+
+/// How the profile's `program` starts here: a bare name found as a pane's
+/// shell finds an agent's program (`hide_platform::programs::account_path`),
+/// or an absolute path that is a file, each read as it starts
+/// (`hide_platform::programs::Start`). `None` when there is no such program.
+fn program_start(program: &str) -> Option<ProfileProgram> {
+    use hide_platform::programs::{Program, Start, account_path};
+    let named = Path::new(program);
+    let found = if named.components().count() > 1 {
+        if !named.is_absolute() || !runnable(named) {
+            return None;
+        }
+        Program::named(named.to_path_buf(), account_path()?)
+    } else {
+        Program::find(&account_path()?, program)?
+    };
+    let (file, leading) = match found.start() {
+        Start::Direct { program, leading } => (program, leading),
+        Start::Batch => (found.into_path(), Vec::new()),
+    };
+    Some(ProfileProgram {
+        file: file.into_os_string().into_string().ok()?,
+        leading: leading
+            .into_iter()
+            .map(std::ffi::OsString::into_string)
+            .collect::<Result<_, _>>()
+            .ok()?,
+    })
+}
+
+/// Whether `path` is a file this account may run.
+fn runnable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
+/// The `hide` beside the node's own program `own`, which runs a profile's
+/// start (`hide agent exec`): the node and it come from one build.
+fn exec_command(own: &Path) -> HostResult<String> {
+    let unavailable = |why: String| {
+        HostError::new(
+            ErrorCode::Unsupported,
+            format!("This machine cannot start a profile's agent: {why}"),
+        )
+    };
+    let exec = own.with_file_name(format!("hide{}", std::env::consts::EXE_SUFFIX));
+    if !exec.is_file() {
+        return Err(unavailable(format!("{} is missing", exec.display())));
+    }
+    exec.into_os_string()
+        .into_string()
+        .map_err(|_| unavailable("its hide command's path is not text".to_owned()))
 }
 
 /// Where a kit pass of this node reads the profiles
@@ -977,6 +1120,123 @@ mod tests {
         assert_eq!(node.list(false).profiles, Vec::new());
         let gone = node.call(Call::ProfileInstall { profile: id }).unwrap_err();
         assert_eq!(gone.code, ErrorCode::NotFound);
+    }
+
+    /// A node program `own` with the `hide` beside it, as every package
+    /// places them.
+    fn package(node: &Node) -> PathBuf {
+        let bin = node.root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(
+            bin.join(format!("hide{}", std::env::consts::EXE_SUFFIX)),
+            b"",
+        )
+        .unwrap();
+        bin.join(format!("hided{}", std::env::consts::EXE_SUFFIX))
+    }
+
+    #[test]
+    fn a_profiles_start_carries_its_account_its_variables_and_the_hide_beside_the_node() {
+        let node = Node::new();
+        let own = package(&node);
+        let added = node.apply(add_with(
+            "claude-code",
+            "work",
+            folder("~/accounts/work/"),
+            &[("ANTHROPIC_BASE_URL", "https://gw.example")],
+            false,
+        ));
+        let id = added.added.clone().unwrap();
+        let account = format!("{}/", node.home().join("accounts/work").display());
+
+        let start = launch_beside(&node.env, "claude", &id, &own).unwrap();
+
+        assert_eq!(
+            start,
+            ProfileStart {
+                name: "work".to_owned(),
+                account: hide_agent_adapter::AccountKey::Folder(account.clone()),
+                version: added.list.profiles[0].version,
+                env: vec![
+                    ("CLAUDE_CONFIG_DIR".to_owned(), account),
+                    (
+                        "ANTHROPIC_BASE_URL".to_owned(),
+                        "https://gw.example".to_owned()
+                    ),
+                ],
+                program: None,
+                exec: own
+                    .with_file_name(format!("hide{}", std::env::consts::EXE_SUFFIX))
+                    .display()
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_profile_that_is_gone_another_agents_or_whose_program_is_missing_starts_nothing() {
+        let node = Node::new();
+        let own = package(&node);
+        let missing = node.root.join("no-such-gateway");
+        let added = node.apply(ProfileOp::Add {
+            kind: "codex".to_owned(),
+            name: "gateway".to_owned(),
+            account: None,
+            program: Some(missing.display().to_string()),
+            env: Vec::new(),
+            default: false,
+        });
+        let id = added.added.clone().unwrap();
+
+        let no_program = launch_beside(&node.env, "codex", &id, &own).unwrap_err();
+        assert_eq!(no_program.code, ErrorCode::NotFound);
+        assert_eq!(
+            no_program.message,
+            format!(
+                "The profile gateway runs {}, which is not a program this machine finds",
+                missing.display()
+            )
+        );
+        let other = launch_beside(&node.env, "claude-code", &id, &own).unwrap_err();
+        assert_eq!(other.code, ErrorCode::InvalidRequest);
+        let builtin =
+            launch_beside(&node.env, "codex", &ProfileId::default_profile(), &own).unwrap_err();
+        assert_eq!(
+            builtin.code,
+            ErrorCode::NotFound,
+            "never asked of the built-in one"
+        );
+        let unpackaged = launch_beside(&node.env, "codex", &id, &node.root.join("hided"));
+        assert_eq!(
+            unpackaged.unwrap_err().code,
+            ErrorCode::NotFound,
+            "the program first"
+        );
+
+        assert_eq!(
+            node.apply(ProfileOp::Remove { id: id.clone() }).refused,
+            None
+        );
+        let gone = node
+            .call(Call::ProfileLaunch {
+                kind: "codex".to_owned(),
+                profile: id,
+            })
+            .unwrap_err();
+        assert_eq!(gone.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn a_node_without_its_hide_cannot_start_a_profiles_agent() {
+        let node = Node::new();
+        let id = node
+            .apply(add("pi", "work", folder("~/accounts/pi/")))
+            .added
+            .unwrap();
+
+        let refused = launch_beside(&node.env, "pi", &id, &node.root.join("hided")).unwrap_err();
+
+        assert_eq!(refused.code, ErrorCode::Unsupported);
     }
 
     #[test]
