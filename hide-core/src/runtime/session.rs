@@ -591,10 +591,20 @@ impl Runtime {
                     ) else {
                         continue;
                     };
+                    // The deepest checkout holding the folder, not the first
+                    // (PRD home-folder-project D-07).
                     let checkout_index = context_path.as_deref().and_then(|path| {
-                        workspace_snapshot.checkouts.iter().position(|checkout| {
-                            path_is_within_checkout(&paths, path, &checkout.path)
-                        })
+                        workspace_snapshot
+                            .checkouts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, checkout)| {
+                                path_is_within_checkout(&paths, path, &checkout.path)
+                            })
+                            .max_by_key(|(index, checkout)| {
+                                (checkout.path.len(), std::cmp::Reverse(*index))
+                            })
+                            .map(|(index, _)| index)
                     });
                     (workspace_snapshot, checkout_index)
                 }

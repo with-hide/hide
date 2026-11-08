@@ -1105,14 +1105,15 @@ impl Runtime {
                 REGISTRABLE_TIMEOUT,
             )
             .map_err(|error| {
-                let confirm = match &error {
-                    LinkError::Refused(refused) => refused.confirm.clone(),
-                    _ => None,
+                let (confirm, home) = match &error {
+                    LinkError::Refused(refused) => (refused.confirm.clone(), refused.home),
+                    _ => (None, false),
                 };
                 (
                     registration_refusal_kind(&error),
                     error.to_string(),
                     confirm,
+                    home,
                 )
             })
         };
@@ -1277,7 +1278,7 @@ impl Runtime {
         }
         let registrable = match answer {
             Ok(registrable) => registrable,
-            Err((kind, message, confirm)) => {
+            Err((kind, message, confirm, home)) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "registration", "kind": "create.refused",
                     "target": device, "message": message,
@@ -1285,6 +1286,7 @@ impl Runtime {
                 self.set_error(kind, message, false);
                 if let Some(error) = self.snapshot.status.last_error.as_mut() {
                     error.confirm = confirm;
+                    error.home = home;
                 }
                 self.settle_project_open(device, requested, Err(kind), Forward::No);
                 return true;
@@ -1510,7 +1512,7 @@ const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
 /// A device helper's refusal of a registration: the core's kind for it, the
 /// helper's sentence for the diagnostic log, and the folder the helper asks
 /// the operator about instead of the one sent (`HostError::confirm`).
-type RegistrationRefusal = (&'static str, String, Option<String>);
+type RegistrationRefusal = (&'static str, String, Option<String>, bool);
 
 pub(super) fn registration_refusal_kind(error: &LinkError) -> &'static str {
     match error {

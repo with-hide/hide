@@ -7637,6 +7637,10 @@ pub struct LastErrorSnapshot {
     /// device's home that folder belongs to (PRD wsl-device B15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<String>,
+    /// A `workspace.create_refused.needs_confirmation` whose folder is the
+    /// device's home itself, which the shell asks about in its own words.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home: bool,
 }
 
 impl Snapshot {

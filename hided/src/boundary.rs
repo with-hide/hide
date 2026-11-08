@@ -747,11 +747,16 @@ impl Boundary {
     /// The comparison is component-wise, so a sibling whose name merely starts
     /// with a root's path (`/repo-other` beside `/repo`) is not inside it.
     fn strip_root<'a>(&self, path: &'a Path) -> Option<(PathBuf, &'a Path)> {
-        self.roots_for_read().iter().find_map(|root| {
-            path.strip_prefix(&root.source.path)
-                .ok()
-                .map(|rest| (root.source.path.clone(), rest))
-        })
+        self.roots_for_read()
+            .iter()
+            .filter_map(|root| {
+                path.strip_prefix(&root.source.path)
+                    .ok()
+                    .map(|rest| (root.source.path.clone(), rest))
+            })
+            // The deepest root, so the home folder as a project does not
+            // hold a nested project's files (PRD home-folder-project D-07).
+            .min_by_key(|(_, rest)| rest.components().count())
     }
 
     /// The canonical directory for `raw` when it is home or under home.

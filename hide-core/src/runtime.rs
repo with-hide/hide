@@ -2885,6 +2885,7 @@ impl Runtime {
             occurred_at: unix_milliseconds(),
             request_id: None,
             confirm: None,
+            home: false,
         });
     }
 
@@ -3127,42 +3128,55 @@ fn find_workspace_for_context<'a>(
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    if let Some(index) = carrying
-        .iter()
-        .copied()
-        .find(|index| {
-            workspaces[*index]
-                .checkouts
-                .iter()
-                .any(|checkout| path_is_within_checkout(paths, raw_path, &checkout.path))
-        })
+    // When several registered folders hold the path (a project under a
+    // project, such as one inside the home folder), the deepest one places
+    // it, and the one the engine workspace belongs to wins between equals
+    // (PRD home-folder-project D-07).
+    if let Some(index) = deepest_holder(workspaces, paths, raw_path, &normalized, &carrying)
         .or_else(|| carrying.first().copied())
     {
-        return workspaces.get_mut(index);
-    }
-    if let Some(index) = workspaces.iter().position(|workspace| {
-        workspace
-            .checkouts
-            .iter()
-            .any(|checkout| workspace::comparison_by_names(Path::new(&checkout.path)) == normalized)
-    }) {
-        return workspaces.get_mut(index);
-    }
-    if let Some(index) = workspaces.iter().position(|workspace| {
-        workspace::comparison_by_names(Path::new(&workspace.path)) == normalized
-    }) {
-        return workspaces.get_mut(index);
-    }
-    if let Some(index) = workspaces.iter().position(|workspace| {
-        let workspace_path = workspace::comparison_by_names(Path::new(&workspace.path));
-        normalized.starts_with(&format!("{workspace_path}/"))
-    }) {
         return workspaces.get_mut(index);
     }
     let mut temporary = workspace::inspect_temporary(&root, node.as_str(), paths);
     temporary.session_workspace_ids = vec![session_workspace_id.to_owned()];
     workspaces.push(temporary);
     workspaces.last_mut()
+}
+
+/// The workspace whose checkout or project folder is the deepest one holding
+/// the pane's folder (`raw_path`, `normalized` once the index placed it); of
+/// equals, one in `carrying` (the workspaces the pane's engine workspace
+/// belongs to), then the first.
+fn deepest_holder(
+    workspaces: &[crate::model::WorkspaceSnapshot],
+    paths: &workspace::PathIndex,
+    raw_path: &str,
+    normalized: &str,
+    carrying: &[usize],
+) -> Option<usize> {
+    let project_holds = |root: &str| {
+        let root = workspace::comparison_by_names(Path::new(root));
+        (normalized == root || normalized.starts_with(&format!("{}/", root.trim_end_matches('/'))))
+            .then_some(root.len())
+    };
+    let checkout_holds = |root: &str| {
+        path_is_within_checkout(paths, raw_path, root)
+            .then(|| workspace::comparison_by_names(Path::new(root)).len())
+    };
+    workspaces
+        .iter()
+        .enumerate()
+        .filter_map(|(index, workspace)| {
+            let depth = workspace
+                .checkouts
+                .iter()
+                .filter_map(|checkout| checkout_holds(&checkout.path).or_else(|| project_holds(&checkout.path)))
+                .chain(project_holds(&workspace.path))
+                .max()?;
+            Some((index, depth))
+        })
+        .max_by_key(|&(index, depth)| (depth, carrying.contains(&index), std::cmp::Reverse(index)))
+        .map(|(index, _)| index)
 }
 
 fn path_is_within_checkout(paths: &workspace::PathIndex, path: &str, checkout_path: &str) -> bool {

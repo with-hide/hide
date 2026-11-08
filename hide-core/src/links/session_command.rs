@@ -620,18 +620,28 @@ fn record(
     );
     let mut facts = host.facts(asked).ok_or_else(core_gone)?.into_iter();
     let own = facts.next().unwrap_or_default();
-    let project = scope
-        .projects
-        .iter()
-        .find(|project| {
-            project.device_id == session.device_id
-                && record.cwd.as_deref().is_some_and(|cwd| {
+    // The project whose deepest folder holds the session's cwd: a project
+    // under another (one inside the home folder) is not labelled by the
+    // outer one (PRD home-folder-project D-07).
+    let project = record
+        .cwd
+        .as_deref()
+        .and_then(|cwd| {
+            scope
+                .projects
+                .iter()
+                .filter(|project| project.device_id == session.device_id)
+                .filter_map(|project| {
                     std::iter::once(&project.root)
                         .chain(&project.checkouts)
-                        .any(|owner| super::within(cwd, owner))
+                        .filter(|owner| super::within(cwd, owner))
+                        .map(|owner| owner.len())
+                        .max()
+                        .map(|depth| (project, depth))
                 })
+                .max_by_key(|(_, depth)| *depth)
         })
-        .map(project_value);
+        .map(|(project, _)| project_value(project));
     let summaries = scope.summaries;
     let (title_text, title_source) = title(
         record.manual_title.as_deref(),
