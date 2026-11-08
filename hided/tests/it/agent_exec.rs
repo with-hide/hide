@@ -11,6 +11,27 @@ use std::time::Duration;
 const HIDE: &str = env!("CARGO_BIN_EXE_hide");
 const HANG_GUARD: Duration = Duration::from_secs(30);
 
+/// Waits for `child` to end within the guard, on a thread of its own, and
+/// answers its exit code.
+fn exit_code(mut child: std::process::Child) -> Option<i32> {
+    let (ended, end) = std::sync::mpsc::channel();
+    std::thread::spawn(move || ended.send(child.wait().unwrap()));
+    end.recv_timeout(HANG_GUARD)
+        .expect("the start never ended")
+        .code()
+}
+
+/// Waits until `holds` answers true, within the guard.
+#[cfg(windows)]
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn until(what: &str, mut holds: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + HANG_GUARD;
+    while !holds() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Runs `command` to its end within the guard, answering its exit code and
 /// its standard output and error.
 fn finished(mut command: Command) -> (Option<i32>, String, String) {
@@ -32,18 +53,8 @@ fn finished(mut command: Command) -> (Option<i32>, String, String) {
         stderr.read_to_string(&mut text).unwrap();
         text
     });
-    let deadline = std::time::Instant::now() + HANG_GUARD;
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the start never ended"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    (status.code(), out.join().unwrap(), err.join().unwrap())
+    let code = exit_code(child);
+    (code, out.join().unwrap(), err.join().unwrap())
 }
 
 #[cfg(unix)]
@@ -216,63 +227,40 @@ mod windows {
             .trim()
             .parse()
             .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while hide_platform::process::is_alive(pid) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the program's child outlived its start"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        until("the program's child outlived its start", || {
+            !hide_platform::process::is_alive(pid)
+        });
     }
 
     /// Ctrl-Break in the start's console group reaches its program, which
     /// ends long before it would have, and the start ends with it.
     #[test]
     fn a_windows_interrupt_reaches_the_program_and_the_start_ends_with_it() {
-        let mut command = exec(
-            "Claude Code · work",
-            &[],
-            &powershell("Start-Sleep 60; exit 3"),
+        let folder = tempfile::tempdir().unwrap();
+        let running = folder.path().join("running");
+        // The program says it runs only once PowerShell runs its script, so
+        // the interrupt cannot reach `hide` before its program exists.
+        let script = format!(
+            "Set-Content -Path '{}' -Value 1; Start-Sleep 60; exit 3",
+            running.display()
         );
+        let mut command = exec("Claude · work", &[], &powershell(&script));
         command.creation_flags(CREATE_NEW_PROCESS_GROUP);
-        let mut child = command
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        // Until PowerShell runs, an interrupt could reach `hide` before its
-        // program exists.
-        let deadline = std::time::Instant::now() + HANG_GUARD;
-        while hide_platform::process::descendants(child.id())
-            .map(|tree| tree.is_empty())
-            .unwrap_or(true)
-        {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the program never started"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        std::thread::sleep(Duration::from_secs(2));
+        let group = child.id();
+        until("the program never started", || running.exists());
         // SAFETY: a plain call naming the group the child leads.
         assert_ne!(
-            unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) },
+            unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, group) },
             0,
             "{}",
             std::io::Error::last_os_error()
         );
-        let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break status;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the start outlived its interrupt"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        assert_ne!(status.code(), Some(3), "the program ran to its own end");
+        assert_ne!(exit_code(child), Some(3), "the program ran to its own end");
     }
 }

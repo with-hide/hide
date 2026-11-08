@@ -114,6 +114,9 @@ pub const INCOMPLETE_SPAWN: [&str; 4] = [
 pub(crate) const AGENT_LIMIT: usize = 2048;
 pub(crate) const SPAWN_LIMIT: usize = 4096;
 
+// One per request, made and consumed by its caller and never kept in bulk
+// (a reservation keeps a `SpawnRecord`), so a spawn's size is not worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
