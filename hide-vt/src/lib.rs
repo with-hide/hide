@@ -6,7 +6,8 @@
 // prepared build inputs instead of a vendored tree, replaced Herdr's name in
 // comments and test paths, and met this repository's Clippy (`as_chunks`, one
 // reasoned `too_many_arguments`); added `set_default_color`,
-// `effective_background_color` and `encode_paste` for the pane holder, and
+// `effective_background_color`, `encode_paste` and
+// `MouseEncoder::set_any_button_pressed` for the pane holder, and
 // made the render row's wrap read `RowIterator::soft_wrapped`, on every
 // system. See hide-vt/PATCHES.md.
 
@@ -3295,6 +3296,18 @@ impl MouseEncoder {
                 self.raw,
                 ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                 (&size as *const ffi::GhosttyMouseEncoderSize).cast(),
+            )
+        }
+    }
+
+    /// Whether a button is held, which lets a motion past the screen's
+    /// edge be reported (a drag out of it) in a mode that reports motion.
+    pub fn set_any_button_pressed(&mut self, pressed: bool) {
+        unsafe {
+            ffi::ghostty_mouse_encoder_setopt(
+                self.raw,
+                ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+                (&pressed as *const bool).cast(),
             )
         }
     }

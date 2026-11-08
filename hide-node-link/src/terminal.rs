@@ -118,6 +118,11 @@ pub enum TerminalControl {
         row: u16,
         #[serde(default)]
         modifiers: u8,
+        /// The cell under the pointer when a held button dragged it past
+        /// the grid's edge (`hide_holder_protocol::Mouse::outside`); a node
+        /// built before it ignores it and reports the nearest cell.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outside: Option<(i32, i32)>,
     },
     /// The agent in the pane sleeps: keys for it are dropped until it wakes.
     Asleep { pane: String, asleep: bool },

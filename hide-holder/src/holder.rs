@@ -127,13 +127,14 @@ const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
 const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send, and what it reads beyond version 1's input
-/// ([`Capability::Keys`]).
-const SENDS: [Capability; 5] = [
+/// ([`Capability::Keys`], [`Capability::MouseOutside`]).
+const SENDS: [Capability; 6] = [
     Capability::Screen,
     Capability::Notices,
     Capability::Keys,
     Capability::Submit,
     Capability::Clipboard,
+    Capability::MouseOutside,
 ];
 
 /// What this holder sends on a watch.
