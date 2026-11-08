@@ -1,4 +1,5 @@
 import { UsageOverview } from "./UsageOverview";
+import { useOffersReconnect } from "./centerReconnect";
 import { EmptyWelcome } from "./components/empty-welcome";
 import { firstRunStep } from "./firstRun";
 import { useSetupWalk } from "./FirstRunWizard";
@@ -197,8 +198,9 @@ function DeviceUnanswered({ device, availability, actions }: { device: Device; a
   const name = useShellStore((s) => machineName(s.rest?.navigator?.devices, device.id, t));
   // B4: since when the device stopped answering, as the core recorded it on that transition; its reason is the tooltip.
   const since = useShellStore((s) => s.rest?.status?.remote?.find((row) => row.target_id === device.id)?.unreachable_since_unix_ms ?? null);
+  const retry = availability.state === "unavailable" ? availability.retry : undefined;
+  useOffersReconnect(retry ? device.id : null);
   if (availability.state !== "unavailable") return null;
-  const retry = availability.retry;
   const words = since === null ? t("overviewTasks.unanswered", { device: name }) : t("overviewTasks.unansweredSince", { device: name, since: ageWords(requireInterfaceLanguage(i18n.language), Date.now() - since, t) });
   return (
     <div role="status" className="flex flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-device-unavailable={device.id}>

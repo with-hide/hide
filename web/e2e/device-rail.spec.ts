@@ -151,7 +151,7 @@ test("the rail follows the registered devices; a device that cannot be reached i
     await expect(tile).toHaveAttribute("aria-pressed", "true");
     await expect(rail.locator(`[data-rail-tile="${daemon.node}"]`)).toHaveAttribute("aria-pressed", "false");
 
-    // B8, B9: selected, the sidebar is the name, Not connected and Reconnect, with no tree.
+    // B8, B9: selected, the sidebar is the name and Not connected, with no tree; Reconnect is the center's, drawn once.
     const disconnected = page.locator("[data-device-disconnected]");
     await expect(disconnected).toBeVisible();
     await expect(disconnected).toContainText("Not connected");
@@ -160,8 +160,9 @@ test("the rail follows the registered devices; a device that cannot be reached i
     await expect(page.locator("[data-sidebar-mode]")).toHaveCount(0);
     await expect(page.locator("[data-sidebar-title-name]")).toContainText("연구실");
     await screenshot(page, "device-rail-not-connected");
+    await expect(disconnected.locator("[data-device-reconnect]")).toHaveCount(0);
     const retried = sent.get("retry_connect") ?? 0;
-    await disconnected.locator("[data-device-reconnect]").click();
+    await page.locator("[data-device-retry]").click();
     await expect.poll(() => (sent.get("retry_connect") ?? 0) - retried).toBe(1);
     await expect(disconnected).toBeVisible();
 
