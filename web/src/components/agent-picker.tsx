@@ -42,6 +42,7 @@ export function AgentPicker({
   withTerminal = false,
   disabled = false,
   kindNote,
+  variant,
   className,
 }: {
   actions: Actions;
@@ -52,6 +53,8 @@ export function AgentPicker({
   disabled?: boolean;
   /** A word about the chosen agent, drawn right after its menu (the start panel's sign-in mark). */
   kindNote?: ReactNode;
+  /** `ghost` draws both menus as quiet words, for a composer's row (the start panel). */
+  variant?: "default" | "ghost";
   className?: string;
 }) {
   useCatalogObservation(actions);
@@ -66,6 +69,7 @@ export function AgentPicker({
       withTerminal={withTerminal}
       disabled={disabled}
       kindNote={kindNote}
+      variant={variant}
       className={className}
     />
   );
@@ -80,6 +84,7 @@ export function AgentPickerView({
   withTerminal = false,
   disabled = false,
   kindNote,
+  variant,
   className,
 }: {
   value: AgentSelection;
@@ -90,6 +95,7 @@ export function AgentPickerView({
   withTerminal?: boolean;
   disabled?: boolean;
   kindNote?: ReactNode;
+  variant?: "default" | "ghost";
   className?: string;
 }) {
   const { t } = useInterfaceTranslation();
@@ -97,7 +103,7 @@ export function AgentPickerView({
   return (
     <div className={cn("flex min-w-0 gap-xs", className)} data-agent-picker="true">
       <Select value={value.kind} disabled={disabled} onValueChange={(next) => onKind(next as AgentKind)}>
-        <SelectTrigger aria-label={t("agentPicker.kind")} className="w-auto min-w-0" data-agent-kind={value.kind}>
+        <SelectTrigger variant={variant} aria-label={t("agentPicker.kind")} className="w-auto min-w-0" data-agent-kind={value.kind}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -111,7 +117,7 @@ export function AgentPickerView({
       </Select>
       {kindNote}
       {value.kind === "terminal" || catalog === null ? null : (
-        <ModelSelect kind={value.kind} catalog={catalog} disabled={disabled} model={modelToSend(value)} onChange={onModel} />
+        <ModelSelect kind={value.kind} catalog={catalog} disabled={disabled} model={modelToSend(value)} onChange={onModel} variant={variant} />
       )}
     </div>
   );
@@ -123,6 +129,7 @@ function ModelSelect({
   disabled: pickerDisabled,
   model: shown,
   onChange,
+  variant,
 }: {
   kind: ProviderKind;
   catalog: ModelCatalog;
@@ -130,13 +137,14 @@ function ModelSelect({
   /** The model a start sends, or null for the CLI default. */
   model: string | null;
   onChange: (model: string | null) => void;
+  variant?: "default" | "ghost";
 }) {
   const { t } = useInterfaceTranslation();
   const reason = catalogReason(catalog, t);
   const disabled = pickerDisabled || reason !== null;
   const models = catalog.state === "ready" ? catalog.models : [];
   const trigger = (
-    <SelectTrigger aria-label={t("common.model")} className="w-auto min-w-0" data-agent-model={shown ?? ""} data-agent-model-kind={kind}>
+    <SelectTrigger variant={variant} aria-label={t("common.model")} className="w-auto min-w-0" data-agent-model={shown ?? ""} data-agent-model-kind={kind}>
       <SelectValue />
     </SelectTrigger>
   );

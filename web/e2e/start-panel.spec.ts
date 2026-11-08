@@ -42,10 +42,11 @@ test("⌘K Start an agent… starts an agent in the checkout in front with the c
     await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(0);
     // B25: the checkout in front is the target.
     await expect(panel.locator("[data-start-target]")).toHaveAttribute("data-start-target", new RegExp(`^checkout:${daemon.node}:.*/fixture$`));
-    // B24: text box, target, kind, model, ⏎ and 시작.
+    // B24: text box, target, kind, model and 시작 ⏎; the ⏎ is drawn, not read.
     await expect(panel.locator("[data-agent-kind]")).toHaveAttribute("data-agent-kind", "claude");
     await expect(panel.locator("[data-agent-model-kind]")).toBeVisible();
-    await expect(panel.locator("[data-start-submit]")).toHaveText("Start");
+    await expect(panel.locator("[data-start-submit]")).toHaveText("Start⏎");
+    await expect(panel.locator("[data-start-submit]")).toHaveAccessibleName("Start");
     await screenshot(page, "start-panel-open");
 
     // The kind list draws each agent's mark beside its name, as a menu item does (issue 1279).
