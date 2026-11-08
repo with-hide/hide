@@ -376,17 +376,28 @@ fn the_operators_own_message_takes_the_turn_down_without_a_letter() {
     assert!(letters_to(&runtime, &sender.pane_id).is_empty());
 }
 
-/// B18: Done on a declaration whose agent's pane is neither seen nor asleep
-/// takes the turn down with no letter, since none could reach the agent.
+/// B18, B23: Done on a declaration whose agent's pane is still drawn but
+/// not yet seen, as right after a restart, keeps the turn for another
+/// press; once the pane is gone, neither drawn nor asleep, Done takes the
+/// turn down with no letter, since none could reach the agent.
 #[test]
 fn done_for_an_agent_no_letter_can_reach_takes_the_turn_down() {
     let root = tempfile::tempdir().unwrap();
     let (runtime, _worker, sender, id) = with_store(root.path());
-    runtime
-        .lock()
-        .unwrap()
-        .delivery_observations
-        .remove(&sender.pane_id);
+    {
+        let mut guard = runtime.lock().unwrap();
+        guard.delivery_observations.remove(&sender.pane_id);
+        assert!(guard.pane_listed(&sender.pane_id));
+        guard.human_turn_done(&id);
+        assert_eq!(guard.delivery_state().unwrap().human_turns.len(), 1);
+        for workspace in &mut guard.snapshot.navigator.workspaces {
+            for checkout in &mut workspace.checkouts {
+                for tab in &mut checkout.tabs {
+                    tab.panes.retain(|pane| pane.id != sender.pane_id);
+                }
+            }
+        }
+    }
     runtime.lock().unwrap().human_turn_done(&id);
     wait_for("the declaration settled", || {
         runtime

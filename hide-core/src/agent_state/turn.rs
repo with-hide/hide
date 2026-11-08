@@ -1254,14 +1254,15 @@ pub mod push {
                     .cloned()
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
                     .unwrap_or((Effective::Other, BTreeSet::new()));
-                // A declaration not seen before is what a notice on a row
-                // already in Needs You says (B17).
-                let declared_now = agent
+                // Each declaration not seen before is a notice of its own,
+                // in its own words, also on a row already in Needs You (B17).
+                let declared_now: Vec<_> = agent
                     .human_turns
                     .iter()
-                    .find(|(id, _)| !declared.contains(*id))
-                    .map(|(_, subject)| subject);
-                if before == *state && !(declared_now.is_some() && *state == Effective::NeedsYou) {
+                    .filter(|(id, _)| !declared.contains(*id))
+                    .map(|(_, subject)| subject)
+                    .collect();
+                if before == *state && (declared_now.is_empty() || *state != Effective::NeedsYou) {
                     continue;
                 }
                 // The row stays in Needs You, or the View's notice already
@@ -1273,35 +1274,45 @@ pub mod push {
                 let announced = state.announced().filter(|_| !absorbed);
                 if let Some(announced) = announced {
                     let look = *state == Effective::Look;
-                    notices.push(Notice {
-                        key: key.clone(),
-                        title: agent.title.clone(),
-                        state: announced,
-                        // `look` is the eye's word, `볼 것`, and the newest
-                        // View is the sentence (`볼 것 · report.html · app`).
-                        status_code: Some(if look {
-                            "look".to_owned()
-                        } else {
-                            agent.status_code.clone()
-                        }),
-                        detail: if look {
-                            agent.look.clone()
-                        } else {
-                            agent.detail.clone()
-                        },
-                        subject: if look {
-                            None
-                        } else if before == *state {
-                            declared_now.cloned()
-                        } else {
-                            agent.subject.clone()
-                        },
-                        place: agent
-                            .place
-                            .as_deref()
-                            .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
-                            .unwrap_or_default(),
-                    });
+                    // The row's own notice when it moved, then every new
+                    // declaration it does not already say.
+                    let entered = (before != *state).then(|| agent.subject.clone());
+                    let declarations = declared_now
+                        .iter()
+                        .filter(|subject| {
+                            !look
+                                && *state == Effective::NeedsYou
+                                && entered
+                                    .as_ref()
+                                    .is_none_or(|lead| lead.as_ref() != Some(**subject))
+                        })
+                        .map(|subject| Some((*subject).clone()))
+                        .collect::<Vec<_>>();
+                    for subject in entered.into_iter().chain(declarations) {
+                        notices.push(Notice {
+                            key: key.clone(),
+                            title: agent.title.clone(),
+                            state: announced,
+                            // `look` is the eye's word, `볼 것`, and the newest
+                            // View is the sentence (`볼 것 · report.html · app`).
+                            status_code: Some(if look {
+                                "look".to_owned()
+                            } else {
+                                agent.status_code.clone()
+                            }),
+                            detail: if look {
+                                agent.look.clone()
+                            } else {
+                                agent.detail.clone()
+                            },
+                            subject: if look { None } else { subject },
+                            place: agent
+                                .place
+                                .as_deref()
+                                .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
+                                .unwrap_or_default(),
+                        });
+                    }
                 } else if (*state == Effective::Seen
                     && matches!(before, Effective::NeedsYou | Effective::Done))
                     || (before == Effective::Look && *state != Effective::NeedsYou)

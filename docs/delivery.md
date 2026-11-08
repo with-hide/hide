@@ -902,7 +902,7 @@ The answer is `{outcome, agent, machine, declaration, operator_notified}`: `decl
 Only the operator's identity settles a declaration (`operator_authority_required` otherwise), by its id, so a settle of one that no longer stands does nothing.
 Done sends the declaring agent one letter from the operator, kind `report` under the intent `ask-human-done:<id>`, first line `운영자가 처리함: <인증|허용> · <place>`, so two presses or two surfaces send one letter; it wakes the agent when it sleeps, the one report that does (`Letter::wakes_a_sleeper`), and waits for no answer, so the row has no reply to wait for after it.
 The letter is saved before the declaration goes, so a letter that could not be saved leaves the declaration for another press, and the diagnostic log says why (`ask_human.settle_failed`); a press while one is being written starts nothing more.
-When the agent's pane is neither seen nor asleep, no letter can reach it, and Done takes the declaration down with none (`ask_human.done_unaddressed`).
+When the agent's pane is gone, neither drawn nor asleep, no letter can reach it, and Done takes the declaration down with none (`ask_human.done_unaddressed`); a pane still drawn that Hide has not yet seen, as right after a restart, keeps the declaration for another press.
 The operator's own message to the agent takes the declaration down with no letter.
 The diagnostic records `ask_human.*` carry the agent, its lineage root, its device, the declaration id and the kind, never the place.
 

@@ -685,9 +685,9 @@ mod tests {
         assert_eq!(declared.mark, super::super::tally::RowMark::Turn);
     }
 
-    /// PRD ask-human B17: a second person's turn raised to a root that
-    /// already stands in Needs You is announced once, in its own words, not
-    /// the lead's.
+    /// PRD ask-human B17: each person's turn raised to a root is announced
+    /// once, in its own words, not the lead's, also when the root already
+    /// stands in Needs You and when two arrive at once.
     #[test]
     fn a_second_persons_turn_on_a_waiting_root_is_announced_in_its_own_words() {
         let second = crate::model::AskSubject::HumanTurn {
@@ -731,9 +731,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             [Some(human_turn("agent-4.10"))]
         );
+        let third = crate::model::AskSubject::HumanTurn {
+            id: "agent-6.30".into(),
+            kind: crate::coordination::human_turn::HumanKind::Auth,
+            place: "vpn.example".into(),
+            device: None,
+        };
         let both = [
             ("first", human_turn("agent-4.10"), 10),
             ("second", second.clone(), 20),
+            ("third", third.clone(), 30),
         ];
         let (again, _) = notices.observe(&projected(&both));
         assert_eq!(
@@ -741,7 +748,7 @@ mod tests {
                 .iter()
                 .map(|notice| notice.subject.clone())
                 .collect::<Vec<_>>(),
-            [Some(second)]
+            [Some(second), Some(third)]
         );
         let (same, _) = notices.observe(&projected(&both));
         assert!(same.is_empty(), "announced once");

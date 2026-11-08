@@ -201,11 +201,16 @@ pub(crate) fn of(
     // The pane's own approval, answer or unread block comes before a raised
     // descendant's ask; a block the operator has read and a stop come after
     // it, so a child's new ask is not hidden behind one already seen.
-    let leads = human.map_or(
-        matches!(own, Some("approval" | "answer"))
-            || agent.state.verb == super::RequestVerb::Blocked,
-        |lead| lead.own,
-    );
+    // A person's turn raised below leads a parent between as it leads the
+    // root (PRD ask-human D-21).
+    let leads = match human {
+        Some(lead) => lead.own,
+        None if !agent.human_below.is_empty() => false,
+        None => {
+            matches!(own, Some("approval" | "answer"))
+                || agent.state.verb == super::RequestVerb::Blocked
+        }
+    };
     // A parent between the root and a declaring descendant draws the
     // person's turns raised below it, as the root does (PRD ask-human B15).
     let raised = if agent.raised.is_empty() {

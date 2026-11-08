@@ -3,7 +3,7 @@
 //! down (B18), and the operator's own message to the agent takes it down
 //! with no letter (B22). The ledger worker writes both, never under the
 //! runtime's lock.
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use serde_json::json;
@@ -21,6 +21,19 @@ struct Settle {
     letter: Option<Prepared>,
     clear: Clear,
     declaration: String,
+}
+
+/// Takes a declaration out of the settles under way when dropped.
+struct Release(
+    Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    String,
+);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let mut under_way = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        under_way.remove(&self.1);
+    }
 }
 
 /// The declaration's settle, as the operator's own identity.
@@ -64,9 +77,13 @@ impl Runtime {
             },
         ) {
             Ok(letter) => Some(letter),
-            // The agent's pane is neither seen nor asleep, so no letter can
-            // reach it; the operator still said the turn is done, and it goes.
-            Err(code) if code == "target_unavailable" => {
+            // The agent's pane is gone, neither drawn nor asleep, so no
+            // letter can reach it; the operator still said the turn is done,
+            // and it goes. A pane still drawn but not yet seen, as right
+            // after a restart, keeps the turn for another press below.
+            Err(code)
+                if code == "target_unavailable" && !self.pane_listed(&record.actor.pane_id) =>
+            {
                 crate::diagnostic!(json!({
                     "component": "coordination",
                     "kind": "ask_human.done_unaddressed",
@@ -119,7 +136,8 @@ impl Runtime {
     fn settling(&self, id: &str) -> bool {
         self.human_turns_settling
             .lock()
-            .is_ok_and(|settling| settling.contains(id))
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(id)
     }
 
     /// The live registration and declaration `matches` picks.
@@ -166,28 +184,23 @@ impl Runtime {
     /// whose letter failed leaves the declaration for another press.
     fn settle(&self, settle: Settle) {
         let settling = Arc::clone(&self.human_turns_settling);
-        let Ok(mut under_way) = settling.lock() else {
-            return;
-        };
+        // The set holds only ids, so a panic elsewhere leaves it sound.
+        let mut under_way = settling.lock().unwrap_or_else(PoisonError::into_inner);
         if !under_way.insert(settle.declaration.clone()) {
             return;
         }
         drop(under_way);
         let declaration = settle.declaration.clone();
-        let release = Arc::clone(&settling);
-        let released = declaration.clone();
+        // Released on every exit of the thread, a panic included, or here
+        // when no thread starts.
+        let release = Release(settling, declaration.clone());
         let spawned = std::thread::Builder::new()
             .name("hide-human-turn".into())
             .spawn(move || {
+                let _release = release;
                 Self::write_settle(settle);
-                if let Ok(mut under_way) = release.lock() {
-                    under_way.remove(&released);
-                }
             });
         if let Err(error) = spawned {
-            if let Ok(mut under_way) = settling.lock() {
-                under_way.remove(&declaration);
-            }
             crate::diagnostic!(json!({
                 "component": "coordination",
                 "kind": "ask_human.settle_failed",
