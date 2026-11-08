@@ -44,14 +44,14 @@ async function strip(page: Page, column: "agent" | "view" = "agent"): Promise<St
     // which include ancestor visibility, rather than only its own display.
     const shown = (node: Element | null) => node !== null && node.getClientRects().length > 0;
     // The tabs' room is what the bar leaves beside its own controls: the zone
-    // holding the strip and New tab, less New tab.
+    // holding the strip, New tab and its menu, less those two.
     const zone = list.parentElement!;
     const newTab = zone.querySelector<HTMLElement>("[data-new-agent-tab], [data-view-new-tab]")!;
     const bounds = list.getBoundingClientRect();
     const tabs = [...list.querySelectorAll<HTMLElement>("[role=tab]")];
     const selected = tabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.getBoundingClientRect();
     return {
-      room: Math.floor(zone.getBoundingClientRect().width - newTab.getBoundingClientRect().width),
+      room: Math.floor(zone.getBoundingClientRect().width - newTab.getBoundingClientRect().width - (zone.querySelector<HTMLElement>("[data-new-tab-menu]")?.getBoundingClientRect().width ?? 0)),
       scrolls: list.scrollWidth > list.clientWidth,
       selectedInView: !!selected && selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1,
       tabs: tabs.map((tab) => ({

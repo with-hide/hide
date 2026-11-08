@@ -96,6 +96,8 @@ export const ONBOARDING_STATES = [
   "project-add",
   "start-panel",
   "start-panel-signed-out",
+  "start-panel-branches",
+  "start-panel-new-branch",
   "home-no-project",
   "home-no-agent",
   "home-no-agent-work",
@@ -306,7 +308,15 @@ function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
   const projects = state === "import-start" || state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state === "home-no-project" || state.startsWith("home-device") ? [] : [
-    workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
+    workspace("my-app", {
+      path: "/work/my-app",
+      // The start panel's branch menu has a project with worktrees to list and a base to make a new branch from.
+      ...(state.startsWith("start-panel-") && state !== "start-panel-signed-out" ? { is_git: true, branches: ["main", "release/2.4"] } : {}),
+      checkouts: [
+        checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now),
+        ...(state.startsWith("start-panel-") && state !== "start-panel-signed-out" ? [checkout({ id: "my-app:login", workspace: "my-app", branch: "fix/login-error-message", age: 600 }, now), checkout({ id: "my-app:billing", workspace: "my-app", branch: "feat/billing-retry-with-a-rather-long-branch-name", age: 7200 }, now)] : []),
+      ],
+    }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
   const step = state === "agents-setup" ? "done" : state === "import-start" ? "project" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
@@ -414,7 +424,9 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
     };
     if (state === "agents-setup") useSetupWalk.getState().open();
     if (state.startsWith("settings-")) useUiStore.getState().openSettings(page);
-    if (state.startsWith("start-panel")) useStartPanel.getState().open(false, { projectId: "my-app", kind: state === "start-panel" ? "claude" : "codex" });
+    if (state.startsWith("start-panel")) useStartPanel.getState().open(false, { projectId: "my-app", kind: state === "start-panel-signed-out" ? "codex" : "claude" });
+    if (state === "start-panel-new-branch") useStartPanel.getState().setTarget("worktree:local:/work/my-app");
+    if (state === "start-panel-branches") click('[data-start-branch][data-state="closed"]');
     // Effects run twice in development, so the toggle is pressed only while it is closed.
     if (state === "agents-changes") click('[data-first-run-what-changes][aria-expanded="false"]');
     // The pass that took the press has landed.
