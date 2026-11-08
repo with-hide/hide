@@ -24,6 +24,13 @@ pub fn product_analytics_disabled(home: &Path) -> PathBuf {
     hide_home(home).join("product-analytics-disabled")
 }
 
+/// What a device's helper writes before it sets the old `~/hide` folder aside
+/// (PRD retire-hide-home): the name it is set aside under and its identity,
+/// the only claim on a folder of that name. Removed when the retirement ends.
+pub fn home_retirement(home: &Path) -> PathBuf {
+    hide_home(home).join("home-retiring.json")
+}
+
 /// Pinned CLIs shared by local keyless journey runs, never operator executables.
 pub fn journey_cli_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/journey-clis")

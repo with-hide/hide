@@ -16,12 +16,17 @@
 //! being removed, so a retirement that stopped halfway finds the rest by it.
 //! The last step is one rename: when only the marker is left and nothing keeps
 //! the folder (no pane or session was recorded in it), `~/hide` is renamed to
-//! `~/.hide-home-retiring`, and the marker and that folder are removed there.
-//! The rename is the durable record that the retirement is past turning back:
-//! a stop after it is finished by the next run, which then finds no `~/hide`,
-//! while a `~/hide` with no marker is never touched, empty or not. A failure
-//! at any step is returned, with the marker still on disk or the folder set
-//! aside, so the next run retries it.
+//! `~/.hide-home-retiring-<token>`, and the marker and that folder are removed
+//! there. Before the rename Hide records the name and the folder's identity in
+//! its own store (`hide_kit::layout::home_retirement`); that record, and
+//! the folder still being the recorded one, is the only claim on a folder of
+//! that name, so a stop after the rename is finished by the next run, which
+//! then finds no `~/hide`, while a `~/hide` with no marker is never touched,
+//! empty or not. A file that arrives while the folder is set aside sends the
+//! folder back to `~/hide` whole, marker included; if `~/hide` exists again it
+//! is not replaced, the folder and the record stay and the call fails. A
+//! failure at any step is returned, with the marker still on disk or the
+//! folder set aside, so the next run retries it.
 //!
 //! Two retirements of one account's folder run one after the other: each
 //! holds an exclusive lock on the account's home folder.
@@ -30,10 +35,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use hide_platform::fs::atomic::{self, DurableAccess};
 use hide_platform::fs::lock::{self, Mode, Waited};
 use hide_platform::fs::{identity, link};
 use hide_platform::path::to_wire_lossy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorCode, HostError, HostResult};
 pub use hide_node_link::home::HomeRetired;
@@ -45,6 +51,7 @@ pub const MARKER_FILE: &str = ".hide-home.json";
 const AGENTS_FILE: &str = "AGENTS.md";
 const CLAUDE_FILE: &str = "CLAUDE.md";
 const MARKER_VERSION: u32 = 1;
+const RECORD_VERSION: u32 = 1;
 /// The guide an earlier build wrote, piece by piece: the head, one of two
 /// introductions (a Home with links, or on Windows one without), either the
 /// line for no project or one bullet per project, and the tail. A file that is
@@ -56,9 +63,9 @@ const GUIDE_INTRO_LINES: &str =
 const GUIDE_NO_PROJECT: &str = "No projects are registered on this device yet.\n";
 const GUIDE_TAIL: &str = "\nWork inside a project follows that project's own AGENTS.md or CLAUDE.md.\nWork that belongs to no project can live here.\nHide rewrites this file when projects change, so edits here are not kept.\n";
 /// Where the folder waits, renamed in one step, while the last of it is
-/// removed: the progress record that lets a stopped retirement finish. The
-/// name carries a random token, so a folder the operator made is never taken
-/// for it, and one with the prefix and a token of its own is Hide's.
+/// removed. The name carries a random token and is recorded in Hide's own
+/// store (`Retiring`) before the rename, with the folder's identity; a name of
+/// this shape without that record is the operator's.
 const RETIRING_PREFIX: &str = ".hide-home-retiring-";
 /// The one line a `CLAUDE.md` that is no link held on Windows.
 const CLAUDE_IMPORT: &str = "@AGENTS.md\n";
@@ -203,8 +210,7 @@ fn clean(
         retired.kept = true;
         return Ok(());
     }
-    rename_no_replace(home_path, &user_home.join(staging_name()))
-        .map_err(|error| io_error(&error, "~/hide could not be set aside"))?;
+    set_aside(user_home, home_path)?;
     finish_leftovers(user_home)?;
     if std::fs::symlink_metadata(home_path).is_ok() {
         // Something arrived between the look and the rename: it went back
@@ -226,15 +232,6 @@ fn staging_name() -> String {
     format!("{RETIRING_PREFIX}{:016x}", hasher.finish())
 }
 
-fn is_staging_name(name: &str) -> bool {
-    name.strip_prefix(RETIRING_PREFIX).is_some_and(|token| {
-        token.len() == 16
-            && token
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    })
-}
-
 /// A rename that never replaces what is at the new name: the platform's own
 /// where it has one, a look first where the system does not replace a folder
 /// anyway.
@@ -250,61 +247,181 @@ fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Finishes the retirements that stopped after setting a folder aside: every
-/// entry of the account's home named `.hide-home-retiring-<token>` was set
-/// aside by Hide. An empty one, or one holding only a marker that reads as
-/// Hide's, goes; one that also holds something else is the old folder with a
-/// file that arrived, and goes back to `~/hide` whole; one holding anything
-/// else is left as it is, with the failure returned.
-fn finish_leftovers(user_home: &Path) -> HostResult<()> {
-    let entries = std::fs::read_dir(user_home)
-        .map_err(|error| io_error(&error, "The home folder could not be listed"))?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| io_error(&error, "The home folder could not be listed"))?;
-        if !entry.file_name().to_str().is_some_and(is_staging_name) {
-            continue;
-        }
-        let retiring = entry.path();
-        if !std::fs::symlink_metadata(&retiring).is_ok_and(|metadata| metadata.is_dir()) {
-            continue;
-        }
-        finish_leftover(user_home, &retiring)?;
+/// What Hide records, in its own store, before it sets `~/hide` aside: the
+/// name it will set it aside under, the identity of the folder that is being
+/// set aside, and the marker's text. Only a folder of that name whose identity
+/// is the recorded one is Hide's to finish; a name that merely looks like a
+/// staging name, or a folder that took the name since, is never touched. The
+/// marker's text is kept so that a folder with a file that arrived goes back
+/// to `~/hide` with its marker, as the folder Hide's cleanup stopped on.
+#[derive(Deserialize, Serialize)]
+struct Retiring {
+    version: u32,
+    staging: String,
+    volume: String,
+    index: String,
+    marker: String,
+}
+
+fn record_path(user_home: &Path) -> PathBuf {
+    hide_kit::layout::home_retirement(user_home)
+}
+
+/// Sets `~/hide` aside under a fresh name, after recording that name and the
+/// folder's identity. A rename that fails (the name was taken) drops the
+/// record again, so it never grants a claim on what is at that name.
+fn set_aside(user_home: &Path, home_path: &Path) -> HostResult<()> {
+    let staging = staging_name();
+    write_record(user_home, home_path, &staging)?;
+    if let Err(error) = rename_no_replace(home_path, &user_home.join(&staging)) {
+        let _ = std::fs::remove_file(record_path(user_home));
+        return Err(io_error(&error, "~/hide could not be set aside"));
     }
     Ok(())
 }
 
-fn finish_leftover(user_home: &Path, retiring: &Path) -> HostResult<()> {
+fn write_record(user_home: &Path, home_path: &Path, staging: &str) -> HostResult<()> {
+    let marker =
+        std::fs::read_to_string(home_path.join(MARKER_FILE)).map_err(|_| unreadable_marker())?;
+    let id = identity::file_id_nofollow(home_path)
+        .map_err(|error| io_error(&error, "~/hide could not be read"))?;
+    let record = record_path(user_home);
+    if let Some(folder) = record.parent() {
+        std::fs::create_dir_all(folder)
+            .map_err(|error| io_error(&error, "Hide's own folder could not be made"))?;
+    }
+    let bytes = serde_json::to_vec(&Retiring {
+        version: RECORD_VERSION,
+        staging: staging.to_owned(),
+        volume: id.volume().to_string(),
+        index: id.index().to_string(),
+        marker,
+    })
+    .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
+    atomic::write_file_durable(&record, &bytes, DurableAccess::Private)
+        .map(|_| ())
+        .map_err(|error| {
+            HostError::new(
+                ErrorCode::Io,
+                format!("The record of the retirement could not be written: {error}"),
+            )
+        })
+}
+
+fn is_staging_name(name: &str) -> bool {
+    name.strip_prefix(RETIRING_PREFIX).is_some_and(|token| {
+        token.len() == 16
+            && token
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    })
+}
+
+/// The record of a retirement that stopped after it began, if there is one:
+/// a record that is no plain file, or that cannot be read, is refused.
+fn read_record(user_home: &Path) -> HostResult<Option<Retiring>> {
+    let path = record_path(user_home);
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(io_error(
+                &error,
+                "The record of the retirement could not be read",
+            ));
+        }
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Err(bad_record()),
+    }
+    let bytes = std::fs::read(&path).map_err(|_| bad_record())?;
+    let record: Retiring = serde_json::from_slice(&bytes).map_err(|_| bad_record())?;
+    if record.version != RECORD_VERSION || !is_staging_name(&record.staging) {
+        return Err(bad_record());
+    }
+    Ok(Some(record))
+}
+
+fn bad_record() -> HostError {
+    HostError::new(
+        ErrorCode::Io,
+        "Hide's record of the ~/hide retirement is unreadable; nothing is removed",
+    )
+}
+
+/// Finishes the retirement that stopped after `~/hide` was set aside: only the
+/// folder the record names, and only while it still is the folder that was set
+/// aside. An empty one, or one holding only a marker, goes; one that also
+/// holds something else is the old folder with a file that arrived, and goes
+/// back to `~/hide` whole, marker included. A record whose folder is gone, or
+/// is not the recorded one (the rename never happened, or something else took
+/// the name), grants nothing and is dropped.
+fn finish_leftovers(user_home: &Path) -> HostResult<()> {
+    let Some(record) = read_record(user_home)? else {
+        return Ok(());
+    };
+    let retiring = user_home.join(&record.staging);
+    match identity::file_id_nofollow(&retiring) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(&error, "The folder set aside could not be read")),
+        Ok(id)
+            if id.volume().to_string() == record.volume
+                && id.index().to_string() == record.index
+                && std::fs::symlink_metadata(&retiring).is_ok_and(|m| m.is_dir()) =>
+        {
+            finish_leftover(user_home, &retiring, &record)?;
+        }
+        // Not the folder that was set aside: not Hide's to touch.
+        Ok(_) => {}
+    }
+    std::fs::remove_file(record_path(user_home))
+        .map_err(|error| io_error(&error, "The record of the retirement could not be removed"))
+}
+
+fn list(folder: &Path) -> HostResult<Vec<std::ffi::OsString>> {
     let mut names = Vec::new();
-    let entries = std::fs::read_dir(retiring)
+    let entries = std::fs::read_dir(folder)
         .map_err(|error| io_error(&error, "The folder set aside could not be listed"))?;
     for entry in entries {
         let entry =
             entry.map_err(|error| io_error(&error, "The folder set aside could not be listed"))?;
         names.push(entry.file_name());
     }
-    if names.is_empty() {
-        return std::fs::remove_dir(retiring)
-            .map_err(|error| io_error(&error, "The folder set aside could not be removed"));
+    Ok(names)
+}
+
+fn finish_leftover(user_home: &Path, retiring: &Path, record: &Retiring) -> HostResult<()> {
+    if list(retiring)?.iter().all(|name| name == MARKER_FILE) {
+        match std::fs::remove_file(retiring.join(MARKER_FILE)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error(
+                    &error,
+                    "The marker set aside could not be removed",
+                ));
+            }
+        }
+        match std::fs::remove_dir(retiring) {
+            Ok(()) => return Ok(()),
+            // A file arrived after the look: the folder goes back below.
+            Err(error) => {
+                if list(retiring)?.is_empty() {
+                    return Err(io_error(
+                        &error,
+                        "The folder set aside could not be removed",
+                    ));
+                }
+            }
+        }
     }
-    if read_marker(retiring)?.is_none() {
-        return Err(not_ours());
-    }
-    if names.len() == 1 {
-        std::fs::remove_file(retiring.join(MARKER_FILE))
-            .map_err(|error| io_error(&error, "The marker set aside could not be removed"))?;
-        return std::fs::remove_dir(retiring)
-            .map_err(|error| io_error(&error, "The folder set aside could not be removed"));
+    // Back to its own address, with the marker it had, so the next call reads
+    // it as the folder Hide's cleanup was on. A `~/hide` that exists again is
+    // never replaced: the folder and the record stay, and the call fails.
+    if !retiring.join(MARKER_FILE).exists() {
+        std::fs::write(retiring.join(MARKER_FILE), &record.marker)
+            .map_err(|error| io_error(&error, "The marker could not be put back"))?;
     }
     rename_no_replace(retiring, &user_home.join(HOME_DIR_NAME))
         .map_err(|error| io_error(&error, "The folder set aside could not go back to ~/hide"))
-}
-
-fn not_ours() -> HostError {
-    HostError::new(
-        ErrorCode::Io,
-        "A folder Hide set ~/hide aside under (~/.hide-home-retiring-...) holds something that is not Hide's; it is left as it is",
-    )
 }
 
 fn remove_file(home: &Path, name: &str, retired: &mut HomeRetired) -> HostResult<()> {
@@ -544,6 +661,27 @@ mod tests {
         user_home.join(format!("{RETIRING_PREFIX}0123456789abcdef"))
     }
 
+    /// What a retirement that stopped right after the rename left: the record
+    /// first, then `~/hide` under the recorded name.
+    fn set_aside_as(user_home: &Path, home: &Path) -> PathBuf {
+        let retiring = aside(user_home);
+        let name = retiring.file_name().unwrap().to_str().unwrap();
+        write_record(user_home, home, name).unwrap();
+        std::fs::rename(home, &retiring).unwrap();
+        retiring
+    }
+
+    fn empty_of_hides_entries(user_home: &Path, home: &Path) {
+        for entry in ["alpha", AGENTS_FILE, CLAUDE_FILE] {
+            let path = home.join(entry);
+            if link::is_link_to(&path, &user_home.join("alpha")) {
+                link::remove_link(&path).unwrap();
+            } else {
+                std::fs::remove_file(&path).ok();
+            }
+        }
+    }
+
     fn names(folder: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(folder)
             .unwrap()
@@ -771,8 +909,7 @@ mod tests {
                 std::fs::remove_file(&path).ok();
             }
         }
-        let retiring = aside(dir.path());
-        std::fs::rename(&home, &retiring).unwrap();
+        let retiring = set_aside_as(dir.path(), &home);
         let retired = retire(dir.path(), false, true).unwrap();
         assert!(!retired.kept && !retired.marked, "{retired:?}");
         assert!(!retiring.exists() && !home.exists());
@@ -828,42 +965,95 @@ mod tests {
     }
 
     /// B10: a stop after the marker of the folder set aside went (an empty
-    /// folder at the set-aside name) is finished, and the folder reads as gone.
+    /// folder at the recorded name) is finished, and the folder reads as gone.
     #[test]
     fn a_stop_after_the_marker_set_aside_went_finishes() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(aside(dir.path())).unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        let retiring = set_aside_as(dir.path(), &home);
+        std::fs::remove_file(retiring.join(MARKER_FILE)).unwrap();
         let retired = retire(dir.path(), false, true).unwrap();
-        assert!(!retired.kept && !retired.marked);
-        assert!(!aside(dir.path()).exists());
+        assert!(!retired.kept && !retired.marked, "{retired:?}");
+        assert!(!retiring.exists() && !record_path(dir.path()).exists());
     }
 
-    /// What Hide did not set aside is never taken for it: a file or folder of
-    /// the operator's named like the earlier fixed name stays whatever it
-    /// holds, and a folder that merely has the prefix, no token and no marker
-    /// is left; one with Hide's name that holds a stranger's file is left too,
-    /// with the failure returned, and a marker-less `~/hide` is unaffected.
+    /// D-03, B5: a name of the set-aside shape is the operator's unless Hide
+    /// recorded it for the folder it set aside: empty, with a file, or with a
+    /// Hide-looking marker, it stays, and so does a marker-less `~/hide`.
     #[test]
-    fn an_entry_that_hide_did_not_set_aside_is_left_alone() {
+    fn a_folder_hide_did_not_record_is_left_alone_whatever_its_name_and_content() {
         let dir = tempfile::tempdir().unwrap();
         let home = old_home(dir.path(), &["alpha"]);
-        let plain = dir.path().join(".hide-home-retiring");
-        std::fs::create_dir(&plain).unwrap();
-        std::fs::write(dir.path().join(".hide-home-retiring-notes"), "mine").unwrap();
+        let empty = aside(dir.path());
+        std::fs::create_dir(&empty).unwrap();
+        let other = dir
+            .path()
+            .join(format!("{RETIRING_PREFIX}fedcba9876543210"));
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("notes.md"), "mine").unwrap();
+        std::fs::write(other.join(MARKER_FILE), "{\"version\":1,\"links\":{}}").unwrap();
         let retired = retire(dir.path(), false, true).unwrap();
         assert!(!retired.kept && retired.failure.is_none(), "{retired:?}");
-        assert!(!home.exists() && plain.is_dir());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join(".hide-home-retiring-notes")).unwrap(),
-            "mine"
-        );
+        assert!(!home.exists() && empty.is_dir());
+        assert_eq!(names(&other), [MARKER_FILE, "notes.md"]);
+    }
 
-        let other = tempfile::tempdir().unwrap();
-        let stranger = aside(other.path());
-        std::fs::create_dir(&stranger).unwrap();
-        std::fs::write(stranger.join("notes.md"), "mine").unwrap();
-        assert!(retire(other.path(), false, true).is_err());
-        assert_eq!(names(&stranger), ["notes.md"]);
+    /// The record written before the rename grants nothing over a folder that
+    /// is not the one it was written for: the rename never happened, or the
+    /// name was taken by the operator's own folder first.
+    #[test]
+    fn a_record_does_not_claim_a_folder_that_is_not_the_one_set_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        let retiring = aside(dir.path());
+        let name = retiring.file_name().unwrap().to_str().unwrap();
+        // Recorded, then the name was taken by a folder of the operator's.
+        write_record(dir.path(), &home, name).unwrap();
+        std::fs::create_dir(&retiring).unwrap();
+        std::fs::write(retiring.join("mine.md"), "mine").unwrap();
+        let retired = retire(dir.path(), false, true).unwrap();
+        assert!(
+            !retired.kept && retired.failure.is_none() && !home.exists(),
+            "{retired:?}"
+        );
+        assert_eq!(names(&retiring), ["mine.md"]);
+        assert!(!record_path(dir.path()).exists());
+
+        // Recorded, then stopped before the rename: the folder is as it was.
+        let again = tempfile::tempdir().unwrap();
+        let home = old_home(again.path(), &["alpha"]);
+        write_record(again.path(), &home, name).unwrap();
+        let retired = retire(again.path(), false, true).unwrap();
+        assert!(!retired.kept && retired.failure.is_none(), "{retired:?}");
+        assert!(!home.exists() && !record_path(again.path()).exists());
+    }
+
+    /// A record that is no plain file, or names something that is not a
+    /// staging name, is refused and nothing is removed.
+    #[test]
+    fn a_record_outside_the_owned_boundary_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        let record = record_path(dir.path());
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(
+            &record,
+            r#"{"version":1,"staging":"../hide","volume":"1","index":"1","marker":"{}"}"#,
+        )
+        .unwrap();
+        assert!(retire(dir.path(), false, true).is_err());
+        assert!(home.join(MARKER_FILE).exists());
+        std::fs::remove_file(&record).unwrap();
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("elsewhere.json");
+            std::fs::write(&target, "{}").unwrap();
+            std::os::unix::fs::symlink(&target, &record).unwrap();
+            assert!(retire(dir.path(), false, true).is_err());
+            assert!(home.join(MARKER_FILE).exists() && target.exists());
+        }
     }
 
     /// B8: a marker-less `~/hide` next to anything at all is reported as kept
@@ -885,21 +1075,61 @@ mod tests {
     fn a_file_that_arrives_before_the_rename_goes_back_with_the_folder() {
         let dir = tempfile::tempdir().unwrap();
         let home = old_home(dir.path(), &["alpha"]);
-        for entry in ["alpha", AGENTS_FILE, CLAUDE_FILE] {
-            let path = home.join(entry);
-            if link::is_link_to(&path, &dir.path().join("alpha")) {
-                link::remove_link(&path).unwrap();
-            } else {
-                std::fs::remove_file(&path).ok();
-            }
-        }
+        empty_of_hides_entries(dir.path(), &home);
         std::fs::write(home.join("late.md"), "mine").unwrap();
-        let retiring = aside(dir.path());
-        std::fs::rename(&home, &retiring).unwrap();
+        let retiring = set_aside_as(dir.path(), &home);
         let retired = retire(dir.path(), false, true).unwrap();
         assert!(retired.kept && retired.marked, "{retired:?}");
         assert_eq!(names(&home), ["late.md"]);
-        assert!(!retiring.exists());
+        assert!(!retiring.exists() && !record_path(dir.path()).exists());
+    }
+
+    /// B6/B10/B11: the marker went, then a file arrived, then the run stopped
+    /// before the core saved anything. The next runs put the folder back at
+    /// `~/hide` with its marker and keep answering marked and kept, so the
+    /// core still names the project; the user's file is there at once.
+    #[test]
+    fn a_file_that_arrives_after_the_marker_went_comes_back_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        let retiring = set_aside_as(dir.path(), &home);
+        std::fs::remove_file(retiring.join(MARKER_FILE)).unwrap();
+        std::fs::write(retiring.join("late.md"), "mine").unwrap();
+        for _ in 0..2 {
+            let retired = retire(dir.path(), false, false).unwrap();
+            assert!(retired.kept && retired.marked, "{retired:?}");
+            assert_eq!(names(&home), [MARKER_FILE, "late.md"]);
+            assert!(!retiring.exists() && !record_path(dir.path()).exists());
+        }
+        let settled = retire(dir.path(), false, true).unwrap();
+        assert!(settled.kept);
+        assert_eq!(names(&home), ["late.md"]);
+    }
+
+    /// A `~/hide` that exists again is never replaced: the folder set aside
+    /// and the record stay, the call fails, and a run after the operator's
+    /// folder is gone finishes the return.
+    #[test]
+    fn a_folder_that_cannot_go_back_stays_set_aside_until_its_place_is_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        std::fs::write(home.join("late.md"), "mine").unwrap();
+        let retiring = set_aside_as(dir.path(), &home);
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("new.md"), "new").unwrap();
+        assert!(retire(dir.path(), false, true).is_err());
+        assert_eq!(names(&home), ["new.md"]);
+        assert!(names(&retiring).contains(&"late.md".to_owned()));
+        assert!(record_path(dir.path()).exists());
+
+        std::fs::remove_file(home.join("new.md")).unwrap();
+        std::fs::remove_dir(&home).unwrap();
+        let retired = retire(dir.path(), false, false).unwrap();
+        assert!(retired.kept && retired.marked, "{retired:?}");
+        assert_eq!(names(&home), [MARKER_FILE, "late.md"]);
+        assert!(!retiring.exists() && !record_path(dir.path()).exists());
     }
 
     /// A lock held elsewhere is reported as busy within the wait.
