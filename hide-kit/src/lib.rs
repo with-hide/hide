@@ -1222,6 +1222,9 @@ pub(crate) fn short_tempdir() -> tempfile::TempDir {
 // Windows kit is tested with the device helper that installs it there.
 #[cfg(all(test, unix))]
 mod tests;
+// What released builds' kits left in an account, read by this build.
+#[cfg(test)]
+mod upgrade_tests;
 // The Windows tests of `process` start a program the job has not started yet.
 #[cfg(all(test, windows))]
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]

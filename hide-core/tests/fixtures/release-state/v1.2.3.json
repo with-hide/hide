@@ -16,6 +16,10 @@
    "ok": true
   },
   {
+   "step": "project settings for a core and a device project",
+   "ok": true
+  },
+  {
    "step": "agents",
    "ok": true
   },
@@ -37,13 +41,11 @@
   },
   {
    "step": "plan step spawned from a device session",
-   "ok": false,
-   "why": "Stop: `hide agent spawn --parent here --plan-node review --name dev-plan-child --kind claude --repo /home/remote/dev-proj --branch plan-child --brief 'Review notes.md and report'` answered rc=2 {\"ok\":false,\"error\":{\"code\":\"agent_hook_off\",\"message\":\"The agent is switched off for that machine; ask th"
+   "ok": true
   },
   {
    "step": "mission conducted on the device with its worker there",
-   "ok": false,
-   "why": "Stop: `hide agent spawn --parent here --intent mission-1:look --name dev-worker --kind claude --repo /home/remote/dev-proj --branch main --path /home/remote/dev-proj --brief 'Read notes.md and report'` answered rc=2 {\"ok\":false,\"error\":{\"code\":\"agent_hook_off\",\"message\":\"The agent is switched off fo"
+   "ok": true
   },
   {
    "step": "remains item in the detail slot",
@@ -51,6 +53,14 @@
   },
   {
    "step": "sleeping device agent",
+   "ok": true
+  },
+  {
+   "step": "agent started from the start panel",
+   "ok": true
+  },
+  {
+   "step": "archived session",
    "ok": true
   }
  ]

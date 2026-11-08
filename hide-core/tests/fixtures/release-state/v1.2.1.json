@@ -16,6 +16,10 @@
    "ok": true
   },
   {
+   "step": "project settings for a core and a device project",
+   "ok": true
+  },
+  {
    "step": "agents",
    "ok": true
   },
@@ -51,6 +55,14 @@
    "step": "sleeping device agent",
    "ok": null,
    "why": "not in this release: Agents on another device cannot sleep"
+  },
+  {
+   "step": "agent started from the start panel",
+   "ok": true
+  },
+  {
+   "step": "archived session",
+   "ok": true
   }
  ]
 }
