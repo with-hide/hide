@@ -19,6 +19,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::definition::{
     ACCOUNT_PART, AccountPath, AccountRule, Base, By, Definition, PathRule, Template,
     reserved_variable, valid_variable,
@@ -36,7 +38,8 @@ const MAX_NAME_BYTES: usize = 64;
 
 /// A profile's stable id: what a start, an agent's record and a project's
 /// choice name it by, kept when the profile is renamed.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ProfileId(pub String);
 
 impl ProfileId {
@@ -51,7 +54,8 @@ impl ProfileId {
 }
 
 /// The account a profile runs in, fixed when it is added.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AccountRef {
     /// A folder, as an absolute path spelled exactly as it is set into the
     /// agent's variable (`~` expanded when it was added, a final `/` kept:
@@ -62,7 +66,7 @@ pub enum AccountRef {
 }
 
 /// One way of running an agent; it holds no secret.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     pub id: ProfileId,
     /// The agent's definition id (`claude-code`, `codex`, ...).
@@ -70,11 +74,14 @@ pub struct Profile {
     /// Unique among the agent's profiles.
     pub name: String,
     /// `None` runs in the account the agent reads by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AccountRef>,
     /// A program to run instead of the definition's (a wrapper), which hands
     /// the account's variables on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program: Option<String>,
     /// Variables added to the start, never secrets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<(String, String)>,
     /// Raised by every change, so a late answer about an older version is
     /// told apart.
@@ -232,6 +239,11 @@ pub enum Refusal {
     NodeVariable {
         variable: String,
     },
+    /// The node's own value of a variable that names an account (omp's
+    /// `OMP_PROFILE`) is no account name.
+    NodeAccountName {
+        variable: String,
+    },
     /// The agent's account cannot be moved; the definition says why.
     AccountUnsupported {
         reason: String,
@@ -271,6 +283,10 @@ impl fmt::Display for Refusal {
             Self::OtherAgent => f.write_str("the profile belongs to another agent"),
             Self::NoAccountHome => f.write_str("the account has no home folder"),
             Self::NodeVariable { variable } => write!(f, "{variable} is not an absolute path"),
+            Self::NodeAccountName { variable } => write!(
+                f,
+                "{variable} is not a profile name of letters, digits, -, _ and ."
+            ),
             Self::AccountUnsupported { reason } => {
                 write!(f, "this agent's account cannot be moved: {reason}")
             }
@@ -351,7 +367,7 @@ pub fn resolve_rule(
                         .to_str()
                         .and_then(|name| checked_name(name).ok())
                         .map(Checked::Name)
-                        .ok_or_else(|| Refusal::NodeVariable {
+                        .ok_or_else(|| Refusal::NodeAccountName {
                             variable: var.name.clone(),
                         }),
                 );

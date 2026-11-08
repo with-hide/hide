@@ -2336,6 +2336,7 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
+            profiles: Vec::new(),
             refused: None,
         },
     );
@@ -2454,6 +2455,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
+            profiles: Vec::new(),
             refused: None,
         },
     );

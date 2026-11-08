@@ -222,7 +222,7 @@ describe("the turn pill (B5)", () => {
     const row = (id: string) => q(`[data-mission-row="${id}"]`)!;
     expect(row("mission-4").dataset.missionRowGroup).toBe("turn");
     expect(row("mission-4").querySelector("[data-mission-row-pill]")).toBeNull();
-    expect(row("mission-4").querySelector("[data-mission-takeover]")?.textContent).toBe("Take over");
+    expect(row("mission-4").querySelector("[data-mission-takeover]")?.textContent).toBe("Resume command");
     expect(row("mission-1").querySelector("[data-mission-row-pill]")?.textContent).toBe("Answer");
     for (const id of ["mission-1", "mission-4"]) expect(row(id).textContent).not.toContain("!");
     const open = vi.spyOn(actions, "openMission");
@@ -231,7 +231,7 @@ describe("the turn pill (B5)", () => {
     // The narrow list beside a detail marks a turn as every other row, with the mission mark and the action under the title, and no `!`.
     act(() => actions.openMission("mission-1"));
     const list = q('[data-mission-list-row="mission-4"]')!;
-    expect(list.textContent).toContain("Take over");
+    expect(list.textContent).toContain("Resume command");
     expect(list.textContent).not.toContain("!");
     expect(q('[data-mission-list-row="mission-1"]')!.textContent).not.toContain("!");
   });

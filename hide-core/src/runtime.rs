@@ -132,7 +132,7 @@ mod worktree_retire;
 pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use hosts::device_links;
-pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
+pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead};
 pub use snapshot_delta::serialize_snapshot_delta;
 
 use agent_areas::AgentLayoutPayload;

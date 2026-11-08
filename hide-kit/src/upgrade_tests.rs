@@ -26,7 +26,7 @@ use crate::record;
 /// The device account the release-state run made (`generate.py`).
 const RELEASED_HOME: &str = "/home/remote/";
 
-fn homes() -> Vec<PathBuf> {
+pub(crate) fn homes() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/release-home");
     let mut homes: Vec<PathBuf> = std::fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("{}: {error}", root.display()))
@@ -41,7 +41,7 @@ fn homes() -> Vec<PathBuf> {
 /// Copies a released home private to the account, as Hide writes its
 /// files: git keeps only the bytes, and the kit refuses a state folder
 /// others can read.
-fn copy_tree(from: &Path, to: &Path) {
+pub(crate) fn copy_tree(from: &Path, to: &Path) {
     use std::io::Write;
     hide_platform::fs::private::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
@@ -112,6 +112,13 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         if loaded.is_fresh() {
             failures.push(format!("the record read as never written for {install}"));
         }
+        // Every piece a release put in is the agent's default account's.
+        if !loaded.targets().is_empty() {
+            failures.push(format!(
+                "{install} read profile accounts: {:?}",
+                loaded.targets()
+            ));
+        }
         for piece in pieces {
             if !loaded.contains_piece(piece) {
                 failures.push(format!("{install} lost its installed piece {piece}"));
@@ -140,6 +147,13 @@ fn upgrade(fixture: &Path) -> Vec<String> {
     record::save(home, &record::load(home, install).unwrap()).unwrap();
     if std::fs::read(&path).unwrap() != once {
         failures.push("a second save of the record wrote something else".to_owned());
+    }
+    if serde_json::from_slice::<Value>(&once)
+        .unwrap()
+        .to_string()
+        .contains("\"targets\"")
+    {
+        failures.push("a save of a released record wrote profile accounts".to_owned());
     }
 
     // Claude Code's hooks: still Hide's, and only Hide's come out.

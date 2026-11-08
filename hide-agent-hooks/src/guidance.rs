@@ -45,6 +45,7 @@ use hide_shell::Syntax;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::account::AccountAt;
 use crate::install::{
     HookDocument, HookStatus, InstallFailure, InstallOutcome, NATIVE, RemoveOutcome, first_quoted,
     helper_exists, read_document, write_document,
@@ -238,7 +239,9 @@ impl GuidanceAgent {
     /// The folder whose presence means the agent is set up for this account.
     /// agy makes `~/.gemini/config` on its first run; `~/.gemini` alone is also
     /// the retired Gemini CLI's.
-    pub fn home_directory(self, home: &Path) -> PathBuf {
+    pub fn home_directory<'h>(self, at: impl Into<AccountAt<'h>>) -> PathBuf {
+        let at = at.into();
+        let home = at.home();
         match self {
             Self::Gemini => home.join(".gemini"),
             Self::Qwen => home.join(".qwen"),
@@ -250,10 +253,8 @@ impl GuidanceAgent {
             // Retired Cursor keeps no account (PRD agent-profiles D-25).
             Self::Cursor => home.join(".cursor"),
             // A declared agent's folder is its default account's.
-            Self::Grok => AgentId::Grok.adapter().place_in(home, AccountPath::State),
-            Self::Antigravity => AgentId::Antigravity
-                .adapter()
-                .place_in(home, AccountPath::State),
+            Self::Grok => at.place(AgentId::Grok.adapter(), AccountPath::State),
+            Self::Antigravity => at.place(AgentId::Antigravity.adapter(), AccountPath::State),
         }
     }
 
@@ -279,12 +280,12 @@ impl GuidanceAgent {
     }
 
     /// The file Hide writes (and reads back) for this agent.
-    pub fn config_path(self, home: &Path) -> PathBuf {
-        self.layout(home).path
+    pub fn config_path<'h>(self, at: impl Into<AccountAt<'h>>) -> PathBuf {
+        self.layout(at.into()).path
     }
 
-    fn layout(self, home: &Path) -> Layout {
-        let folder = self.home_directory(home);
+    fn layout(self, at: AccountAt<'_>) -> Layout {
+        let folder = self.home_directory(at);
         match self {
             Self::Gemini => Layout::event_map(folder.join("settings.json"), true),
             Self::Qwen => Layout::event_map(folder.join("settings.json"), true),
@@ -322,18 +323,15 @@ impl GuidanceAgent {
             Self::Junie => Layout::event_map(folder.join("config.json"), true),
             // Grok merges every `~/.grok/hooks/*.json`, so Hide's is a file of
             // its own beside the other tools' files.
-            Self::Grok => Layout::event_map(
-                AgentId::Grok.adapter().place_in(home, AccountPath::Hooks),
-                true,
-            ),
+            Self::Grok => {
+                Layout::event_map(at.place(AgentId::Grok.adapter(), AccountPath::Hooks), true)
+            }
             // agy reads one global `hooks.json` whose top-level keys are
             // named blocks; Hide's is `hide` (Herdr's was `herdr`). Hide creates
             // the file when agy has none and deletes it again only when
             // nothing is left in it.
             Self::Antigravity => Layout {
-                path: AgentId::Antigravity
-                    .adapter()
-                    .place_in(home, AccountPath::Hooks),
+                path: at.place(AgentId::Antigravity.adapter(), AccountPath::Hooks),
                 shape: Shape::NamedBlock { block: "hide" },
                 own_file: true,
             },
@@ -930,11 +928,16 @@ fn owned<'a>(
 /// for the agent must carry Hide's entry for the hook to be Installed; one
 /// that lacks it (an earlier version wrote fewer events, or the operator took
 /// one out) reads Outdated, and the next pass writes it back.
-pub fn status(agent: GuidanceAgent, home: &Path, install: Option<&str>) -> HookStatus {
-    if !agent.home_directory(home).is_dir() {
+pub fn status<'h>(
+    agent: GuidanceAgent,
+    at: impl Into<AccountAt<'h>>,
+    install: Option<&str>,
+) -> HookStatus {
+    let at = at.into();
+    if !agent.home_directory(at).is_dir() {
         return HookStatus::RuntimeAbsent;
     }
-    let layout = agent.layout(home);
+    let layout = agent.layout(at);
     let mut document = match read_document(&layout.path) {
         Ok(Some(document)) => document,
         Ok(None) => return HookStatus::NotInstalled,
@@ -984,12 +987,12 @@ pub fn status(agent: GuidanceAgent, home: &Path, install: Option<&str>) -> HookS
 
 /// The helper Hide's entry in `agent`'s file names, when there is one; the
 /// kit compares it with the helper it would install.
-pub fn installed_helper_path(
+pub fn installed_helper_path<'h>(
     agent: GuidanceAgent,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     install: Option<&str>,
 ) -> Option<String> {
-    let layout = agent.layout(home);
+    let layout = agent.layout(at.into());
     let mut document = read_document(&layout.path).ok()??;
     for slot in agent.slots() {
         if let Some(found) = entries(&mut document, &layout, slot.key, false).ok()?
@@ -1007,13 +1010,13 @@ pub fn installed_helper_path(
 /// entry that carries Hide's marker over anything else was edited, and the
 /// kit reads it Outdated and leaves it until Reinstall (PRD grok-cursor-hooks
 /// B8).
-pub fn matches_install<'a>(
+pub fn matches_install<'a, 'h>(
     agent: GuidanceAgent,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: impl Into<HookTarget<'a>>,
 ) -> bool {
     let helper = helper.into();
-    let layout = agent.layout(home);
+    let layout = agent.layout(at.into());
     let Ok(Some(mut document)) = read_document(&layout.path) else {
         return false;
     };
@@ -1031,13 +1034,14 @@ pub fn matches_install<'a>(
 
 /// A complete generated command may move to a different state folder;
 /// commands with operator edits still fail the exact comparison.
-pub fn matches_helper(
+pub fn matches_helper<'h>(
     agent: GuidanceAgent,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: &Path,
     install: Option<&str>,
 ) -> bool {
-    let layout = agent.layout(home);
+    let at = at.into();
+    let layout = agent.layout(at);
     let Ok(Some(mut document)) = read_document(&layout.path) else {
         return false;
     };
@@ -1068,10 +1072,10 @@ pub fn matches_helper(
         // This helper's entries at another route, named for this
         // installation or written by a build that named none.
         Some(state) => HookTarget::new(helper, &state).is_ok_and(|target| {
-            matches_install(agent, home, target)
+            matches_install(agent, at, target)
                 || install
                     .and_then(|install| target.of_install(install).ok())
-                    .is_some_and(|target| matches_install(agent, home, target))
+                    .is_some_and(|target| matches_install(agent, at, target))
         }),
         None => false,
     }
@@ -1087,27 +1091,28 @@ fn blank_document(layout: &Layout) -> Value {
 
 /// Appends Hide's entries, preserving everything already in the file; a
 /// second install converges on one entry per event.
-pub fn install<'a>(
+pub fn install<'a, 'h>(
     agent: GuidanceAgent,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     helper: impl Into<HookTarget<'a>>,
 ) -> Result<InstallOutcome, InstallFailure> {
+    let at = at.into();
     let helper = helper.into();
     if agent.is_retired() {
         return Err(failure_shape(
-            &agent.config_path(home),
+            &agent.config_path(at),
             "Hide no longer writes this agent's hook",
         ));
     }
     agent
         .supported_here()
         .map_err(|why| InstallFailure::UnexpectedShape {
-            path: agent.config_path(home).display().to_string(),
+            path: agent.config_path(at).display().to_string(),
             detail: why.to_owned(),
         })?;
-    let outcome = install_any(agent, home, helper)?;
+    let outcome = install_any(agent, at, helper)?;
     if agent == GuidanceAgent::Antigravity {
-        crate::antigravity_trust::prepare_read_only(home)?;
+        crate::antigravity_trust::prepare_read_only(at.home())?;
     }
     Ok(outcome)
 }
@@ -1118,11 +1123,11 @@ pub fn install<'a>(
 /// shell.
 fn install_any<'a>(
     agent: GuidanceAgent,
-    home: &Path,
+    at: AccountAt<'_>,
     helper: impl Into<HookTarget<'a>>,
 ) -> Result<InstallOutcome, InstallFailure> {
     let helper = helper.into();
-    let layout = agent.layout(home);
+    let layout = agent.layout(at);
     let mut document =
         read_document(&layout.path)?.unwrap_or_else(|| HookDocument::new(blank_document(&layout)));
     let before = serde_json::to_string(&document).unwrap_or_default();
@@ -1175,7 +1180,7 @@ fn install_any<'a>(
     // Grok's own file sits in `~/.grok/hooks`, which a Grok that has made
     // `~/.grok` may not have made yet; the agent's own folder is never made.
     if layout.own_file
-        && agent.home_directory(home).is_dir()
+        && agent.home_directory(at).is_dir()
         && let Some(parent) = layout.path.parent()
     {
         std::fs::create_dir_all(parent).map_err(|error| InstallFailure::NotWritable {
@@ -1192,16 +1197,17 @@ fn install_any<'a>(
 
 /// Takes out only the entries carrying Hide's marker; a file that was Hide's
 /// alone goes with them.
-pub fn remove(
+pub fn remove<'h>(
     agent: GuidanceAgent,
-    home: &Path,
+    at: impl Into<AccountAt<'h>>,
     install: Option<&str>,
 ) -> Result<RemoveOutcome, InstallFailure> {
+    let at = at.into();
     // Every file Hide could have written to, so an entry written beside a
     // settings file is still found after a `hooks.json` appeared (Droid).
-    let mut layouts = vec![agent.layout(home)];
+    let mut layouts = vec![agent.layout(at)];
     if agent == GuidanceAgent::Droid {
-        let folder = agent.home_directory(home);
+        let folder = agent.home_directory(at);
         for layout in [
             Layout::event_map(folder.join("hooks.json"), false),
             Layout::event_map(folder.join("settings.json"), true),
@@ -1223,20 +1229,26 @@ pub fn remove(
         total.preserved_entries += outcome.preserved_entries;
     }
     // Switching agy or Grok off also takes out the folder trust Hide added
-    // (D-08), and agy's also Hide AI's folder for agy (D-09).
+    // (D-08), and agy's also Hide AI's folder for agy (D-09). Hide records
+    // a trust in the default account only; a profile's account has none of
+    // Hide's to take.
     let trusted = match agent {
+        _ if !at.is_default() => None,
         GuidanceAgent::Antigravity => Some(crate::folder_trust::Agent::Antigravity),
         GuidanceAgent::Grok => Some(crate::folder_trust::Agent::Grok),
         _ => None,
     };
     if let Some(trusted) = trusted {
-        let forgotten =
-            crate::folder_trust::forget_all(trusted, home, crate::folder_trust::Tools::none())?;
+        let forgotten = crate::folder_trust::forget_all(
+            trusted,
+            at.home(),
+            crate::folder_trust::Tools::none(),
+        )?;
         total.changed |= forgotten > 0;
         total.removed_entries += forgotten;
     }
     if agent == GuidanceAgent::Antigravity {
-        let removed = crate::antigravity_trust::remove_read_only(home)?;
+        let removed = crate::antigravity_trust::remove_read_only(at.home())?;
         total.changed |= removed;
     }
     Ok(total)

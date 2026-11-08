@@ -11,10 +11,22 @@
 //! the other's as its own (docs/agent-hooks.md, More than one Hide on an
 //! account). The operator's agent choices and the retirements stay the
 //! account's.
+//!
+//! What an installation put in an agent's account is kept by target
+//! (docs/agent-hooks.md, Profile accounts): the pieces in each agent's
+//! default account stay in `installed`, where every earlier build reads and
+//! writes them, and the built-in default profile refers to them for good, so
+//! no profile's going ever takes them out. Each other account a profile runs
+//! in is a [`TargetRecord`] in `targets`, keyed by the agent and the account's
+//! own folder as the file system names it, with the pieces put there and the
+//! profiles that refer to it: two profiles of one folder share one target,
+//! and its pieces come out only when the last of them goes. A record from
+//! before profiles has no `targets` and reads as the default target alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use hide_agent_adapter::{AccountRef, ProfileId};
 use hide_agent_hooks::codex_trust::HookEntry;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +46,36 @@ struct InstallRecord {
     /// The daemon that owns this installation's hook route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     state_route: Option<PathBuf>,
+    /// Each profile account this installation put pieces in, by its key
+    /// (`crate::targets::key`). A build that does not know the field
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    targets: BTreeMap<String, TargetRecord>,
+}
+
+/// One account a profile runs in that is not its agent's default account:
+/// what the kit put there, and which profiles refer to it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct TargetRecord {
+    /// The agent's adapter id.
+    pub(crate) agent: String,
+    /// The account as the file system names it (a folder with every link
+    /// resolved, or omp's name), which reaches the folder the pieces went
+    /// into once no profile names it, whatever a link it was spelled
+    /// through leads to by then.
+    pub(crate) account: AccountRef,
+    /// The pieces put there, by the codes `installed` uses.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) pieces: BTreeSet<String>,
+    /// The skills folder Hide's stubs went into, as the file system names
+    /// it: another installation's target holding the same folder keeps the
+    /// stubs when this one goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skill_root: Option<PathBuf>,
+    /// The profiles that run in it. A target with none is one whose pieces
+    /// could not all be taken out yet.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) refs: BTreeSet<ProfileId>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -205,6 +247,57 @@ impl Record {
                     _ => false,
                 }
         })
+    }
+
+    /// The profile accounts this installation put pieces in, by key.
+    pub(crate) fn targets(&self) -> &BTreeMap<String, TargetRecord> {
+        static NONE: BTreeMap<String, TargetRecord> = BTreeMap::new();
+        self.mine().map_or(&NONE, |mine| &mine.targets)
+    }
+
+    /// The profile account `key`, made with `make` the first time.
+    pub(crate) fn target_mut(
+        &mut self,
+        key: &str,
+        make: impl FnOnce() -> TargetRecord,
+    ) -> &mut TargetRecord {
+        self.mine_mut()
+            .targets
+            .entry(key.to_owned())
+            .or_insert_with(make)
+    }
+
+    /// Whether another installation on the account keeps Hide's skill stubs
+    /// in a folder (`TargetRecord::skill_root`) that holds the real place
+    /// `path`, so this one's going leaves it.
+    pub(crate) fn skill_kept_elsewhere(&self, path: &Path) -> bool {
+        let others = std::iter::once((hide_agent_hooks::route::APP_INSTALL, &self.app))
+            .chain(
+                self.installs
+                    .iter()
+                    .flatten()
+                    .map(|(install, part)| (install.as_str(), part)),
+            )
+            .filter(|(install, _)| {
+                !(is_app(install) && is_app(&self.install)) && *install != self.install
+            });
+        others
+            .flat_map(|(_, part)| part.targets.values())
+            .any(|target| {
+                target
+                    .skill_root
+                    .as_deref()
+                    .is_some_and(|root| path.starts_with(root))
+                    && target
+                        .pieces
+                        .iter()
+                        .any(|piece| piece.starts_with("skill:"))
+            })
+    }
+
+    /// Forgets the profile account `key`; true when it was recorded.
+    pub(crate) fn forget_target(&mut self, key: &str) -> bool {
+        self.mine_mut().targets.remove(key).is_some()
     }
 
     pub(crate) fn remember_cli(&mut self, destination: PathBuf) -> bool {

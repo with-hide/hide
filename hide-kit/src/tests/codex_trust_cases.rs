@@ -17,7 +17,7 @@ fn fake_codex() -> PathBuf {
 }
 
 /// A fixture whose Codex is the stand-in app-server.
-fn with_codex() -> Fixture {
+pub(super) fn with_codex() -> Fixture {
     let mut fixture = Fixture::new();
     std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
     fixture.use_codex(&fake_codex());
@@ -338,7 +338,12 @@ fn a_changed_hook_is_trusted_in_the_pass_that_replaces_it() {
 #[test]
 fn hide_quitting_during_the_check_says_nothing_of_the_part_and_keeps_what_was_remembered() {
     let fixture = with_codex();
-    crate::hooks::install(&fixture.target, hide_agent_hooks::AgentRuntime::Codex).unwrap();
+    crate::hooks::install(
+        &fixture.target,
+        hide_agent_hooks::AgentRuntime::Codex,
+        (&fixture.target.home).into(),
+    )
+    .unwrap();
     // A failure the last pass found.
     mode(&fixture, "refuse_write");
     let remembered = crate::codex_trust::ensure(&fixture.target, &[]);

@@ -42,6 +42,7 @@ mod retired_agents;
 pub mod retirement_inspection;
 pub mod runtime;
 mod state_route;
+mod targets;
 mod why;
 
 use std::collections::BTreeSet;
@@ -64,6 +65,7 @@ pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
+pub use targets::{KitProfiles, ProfilePlace, ProfileReport, ProfileSource, prepare_account};
 
 /// What a retirement took off one machine.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -239,6 +241,11 @@ pub struct KitReport {
     /// D-13, D-14).
     #[serde(default, skip_serializing_if = "Retirement::is_empty")]
     pub legacy_retirement: Retirement,
+    /// The machine's profiles whose accounts the kit installs into, each
+    /// with where its pieces are (PRD agent-profiles D-09); empty when the
+    /// pass was given none, and in a report from a build that predates them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileReport>,
     /// The pass stopped before changing anything, and why; the report then
     /// has no part and no agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,6 +320,11 @@ pub struct KitTarget {
     /// Raised by the kit's owner when it is going away: a child the kit is
     /// waiting on is ended and no further part is started.
     pub stop: Arc<AtomicBool>,
+    /// Where the machine's profiles are read from, the node's profile file,
+    /// whose accounts get the agents' pieces (`targets`); a pass reads it
+    /// once it holds the account's lock. `None` leaves every profile account
+    /// as the record has it: a caller with no profile file.
+    pub profiles: Option<ProfileSource>,
 }
 
 /// What an apply is allowed to do. The launch or connection pass is the
@@ -449,10 +461,16 @@ pub(crate) enum Observed {
 fn observe(id: ComponentId, target: &KitTarget) -> Observed {
     match id {
         ComponentId::Cli => cli::observe(target),
-        ComponentId::ClaudeCodeHook => {
-            hooks::observe(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
-        }
-        ComponentId::CodexHook => hooks::observe(target, hide_agent_hooks::AgentRuntime::Codex),
+        ComponentId::ClaudeCodeHook => hooks::observe(
+            target,
+            hide_agent_hooks::AgentRuntime::ClaudeCode,
+            (&target.home).into(),
+        ),
+        ComponentId::CodexHook => hooks::observe(
+            target,
+            hide_agent_hooks::AgentRuntime::Codex,
+            (&target.home).into(),
+        ),
         ComponentId::CoordinationRetirement => coordination_retirement::observe(target),
     }
 }
@@ -460,10 +478,16 @@ fn observe(id: ComponentId, target: &KitTarget) -> Observed {
 fn install(id: ComponentId, target: &KitTarget) -> Result<(), String> {
     match id {
         ComponentId::Cli => cli::install(target),
-        ComponentId::ClaudeCodeHook => {
-            hooks::install(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
-        }
-        ComponentId::CodexHook => hooks::install(target, hide_agent_hooks::AgentRuntime::Codex),
+        ComponentId::ClaudeCodeHook => hooks::install(
+            target,
+            hide_agent_hooks::AgentRuntime::ClaudeCode,
+            (&target.home).into(),
+        ),
+        ComponentId::CodexHook => hooks::install(
+            target,
+            hide_agent_hooks::AgentRuntime::Codex,
+            (&target.home).into(),
+        ),
         ComponentId::CoordinationRetirement => coordination_retirement::install(target),
     }
 }
@@ -637,6 +661,10 @@ pub fn status(target: &KitTarget) -> KitReport {
         })
         .collect();
     let agents = agent_kit::status(target, &record, &agent_kit::part_views(&components));
+    let profiles = match target.profiles {
+        Some(_) => targets::status(target, &record, &agents::Detection::probe(target)),
+        None => Vec::new(),
+    };
     let daemon = codex_daemon(target);
     KitReport {
         components,
@@ -649,6 +677,7 @@ pub fn status(target: &KitTarget) -> KitReport {
         codex_daemon_off: None,
         held_for_onboarding: held,
         legacy_retirement: Retirement::default(),
+        profiles,
         refused: None,
     }
 }
@@ -898,6 +927,16 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     }
     let applied = agent_kit::apply(target, scope, &mut record);
     changed |= applied.changed;
+    // Every profile's account follows the same switches and Reinstall as
+    // the default one (PRD agent-profiles D-28).
+    let (profiles, profiles_changed) = targets::apply(
+        target,
+        scope,
+        &BTreeSet::new(),
+        &mut record,
+        &applied.detection,
+    );
+    changed |= profiles_changed;
     // Whether this pass wrote the entries or found them, Codex trusts Hide's,
     // after the agents' pass took out a Herdr integration the kit installed.
     // A failure is the Codex part's, and the other parts are already installed.
@@ -960,8 +999,56 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         codex_daemon_off: None,
         held_for_onboarding,
         legacy_retirement,
+        profiles,
         refused: None,
     }
+}
+
+/// What a pass over the machine's profile accounts did.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProfilesApplied {
+    /// Each profile of [`KitTarget::profiles`], in use or going.
+    pub profiles: Vec<ProfileReport>,
+    /// The record could not be saved: the pieces are in place, but the next
+    /// pass does not know they are Hide's (`KitRefusal`'s detail, for the log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsaved: Option<String>,
+}
+
+/// Installs and takes out the agents' pieces in the machine's profile
+/// accounts alone, for a profile added, changed, reinstalled or removed
+/// (PRD agent-profiles D-09, D-28): under the account's lock, as every pass,
+/// and with nothing else of the kit run. The profiles in `reinstall` have
+/// their pieces put back even where the operator took them out.
+pub fn apply_profiles(
+    target: &KitTarget,
+    reinstall: &BTreeSet<hide_agent_adapter::ProfileId>,
+) -> Result<ProfilesApplied, KitRefusal> {
+    let _lock = lock_account(target)?;
+    let mut record = record::load(&target.home, &target.install)?;
+    let _previous_owner = state_route::claim(target, &record)?;
+    let detection = agents::Detection::probe(target);
+    let (profiles, changed) = targets::apply(
+        target,
+        &Scope::automatic(),
+        reinstall,
+        &mut record,
+        &detection,
+    );
+    let unsaved = changed
+        .then(|| record::save(&target.home, &record).err())
+        .flatten();
+    Ok(ProfilesApplied { profiles, unsaved })
+}
+
+/// Every profile account judged without changing anything.
+pub fn profile_status(target: &KitTarget) -> Result<Vec<ProfileReport>, KitRefusal> {
+    let record = record::load(&target.home, &target.install)?;
+    Ok(targets::status(
+        target,
+        &record,
+        &agents::Detection::probe(target),
+    ))
 }
 
 /// What the machine's Codex says about its shared daemon, read without
@@ -1083,20 +1170,30 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     for id in ComponentId::ALL {
         let outcome = match id {
             ComponentId::Cli => cli::remove(target),
-            ComponentId::ClaudeCodeHook => {
-                hooks::remove(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
-            }
-            ComponentId::CodexHook => hooks::remove(target, hide_agent_hooks::AgentRuntime::Codex),
+            ComponentId::ClaudeCodeHook => hooks::remove(
+                target,
+                hide_agent_hooks::AgentRuntime::ClaudeCode,
+                (&target.home).into(),
+            ),
+            ComponentId::CodexHook => hooks::remove(
+                target,
+                hide_agent_hooks::AgentRuntime::Codex,
+                (&target.home).into(),
+            ),
             ComponentId::CoordinationRetirement => RemoveOutcome::Kept {
                 reason: "retirement preserves the old ledger folder".to_owned(),
             },
         };
         components.push((id, outcome));
     }
-    // Before the record goes: it is what says which integrations were Hide's.
-    let herdr = match record::load(&target.home, &target.install) {
-        Ok(mut record) => agent_kit::remove_herdr(target, &mut record),
-        Err(_) => Vec::new(),
+    // Before the record goes: it is what says which integrations were Hide's
+    // and which profile accounts hold Hide's pieces (PRD agent-profiles D-28).
+    let (herdr, profiles) = match record::load(&target.home, &target.install) {
+        Ok(mut record) => (
+            agent_kit::remove_herdr(target, &mut record),
+            targets::remove(target, &record),
+        ),
+        Err(_) => (Vec::new(), Vec::new()),
     };
     if let Err(reason) = record::forget(&target.home, &target.install) {
         components.push((
@@ -1108,6 +1205,7 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     }
     let mut agents = agent_kit::remove(target);
     agents.extend(herdr);
+    agents.extend(profiles);
     RemoveReport { components, agents }
 }
 

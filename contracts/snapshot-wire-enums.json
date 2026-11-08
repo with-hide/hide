@@ -56,6 +56,8 @@
   "kit_state_variable": ["HIDE_STATE_DIR", "XDG_STATE_HOME"],
   "kit_component_id": ["cli", "claude_code_hook", "codex_hook", "coordination_retirement"],
   "kit_component_state": ["installed", "outdated", "not_installed", "removed", "failed", "absent", "off"],
+  "profiles_state": ["listed", "unsupported", "unreadable"],
+  "profile_install": ["default", "own", "refused", "removing", "remove_failed"],
   "kit_feature": ["skill", "guidance", "letters", "bell", "memory", "sleep", "fork", "start", "titles"],
   "task_state": ["needs_you", "blocked", "working", "waiting", "done", "revisit", "resting", "cleanup"],
   "backlog_phase": ["waiting", "creating", "created", "failed"],
