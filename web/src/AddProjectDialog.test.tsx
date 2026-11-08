@@ -220,6 +220,24 @@ it("asks once about the whole home folder in its own words and adds it only when
   await unmount();
 });
 
+it("registers nothing when the home folder question is closed (PRD home-folder-project B3)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state("/mnt", "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: home });
+  await act(async () => find("[data-folder-browser-submit]")!.click());
+  await act(async () =>
+    useShellStore.setState({
+      rest: { ...useShellStore.getState().rest, status: { last_error: { kind: "workspace.create_refused.needs_confirmation", message: "home", occurred_at: Date.now() + 1_000, home: true } } },
+    } as never),
+  );
+  expect(find('[data-registration-confirm="/home/me"]')).not.toBeNull();
+  await act(async () => useUiStore.getState().closeOverlay("add_project"));
+  expect(find("[data-add-project]")).toBeNull();
+  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me", label: "me", initialize_git: false }]);
+  await unmount();
+});
+
 it("moves the list to a typed folder and filters it by the rest of the line", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
   const { events, unmount } = await mount(state(null, "ubuntu"));

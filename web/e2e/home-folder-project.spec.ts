@@ -80,6 +80,10 @@ test("the home folder is asked about once, added when confirmed, and listed and 
     const typed = await sendEvent(page, daemon, "file_list", { root: toPage(home), path: toPage(path.join(home, ".config")) }, "directory_list");
     expect((typed?.payload as Listed).entries.map((entry) => entry.name)).toContain("tool");
 
+    // B18: a folder under home opens as in any project, a hidden one too.
+    const documents = await sendEvent(page, daemon, "file_list", { root: toPage(home), path: toPage(path.join(home, "Documents")) }, "directory_list");
+    expect((documents?.payload as Listed).entries.map((entry) => entry.name)).toContain("note.md");
+
     // B9: ⌘P finds files under home, none under hidden or app-data folders or the other project's.
     let files: string[] = [];
     await expect
