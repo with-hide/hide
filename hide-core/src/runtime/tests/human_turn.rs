@@ -94,6 +94,8 @@ fn an_agent_holds_one_declaration_and_says_what_each_command_did() {
         apply(ledger, &sender, &Mutation::AskHuman { turn: None }, 4).unwrap()["outcome"].clone()
     };
     assert_eq!(clear(&mut ledger), json!(Outcome::Cleared));
+    // B4: the place goes with the declaration.
+    assert!(!serde_json::to_string(&ledger).unwrap().contains("1Password"));
     assert_eq!(clear(&mut ledger), json!(Outcome::NothingToClear));
 }
 
@@ -147,6 +149,8 @@ fn only_the_operator_settles_the_standing_declaration_and_an_end_takes_it_down()
     )
     .unwrap();
     assert!(ledger.human_turns.is_empty());
+    // B4: the place goes with it.
+    assert!(!serde_json::to_string(&ledger).unwrap().contains("github.com/login"));
 }
 
 /// B23: the declaration is saved with the ledger and read back as it was.
@@ -271,8 +275,11 @@ fn a_persons_turn_holds_a_working_or_asking_row_and_leaves_its_own_question_alon
     }
 }
 
+/// The place `with_store` declares, a URL whose query carries a code.
+const CODE_PLACE: &str = "https://github.com/login/device?user_code=WDJB-MJHT#step=2";
+
 /// A runtime whose ledger store runs, with the sender registered and its
-/// declaration saved, as a restart reads it.
+/// declaration saved, as a restart reads it, and the store's file.
 fn with_store(
     root: &std::path::Path,
 ) -> (
@@ -280,20 +287,20 @@ fn with_store(
     crate::delivery::worker::Worker,
     Actor,
     String,
+    std::path::PathBuf,
 ) {
     let (runtime, _, _, path) = fixture(root);
     let sender = registered_sender(&mut runtime.lock().unwrap());
     let mut ledger = ledger_with_sender(&sender);
-    let id =
-        declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 1)["declaration"]["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+    let declared = declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 1);
+    // B4: kept as written, query and fragment included.
+    assert_eq!(declared["declaration"]["place"], CODE_PLACE);
+    let id = declared["declaration"]["id"].as_str().unwrap().to_owned();
     crate::delivery::ledger::save(&path, &ledger).unwrap();
     let (worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
-        path,
+        path.clone(),
     )
     .unwrap();
     {
@@ -303,7 +310,17 @@ fn with_store(
         // What the store read back, as it publishes it.
         guard.publish_delivery(Arc::new(ledger), true);
     }
-    (runtime, worker, sender, id)
+    (runtime, worker, sender, id, path)
+}
+
+/// B4: once the declaration is down, the saved ledger no longer holds its
+/// place anywhere.
+fn assert_place_gone_from(path: &std::path::Path) {
+    wait_for("the saved ledger dropped the place", || {
+        !std::fs::read_to_string(path)
+            .unwrap()
+            .contains("WDJB-MJHT")
+    });
 }
 
 fn letters_to(runtime: &Arc<Mutex<Runtime>>, pane: &str) -> Vec<crate::delivery::ledger::Letter> {
@@ -325,7 +342,7 @@ fn letters_to(runtime: &Arc<Mutex<Runtime>>, pane: &str) -> Vec<crate::delivery:
 #[test]
 fn done_sends_one_letter_that_waits_for_no_answer_and_takes_the_turn_down() {
     let root = tempfile::tempdir().unwrap();
-    let (runtime, _worker, sender, id) = with_store(root.path());
+    let (runtime, _worker, sender, id, path) = with_store(root.path());
     // Two surfaces press at once.
     runtime.lock().unwrap().human_turn_done(&id);
     runtime.lock().unwrap().human_turn_done(&id);
@@ -344,8 +361,13 @@ fn done_sends_one_letter_that_waits_for_no_answer_and_takes_the_turn_down() {
     assert!(!letter.waiting_answer, "the agent owes no answer");
     assert_eq!(
         letter.body.lines().next(),
-        Some("운영자가 처리함: 인증 · github.com/login")
+        Some("운영자가 처리함: 인증")
     );
+    // B4, B18: the letter stays after the turn goes, so it never names the
+    // place.
+    assert!(!letter.body.contains("WDJB-MJHT"), "{}", letter.body);
+    assert!(!letter.body.contains("github.com"), "{}", letter.body);
+    assert_place_gone_from(&path);
     assert!(
         letter.wakes_a_sleeper(),
         "the operator's Done wakes a sleeping agent"
@@ -379,7 +401,7 @@ fn done_sends_one_letter_that_waits_for_no_answer_and_takes_the_turn_down() {
 #[test]
 fn the_operators_own_message_takes_the_turn_down_without_a_letter() {
     let root = tempfile::tempdir().unwrap();
-    let (runtime, _worker, sender, _) = with_store(root.path());
+    let (runtime, _worker, sender, _, path) = with_store(root.path());
     runtime.lock().unwrap().human_turn_spoke(&sender.pane_id);
     wait_for("the declaration settled", || {
         runtime
@@ -389,6 +411,7 @@ fn the_operators_own_message_takes_the_turn_down_without_a_letter() {
             .is_ok_and(|ledger| ledger.human_turns.is_empty())
     });
     assert!(letters_to(&runtime, &sender.pane_id).is_empty());
+    assert_place_gone_from(&path);
 }
 
 /// B18, B23: Done on a declaration whose agent's pane is still drawn but
@@ -398,7 +421,7 @@ fn the_operators_own_message_takes_the_turn_down_without_a_letter() {
 #[test]
 fn done_for_an_agent_no_letter_can_reach_takes_the_turn_down() {
     let root = tempfile::tempdir().unwrap();
-    let (runtime, _worker, sender, id) = with_store(root.path());
+    let (runtime, _worker, sender, id, _) = with_store(root.path());
     {
         let mut guard = runtime.lock().unwrap();
         guard.delivery_observations.remove(&sender.pane_id);
@@ -491,7 +514,7 @@ fn an_own_question_answered_while_a_persons_turn_stood_does_not_come_back_after_
 #[test]
 fn done_while_the_ledger_cannot_be_read_settles_nothing_and_keeps_the_turn() {
     let root = tempfile::tempdir().unwrap();
-    let (runtime, _worker, sender, id) = with_store(root.path());
+    let (runtime, _worker, sender, id, _) = with_store(root.path());
     let mut guard = runtime.lock().unwrap();
     assert!(guard.human_turns_laid.contains_key(&sender.pane_id));
     guard.invalidate_delivery();

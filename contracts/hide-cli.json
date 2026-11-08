@@ -1012,7 +1012,7 @@
                             "$ref": "#/definitions/HumanKind"
                         },
                         "place": {
-                            "description": "Where the person acts, cut of a URL's query and fragment.",
+                            "description": "Where the person acts, as the agent wrote it on one line.",
                             "type": "string"
                         }
                     },
@@ -1433,7 +1433,7 @@
                             "$ref": "#/definitions/HumanKind"
                         },
                         "place": {
-                            "description": "Where the person acts, cut of a URL's query and fragment.",
+                            "description": "Where the person acts, as the agent wrote it on one line.",
                             "type": "string"
                         }
                     },
@@ -3071,7 +3071,7 @@
                             "$ref": "#/definitions/HumanKind"
                         },
                         "place": {
-                            "description": "Where the person acts, cut of a URL's query and fragment.",
+                            "description": "Where the person acts, as the agent wrote it on one line.",
                             "type": "string"
                         }
                     },
@@ -6051,7 +6051,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:39d2ec2878b1889132e5a0beae74b875330419fcff204e9d57e528ff3fc36099",
+    "digest": "sha256:ff1a8f37a1a4432f0c631a9e949cb015533f8aa89533dfcedbff18e16be36803",
     "envelopes": {
         "agent": {
             "answer": "value",

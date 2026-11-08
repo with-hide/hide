@@ -34,10 +34,12 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     daemon = await startHided(fixture, "ask-human");
     const [root, child] = fixture.panes;
     const asChild = fixture.runAs(child);
-    const declared = await ok(asChild, ["agent", "ask-human", "auth", "https://github.com/login?return_to=secret-token#frag"]);
-    expect(declared.value).toMatchObject({ outcome: "declared", declaration: { kind: "auth", place: "github.com/login" } });
+    // The place is kept as written, its query and fragment included (B4).
+    const place = "https://github.com/login/device?user_code=WDJB-MJHT#step=2";
+    const declared = await ok(asChild, ["agent", "ask-human", "auth", place]);
+    expect(declared.value).toMatchObject({ outcome: "declared", declaration: { kind: "auth", place } });
     // The same declaration again is one declaration (B5).
-    expect((await ok(asChild, ["agent", "ask-human", "auth", "https://github.com/login?again=1"])).value).toMatchObject({ outcome: "unchanged" });
+    expect((await ok(asChild, ["agent", "ask-human", "auth", place])).value).toMatchObject({ outcome: "unchanged" });
 
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -46,14 +48,13 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     const task = tasks.locator(`[data-task-row="${root}"]`);
     await expect(task).toHaveAttribute("data-task-state", "needs_you");
     await expect(task.locator('[data-mark-human="true"]')).toHaveCount(1);
-    await expect(task.locator("[data-human-turn-place]")).toHaveText("Sign-in · github.com/login");
-    await expect(page.locator("body")).not.toContainText("secret-token");
+    await expect(task.locator("[data-human-turn-place]")).toHaveText(`Sign-in · ${place}`);
     await screenshot(page, "ask-human-task-row");
 
     // The child's own pane head says it with Done (B15).
     await withControl(daemon, async (control) => viewPane(control, child));
     const band = page.locator(`[data-pane-header-band="answer"]`).filter({ has: page.locator("[data-human-turn-done]") });
-    await expect(band).toContainText("Sign-in · github.com/login");
+    await expect(band).toContainText(`Sign-in · ${place}`);
     await screenshot(page, "ask-human-pane-head");
 
     // Done from the task list sends one letter and takes the turn down everywhere (B18, B19); a repeat press is the core test's.
@@ -62,8 +63,10 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     await expect(page.locator("[data-human-turn-done]")).toHaveCount(0);
     await expect.poll(async () => {
       const inbox = await asChild(["inbox"]);
-      return (inbox.out.match(/운영자가 처리함: 인증 · github\.com\/login/g) ?? []).length;
+      return (inbox.out.match(/운영자가 처리함: 인증/g) ?? []).length;
     }, { timeout: 20_000 }).toBe(1);
+    // The letter stays after the turn, so it never carries the place (B4, B18).
+    expect((await asChild(["inbox"])).out).not.toContain("WDJB-MJHT");
     // The child is no longer waiting on a person, and the letter waits for no answer.
     const shown = await ok(asChild, ["agent", "show", "here"]);
     expect(JSON.stringify(shown.value)).not.toContain("human_turn");

@@ -50,26 +50,20 @@ impl HumanKind {
 pub struct HumanTurn {
     pub id: String,
     pub kind: HumanKind,
-    /// Where the person acts, cut of a URL's query and fragment.
+    /// Where the person acts, as the agent wrote it on one line.
     pub place: String,
     pub declared_at_unix_ms: u64,
 }
 
-/// The longest place, in characters, after it is cut (D-21).
+/// The longest place, in characters (D-21).
 pub const PLACE_LIMIT: usize = 300;
 
-/// The place as it is kept (D-04): one line, nothing of a word from the first
-/// `?` or `#` after a `/`, and each URL the `url` crate reads without its
-/// user and password, which can carry one-time tokens that would otherwise
-/// reach the screen, a notification and the phone; an `http` or `https` one
-/// without its scheme. Every other word is kept as written.
+/// The place as it is kept (D-04): as written, a URL's query and fragment
+/// included, since they can name what the operator needs (a project, a
+/// device code, a request number), on one line. It lives only while the
+/// declaration stands and never reaches a letter or the diagnostic log.
 pub fn place_of(raw: &str) -> Result<String, &'static str> {
-    let place = raw
-        .split_whitespace()
-        .map(kept_word)
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let place = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if place.is_empty() {
         return Err("human_place_required");
     }
@@ -77,104 +71,6 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
         return Err("human_place_too_long");
     }
     Ok(place)
-}
-
-/// One word as it is kept. The cut does not try to tell a URL, or what wraps
-/// it, from any other word with a path: a path that is no URL loses its tail
-/// too, which never leaks (`src/lib.rs#L10` reads `src/lib.rs`). A URL
-/// starts at the scheme written before its `://`, after whatever wraps it.
-fn kept_word(word: &str) -> String {
-    let (word, closing) = match word
-        .find('/')
-        .and_then(|slash| word[slash..].find(['?', '#']).map(|at| slash + at))
-    {
-        Some(at) => {
-            let cut = &word[at..];
-            (&word[..at], &cut[cut.trim_end_matches(CLOSING).len()..])
-        }
-        None => (word, ""),
-    };
-    let start = word.find("://").map_or(0, |at| {
-        word[..at]
-            .char_indices()
-            .rev()
-            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
-            .map_or(0, |(i, c)| i + c.len_utf8())
-    });
-    let (prefix, url) = word.split_at(start);
-    // A word that writes a `://` the crate cannot read could still carry a
-    // user and password, so it is left out rather than kept as written.
-    if url.contains("://") && url::Url::parse(url).is_err() {
-        return String::new();
-    }
-    match url_word(url) {
-        // Nothing a person could go to is left of it, so the word goes.
-        Some(kept) if kept.is_empty() => String::new(),
-        Some(kept) => format!("{prefix}{kept}{closing}"),
-        None => format!("{word}{closing}"),
-    }
-}
-
-/// What closes a wrapped word after its cut: a bracket, a quote, a
-/// backtick, punctuation.
-const CLOSING: [char; 12] = [')', ']', '}', '>', '"', '\'', '`', ',', '.', ';', ':', '!'];
-
-/// A word as its URL is kept, or None to keep the word as written. A word
-/// with no scheme is read as `https://<word>` only when that names a dotted
-/// host or an address followed by a path, query or fragment
-/// (`github.com/login?…`), so an email address or a bare host stays as
-/// written, and any word is kept as written when it carries nothing to
-/// remove.
-fn url_word(word: &str) -> Option<String> {
-    // A word read with no host (`user:pass@host.com/x` as the scheme `user`)
-    // is read as a bare host first, which finds its user and password.
-    let direct = match url::Url::parse(word) {
-        // A URL with no host keeps nothing a person could go to.
-        Err(url::ParseError::EmptyHost) => return Some(String::new()),
-        parsed => parsed.ok(),
-    };
-    let (mut url, given) = match direct {
-        Some(url) if url.has_host() => (url, true),
-        direct => match (bare_url(word), direct) {
-            (Some(url), _) => (url, false),
-            (None, Some(url)) => (url, true),
-            (None, None) => return None,
-        },
-    };
-    let http = matches!(url.scheme(), "http" | "https");
-    let secret = !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some();
-    if !secret && !(given && http) {
-        return None;
-    }
-    // A URL that cannot be a base has no user to take away.
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    url.set_query(None);
-    url.set_fragment(None);
-    let kept = url.as_str();
-    let kept = if http {
-        kept.split_once("://").map_or(kept, |(_, rest)| rest)
-    } else {
-        kept
-    };
-    Some(kept.trim_end_matches('/').to_owned())
-}
-
-/// `word` read as `https://<word>`, when that names a dotted host or an
-/// address followed by a path, query or fragment.
-fn bare_url(word: &str) -> Option<url::Url> {
-    let url = url::Url::parse(&format!("https://{word}")).ok()?;
-    if url.path() == "/" && url.query().is_none() && url.fragment().is_none() {
-        return None;
-    }
-    match url.host()? {
-        url::Host::Domain(domain) if domain.contains('.') => Some(url),
-        url::Host::Ipv4(_) | url::Host::Ipv6(_) => Some(url),
-        url::Host::Domain(_) => None,
-    }
 }
 
 /// What a declaration did (B1, B5, B6).
@@ -352,8 +248,9 @@ fn log(record: &AgentRecord, ledger: &Ledger, event: &str, turn: Option<&HumanTu
     }));
 }
 
-/// The first line of the letter Done sends the agent (B18), in the words
-/// the operator saw, then what to do in English for any agent.
+/// The letter Done sends the agent (B18): the kind in the words the
+/// operator saw, then what to do in English for any agent. Never the
+/// place, since the letter stays after the declaration is gone (D-04).
 pub(crate) fn done_letter(turn: &HumanTurn) -> String {
     let word = match turn.kind {
         HumanKind::Auth => "인증",
@@ -364,8 +261,7 @@ pub(crate) fn done_letter(turn: &HumanTurn) -> String {
         HumanKind::Permission => "permission",
     };
     format!(
-        "운영자가 처리함: {word} · {place}\nThe operator finished the {english} at {place} that you asked for with hide agent ask-human. Continue from where you stopped; if it is still not done, declare it again.",
-        place = turn.place
+        "운영자가 처리함: {word}\nThe operator finished the {english} you asked for with hide agent ask-human. Continue from where you stopped; if it is still not done, declare it again."
     )
 }
 
@@ -387,89 +283,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_url_place_keeps_neither_its_query_nor_its_fragment() {
-        assert_eq!(
-            place_of("https://github.com/login/oauth?code=abc&state=x#token=y").unwrap(),
-            "github.com/login/oauth"
-        );
-        assert_eq!(
-            place_of("github.com/login?return_to=%2F").unwrap(),
-            "github.com/login"
-        );
-        assert_eq!(
-            place_of("https://accounts.example.com/#/signin").unwrap(),
-            "accounts.example.com"
-        );
-        assert_eq!(
-            place_of("x-apple.systempreferences://Privacy?Camera").unwrap(),
-            "x-apple.systempreferences://Privacy"
-        );
-        // A port, a machine name, an address and a user and password are a
-        // URL's too, and a URL inside a sentence keeps nothing secret either.
+    fn a_place_is_kept_as_written_on_one_line() {
         for (raw, kept) in [
-            ("localhost:3000/cb?code=1", "localhost:3000/cb"),
-            ("example.com:8443/cb?code=abc", "example.com:8443/cb"),
-            ("192.168.1.5:8080/x?t=1", "192.168.1.5:8080/x"),
             (
-                "https://user:token@host.example/path?x=1",
-                "host.example/path",
+                "https://github.com/login/device?user_code=WDJB-MJHT#step=2",
+                "https://github.com/login/device?user_code=WDJB-MJHT#step=2",
             ),
-            ("http://localhost:8080/#/login", "localhost:8080"),
+            ("x-apple.systempreferences://Privacy?Camera", "x-apple.systempreferences://Privacy?Camera"),
+            ("1Password", "1Password"),
             (
-                "Sign in at https://github.com/login?return_to=secret then",
-                "Sign in at github.com/login then",
+                "System Settings › Privacy & Security?\n Camera",
+                "System Settings › Privacy & Security? Camera",
             ),
-            ("[::1]:3000/cb?t=1", "[::1]:3000/cb"),
-            ("my_host.internal:9000/cb?t=1", "my_host.internal:9000/cb"),
-            ("url=github.com/login?t=1", "url=github.com/login"),
-            ("at:localhost:3000/cb?t=1#f", "at:localhost:3000/cb"),
-            ("me@example.com/x?t=1", "example.com/x"),
-            ("user:pass@host.example/x", "host.example/x"),
-            // Wrapped as an agent writes it in a sentence.
-            ("`https://github.com/login?t=1#f`", "`github.com/login`"),
-            ("(https://github.com/login?t=1#f)", "(github.com/login)"),
-            ("\"https://github.com/login?t=1\"", "\"github.com/login\""),
-            ("<https://github.com/login#f>", "<github.com/login>"),
-            ("url=https://github.com/login?t=1", "url=github.com/login"),
-            (
-                "[sign-in](https://github.com/login?t=1)",
-                "[sign-in](github.com/login)",
-            ),
-            ("(https://user:pw@host.example/x?t=1)", "(host.example/x)"),
-            // A URL the crate cannot read, or with nothing left, is left out.
-            ("at https://user:pw@host.example:99999/x", "at"),
-            ("at (https://?code=1)", "at"),
-            ("(github.com/login?t=1).", "(github.com/login)."),
-            ("https://github.com/login?t=1,", "github.com/login,"),
-            ("[why?](github.com/login?t=1)", "[why?](github.com/login)"),
-            ("a?b/c?t=1", "a?b/c"),
-            // A path that is no URL loses its tail as well.
-            ("src/lib.rs#L10", "src/lib.rs"),
-            // Words that are no URL are kept as written.
-            ("Privacy & Security > Camera", "Privacy & Security > Camera"),
-            ("README.md", "README.md"),
-            ("Sign in as me@example.com", "Sign in as me@example.com"),
-            ("mailto:me@example.com", "mailto:me@example.com"),
-            ("example.com:8443", "example.com:8443"),
         ] {
             assert_eq!(place_of(raw).unwrap(), kept, "{raw}");
         }
     }
 
     #[test]
-    fn a_place_that_is_not_a_url_is_kept_as_written_on_one_line() {
-        assert_eq!(place_of("1Password").unwrap(), "1Password");
-        assert_eq!(
-            place_of("System Settings › Privacy & Security?\n Camera").unwrap(),
-            "System Settings › Privacy & Security? Camera"
-        );
-        assert_eq!(place_of("v1.2 release").unwrap(), "v1.2 release");
+    fn the_done_letter_names_the_kind_and_never_the_place() {
+        let turn = HumanTurn {
+            id: "agent-1.1".into(),
+            kind: HumanKind::Auth,
+            place: "https://github.com/login/device?user_code=WDJB-MJHT".into(),
+            declared_at_unix_ms: 1,
+        };
+        let letter = done_letter(&turn);
+        assert_eq!(letter.lines().next(), Some("운영자가 처리함: 인증"));
+        assert!(!letter.contains("github.com"), "{letter}");
+        assert!(!letter.contains("WDJB-MJHT"), "{letter}");
     }
 
     #[test]
     fn an_empty_or_overlong_place_is_refused() {
         assert_eq!(place_of("  \n "), Err("human_place_required"));
-        assert_eq!(place_of("https://?code=1"), Err("human_place_required"));
         let long = "a".repeat(PLACE_LIMIT + 1);
         assert_eq!(place_of(&long), Err("human_place_too_long"));
         assert!(place_of(&"가".repeat(PLACE_LIMIT)).is_ok());
