@@ -59,7 +59,7 @@ test("the home folder is asked about once, added when confirmed, and listed and 
     await dialog.locator("[data-folder-browser-field]").fill("~");
     await dialog.locator("[data-folder-browser-field]").press("Enter");
     await expect(dialog.locator("[data-folder-browser-target]")).toHaveAttribute("data-folder-browser-target", home);
-    await dialog.getByRole("button", { name: "Add", exact: true }).click();
+    await dialog.locator("[data-folder-browser-submit]").click();
     const question = dialog.locator("[data-registration-confirm]");
     await expect(question).toContainText("home folder");
     await expect(dialog.locator("[data-registration-confirm-add]")).toBeFocused();
