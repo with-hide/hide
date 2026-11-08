@@ -21,6 +21,7 @@ crc32fast = { version = "1" }
 digest-93f6ce9d446188ac = { package = "digest", version = "0.10", features = ["mac", "std"] }
 digest-a6292c17cd707f01 = { package = "digest", version = "0.11", features = ["alloc", "oid"] }
 flate2 = { version = "1" }
+form_urlencoded = { version = "1" }
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 hashbrown = { version = "0.17" }
@@ -31,6 +32,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", 
 libc = { version = "0.2", features = ["extra_traits"] }
 memchr = { version = "2" }
 once_cell = { version = "1" }
+percent-encoding = { version = "2" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 rusqlite = { version = "0.32", default-features = false, features = ["bundled", "hooks", "limits"] }

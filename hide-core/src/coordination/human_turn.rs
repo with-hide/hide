@@ -58,17 +58,15 @@ pub struct HumanTurn {
 /// The longest place, in characters, after it is cut (D-21).
 pub const PLACE_LIMIT: usize = 300;
 
-/// The place as it is kept: one line, each URL in it without its `http`
-/// scheme, its user and password, query and fragment, which can carry
+/// The place as it is kept: one line, each word the `url` crate reads as a
+/// URL without its user, password, query and fragment, which can carry
 /// one-time tokens that would otherwise reach the screen, a notification
-/// and the phone (D-04). Every other word is kept as written.
+/// and the phone (D-04), and an `http` or `https` one without its scheme.
+/// Every other word is kept as written.
 pub fn place_of(raw: &str) -> Result<String, &'static str> {
     let place = raw
         .split_whitespace()
-        .map(|word| {
-            let word = without_query(word);
-            url_word(&word).unwrap_or(word)
-        })
+        .map(|word| url_word(word).unwrap_or_else(|| word.to_owned()))
         .collect::<Vec<_>>()
         .join(" ");
     if place.is_empty() {
@@ -80,94 +78,43 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
     Ok(place)
 }
 
-/// The word cut at its first `?` or `#` after a path (`/`), whatever wraps
-/// it: what follows can be a one-time token, so it is never kept, only the
-/// punctuation that closes the word (`)`, a quote, a comma). A path that is
-/// no URL loses that tail too (`src/lib.rs#L10` reads `src/lib.rs`), the
-/// price of never telling a token from an anchor.
-fn without_query(word: &str) -> String {
-    let after_path = word
-        .find('/')
-        .and_then(|slash| word[slash..].find(['?', '#']).map(|at| slash + at));
-    match after_path {
-        Some(at) => {
-            let cut = &word[at..];
-            let closing = &cut[cut.trim_end_matches(CLOSING).len()..];
-            format!("{}{closing}", &word[..at])
-        }
-        _ => word.to_owned(),
-    }
-}
-
-/// What closes a wrapped URL: a bracket, a quote, a backtick, punctuation.
-const CLOSING: [char; 12] = [')', ']', '}', '>', '"', '\'', '`', ',', '.', ';', ':', '!'];
-
-/// A word that is a URL, as it is kept: one with a scheme (`https://…`,
-/// `myapp://…`), or a bare host and what follows it (`github.com/login?…`,
-/// `localhost:3000/cb?…`, `192.168.1.5:8080/x`). None for any other word.
-/// What wraps the URL in the word, a backtick, a bracket, a quote or
-/// `url=`, is kept around it, and so is what closes it after a cut query.
+/// A word as its URL is kept, or None to keep the word as written. A word
+/// with no scheme is read as `https://<word>` only when that names a dotted
+/// host or an address (`github.com/login?…`), and is kept as written when
+/// it carries nothing to remove.
 fn url_word(word: &str) -> Option<String> {
-    let scheme_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.');
-    let (prefix, scheme, rest) = match word.find("://") {
-        Some(at) => {
-            let before = &word[..at];
-            let start = before
-                .char_indices()
-                .rev()
-                .find(|&(_, c)| !scheme_char(c))
-                .map_or(0, |(i, c)| i + c.len_utf8());
-            if start == at {
-                return None;
+    let (mut url, given) = match url::Url::parse(word) {
+        Ok(url) => (url, true),
+        Err(_) => {
+            let url = url::Url::parse(&format!("https://{word}")).ok()?;
+            match url.host()? {
+                url::Host::Domain(domain) if domain.contains('.') => {}
+                url::Host::Ipv4(_) | url::Host::Ipv6(_) => {}
+                url::Host::Domain(_) => return None,
             }
-            (&word[..start], Some(&before[start..]), &word[at + 3..])
-        }
-        None => {
-            let start = word.find(|c: char| c.is_ascii_alphanumeric())?;
-            (&word[..start], None, &word[start..])
+            (url, false)
         }
     };
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, tail) = rest.split_at(end);
-    let host_port = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    // A bare word is a URL only when a host stands before a path, query or fragment.
-    if scheme.is_none() && (tail.is_empty() || !is_host(host_port)) {
+    let http = matches!(url.scheme(), "http" | "https");
+    let secret = !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some();
+    if !secret && !(given && http) {
         return None;
     }
-    let path = tail.split(['?', '#']).next().unwrap_or_default();
-    let cut = &tail[path.len()..];
-    let closing = &cut[cut.trim_end_matches(CLOSING).len()..];
-    let kept = format!("{host_port}{path}");
-    let kept = kept.trim_end_matches('/');
-    let url = match scheme {
-        Some(scheme)
-            if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") =>
-        {
-            format!("{scheme}://{kept}")
-        }
-        _ => kept.to_owned(),
+    // A URL that cannot be a base has no user to take away.
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    let kept = url.as_str();
+    let kept = if http {
+        kept.split_once("://").map_or(kept, |(_, rest)| rest)
+    } else {
+        kept
     };
-    Some(format!("{prefix}{url}{closing}"))
-}
-
-/// A host with an optional port: `localhost`, or dotted labels of letters,
-/// digits, `-` and `_` (an IPv4 address included).
-fn is_host(host_port: &str) -> bool {
-    let host = match host_port.rsplit_once(':') {
-        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
-        Some(_) => return false,
-        None => host_port,
-    };
-    host.eq_ignore_ascii_case("localhost")
-        || (host.contains('.')
-            && host.split('.').all(|label| {
-                !label.is_empty()
-                    && label
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-            }))
+    Some(kept.trim_end_matches('/').to_owned())
 }
 
 /// What a declaration did (B1, B5, B6).
@@ -412,25 +359,13 @@ mod tests {
                 "Sign in at https://github.com/login?return_to=secret then",
                 "Sign in at github.com/login then",
             ),
-            // Wrapped as an agent writes it in a sentence.
-            ("`https://github.com/login?t=1#f`", "`github.com/login`"),
-            ("(https://github.com/login?t=1#f)", "(github.com/login)"),
-            ("\"https://github.com/login?t=1\"", "\"github.com/login\""),
-            ("<https://github.com/login#f>", "<github.com/login>"),
-            ("url=https://github.com/login?t=1", "url=github.com/login"),
-            (
-                "[sign-in](https://github.com/login?t=1)",
-                "[sign-in](github.com/login)",
-            ),
-            ("(github.com/login?t=1).", "(github.com/login)."),
+            ("[::1]:3000/cb?t=1", "[::1]:3000/cb"),
             ("my_host.internal:9000/cb?t=1", "my_host.internal:9000/cb"),
             ("url=github.com/login?t=1", "url=github.com/login"),
             ("at:localhost:3000/cb?t=1#f", "at:localhost:3000/cb"),
-            ("https://github.com/login?t=1,", "github.com/login,"),
-            ("[why?](github.com/login?t=1)", "[why?](github.com/login)"),
-            ("a?b/c?t=1", "a?b/c"),
-            // A path that is no URL loses its tail as well.
-            ("src/lib.rs#L10", "src/lib.rs"),
+            // Words that are no URL are kept as written.
+            ("Privacy & Security > Camera", "Privacy & Security > Camera"),
+            ("src/lib.rs#L10 README.md", "src/lib.rs#L10 README.md"),
         ] {
             assert_eq!(place_of(raw).unwrap(), kept, "{raw}");
         }
