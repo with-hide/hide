@@ -15,10 +15,13 @@ import { Button } from "./ui/button";
 // (the core's judgment, conflict and merge queue included), and a line of
 // the node that failed and that reason does not already say, so the choice
 // is made with the cause in view. Then the choices the core offers for the
-// raise, in its order (`AttentionReason::choices`): Conductor에게 맡기기
-// first, or 그대로 두기 with no Conductor, and 노드 제외 last, which never
-// goes on one press: the first turns it into 제외 확인 in place, a press
-// elsewhere puts it back, and only the second press sends. Each choice sends
+// raise, in its order (`AttentionReason::choices`): 지휘 에이전트에게 넘기기
+// first, or 그대로 두기 with no Conductor, and 이 단계 빼기 last, which never
+// goes on one press: the first turns it into 빼기 확인 in place, a press
+// elsewhere puts it back, and only the second press sends. A refused close
+// leads with 완료로 닫기 (`done` on that reason), which closes the mission and
+// follows the same two presses (닫기 확인), and offers no 이 단계 빼기, since
+// its work is finished. Each choice sends
 // one `mission_attention` event, and the core settles the node and tells
 // the Conductor (B17). Once one is sent every choice is off; the item goes
 // when the core's next snapshot settles it.
@@ -46,8 +49,17 @@ export function AttentionChoices({ mission, node, attention, actions }: { missio
         </span>
       ) : null}
       {attention.choices.map((choice) => {
-        const confirm = choice === "drop" && confirming;
-        const label = confirm ? t("mission.operator.dropConfirm") : choice === "leave" && !mission.conductor.present ? t("mission.operator.leaveAsIs") : t(`mission.operator.${choice}`);
+        // A choice that ends something goes on a second press: dropping a node, or closing a mission whose empty lines the operator passes.
+        const closes = choice === "done" && attention.reason === "close_refused";
+        const twice = choice === "drop" || closes;
+        const confirm = twice && confirming;
+        const label = closes
+          ? t(confirm ? "mission.operator.closeDoneConfirm" : "mission.operator.closeDone")
+          : confirm
+            ? t("mission.operator.dropConfirm")
+            : choice === "leave" && !mission.conductor.present
+              ? t("mission.operator.leaveAsIs")
+              : t(`mission.operator.${choice}`);
         return (
           <Button
             key={choice}
@@ -55,14 +67,14 @@ export function AttentionChoices({ mission, node, attention, actions }: { missio
             variant={confirm ? "destructive" : "secondary"}
             disabled={sent}
             onClick={() => {
-              if (choice === "drop" && !confirming) {
+              if (twice && !confirming) {
                 setConfirming(true);
                 return;
               }
               setSent(true);
               actions.settleMissionNode(mission.id, node.key, choice, attention.since_unix_ms);
             }}
-            onBlur={choice === "drop" ? () => setConfirming(false) : undefined}
+            onBlur={twice ? () => setConfirming(false) : undefined}
             data-attention-choice={choice}
             data-attention-confirm={confirm ? "true" : undefined}
           >

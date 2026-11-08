@@ -51,6 +51,14 @@ impl Runtime {
         {
             return pull.head_oid.clone();
         }
+        // A finished node without a pull request is judged against the
+        // commit it finished on, not a folder that moves on after it.
+        if node.status == NodeStatus::Done
+            && node.current_pr().is_none()
+            && let Some(frozen) = &node.done_head
+        {
+            return Some(frozen.clone());
+        }
         let (device, folder) = node.check_folder(&mission.device_id)?;
         // A machine that does not answer shows its last session, whose head
         // may be long gone: nothing passes on it until it answers again.
@@ -62,6 +70,17 @@ impl Runtime {
             .flat_map(|workspace| &workspace.checkouts)
             .find(|checkout| checkout.path == folder)
             .and_then(|checkout| checkout.head_sha().map(str::to_owned))
+    }
+
+    /// Freezes the commit a done node without a pull request finished on
+    /// (`MissionNode::done_head`), read from its work folder now: the gate
+    /// that let it be done judged that same head. None where Hide cannot
+    /// read it, and then nothing was met on it.
+    fn freeze_done_head(&self, mission: &Mission, node: &mut MissionNode) {
+        node.done_head = None;
+        if node.status == NodeStatus::Done && node.current_pr().is_none() {
+            node.done_head = self.node_head(mission, node, None);
+        }
     }
 
     /// The checkout whose tabs hold `pane` on `machine`.
@@ -176,13 +195,32 @@ impl Runtime {
     /// now, against `pulls` (B7, B9): a new commit, a changed check command
     /// or a checker's new verdict after the node was done opens it again.
     fn done_unmet(&self, mission: &Mission, pulls: Option<&GithubProjectSnapshot>) -> Vec<String> {
+        self.done_unmet_lines(mission, pulls)
+            .into_iter()
+            .map(|(index, unmet)| format!("{}: {}", mission.nodes[index].key, unmet.join(", ")))
+            .collect()
+    }
+
+    /// The done nodes of `mission` that are not met now, by index, each with
+    /// the keys of its open lines: what `done_unmet` words and what the
+    /// operator's close of a refused mission passes.
+    pub(super) fn unmet_done_nodes(&self, mission: &Mission) -> Vec<(usize, Vec<String>)> {
+        self.done_unmet_lines(mission, self.mission_pulls(mission))
+    }
+
+    fn done_unmet_lines(
+        &self,
+        mission: &Mission,
+        pulls: Option<&GithubProjectSnapshot>,
+    ) -> Vec<(usize, Vec<String>)> {
         mission
             .nodes
             .iter()
-            .filter(|node| node.status == NodeStatus::Done && Self::gated(mission, node))
-            .filter_map(|node| {
+            .enumerate()
+            .filter(|(_, node)| node.status == NodeStatus::Done && Self::gated(mission, node))
+            .filter_map(|(index, node)| {
                 let unmet = self.node_unmet_in(mission, node, pulls);
-                (!unmet.is_empty()).then(|| format!("{}: {}", node.key, unmet.join(", ")))
+                (!unmet.is_empty()).then_some((index, unmet))
             })
             .collect()
     }
@@ -240,6 +278,9 @@ impl Runtime {
         let mut next = crate::missions::apply_patch(node, patch, now)?;
         if mission.exempt {
             return Ok(next);
+        }
+        if next.status == NodeStatus::Done && node.status != NodeStatus::Done {
+            self.freeze_done_head(mission, &mut next);
         }
         if next.current_pr() != node.current_pr() {
             next.criteria.retain(|line| line.kind != CriterionKind::Ci);
@@ -425,7 +466,14 @@ impl Runtime {
                         next.set_check_folder(&mission.device_id, &actor.device_id, &folder);
                     let mut effect = next.criteria[at]
                         .record(pass, evidence, summary, commit, rerun, recorder)?;
-                    effect.changed |= moved;
+                    // A check recorded on a node already done is the proof
+                    // it finishes on from now, when the record is new: the
+                    // same result sent again changes nothing, so it leaves
+                    // the proof the node finished on as it is.
+                    if pass && effect.changed && next.status == NodeStatus::Done {
+                        self.freeze_done_head(mission, &mut next);
+                    }
+                    effect.changed |= moved || next.done_head != row.done_head;
                     effect
                 } else {
                     next.criteria[at].record(pass, evidence, summary, commit, rerun, recorder)?

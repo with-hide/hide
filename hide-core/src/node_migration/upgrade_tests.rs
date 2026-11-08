@@ -342,8 +342,18 @@ fn released_facts(
         core["agent_sleep"]["dormant"]
             .as_object()
             .into_iter()
-            .flat_map(|rows| rows.values())
-            .map(|row| session_fact(&text(&row["kind"]), &text(&row["native_session_id"])))
+            .flat_map(|rows| rows.iter())
+            .map(|(id, row)| {
+                let reference = &row["source_reference"];
+                dormant_fact(&DormantIdentity {
+                    sleep: Some(id.clone()),
+                    kind: text(&row["kind"]),
+                    session: text(&row["native_session_id"]),
+                    reference: text(&reference["kind"]).zip(text(&reference["value"])),
+                    owner: text(&row["label_owner"]),
+                    label: text(&row["identity_label"]),
+                })
+            })
             .collect(),
     );
     facts.insert(
@@ -406,8 +416,52 @@ fn session_fact(kind: &Option<String>, session: &Option<String>) -> String {
     format!("{kind:?} session {session:?}")
 }
 
+/// Who a session asleep with its pane closed is: its sleep, the agent's
+/// kind and label, and the native session with the proof its wake checks.
+struct DormantIdentity {
+    sleep: Option<String>,
+    kind: Option<String>,
+    session: Option<String>,
+    reference: Option<(String, String)>,
+    owner: Option<String>,
+    label: Option<String>,
+}
+
+fn dormant_fact(identity: &DormantIdentity) -> String {
+    let DormantIdentity {
+        sleep,
+        kind,
+        session,
+        reference,
+        owner,
+        label,
+    } = identity;
+    format!(
+        "{sleep:?} {kind:?} session {session:?} reference {reference:?} owner {owner:?} label {label:?}"
+    )
+}
+
 fn agent_fact(id: &Option<String>, name: &Option<String>, session: &Option<String>) -> String {
     format!("{id:?} {name:?} session {session:?}")
+}
+
+/// The scenario step (`scripts/release_state/scenario.py`) that puts Pi on
+/// the core to sleep with its pane closed.
+const DORMANT_STEP: &str = "Pi on the core asleep with its pane closed";
+
+/// What the release's run report (`<tag>.json` beside its folder) says a
+/// step did: `None` when the run had no such step.
+fn released_step(fixture: &Path, step: &str) -> Option<bool> {
+    // Not `with_extension`: a tag's dots are not an extension.
+    let mut name = fixture.file_name().unwrap().to_os_string();
+    name.push(".json");
+    let report = fixture.with_file_name(name);
+    let report: Value = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    report["steps"]
+        .as_array()?
+        .iter()
+        .find(|row| row["step"] == step)
+        .and_then(|row| row["ok"].as_bool())
 }
 
 /// The project choices a later build reads, by field, as JSON: an absent
@@ -463,8 +517,20 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
         "dormant sleeps",
         ui.agent_sleep
             .dormant
-            .values()
-            .map(|row| session_fact(&some(&row.kind), &some(&row.native_session_id)))
+            .iter()
+            .map(|(id, row)| {
+                dormant_fact(&DormantIdentity {
+                    sleep: some(id.as_str()),
+                    kind: some(&row.kind),
+                    session: some(&row.native_session_id),
+                    reference: row
+                        .source_reference
+                        .as_ref()
+                        .map(|reference| (reference.kind.clone(), reference.value.clone())),
+                    owner: some(&row.label_owner),
+                    label: some(&row.identity_label),
+                })
+            })
             .collect(),
     );
     loaded.insert(
@@ -498,11 +564,18 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
             .collect(),
     );
     let mut failures = Vec::new();
+    // A sleep on a device is refused before 1.2.3, and a release whose
+    // folder predates the Pi step wrote no dormant sleep; a release whose
+    // report says its Pi slept wrote one.
+    let pi_slept = released_step(fixture, DORMANT_STEP) == Some(true);
     for (store, facts) in &released {
-        // Every release writes these; a sleep on a device is refused before 1.2.3,
-        // and no step makes a release write a dormant sleep yet.
-        // An old Home is written by the releases that kept one.
-        let optional = matches!(*store, "sleep records" | "dormant sleeps" | "old homes");
+        let optional = match *store {
+            "sleep records" => true,
+            "dormant sleeps" => !pi_slept,
+            // An old Home is written by the releases that kept one.
+            "old homes" => true,
+            _ => false,
+        };
         if facts.is_empty() && !optional {
             failures.push(format!(
                 "the released folder holds no {store}: the scenario no longer writes them"
@@ -527,6 +600,13 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
                 "the pending retirement of {} names {}, its registration {device:?}",
                 retirement.registration_id, retirement.device_id
             ));
+        }
+    }
+    // A later build wakes a dormant sleep only from a record that still
+    // proves its session (`DormantRecord::validate`).
+    for (id, record) in &ui.agent_sleep.dormant {
+        if let Err(reason) = record.validate() {
+            failures.push(format!("dormant sleep {}: {reason}", id.as_str()));
         }
     }
     let projects = projects.as_object().cloned().unwrap_or_default();

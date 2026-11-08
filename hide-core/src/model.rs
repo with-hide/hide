@@ -1458,9 +1458,14 @@ pub enum AskSubject {
     MissionDecision { line: String },
     /// A node of the mission waits on the operator to look (PRD
     /// mission-node-simple D-05, B14): its title and why.
+    ///
+    /// `unmet` is, for a refused close, how many finished nodes have a line
+    /// empty now (0 for every other reason and then left off the wire).
     MissionAttention {
         node: String,
         reason: crate::missions::AttentionReason,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        unmet: u32,
     },
     /// Hide typed a brief or a letter's bell into the agent and the agent
     /// has not recorded it, and no parent cleared it (`delivery::typed`).
@@ -8431,6 +8436,7 @@ mod wire_enum_tests {
             AskSubject::MissionAttention {
                 node: "node".into(),
                 reason: crate::missions::AttentionReason::WorkerEnded,
+                unmet: 0,
             },
             AskSubject::InputUnconfirmed {
                 input: crate::delivery::typed::InputKind::Brief,

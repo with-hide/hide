@@ -656,7 +656,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         subject_input_unconfirmed_brief_held: "브리프 못 받음",
         subject_input_unconfirmed_letter_held: "편지 못 받음",
         subject_mission_attention: "확인 필요",
-        subject_mission_attention_close_refused: "미션을 닫지 못함",
+        subject_mission_attention_close_refused: "작업은 끝남 · 확인 기록 빠짐",
         subject_mission_attention_conductor_failed: "Conductor가 실패로 기록함",
         subject_mission_attention_merged_unproven: "PR 머지됨, 기준 기록이 없거나 실패",
         subject_mission_attention_pr_closed: "PR 머지 없이 닫힘",

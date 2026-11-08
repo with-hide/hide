@@ -204,7 +204,7 @@ export type UserTurnFact = {
 
 export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn"] as const;
 /** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
 
 export const HUMAN_KINDS = ["auth", "permission"] as const;
 /** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
@@ -1340,7 +1340,7 @@ export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
 /** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[] };
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */

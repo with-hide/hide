@@ -44,7 +44,7 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
   try {
     const row = container.querySelector<HTMLElement>(`[data-mission-ask="${mission.id}"]`)!;
     const buttons = [...row.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
-    expect(buttons).toEqual(["이어받기", "끝으로"]);
+    expect(buttons).toEqual(["지휘 다시 열기", "끝으로"]);
     await act(async () => row.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
     await act(async () => row.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
     expect(sent).toEqual([{ schema_version: 2, kind: "mission_attention", payload: { mission: mission.id, node: ask!.node.key, action: "done", since_unix_ms: ask!.attention.since_unix_ms } }]);

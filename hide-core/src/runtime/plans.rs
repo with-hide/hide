@@ -1047,6 +1047,11 @@ impl Runtime {
                 let subject = AskSubject::MissionAttention {
                     node: node.title.clone(),
                     reason: attention.reason,
+                    unmet: if attention.reason == crate::missions::AttentionReason::CloseRefused {
+                        u32::try_from(self.unmet_done_nodes(mission).len()).unwrap_or(u32::MAX)
+                    } else {
+                        0
+                    },
                 };
                 if let Some(asked) = self.mission_attention_row(ledger.as_deref(), mission, node) {
                     out.push((asked, since, subject));

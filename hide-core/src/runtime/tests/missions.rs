@@ -6104,6 +6104,7 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         Some(crate::model::AskSubject::MissionAttention {
             node: "Fix it".into(),
             reason: AttentionReason::PrClosed,
+            unmet: 0,
         })
     );
     assert!(runtime.claim_mission_notices().is_empty());
@@ -8161,5 +8162,315 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         held(&runtime),
         None,
         "the later letter's bell was answered: the Conductor is reached again, before any ack"
+    );
+}
+
+/// A mission of one direct change (no pull request) whose worker recorded
+/// both lines at `HEAD` and finished it there.
+fn finished_direct_node(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct",
+             "criteria": ["it works"]},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+    checkout_at(runtime, HEAD);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+}
+
+/// A finished direct node keeps the proof its check gave: the worker then
+/// merges into main and the folder moves on, and the mission still closes
+/// with no raise, since the node was judged on the commit it finished on.
+#[test]
+fn a_finished_direct_nodes_check_survives_its_folder_moving() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    checkout_at(&mut runtime, OTHER_HEAD);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_ne!(mission.status, MissionStatus::Running);
+    assert!(
+        mission.nodes.iter().all(|node| node.attention.is_none()),
+        "{:?}",
+        mission.nodes[0].attention
+    );
+}
+
+/// The proof frozen at a finish goes with it: a node set working again is
+/// judged against its folder, so a check from before asks to be run again.
+#[test]
+fn a_direct_node_set_working_again_needs_a_fresh_check() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    let done_head = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .done_head
+            .clone()
+    };
+    assert_eq!(done_head(&runtime).as_deref(), Some(HEAD));
+    checkout_at(&mut runtime, OTHER_HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    assert_eq!(done_head(&runtime), None);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_criteria_unmet", Some("fix: check"))
+    );
+    // A fresh check on the new commit finishes it again, on that commit.
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    assert_eq!(done_head(&runtime).as_deref(), Some(OTHER_HEAD));
+}
+
+/// A node finished before the commit was kept has none and is judged
+/// against its folder as before; the mission's close is then refused, and
+/// the operator's 완료로 닫기 passes the empty line as their own decision
+/// and closes it. Drop is not offered, since the work is finished.
+#[test]
+fn the_operator_closes_a_refused_mission_as_done_passing_the_empty_lines() {
+    use crate::mission_criteria::CriterionState;
+    use crate::missions::{AttentionReason, OperatorAction};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].done_head = None;
+    checkout_at(&mut runtime, OTHER_HEAD);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let node = node_view(&runtime, "fix");
+    let attention = node.attention.expect("the refused close is raised");
+    assert_eq!(attention.reason, AttentionReason::CloseRefused);
+    assert_eq!(attention.unmet_nodes, 1);
+    assert!(attention.choices.contains(&OperatorAction::Done));
+    assert!(!attention.choices.contains(&OperatorAction::Drop));
+    let payload = |action| crate::runtime::mission_health::MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        action,
+        since_unix_ms: Some(attention.since_unix_ms),
+    };
+    assert_eq!(
+        runtime
+            .mission_attention_act(&payload(OperatorAction::Drop), now)
+            .unwrap_err(),
+        "mission_attention_choice_refused"
+    );
+    assert!(
+        runtime
+            .mission_attention_act(&payload(OperatorAction::Done), now)
+            .unwrap()
+    );
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.nodes[0].attention.is_none());
+    let check = mission.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "check")
+        .unwrap();
+    assert_eq!(check.state, CriterionState::Skipped);
+    assert_eq!(
+        check.skip.as_ref().map(|skip| skip.reason.as_str()),
+        Some("운영자 판단")
+    );
+    assert_eq!(
+        check.by.as_ref().map(|by| by.role),
+        Some(crate::mission_criteria::Role::Operator)
+    );
+}
+
+/// The same passing check sent again after the folder moved on changes
+/// nothing: the proof the node finished on stays, so the line stays passed.
+#[test]
+fn a_check_sent_again_unchanged_keeps_the_proof_a_node_finished_on() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    checkout_at(&mut runtime, OTHER_HEAD);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let done_head = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .done_head
+        .clone();
+    assert_eq!(done_head.as_deref(), Some(HEAD));
+}
+
+/// 완료로 닫기 answers a question about a mission whose every node was
+/// finished: once another node works again it is refused and passes nothing,
+/// and the next evaluation takes the question and its choices away.
+#[test]
+fn a_refused_close_is_not_closed_by_the_operator_once_a_node_works_again() {
+    use crate::missions::{AttentionReason, NodeStatus, OperatorAction};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let mut second = mission.nodes[0].clone();
+        second.key = "second".into();
+        mission.nodes.push(second);
+        mission.nodes[0].done_head = None;
+    }
+    checkout_at(&mut runtime, OTHER_HEAD);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let attention = node_view(&runtime, "fix").attention.unwrap();
+    assert_eq!(attention.reason, AttentionReason::CloseRefused);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    let payload = crate::runtime::mission_health::MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        action: OperatorAction::Done,
+        since_unix_ms: Some(attention.since_unix_ms),
+    };
+    assert_eq!(
+        runtime.mission_attention_act(&payload, now + 1),
+        Err("mission_attention_moved".into())
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(mission.nodes[1].status, NodeStatus::Working);
+    assert!(
+        mission.nodes[0]
+            .criteria
+            .iter()
+            .all(|line| line.skip.is_none())
+    );
+    runtime.drive_mission_health(now + 2);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+}
+
+/// A refused close the evaluation took away because another node worked
+/// again is not held back as handled: once that node finishes again and the
+/// close is refused again, the question comes back with its own history
+/// entry, so the mission is never left running with nothing to answer.
+#[test]
+fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
+    use crate::mission_criteria::CriterionState;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let mut second = mission.nodes[0].clone();
+        second.key = "second".into();
+        mission.nodes.push(second);
+        mission.nodes[0].done_head = None;
+    }
+    checkout_at(&mut runtime, OTHER_HEAD);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        node_view(&runtime, "fix").attention.unwrap().reason,
+        AttentionReason::CloseRefused
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 1);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("second", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 2);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(AttentionReason::CloseRefused),
+        "the close was refused again, so the choice to close is reachable again"
+    );
+    let raised = runtime.missions.events["mission-1"]
+        .events
+        .iter()
+        .filter(|event| event.reason == Some(AttentionReason::CloseRefused))
+        .filter_map(|event| event.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        raised.len(),
+        2,
+        "each question has its own entry: {raised:?}"
     );
 }
