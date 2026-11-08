@@ -13,7 +13,7 @@ const say = (text: string) => ({ type: { pane: LEAD, text } });
 
 export default chapter<PlanModel>({
   id: "plan",
-  number: 8,
+  number: 3,
   version: 1,
   world: PLAN_WORLD,
   quest: true,

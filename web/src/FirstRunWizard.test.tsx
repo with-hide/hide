@@ -114,7 +114,7 @@ it("asks how to start with two ways and Skip for now, and no choice to confirm",
   await unmount();
 });
 
-it("practice first ends the wizard and opens the practice window on chapter 0", async () => {
+it("practice first ends the wizard and opens the practice window on the mission flow", async () => {
   const openPractice = vi.fn();
   window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
   const { events, unmount } = await mount(startStep());

@@ -1,4 +1,4 @@
-// Chapter 0, where the first run and the sidebar's invitation land: one job
+// The mission flow (flow 4), where the first run and the sidebar's invitation land: one job
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
@@ -21,7 +21,8 @@ const SCREEN = "ui";
 
 export default chapter<MissionModel>({
   id: "mission",
-  number: 0,
+  number: 4,
+  next: "overview",
   version: 13,
   world: MISSION_WORLD,
   quest: true,

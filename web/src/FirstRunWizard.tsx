@@ -474,7 +474,7 @@ function NotificationsStep({ actions, reopened, primary, onBack, answered, onAns
 /**
  * The last step: how to start. Each way is its own button, with no choice to
  * confirm: practice first, which ends the wizard and opens the
- * practice window on chapter 0 over the empty Home; Add a project, the views
+ * practice window on the mission flow over the empty Home; Add a project, the views
  * of Add project as they were, whose Back returns here; or Skip for now. Which
  * of the two is on screen is the project draft's view (`""` here), so a reload
  * reopens it.

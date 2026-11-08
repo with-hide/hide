@@ -10,7 +10,7 @@ const say = (text: string) => ({ type: { pane: LEAD, text } });
 
 export default chapter<DelegateModel>({
   id: "delegate",
-  number: 5,
+  number: 12,
   version: 2,
   world: DELEGATE_WORLD,
   quest: true,

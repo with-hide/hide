@@ -348,11 +348,11 @@ async function withShell(page: Page, journey: (origin: string) => Promise<void>)
   }
 }
 
-test("the sidebar's invitation brings the open practice window forward on chapter 0 and goes once a chapter is opened", async ({ page }) => {
+test("the sidebar's invitation brings the open practice window forward on the mission flow and goes once a chapter is opened", async ({ page }) => {
   await withShell(page, async () => {
     const invite = page.locator("[data-practice-invite]");
     await expect(invite).toBeVisible();
-    // A practice window already open on its chapter list: the invitation plays chapter 0 there, in the same window.
+    // A practice window already open on its chapter list: the invitation plays the mission flow there, in the same window.
     await page.locator("[data-help-menu-trigger]").click();
     const opened = page.context().waitForEvent("page");
     await page.locator('[data-help-item="practice"]').click();

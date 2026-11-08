@@ -6,7 +6,7 @@ import { SWITCH_WORLD, type SwitchModel } from "../worlds/switch";
 
 export default chapter<SwitchModel>({
   id: "switch",
-  number: 3,
+  number: 10,
   version: 2,
   world: SWITCH_WORLD,
   quest: true,

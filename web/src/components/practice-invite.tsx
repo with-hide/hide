@@ -1,6 +1,6 @@
 // The sidebar's invitation to practice: a quiet row above the footer for an
 // operator who never practiced (`practiceInvited`). Pressing it opens the
-// practice window on chapter 0; its × closes it for good, which the core
+// practice window on the mission flow; its × closes it for good, which the core
 // keeps (`practice_invite_close`). Opening any chapter writes progress, so
 // the row goes with the first step too.
 

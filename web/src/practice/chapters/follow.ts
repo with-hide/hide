@@ -9,7 +9,7 @@ const LEAD = '[data-pane-view="lead"]';
 
 export default chapter<FollowModel>({
   id: "follow",
-  number: 4,
+  number: 11,
   version: 2,
   world: FOLLOW_WORLD,
   quest: true,
