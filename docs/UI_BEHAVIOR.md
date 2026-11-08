@@ -150,7 +150,10 @@ When several tabs request the same file during its read, they share the read and
 A buffer opened through another path before the read answers retains its draft and save state, and the pending GUI displays still open in their requesting tabs.
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
 Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
-A new checkout in front changes the documents and the Explorer to that checkout's; the 보기 slot, the window's, stays, and its rail button opens that checkout's lane when it is closed (B22).
+A new checkout in front changes the documents and the Explorer to that checkout's.
+The 보기 slot belongs to the Agent tab that was in front when its item was opened: it stays while that tab is in front, also when the operator clicks another pane of the tab, and another tab in front, in this checkout or another, shows its own slot or none, so the lane is the checkout's documents or Explorer as it stands, the rail's 보기 button brings back only the front tab's own slot, and ⌘E opens the lane with that slot when the tab has one.
+Back in the tab its card is there as it was, with its ← history; a closed tab takes its slot with it, and a slot saved window-wide by an older build attaches to the tab in front on the first event after the launch.
+With no Workspace in front the Overview's own panel opens the items as before (B22).
 
 ⌘⇧P shows and focuses the sidebar.
 `Toggle device rail` has no default chord either and is bound the same way; it shows or hides the device rail.

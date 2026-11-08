@@ -32,7 +32,7 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // PRD lane-two-columns D-01, D-02, D-09): one checkout's path in the
 // window's top row (PRD sidebar-titlebar-refresh D-15, `WorkspaceTitle`),
 // and in the body Agent Views (its engine tabs and their panes), the right
-// lane's two columns (the documents or the window's 보기 slot at the agents'
+// lane's two columns (the documents or the front tab's 보기 slot at the agents'
 // side, and a tool, Memory, PRs, Explorer or Changes, beside the rail) and,
 // at the right edge, the tool rail. Which columns show, the tool, the pin
 // and the four widths are the core's, per Workspace; this draws them and
@@ -74,7 +74,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   );
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
-  // The viewing column draws the window's 보기 slot while it is shown, else the Workspace's documents (PRD sidebar-task-lens D-50; lane-two-columns D-04).
+  // The viewing column draws the front tab's 보기 slot while it is shown, else the Workspace's documents (PRD sidebar-task-lens D-50; lane-two-columns D-04).
   const detail = useShellStore((s) => s.rest?.ui_state?.detail);
   const laneView = laneViewOf(view, detail, hasViews);
   const input: LaneInput = {

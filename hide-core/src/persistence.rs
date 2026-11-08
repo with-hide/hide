@@ -97,6 +97,11 @@ struct StoredUiState {
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<serde_json::Value>,
+    /// The tab `detail` belongs to, and the slots of the other tabs by tab id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_tabs: Option<serde_json::Value>,
     /// Kept as JSON and read record by record
     /// (`OverviewGraphChoices::read_stored`), so a record this build cannot
     /// read is left out and the rest of the store still loads.
@@ -562,6 +567,26 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 DetailSlot::default()
             }),
     };
+    // One slot this build cannot read drops alone; the others still load.
+    let detail_tabs = match stored.detail_tabs {
+        None => BTreeMap::new(),
+        Some(serde_json::Value::Object(slots)) => slots
+            .into_iter()
+            .filter_map(|(tab, value)| {
+                let slot = serde_json::from_value::<DetailSlot>(value)
+                    .ok()
+                    .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT);
+                if slot.is_none() {
+                    unrecognized.push(UnrecognizedField::Detail);
+                }
+                slot.map(|slot| (tab, slot))
+            })
+            .collect(),
+        Some(_) => {
+            unrecognized.push(UnrecognizedField::Detail);
+            BTreeMap::new()
+        }
+    };
     let overview_graph = match stored.overview_graph {
         None => OverviewGraphChoices::default(),
         Some(value) => match OverviewGraphChoices::read_stored(value) {
@@ -657,6 +682,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             practice,
             practice_invite_closed: stored.practice_invite_closed,
             detail,
+            detail_home: stored.detail_home,
+            detail_tabs,
             overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
@@ -843,6 +870,9 @@ pub fn save(
         practice_invite_closed: state.practice_invite_closed,
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
+        detail_home: state.detail_home.clone(),
+        detail_tabs: (!state.detail_tabs.is_empty())
+            .then(|| serde_json::to_value(&state.detail_tabs).expect("the 보기 slots serialize")),
         overview_graph: Some(
             serde_json::to_value(&state.overview_graph)
                 .expect("the Overview map's choices serialize"),
@@ -1677,9 +1707,17 @@ mod tests {
             workspace_id: "workspace:alpha".to_owned(),
             number: 7,
         });
+        state.detail_home = Some("w1:t1".to_owned());
+        let mut other = DetailSlot::default();
+        other.open(crate::model::DetailItem::Cost {
+            workspace_id: "workspace:alpha".to_owned(),
+        });
+        state.detail_tabs.insert("w1:t2".to_owned(), other);
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the lens");
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.detail_home, state.detail_home);
+        assert_eq!(restored.detail_tabs, state.detail_tabs);
         assert_eq!(restored.sidebar_lens, SidebarLens::Tasks);
         assert_eq!(restored.task_view, TaskView::Project);
         assert_eq!(restored.sidebar_project, state.sidebar_project);
@@ -1693,6 +1731,10 @@ mod tests {
         assert_eq!(older_state.task_view, TaskView::Status);
         assert_eq!(older_state.sidebar_project, None);
         assert_eq!(older_state.detail, DetailSlot::default());
+        assert_eq!(
+            (older_state.detail_home, older_state.detail_tabs.len()),
+            (None, 0)
+        );
 
         let unknown = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
             "sidebar_lens":"sessions","task_view":"status","detail":{"items":[{"kind":"tab"}],"shown":true}}"#;
