@@ -128,7 +128,6 @@
     "button": 3
   },
   "web/src/StartPanel.tsx": {
-    "input": 1,
     "layer": 1
   },
   "web/src/SuggestionsTab.tsx": {

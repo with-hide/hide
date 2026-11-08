@@ -67,6 +67,7 @@ import type { Catalogs } from "./schema";
 import { coreErrorsCatalogs, coreErrorsEnglish } from "./resources/coreErrors";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
+import { startPanelCatalogs, startPanelEnglish } from "./resources/startPanel";
 import { overviewRedesignCatalogs, overviewRedesignEnglish } from "./resources/overviewRedesign";
 
 export const english = {
@@ -74,6 +75,7 @@ export const english = {
   ...menusEnglish,
   ...sessionWorkEnglish,
   ...deviceOverviewEnglish,
+  ...startPanelEnglish,
   ...overviewRedesignEnglish,
   ...overviewBacklogEnglish,
   ...overviewUsageEnglish,
@@ -150,6 +152,7 @@ export const catalogs = {
     ...menusCatalogs.ko,
     ...sessionWorkCatalogs.ko,
     ...deviceOverviewCatalogs.ko,
+    ...startPanelCatalogs.ko,
     ...overviewRedesignCatalogs.ko,
     ...overviewBacklogCatalogs.ko,
     ...overviewUsageCatalogs.ko,
@@ -221,6 +224,7 @@ export const catalogs = {
     ...menusCatalogs["zh-CN"],
     ...sessionWorkCatalogs["zh-CN"],
     ...deviceOverviewCatalogs["zh-CN"],
+    ...startPanelCatalogs["zh-CN"],
     ...overviewRedesignCatalogs["zh-CN"],
     ...overviewBacklogCatalogs["zh-CN"],
     ...overviewUsageCatalogs["zh-CN"],
@@ -292,6 +296,7 @@ export const catalogs = {
     ...menusCatalogs.ja,
     ...sessionWorkCatalogs.ja,
     ...deviceOverviewCatalogs.ja,
+    ...startPanelCatalogs.ja,
     ...overviewRedesignCatalogs.ja,
     ...overviewBacklogCatalogs.ja,
     ...overviewUsageCatalogs.ja,

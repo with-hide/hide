@@ -60,7 +60,7 @@ An empty, loading, disconnected, failed or stale catalog gives small feedback in
 Discovery never starts or stops a server, and an opened page retains the Browser View’s own connection failure and recovery controls.
 Hovering or focusing an icon shows its name in a tooltip; `Open server` has no chord.
 A right-click or the menu key on the path offers Show or Hide right lane and Copy Workspace path.
-An empty Agent group or draft offers an agent start and a separate `Start with terminal` action.
+An empty Agent group or draft offers an agent start, and under it a quiet `Start with terminal` in words.
 An area showing a delegated child still draws that tab's canvas even though the tab stays off the ordinary strip, so choosing the child from the sidebar opens its pane rather than an empty start surface.
 
 ### The window's top row
@@ -230,10 +230,11 @@ Ungroup moves the group's tabs in order to the end of the ungrouped active area 
 Undo restores the last ungrouping while its session-local receipt remains valid, until the next group mutation or the checkout's saved state is unloaded; Undo is shown only while it can act and does not survive restart.
 
 New tab opens one terminal immediately in the chosen area's bar, in the selected group, without an instruction field or provider picker.
+Beside an Agent area's New tab a `▾` opens a menu of what a new tab can be: `터미널` with the new tab chord, which is New tab itself, and `에이전트 시작…` with ⌘N, which opens the [Start panel](#start-panel); a View area has no such menu.
 The button, keyboard shortcut and checkout menu use this same behavior on this machine and connected devices.
 Previously saved drafts remain available to finish or close.
 An empty group creates its first draft when a start is requested.
-Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with a terminal icon and secondary `Start with terminal` button always visible beside that start flow.
+Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with `Start with terminal` always visible under that start flow as a text button with a terminal icon, quieter than Start.
 Terminal start needs neither an instruction nor an agent selection.
 The first start fills that draft's position with the live tab.
 Existing starts that add a pane to a live tab retain their progress, failure and recovery form; New tab remains the tab bar's creation entry point.
@@ -2085,11 +2086,14 @@ Web owner: `web/src/StartPanel.tsx`, `web/src/startTargets.ts`, `web/src/startDr
 The start panel starts an agent supported by the shared adapter with a first instruction anywhere hide can reach (PRD home-device-rail D-17..D-22).
 It remains independent of the inline group/draft start: a successful start makes its own tab in the target checkout's selected group rather than consuming the draft whose form happens to be open.
 ⌘N opens it in the desktop app, where it is also File › Start agent; in a browser tab ⌘N stays the browser's and `에이전트 시작…` in ⌘K, found by typing, opens it, on every screen.
-It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its one-line text box, `에이전트에게 무엇을 요청할까요?`.
+It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its text box, `에이전트에게 무엇을 요청할까요?`, which grows with what is written to about six lines and then scrolls; Enter starts, Shift+Enter is a new line, and an Enter that ends an input method's composition does neither.
 Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's Home.
-Under the text are the target, the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, typed once the agent's screen takes input or handed to the CLI as its own argument where that is proven (ARCHITECTURE.md, the first prompt).
+Under the text are two rows: where, which is the device when the target is another device's (its chip in the other-device colour), the project and the branch; and who, which is the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, typed once the agent's screen takes input or handed to the CLI as its own argument where that is proven (ARCHITECTURE.md, the first prompt).
 The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's Home while the Overview with no project chip or Settings is; a device's surface in front makes that device the target's.
-The target menu lists the front device's Home and checkouts, then each other device's Home and checkouts prefixed with its name, with a separator between devices and a check on the chosen item; a device that is not connected is listed disabled with `연결 안 됨`.
+The project menu lists the front device's Home and projects, then each other device's under its name, with a separator between devices, a check on the chosen project and a search field; a device that is not connected is listed with `연결 안 됨` and its projects cannot be chosen.
+Choosing a project starts on its main checkout; the branch menu, drawn for a project and never for a Home, lists that project's checkouts by branch with its main checkout first, marked `기본`, then the checkout in front, marked `지금`, then the rest as the catalog lists them, with a search field and, for a Git project, `새 브랜치에서 시작…` at its end.
+`새 브랜치에서 시작…` puts a new branch's name field, its base (the project's saved base, else its default branch) and an `✕` where the branch chip was; the start then creates that worktree and starts the agent in it, and `✕` goes back to the project's main checkout.
+A target whose device stops answering after it was chosen stays chosen: the panel says `<device> · 연결 안 됨` with `다시 연결` and holds `시작` until the device answers, and never moves the start to another target.
 The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
 OpenCode's start takes no model, so with OpenCode chosen no model menu is drawn here or in a Factory's worker candidate, and a model remembered for it from before is not sent.
 While the catalog is being read or cannot be read, the model menu shows the remembered model or `CLI 기본값`, is disabled, and gives the reason in its tooltip; starting is never held back by it.

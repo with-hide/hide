@@ -2,7 +2,7 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { describe, expect, it } from "vitest";
 import type { Checkout, Device, SnapshotRest, Workspace } from "./snapshot";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { checkoutKey, homeKey, resolveTarget, startTargets as targetsWith, worktreeKey } from "./startTargets";
+import { checkoutKey, homeKey, projectKey, projectOf, resolveTarget, startTargets as targetsWith, worktreeKey } from "./startTargets";
 import type { Screen } from "./ui";
 
 const { t } = initializeInterfaceI18n("en");
@@ -144,7 +144,7 @@ describe("start target menu (B26)", () => {
   });
 
   it("offers nothing before the first snapshot", () => {
-    expect(startTargets(null, null)).toEqual({ groups: [], defaultKey: null });
+    expect(startTargets(null, null)).toEqual({ groups: [], defaultKey: null, currentKey: null });
   });
 });
 
@@ -164,11 +164,51 @@ describe("resolving the target a start goes to", () => {
     snapshot.ui_state!.project_settings!.selected!.new_work = "checkout";
     expect(overviewTargets(snapshot, "w-hide").defaultKey).toBe(checkoutKey("local", "/hide"));
   });
-  it("keeps the operator's pick while it is listed and usable, else the default", () => {
+  it("keeps the operator's pick while it is listed, else the default", () => {
     const targets = startTargets(rest(), { kind: "main" });
     expect(resolveTarget(targets, checkoutKey("local", "/sasu"))?.key).toBe(checkoutKey("local", "/sasu"));
     expect(resolveTarget(targets, checkoutKey("local", "/removed"))?.key).toBe(homeKey("local"));
-    expect(resolveTarget(targets, homeKey("box"))?.key).toBe(homeKey("local"));
     expect(resolveTarget(targets, null)?.key).toBe(homeKey("local"));
+  });
+
+  it("keeps a pick whose device stopped answering, disabled, instead of moving the start elsewhere", () => {
+    const picked = checkoutKey("mini", "/srv/app");
+    expect(resolveTarget(startTargets(rest(), { kind: "main" }), picked)?.disabled).toBeNull();
+    const after = resolveTarget(startTargets(rest({ connected: false }), { kind: "main" }), picked);
+    expect([after?.key, after?.disabled]).toEqual([picked, "not_connected"]);
+  });
+});
+
+describe("the where row: which project, then which branch", () => {
+  it("lists each device's Home and projects, a project once however many checkouts it has", () => {
+    const groups = startTargets(rest(), { kind: "main" }).groups;
+    expect(groups.map((group) => group.projects.map((project) => project.label))).toEqual([["Home", "hide", "sasu"], ["Home", "app"], ["Home"]]);
+    expect(groups[0]!.projects[1]!.key).toBe(projectKey("local", "w-hide"));
+  });
+
+  it("puts the main checkout first and the one in front second, and marks the one in front", () => {
+    const snapshot = rest({ focusedCheckout: "c-tree" });
+    const extra = checkout("c-other", "w-hide", "/hide.worktrees/docs", { is_worktree: true, label: "docs", branch: "docs/start" });
+    snapshot.navigator!.workspaces![0]!.checkouts = [extra, HIDE_TREE, HIDE_MAIN];
+    const targets = startTargets(snapshot, { kind: "workspace" });
+    const hide = targets.groups[0]!.projects[1]!;
+    expect(hide.branches.map((branch) => branch.key)).toEqual([checkoutKey("local", "/hide"), checkoutKey("local", "/hide.worktrees/rail"), checkoutKey("local", "/hide.worktrees/docs")]);
+    expect(hide.branches.map((branch) => branch.kind === "checkout" && branch.branch)).toEqual(["main", "rail", "docs/start"]);
+    expect(targets.currentKey).toBe(checkoutKey("local", "/hide.worktrees/rail"));
+    expect(targets.defaultKey).toBe(targets.currentKey);
+    // Only a Workspace in front has a checkout in front.
+    expect(startTargets(snapshot, { kind: "main" }).currentKey).toBeNull();
+  });
+
+  it("offers a new branch for a Git project only, and names the project a target belongs to", () => {
+    const snapshot = rest();
+    snapshot.navigator!.workspaces![0]!.is_git = true;
+    const targets = startTargets(snapshot, { kind: "main" });
+    const [, hide, sasu] = targets.groups[0]!.projects;
+    expect(hide!.worktree?.key).toBe(worktreeKey("local", "/hide"));
+    expect(sasu!.worktree).toBeNull();
+    expect(projectOf(targets, resolveTarget(targets, worktreeKey("local", "/hide")))?.key).toBe(hide!.key);
+    expect(projectOf(targets, resolveTarget(targets, checkoutKey("local", "/hide.worktrees/rail")))?.key).toBe(hide!.key);
+    expect(projectOf(targets, resolveTarget(targets, homeKey("local")))?.home).toBe(true);
   });
 });

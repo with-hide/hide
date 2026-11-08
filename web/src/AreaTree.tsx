@@ -80,6 +80,8 @@ export type AreaAdapter<I extends AreaItem> = {
   newTab: (areaId: string) => void;
   newTabLabel: string;
   newTabContent?: React.ReactNode;
+  /** A menu beside New tab offering what else a new tab can be; drawn only where an area has one. */
+  newTabMenu?: (areaId: string) => React.ReactNode;
   tabListLabel: string;
   actionsLabel: string;
   newTabShortcut?: string;
@@ -551,6 +553,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
             {tree.adapter.newTabContent ?? <PlusIcon className="size-(--size-icon)" />}
           </button>
         </Hint>
+        {tree.adapter.newTabMenu?.(area.id)}
       </div>
       {switcher ? <AreaSwitcher current={area.id} /> : null}
       {tree.adapter.barEnd?.(area)}
