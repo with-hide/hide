@@ -795,6 +795,7 @@ pub const COMMANDS: &[Spec] = &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
+            "intent_conflict",
         ],
     },
     spec(
