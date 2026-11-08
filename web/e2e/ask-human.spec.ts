@@ -1,9 +1,10 @@
 // A person's turn an agent declares, on the core's own engine and an
 // isolated hided (PRD ask-human B1, B4, B8, B9, B14, B15, B18, B19): the
 // delegated child's `hide agent ask-human` puts its lineage root in Needs
-// You with the key and `<kind> · <place>`, the query and fragment of a URL
-// never reach the screen, the root's task row and the child's own pane head
-// carry Done, and Done sends the child one letter and takes the turn down.
+// You with the key and `<kind> · <place>`, the place as written, a URL's
+// query and fragment included, the root's task row and the child's own pane
+// head carry Done, and Done sends the child one letter without the place and
+// takes the turn down.
 
 import { expect, test } from "@playwright/test";
 import type { HideAnswer } from "./agent-pane";

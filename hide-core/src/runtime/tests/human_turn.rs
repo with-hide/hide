@@ -153,6 +153,69 @@ fn only_the_operator_settles_the_standing_declaration_and_an_end_takes_it_down()
     assert!(!serde_json::to_string(&ledger).unwrap().contains("github.com/login"));
 }
 
+/// B29: every step of a declaration is logged with who and the kind, and
+/// no record carries the place.
+#[test]
+fn the_diagnostic_log_never_carries_the_place() {
+    use crate::coordination::human_turn::Settled;
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _, _, _) = fixture(root.path());
+    let sender = registered_sender(&mut runtime.lock().unwrap());
+    let mut ledger = ledger_with_sender(&sender);
+    let operator = Actor::operator(crate::node::TEST_NODE);
+    let (_, records) = crate::diagnostics::capture(|| {
+        declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 1);
+        declare(&mut ledger, &sender, HumanKind::Permission, CODE_PLACE, 2);
+        apply(&mut ledger, &sender, &Mutation::AskHuman { turn: None }, 3).unwrap();
+        let id = declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 4)["declaration"]
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        apply(
+            &mut ledger,
+            &operator,
+            &Mutation::SettleHuman {
+                id,
+                by: Settled::Done,
+            },
+            5,
+        )
+        .unwrap();
+        declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 6);
+        apply(
+            &mut ledger,
+            &sender,
+            &Mutation::End {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            7,
+        )
+        .unwrap();
+    });
+    let steps = records
+        .iter()
+        .filter_map(|record| record["kind"].as_str())
+        .filter(|kind| kind.starts_with("ask_human."))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        steps,
+        [
+            "ask_human.declared",
+            "ask_human.replaced",
+            "ask_human.cleared",
+            "ask_human.declared",
+            "ask_human.done",
+            "ask_human.declared",
+            "ask_human.ended",
+        ]
+    );
+    for record in &records {
+        assert!(!record.to_string().contains("WDJB-MJHT"), "{record}");
+    }
+}
+
 /// B23: the declaration is saved with the ledger and read back as it was.
 #[test]
 fn a_declaration_is_read_back_after_a_restart() {
@@ -421,7 +484,7 @@ fn the_operators_own_message_takes_the_turn_down_without_a_letter() {
 #[test]
 fn done_for_an_agent_no_letter_can_reach_takes_the_turn_down() {
     let root = tempfile::tempdir().unwrap();
-    let (runtime, _worker, sender, id, _) = with_store(root.path());
+    let (runtime, _worker, sender, id, path) = with_store(root.path());
     {
         let mut guard = runtime.lock().unwrap();
         guard.delivery_observations.remove(&sender.pane_id);
@@ -445,6 +508,7 @@ fn done_for_an_agent_no_letter_can_reach_takes_the_turn_down() {
             .is_ok_and(|ledger| ledger.human_turns.is_empty())
     });
     assert!(letters_to(&runtime, &sender.pane_id).is_empty());
+    assert_place_gone_from(&path);
 }
 
 /// B11, B15: the declaring agent's registration moving to another pane lays

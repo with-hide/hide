@@ -1339,7 +1339,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Name where the person acts: the page's address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"
         }
         "human_place_too_long" => {
-            "Name the place in at most 300 characters: the page's address without its query, the app or the setting"
+            "Name the place in at most 300 characters: the page's address, the app or the setting"
         }
         "machine_unavailable" => {
             "Check that the device is connected in Settings > Devices and its helper is allowed, then run the same command again"
