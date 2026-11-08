@@ -166,7 +166,10 @@ function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
 /** `name`: the device as this window calls it (`machineName`). */
 function deviceAvailability(device: Device, status: RemoteStatus | undefined, name: string): DeviceAvailability {
   if (device.kind !== "remote") return { state: "ready" };
-  if (!status || status.state === "not_connected") return { state: "loading", text: translate("devices.state.connecting") };
+  if (!status) return { state: "loading", text: translate("devices.state.connecting") };
+  // `not_connected` is the device the sidebar and the title row already call 연결 안 됨, with 다시 연결:
+  // the Overview says the same instead of counting what it has not read.
+  if (status.state === "not_connected") return { state: "unavailable", text: translate("devices.rail.notConnected"), retry: "connect" };
   if (status.state !== "connected" && status.state !== "stale") {
     return { state: "unavailable", text: remoteStateText(status.state, name, translate), retry: status.state === "disabled" ? null : "connect" };
   }

@@ -66,3 +66,36 @@ it("searches a disconnected device's retained records while live views keep thei
     expect(container.querySelector('[data-device-unavailable="mini"]')).not.toBeNull();
   } finally { await act(async () => root.unmount()); }
 });
+
+// UI_BEHAVIOR, Overview: a device that has not answered yet, or is not
+// connected, shows that in the live tabs' place, with no count it has not read.
+it("draws a device on its way or not connected in place of the live tabs, with no count it has not read", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const rest = (remote: unknown[]) => ({
+    navigator: { devices: [{ id: "local", kind: "local" }, { id: "window", kind: "remote", label: "window" }], workspaces: [] },
+    status: { remote },
+  }) as unknown as SnapshotRest;
+  useShellStore.setState({ rest: rest([]), agents: [], connection: "live", sessionWorkSearch: null });
+  useUiStore.getState().setMainView("work");
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  const events: { kind: string; payload: unknown }[] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const tabCounts = () => [...container.querySelectorAll("[data-main-tab]")].map((tab) => tab.textContent);
+  try {
+    await act(async () => root.render(<TooltipProvider><MainScreen actions={actions} deviceId="window" /></TooltipProvider>));
+    expect(container.querySelector("[data-device-loading] [role=status]")?.textContent).toBe("Connecting…");
+    expect(container.querySelector("[data-overview-graph], [data-graph-welcome], [data-main-empty-home]")).toBeNull();
+    expect(tabCounts()).toEqual(["Work", "Projects", "Backlog", "History", "Usage"]);
+
+    await act(async () => useShellStore.setState({ rest: rest([{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", unreachable_since_unix_ms: null }]) }));
+    expect(container.querySelector("[data-device-loading]")).toBeNull();
+    expect(container.querySelector('[data-device-unavailable="window"]')?.textContent).toContain("window is not responding");
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-device-retry="window"]')!.click());
+    expect(events.at(-1)).toMatchObject({ kind: "retry_connect", payload: { target_id: "window" } });
+    expect(tabCounts()).toEqual(["Work", "Projects", "Backlog", "History", "Usage"]);
+  } finally { await act(async () => root.unmount()); }
+});

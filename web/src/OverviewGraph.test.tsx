@@ -15,6 +15,7 @@ import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
 import type { Checkout, OverviewGraphChoices, SnapshotRest, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { useStartPanel } from "./startDraft";
 import type { DispatchFn } from "./ws";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
@@ -76,6 +77,8 @@ it.each([
       expect(row.getAttribute("aria-label")).toContain("Retained conversation summary");
       expect(row.querySelector("[data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "confirmed" ? null : connection);
     }
+    // The filter's counts say they are the map's sessions.
+    expect(container.querySelector(".og-filter-scope")?.textContent).toBe("Sessions on the map");
     // B4/D09: a matching confirmed entry highlights without opening a panel.
     expect(container.querySelector("[data-graph-preview]")).toBeNull();
     expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe(String(!overflow && front === device));
@@ -128,14 +131,13 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
   const root = createRoot(container);
   try {
     await act(async () => root.render(<TooltipProvider><OverviewGraph projects={[]} deviceId="local" actions={actions} /></TooltipProvider>));
-    expect(container.querySelector(".og-empty")).not.toBeNull();
+    // With no session awake the map's place is New agent's, and the waiting mission stays under it.
+    expect(container.querySelector("[data-graph-welcome]")).not.toBeNull();
     const item = container.querySelector<HTMLElement>('[data-graph-mission-asks] [data-graph-mission-ask="mission-1"]');
     expect(item?.textContent).toContain("이슈 정리");
     expect(item?.textContent).toContain("API 추가");
     expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Take over", "Mark done"]);
     expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you 1");
-    // The filter's counts say they are the map's sessions.
-    expect(container.querySelector(".og-filter-scope")?.textContent).toBe("Sessions on the map");
   } finally { await act(async () => root.unmount()); }
 });
 
@@ -475,4 +477,54 @@ it("finds a session from the side column's search and shows it, opening what hid
     await act(async () => search().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(head()).toContain("배포 확인");
   } finally { await act(async () => reactRoot.unmount()); }
+});
+
+// An Overview with no session awake: nothing to filter or arrange, so its one
+// next step, New agent, takes the map's place (UI_BEHAVIOR, Overview Work).
+it("with no session awake, offers New agent in the one project in scope and keeps sleeping sessions one press away", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: null } as unknown as Checkout;
+  const workspace = { id: "project", label: "Project", device_id: "local", path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: emptyScope() } as unknown as Workspace;
+  const sleeping = legacyAgentRow({ id: "p1", pane_id: "p1", device_id: "local", identity_label: "Slept work", mark: "asleep", status_code: "sleeping", activity: "stopped", agent_kind: "claude", session_id: "native-slept" });
+  const graph = (include_resting: boolean) => ({ ...GRAPH_CHOICES_DEFAULTS, include_resting });
+  const draw = (agents: typeof sleeping[], include_resting = false) => {
+    const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: [{ ...workspace, agent_scope: { ...emptyScope(), members: agents.map((row) => ({ pane_id: row.pane_id, project_id: "project", checkout_id: "checkout" })) } }], focused_device_id: "local" }, status: { remote: [] }, ui_state: { overview_graph: graph(include_resting) }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [] } } as unknown as SnapshotRest;
+    useShellStore.setState({ rest, agents, focusedPaneId: null, connection: "live", linkSummaries: null });
+    return [{ workspace: rest.navigator!.workspaces![0]!, agents, device: null }] as BoardProject[];
+  };
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  useStartPanel.setState({ isOpen: false, preset: null });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (projects: BoardProject[]) => act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+  try {
+    await render(draw([]));
+    const welcome = container.querySelector("[data-graph-welcome]")!;
+    expect(welcome.querySelector("h2")?.textContent).toBe("Hand an agent some work");
+    expect(welcome.querySelector("p")?.textContent).toBe("Starts in Project");
+    expect(container.querySelector(".og-filters")).toBeNull();
+    expect(welcome.querySelector('[data-graph-welcome-action="show_resting"]')).toBeNull();
+    await act(async () => welcome.querySelector<HTMLButtonElement>('[data-graph-welcome-action="start_agent"]')!.click());
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, preset: { projectId: "project" } });
+
+    // Only a sleeping session: the welcome stays, and one press shows every session.
+    await render(draw([sleeping]));
+    const show = container.querySelector<HTMLButtonElement>('[data-graph-welcome] [data-graph-welcome-action="show_resting"]')!;
+    expect(show.textContent).toBe("Show sleeping sessions (1)");
+    await act(async () => show.click());
+    expect(events.at(-1)).toMatchObject({ kind: "overview_graph_change", payload: { change: { kind: "focus", focus: "all", include_resting: true } } });
+
+    // Once the core keeps sleeping sessions on the map, the map draws them.
+    await render(draw([sleeping], true));
+    expect(container.querySelector("[data-graph-welcome]")).toBeNull();
+    expect(container.querySelector(".og-filters")).not.toBeNull();
+
+    // Two projects and none chosen: the start panel picks the place, so no project is named.
+    await render([...draw([]), { workspace: { ...workspace, id: "other", label: "Other" }, agents: [], device: null } as BoardProject]);
+    expect(container.querySelector("[data-graph-welcome] p")).toBeNull();
+  } finally { await act(async () => root.unmount()); }
 });
