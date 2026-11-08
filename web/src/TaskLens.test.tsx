@@ -197,6 +197,41 @@ it("narrowed to another project, leaves the mission out of 내 차례 and counts
   expect(container.querySelector("[data-sidebar-project-elsewhere]")?.textContent).toBe("+1");
 });
 
+/** `rest` with a connected Mac mini whose project `api` holds the given tasks, its agents in its session. */
+function withMini(rest: SnapshotRest, agents: AgentRow[], cards: TaskCardScope[]): SnapshotRest {
+  const api = { id: "api", device_id: "mini", label: "api", path: "/api", is_git: true, agent_scope: emptyScope(), checkouts: [{ id: "api-main", workspace_id: "api", label: "main", branch: "main", path: "/api", agent_scope: emptyScope(), tabs: [{ id: "api-tab", panes: agents.map((agent) => ({ id: agent.pane_id })) }] }] } as unknown as Workspace;
+  const mini = { id: "mini", kind: "remote", label: "Mac mini", agent_scope: { ...emptyScope(), tasks: { cards, needs_you: 1, recency: "" } } };
+  return { ...rest, navigator: { ...rest.navigator!, devices: [...rest.navigator!.devices!, mini] as never }, status: { ...rest.status, remote: [{ target_id: "mini", state: "connected", session: { agents, workspaces: [api] } }] } as never };
+}
+
+it.each(["status", "project"] as const)("in %s lists another connected device's 내 차례 tasks and missions after the device's own, named by its device chip, and nothing else of it (operator decision 2026-11-08)", async (view) => {
+  const agents = [row("ask", {}, { group: "needs_you" }), row("works")];
+  const far = [row("far", {}, { group: "needs_you" }), row("farwork")];
+  let rest = withMini(snapshot(agents, [card("ask", "needs_you", "hide-main"), card("works", "working", "hide-main")], view), far, [card("far", "needs_you", "api-main"), card("farwork", "working", "api-main")]);
+  rest = withMissionAsk(rest, "mini", Date.UTC(2026, 10, 1));
+  rest.missions!.items![0] = { ...rest.missions!.items![0]!, device_id: "mini", workspace_id: "api" };
+  const { container, sent } = await render(rest, agents);
+  expect(rows(container)).toEqual(view === "status" ? ["ask", "far", "works"] : ["ask", "works", "far"]);
+  expect(container.querySelector("[data-task-count]")?.textContent).toBe("태스크 2");
+  expect(container.querySelector('[data-task-row="far"] [data-device-chip]')?.textContent).toBe("Mac mini");
+  expect(container.querySelector('[data-task-row="ask"] [data-device-chip]')).toBeNull();
+  expect(container.querySelector('[data-mission-ask] [data-device-chip]')?.textContent).toBe("Mac mini");
+  if (view === "status") expect(heads(container)).toEqual(["내 차례3", "작업 중1"]);
+  else expect([...container.querySelectorAll("[data-task-group]")].map((group) => group.getAttribute("data-task-group"))).toEqual(["hide", "api"]);
+  // Pressing it opens that device's pane, as a notification's click does.
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-task-row="far"] [data-task-focus="row"]')!.click());
+  expect(JSON.stringify(sent.at(-1))).toContain('"far"');
+});
+
+it("narrowed to a project, lists no other device's tasks", async () => {
+  const agents = [row("ask", {}, { group: "needs_you" })];
+  const rest = withMini(snapshot(agents, [card("ask", "needs_you", "hide-main")]), [row("far", {}, { group: "needs_you" })], [card("far", "needs_you", "api-main")]);
+  rest.navigator!.workspaces![0]!.agent_scope = { ...emptyScope(), tasks: { cards: [card("ask", "needs_you", "hide-main")], needs_you: 1, recency: "" } };
+  rest.ui_state = { ...rest.ui_state!, sidebar_project: { device_id: "local", workspace_id: "hide" } };
+  const { container } = await render(rest, agents);
+  expect(rows(container)).toEqual(["ask"]);
+});
+
 it("in 프로젝트별 draws one group per project, the asking project first, with no project name on the rows and a state label over each band (B6; status-marks B32)", async () => {
   const agents = [row("a"), row("b", {}, { group: "needs_you" }), row("c"), row("d")];
   const cards = [card("a", "working", "hide-main"), card("b", "needs_you", "site-main"), card("c", "done", "hide-main"), card("d", "waiting", "hide-main")];
