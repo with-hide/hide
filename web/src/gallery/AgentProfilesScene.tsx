@@ -1,10 +1,9 @@
-// Agent profiles over invented values, for the operator's review before the
-// screens are wired (PRD agent-profiles B1-B4, B10, B14, B15, B26-B28, B30):
-// two candidates for Settings › Agents (A unfolds the profiles under each
-// agent row and edits in a dialog; B shows a summary line and edits in a panel
-// on the right), the add form for each way an agent keeps accounts, every row
-// state, the start panel's profile menu, a project's Agent accounts and the two
-// delete outcomes. Names, paths and numbers are invented; nothing is sent.
+// Agent profiles over invented values, drawn before the screens are wired
+// (PRD agent-profiles B1-B4, B10, B14, B15, B26-B28, B30): Settings › Agents
+// with each agent's profiles unfolded under its row and edited in a dialog,
+// the add form for each way an agent keeps accounts, every row state, the
+// start panel's profile menu, a project's Agent accounts and the two delete
+// outcomes. Names, paths and numbers are invented; nothing is sent.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { AgentPickerView } from "../components/agent-picker";
@@ -12,9 +11,7 @@ import {
   InlineProfiles,
   ProfileDeleteDialog,
   ProfileFormDialog,
-  ProfilePanel,
   ProfilePicker,
-  ProfileSummaryLine,
   ProfilesMachineNote,
   ProjectAgentAccounts,
   type AgentProfilesView,
@@ -36,8 +33,6 @@ import { useShellStore } from "../store";
 export const AGENT_PROFILES_STATES = [
   "list-a",
   "list-a-edit",
-  "list-b",
-  "list-b-add",
   "form-folder",
   "form-name",
   "form-none",
@@ -83,7 +78,6 @@ function fixtures(long: boolean) {
   return { claude, codex, omp, agy, views: [claude, codex, omp, agy] };
 }
 
-const EMPTY_DRAFT: ProfileDraft = { name: "", account: "", program: "", env: [] };
 
 function Scene({ state, long, device }: { state: State; long: boolean; device: Device }) {
   const { t } = useInterfaceTranslation();
@@ -96,12 +90,12 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
       <ToggleGroupItem value="win-box">win-box</ToggleGroupItem>
     </ToggleGroup>
   );
-  const list = (candidate: "a" | "b", machine: ProfilesMachine = "live") => (
+  const list = (machine: ProfilesMachine = "live") => (
     <Group title={t("agents.installedCount", { count: KIT.length })}>
       {KIT.map((agent, index) => (
         <div key={agent.id} data-agent-with-profiles={agent.id}>
           {agentRow(agent)}
-          {candidate === "a" ? <InlineProfiles view={data.views[index]!} machine={machine} /> : <ProfileSummaryLine view={data.views[index]!} machine={machine} />}
+          <InlineProfiles view={data.views[index]!} machine={machine} />
         </div>
       ))}
     </Group>
@@ -112,28 +106,24 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
 
   switch (state) {
     case "list-a":
-      return <>{machines}{list("a")}</>;
+      return <>{machines}{list()}</>;
     case "list-a-edit":
-      return <>{machines}{list("a")}<ProfileFormDialog open view={claude} mode="edit" profile={work} draft={workDraft} /></>;
-    case "list-b":
-      return <>{machines}{list("b")}<ProfilePanel open view={claude} selected="work" draft={workDraft} /></>;
-    case "list-b-add":
-      return <>{machines}{list("b")}<ProfilePanel open view={claude} selected={null} adding draft={{ ...EMPTY_DRAFT, account: "~/accounts/claude-new" }} /></>;
+      return <>{machines}{list()}<ProfileFormDialog open view={claude} mode="edit" profile={work} draft={workDraft} /></>;
     case "form-folder":
-      return <>{list("a")}<ProfileFormDialog open view={claude} mode="add" draft={{ name: long ? "회사-고객사-프로젝트-전용-계정" : "client", account: long ? "~/accounts/회사-고객사-프로젝트-전용-계정-폴더/claude" : "~/accounts/claude-client", program: "", env: [] }} /></>;
+      return <>{list()}<ProfileFormDialog open view={claude} mode="add" draft={{ name: long ? "회사-고객사-프로젝트-전용-계정" : "client", account: long ? "~/accounts/회사-고객사-프로젝트-전용-계정-폴더/claude" : "~/accounts/claude-client", program: "", env: [] }} /></>;
     case "form-name":
-      return <>{list("a")}<ProfileFormDialog open view={data.omp} mode="add" draft={{ name: "work", account: "work", program: "", env: [] }} /></>;
+      return <>{list()}<ProfileFormDialog open view={data.omp} mode="add" draft={{ name: "work", account: "work", program: "", env: [] }} /></>;
     case "form-none":
-      return <>{list("a")}<ProfileFormDialog open view={data.agy} mode="add" draft={{ name: "gateway", account: "", program: "agy-gateway", env: [] }} /></>;
+      return <>{list()}<ProfileFormDialog open view={data.agy} mode="add" draft={{ name: "gateway", account: "", program: "agy-gateway", env: [] }} /></>;
     case "form-wrapper":
-      return <>{list("a")}<ProfileFormDialog open view={claude} mode="add" draft={{ name: "gateway", account: "", program: "~/bin/claude-gateway", env: [{ key: "ANTHROPIC_BASE_URL", value: "https://gateway.example.test" }, { key: "MAX_THINKING_TOKENS", value: "8000" }] }} /></>;
+      return <>{list()}<ProfileFormDialog open view={claude} mode="add" draft={{ name: "gateway", account: "", program: "~/bin/claude-gateway", env: [{ key: "ANTHROPIC_BASE_URL", value: "https://gateway.example.test" }, { key: "MAX_THINKING_TOKENS", value: "8000" }] }} /></>;
     case "form-refused": {
       const refusals: ProfileRefusal[] = [
         { field: "account", text: t("agentProfiles.refuse.defaultLocation") },
         { field: "env", envKey: "CLAUDE_CONFIG_DIR", text: t("agentProfiles.refuse.accountVar", { key: "CLAUDE_CONFIG_DIR" }) },
         { field: "env", envKey: "HOME", text: t("agentProfiles.refuse.reserved", { key: "HOME" }) },
       ];
-      return <>{list("a")}<ProfileFormDialog open view={claude} mode="add" draft={{ name: "mine", account: "~/.claude", program: "", env: [{ key: "CLAUDE_CONFIG_DIR", value: "~/accounts/x" }, { key: "HOME", value: "/tmp/x" }] }} refusals={refusals} /></>;
+      return <>{list()}<ProfileFormDialog open view={claude} mode="add" draft={{ name: "mine", account: "~/.claude", program: "", env: [{ key: "CLAUDE_CONFIG_DIR", value: "~/accounts/x" }, { key: "HOME", value: "/tmp/x" }] }} refusals={refusals} /></>;
     }
     case "states": {
       const rows: AgentProfilesView = {
@@ -189,12 +179,12 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
         ]} />
       );
     case "delete-refused":
-      return <>{list("a")}<ProfileDeleteDialog open profile="work" location="~/accounts/claude-work" projects={[]} inUse={[
+      return <>{list()}<ProfileDeleteDialog open profile="work" location="~/accounts/claude-work" projects={[]} inUse={[
         { id: "agent-31", title: long ? "로그인 화면의 예외 상황을 모두 찾아서 정리하기" : "fix-bell", place: "herdr-ide", asleep: false },
         { id: "agent-44", title: "usage-store", place: "blog", asleep: true },
       ]} /></>;
     case "delete-confirm":
-      return <>{list("a")}<ProfileDeleteDialog open profile="work" location={long ? "~/accounts/회사-고객사-프로젝트-전용-계정-폴더/claude" : "~/accounts/claude-work"} inUse={[]} projects={long ? ["개인 블로그와 여러 기기에서 이어지는 아주 긴 프로젝트 이름", "side-app"] : ["blog", "side-app"]} /></>;
+      return <>{list()}<ProfileDeleteDialog open profile="work" location={long ? "~/accounts/회사-고객사-프로젝트-전용-계정-폴더/claude" : "~/accounts/claude-work"} inUse={[]} projects={long ? ["개인 블로그와 여러 기기에서 이어지는 아주 긴 프로젝트 이름", "side-app"] : ["blog", "side-app"]} /></>;
   }
 }
 

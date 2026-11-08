@@ -4,7 +4,7 @@
 // here reads the store or sends an event; the gallery's `scene=agent-profiles`
 // draws every state, and the screens that will own them pass the values in.
 
-import { ChevronRightIcon, LockIcon, PlusIcon, XIcon } from "lucide-react";
+import { LockIcon, PlusIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -15,9 +15,8 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { RowButton, RowOverlayButton } from "./ui/row-button";
+import { RowOverlayButton } from "./ui/row-button";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "./ui/sheet";
 import { Hint } from "./ui/tooltip";
 
 /** How an agent's definition keeps accounts apart: a folder, a name the agent owns (omp), or not at all (agy). */
@@ -118,12 +117,12 @@ function DefaultBadge() {
  * its state. The whole line opens the profile; the state's own button stays
  * its own, so the press goes to a RowOverlayButton behind the content.
  */
-export function ProfileRow({ profile, agentLabel, selected = false, readOnly = false, onOpen, onAction }: { profile: ProfileView; agentLabel: string; selected?: boolean; readOnly?: boolean; onOpen?: () => void; onAction?: (action: "reinstall" | "retry" | "open") => void }) {
+export function ProfileRow({ profile, agentLabel, readOnly = false, onOpen, onAction }: { profile: ProfileView; agentLabel: string; readOnly?: boolean; onOpen?: () => void; onAction?: (action: "reinstall" | "retry" | "open") => void }) {
   const { t } = useInterfaceTranslation();
   const name = profileName(profile, t);
   return (
-    <div className={cn("relative min-h-(--size-control) rounded-xs", selected && "bg-accent")} data-profile-row={profile.id} data-profile-selected={selected || undefined}>
-      {onOpen && !readOnly ? <RowOverlayButton aria-label={t("agentProfiles.editTitle", { agent: agentLabel, profile: name })} onClick={onOpen} hover={!selected} /> : null}
+    <div className="relative min-h-(--size-control) rounded-xs" data-profile-row={profile.id}>
+      {onOpen && !readOnly ? <RowOverlayButton aria-label={t("agentProfiles.editTitle", { agent: agentLabel, profile: name })} onClick={onOpen} /> : null}
       <div className="pointer-events-none relative flex min-h-(--size-control) min-w-0 flex-wrap items-center gap-x-md gap-y-xxs px-sm py-xs">
         <span className="flex min-w-0 flex-1 basis-(--size-settings-control-w) flex-wrap items-center gap-x-sm gap-y-xxs">
           <span className="min-w-0 max-w-full truncate text-subhead text-foreground">{name}</span>
@@ -156,7 +155,7 @@ export function ProfilesMachineNote({ machine, device }: { machine: ProfilesMach
 }
 
 /**
- * Candidate A: an agent's profiles unfolded under its row in the installed
+ * An agent's profiles unfolded under its row in the installed
  * list, indented to the agent's name. With nothing but the built-in profile
  * only the add button shows (B1). Add and edit open `ProfileFormDialog`.
  */
@@ -170,30 +169,6 @@ export function InlineProfiles({ view, machine = "live", onAdd, onOpen, onAction
         <ProfileRow key={profile.id} profile={profile} agentLabel={view.label} readOnly={readOnly} onOpen={() => onOpen?.(profile.id)} onAction={(action) => onAction?.(profile.id, action)} />
       )) : null}
       {readOnly ? null : <AddProfileButton onAdd={onAdd} />}
-    </div>
-  );
-}
-
-/**
- * Candidate B: under the agent's row only how many profiles it has and the
- * most urgent state among them; the line opens `ProfilePanel` on the right.
- */
-export function ProfileSummaryLine({ view, machine = "live", onOpen, onAdd }: { view: AgentProfilesView; machine?: ProfilesMachine; onOpen?: () => void; onAdd?: () => void }) {
-  const { t } = useInterfaceTranslation();
-  if (machine === "unsupported") return null;
-  const own = view.profiles.filter((profile) => !profile.builtIn);
-  if (own.length === 0) {
-    return machine === "live" ? <div className="flex pb-sm pl-[calc(var(--spacing-md)+var(--size-icon-lg))]"><AddProfileButton onAdd={onAdd} /></div> : null;
-  }
-  const urgent = view.profiles.map(profileState).find((state) => state !== null && state.tone !== "muted") ?? null;
-  return (
-    <div className={cn("pb-sm pl-[calc(var(--spacing-md)+var(--size-icon-lg)-var(--spacing-xs))] pr-sm", machine === "offline" && "opacity-(--opacity-dimmed)")} data-profile-summary={view.agent}>
-      <RowButton onClick={onOpen} className="gap-sm" aria-label={t("agentProfiles.panelTitle", { agent: view.label })}>
-        <span className="text-body text-subtle-foreground">{t("agentProfiles.count", { count: view.profiles.length })}</span>
-        <span className="min-w-0 flex-1 truncate text-body text-muted-foreground">{view.profiles.map((profile) => profileName(profile, t)).join(", ")}</span>
-        {urgent ? <Status tone={urgent.tone}>{t(urgent.key as "agentProfiles.state.failed")}</Status> : null}
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-      </RowButton>
     </div>
   );
 }
@@ -293,7 +268,7 @@ function ProfileEditActions({ profile, onMakeDefault, onDelete }: { profile: Pro
   );
 }
 
-/** Candidate A's form: adding or editing a profile in a dialog over the Agents list. */
+/** Adding or editing a profile in a dialog over the Agents list. */
 export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, draft, refusals }: { open: boolean; onOpenChange?: (open: boolean) => void; view: AgentProfilesView; mode: "add" | "edit"; profile?: ProfileView; draft: ProfileDraft; refusals?: readonly ProfileRefusal[] }) {
   const { t } = useInterfaceTranslation();
   const title = mode === "add" || !profile ? t("agentProfiles.addTitle", { agent: view.label }) : t("agentProfiles.editTitle", { agent: view.label, profile: profileName(profile, t) });
@@ -316,53 +291,6 @@ export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, dra
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/**
- * Candidate B: one agent's profiles in a panel on the right, the list on top
- * and the picked profile's fields under it, edited in place. Adding fills the
- * same place with an empty form.
- */
-export function ProfilePanel({ open, onOpenChange, view, machine = "live", selected, adding = false, draft, refusals, onSelect, onAdd }: { open: boolean; onOpenChange?: (open: boolean) => void; view: AgentProfilesView; machine?: ProfilesMachine; selected: string | null; adding?: boolean; draft: ProfileDraft; refusals?: readonly ProfileRefusal[]; onSelect?: (id: string) => void; onAdd?: () => void }) {
-  const { t } = useInterfaceTranslation();
-  const readOnly = machine !== "live";
-  const profile = view.profiles.find((row) => row.id === selected) ?? null;
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-(--size-add-device-sheet-w)" data-profile-panel={view.agent}>
-        <SheetHeader className="flex-row items-center gap-sm px-lg pt-lg">
-          <AgentLogo agent={view.agent} label={view.label} />
-          <SheetTitle className="min-w-0 flex-1 truncate">{t("agentProfiles.panelTitle", { agent: view.label })}</SheetTitle>
-        </SheetHeader>
-        <div className="flex min-h-0 flex-1 flex-col gap-lg overflow-y-auto px-lg pb-lg">
-          <div className={cn("flex flex-col gap-xxs", readOnly && "opacity-(--opacity-dimmed)")} data-profile-panel-list="true">
-            {view.profiles.map((row) => (
-              <ProfileRow key={row.id} profile={row} agentLabel={view.label} selected={!adding && row.id === selected} readOnly={readOnly} onOpen={() => onSelect?.(row.id)} />
-            ))}
-            {readOnly ? null : <AddProfileButton onAdd={onAdd} />}
-          </div>
-          {adding ? (
-            <section className="flex flex-col gap-md border-t border-border pt-lg" data-profile-panel-detail="add">
-              <h3 className="text-subhead font-semibold text-foreground">{t("agentProfiles.addTitle", { agent: view.label })}</h3>
-              <ProfileForm view={view} mode="add" draft={draft} refusals={refusals} idPrefix="panel-add" />
-              <div className="flex justify-end gap-sm">
-                <Button variant="secondary">{t("common.cancel")}</Button>
-                <Button data-profile-submit="true">{t("common.add")}</Button>
-              </div>
-            </section>
-          ) : profile ? (
-            <section className="flex flex-col gap-md border-t border-border pt-lg" data-profile-panel-detail={profile.id}>
-              <h3 className="text-subhead font-semibold text-foreground">{t("agentProfiles.editTitle", { agent: view.label, profile: profileName(profile, t) })}</h3>
-              <ProfileForm view={view} mode="edit" draft={draft} refusals={refusals} builtIn={profile.builtIn} readOnly={readOnly} idPrefix="panel-edit" />
-              {readOnly ? null : <div className="flex flex-wrap justify-between gap-sm"><ProfileEditActions profile={profile} /></div>}
-            </section>
-          ) : (
-            <Note>{t("agentProfiles.panelEmpty")}</Note>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
   );
 }
 
