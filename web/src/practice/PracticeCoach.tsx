@@ -11,7 +11,7 @@ import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
-import { pasteText, terminalFor } from "../terminals";
+import { focusTerminal, pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
 import { FIRST_CHAPTER } from "./channel";
@@ -134,6 +134,8 @@ const LETTER_MS = 90;
 function typeInto(typing: PracticeTyping, pace: number): Promise<void> {
   if ("input" in typing) return typeInField(typing.input, typing.text, pace);
   if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
+  // A learner clicks the terminal they type into, so the keyboard is there afterwards: the chord a later step presses acts on that pane.
+  focusTerminal(typing.pane);
   pasteText(typing.pane, `\x15${"words" in typing ? clientI18n.t(typing.words as MessageKey) as string : typing.text}`);
   return new Promise((resolve) => window.setTimeout(() => {
     pasteText(typing.pane, "\r");

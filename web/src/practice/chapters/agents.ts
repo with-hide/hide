@@ -17,7 +17,7 @@ const say = (pane: string, text: string) => ({ type: { pane, text } });
 export default chapter<AgentsModel>({
   id: "agents",
   number: 2,
-  version: 5,
+  version: 6,
   world: AGENTS_WORLD,
   quest: true,
   preview: "rows",
@@ -36,7 +36,7 @@ export default chapter<AgentsModel>({
     { id: "answer", quest: true, target: pane(REV), side: "inside", gesture: say(REV, "Yes, run it"), done: (model) => model.stage >= 4 },
     { id: "finishes", target: row(REV), side: "right", wait: true, done: (model) => model.stage >= 5 },
     // The reviewer is finished, so closing it asks nothing; Reopen closed tab brings it back with its conversation, its View still waiting.
-    { id: "close", quest: true, target: pane(REV), side: "inside", command: "close_pane", done: (model) => model.closed.length > 0 },
+    { id: "close", quest: true, target: pane(REV), side: "inside", command: "close_tab", done: (model) => model.closed.length > 0 },
     { id: "reopen", quest: true, target: "[data-agent-area]", side: "inside", command: "reopen_closed_tab", done: reopenedAsClosed },
     { id: "switch", quest: true, target: "[data-agent-area]", side: "inside", command: "recent_area_tab", done: (model) => model.switched && !inReviewer(model) },
     // The row marked 볼 것 brings the agent and the file it opened forward in the lane.
