@@ -701,12 +701,15 @@ for last; do :; done
     /// server took while it was down is named, since a restart cannot choose
     /// another (the client's config is bound to the port).
     #[test]
+    #[ignore = "the system's sshd; the remote mailbox lane runs it"]
     fn a_restart_waits_for_its_own_listening_line_and_names_a_lost_port() {
         let fixture = fixture();
         let port = fixture.sshd.port;
         let listening = format!("Server listening on 127.0.0.1 port {port}.");
         fixture.sshd.online(false).unwrap();
-        let other_server = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let other_server = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap_or_else(|error| {
+            panic!("another process took port {port} between the server's stop and this test's bind: {error}")
+        });
         let error = fixture.sshd.online(true).unwrap_err();
         assert!(
             format!("{error:#}").contains("another server holds it"),
