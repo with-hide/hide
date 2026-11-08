@@ -3758,11 +3758,7 @@
                 {
                     "name": "kind",
                     "value": {
-                        "type": "one_of",
-                        "values": [
-                            "auth",
-                            "permission"
-                        ]
+                        "type": "text"
                     }
                 },
                 {
@@ -6055,7 +6051,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e13a318b1a4be24ae65ad2b9e145b1833823d14a6a9a3dc67ed64384c44de44d",
+    "digest": "sha256:39d2ec2878b1889132e5a0beae74b875330419fcff204e9d57e528ff3fc36099",
     "envelopes": {
         "agent": {
             "answer": "value",

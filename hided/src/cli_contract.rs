@@ -287,13 +287,16 @@ pub const COMMANDS: &[Spec] = &[
     },
     // The caller declares that its next step is one only a person can take
     // (PRD ask-human): its lineage root stands in the operator's Needs You
-    // until the operator presses Done, which sends the caller a letter.
+    // until the operator presses Done, which sends the caller a letter. The
+    // kind is `auth` or `permission`; the core, not the parser, refuses any
+    // other with `human_kind_unknown` and the next action (a letter to the
+    // parent), so the parser takes it as text.
     Spec {
         words: &["agent", "ask-human"],
         arguments: &[
             Arg {
                 name: "kind",
-                value: OneOf(&["auth", "permission"]),
+                value: Text,
                 required: true,
                 value_with: None,
             },

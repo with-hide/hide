@@ -554,8 +554,8 @@ mod tests {
 
     /// PRD ask-human B5, B13, B17, B23: a person's turn announces once per
     /// declaration, a new one again while the row already stands in Needs
-    /// You, a raised one in the root's notice with its subject, and the
-    /// first look after a restart only seeds.
+    /// You in its own words, a raised one in the root's notice with its
+    /// subject, and the first look after a restart only seeds.
     #[test]
     fn each_persons_turn_is_announced_once_with_what_and_where() {
         let turn = |id: &str| json!({"cause": "human_turn", "id": id, "kind": "auth", "place": "github.com/login", "device": "mini"});
@@ -582,8 +582,8 @@ mod tests {
         assert_eq!(notice.state, NoticeState::NeedsYou);
         assert_eq!(
             serde_json::to_value(&notice.subject).unwrap(),
-            turn("agent-3.1"),
-            "the root says the declaration it leads with"
+            turn("agent-4.2"),
+            "the new declaration says itself, not the lead"
         );
         assert!(
             transitions.observe(&root(&["agent-4.2"])).0.is_empty(),
