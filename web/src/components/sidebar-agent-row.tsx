@@ -73,7 +73,7 @@ export type SidebarTreeSlot = {
   /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
   fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
-  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn"> } | null;
+  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
 };
 
 /**
@@ -144,7 +144,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
   /** Done on the person's turn the row carries (PRD ask-human B19); without it the row draws none. */
-  actions?: Pick<Actions, "finishHumanTurn"> | null;
+  actions?: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);
@@ -160,6 +160,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // A row on a device that is not connected shows what Hide last knew of it,
   // which may be long over: it draws no mark, and its line says why (status-marks B16).
   const offline = unreachable ? t("agents.line.disconnected", { device: remote.label }) : null;
+  // Copy stands beside a person's turn's place wherever Done does (operator decision 2026-11-08).
+  const humanActions = agent.human_turn && actions && !offline ? actions : null;
+  const copy = humanActions?.copyText;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
@@ -259,9 +262,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
             {offline}
           </span>
-        ) : ask && agent.state.ask ? <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} className="flex-1" /></span> : agent.human_turn ? (
+        ) : ask && agent.state.ask ? <span className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} copy={copy} textHidden className="flex-1" /></span> : agent.human_turn ? (
           // A tree row's person's turn, its own or raised to it, says where in place of its line (PRD ask-human B14).
-          <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><HumanTurnLine turn={agent.human_turn} className="flex-1" /></span>
+          <span className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><HumanTurnLine turn={agent.human_turn} copy={copy} textHidden className="flex-1" /></span>
         ) : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
           // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
           <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
@@ -280,7 +283,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             <DeviceChip label={remote.label} />
           </span>
         ) : null}
-        {agent.human_turn && actions && !offline ? <HumanTurnDone turn={agent.human_turn} actions={actions} className="mt-xxs" /> : null}
+        {agent.human_turn && humanActions ? <HumanTurnDone turn={agent.human_turn} actions={humanActions} className="mt-xxs" /> : null}
         {place ? (
           <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}

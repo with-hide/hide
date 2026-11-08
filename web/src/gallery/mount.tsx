@@ -28,6 +28,7 @@ import { AddDeviceScene } from "./AddDeviceScene";
 import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
+import { AgentProfilesScene } from "./AgentProfilesScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
 import { PrListScene } from "./PrListScene";
@@ -90,6 +91,11 @@ export function mountGallery(root: Root) {
     if (scene === "agents-settings") {
       document.title = "hide · Agents settings scene";
       root.render(<StrictMode><AgentsSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "agent-profiles") {
+      document.title = "hide · Agent profiles scene";
+      root.render(<StrictMode><AgentProfilesScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "close-tree") {

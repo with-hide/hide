@@ -33,6 +33,7 @@ import { removalReasonsCatalogs, removalReasonsEnglish } from "./resources/remov
 import { diffReasonsCatalogs, diffReasonsEnglish } from "./resources/diffReasons";
 import { wakeReasonsCatalogs, wakeReasonsEnglish } from "./resources/wakeReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
+import { agentProfilesCatalogs, agentProfilesEnglish } from "./resources/agentProfiles";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
 import { historyCatalogs, historyEnglish } from "./resources/history";
@@ -124,6 +125,7 @@ export const english = {
   ...issueSettingsEnglish,
   ...hideAiEnglish,
   ...agentsEnglish,
+  ...agentProfilesEnglish,
   ...requestsEnglish,
   ...issuesEnglish,
   ...prWorkEnglish,
@@ -201,6 +203,7 @@ export const catalogs = {
     ...issueSettingsCatalogs.ko,
     ...hideAiCatalogs.ko,
     ...agentsCatalogs.ko,
+    ...agentProfilesCatalogs.ko,
     ...requestsCatalogs.ko,
     ...issuesCatalogs.ko,
     ...prWorkCatalogs.ko,
@@ -273,6 +276,7 @@ export const catalogs = {
     ...issueSettingsCatalogs["zh-CN"],
     ...hideAiCatalogs["zh-CN"],
     ...agentsCatalogs["zh-CN"],
+    ...agentProfilesCatalogs["zh-CN"],
     ...requestsCatalogs["zh-CN"],
     ...issuesCatalogs["zh-CN"],
     ...prWorkCatalogs["zh-CN"],
@@ -345,6 +349,7 @@ export const catalogs = {
     ...issueSettingsCatalogs.ja,
     ...hideAiCatalogs.ja,
     ...agentsCatalogs.ja,
+    ...agentProfilesCatalogs.ja,
     ...requestsCatalogs.ja,
     ...issuesCatalogs.ja,
     ...prWorkCatalogs.ja,
