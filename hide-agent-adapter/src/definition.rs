@@ -160,6 +160,27 @@ pub fn builtins() -> &'static [Definition] {
     &BUILTINS
 }
 
+/// The `[account]` of the built-in definition with this id, read once
+/// without compiling any screen rules: an account's folders are asked on
+/// paths that cannot wait for every agent's rules to compile.
+pub fn builtin_account(id: &str) -> Option<&'static AccountRule> {
+    static ACCOUNTS: LazyLock<Vec<(&'static str, Option<AccountRule>)>> = LazyLock::new(|| {
+        builtin::ALL
+            .iter()
+            .map(|builtin| {
+                let name = format!("{}.toml", builtin.id);
+                let fields = file::read(&name, builtin.text, Origin::Builtin)
+                    .unwrap_or_else(|reason| panic!("built-in agent definition: {reason}"));
+                (builtin.id, fields.account)
+            })
+            .collect()
+    });
+    ACCOUNTS
+        .iter()
+        .find(|(each, _)| *each == id)
+        .and_then(|(_, account)| account.as_ref())
+}
+
 /// The built-in definition with this id.
 pub fn builtin(id: &str) -> Option<&'static Definition> {
     builtins().iter().find(|definition| definition.id == id)

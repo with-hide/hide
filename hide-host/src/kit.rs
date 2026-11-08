@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn every_kit_location_follows_the_home_the_platform_names() {
         use crate::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
-        use hide_agent_adapter::{ADAPTERS, AccountPath, NodeEnv, Profile, resolve};
+        use hide_agent_adapter::{ADAPTERS, AccountPath, NodeEnv, Profile};
         let dir = tempfile::tempdir().unwrap();
         let own = dir.path().join("own");
         let account = dir.path().join("account");
@@ -669,7 +669,7 @@ mod tests {
                 node = node.with_variable(variable, started(variable));
             }
             let account =
-                resolve(agent.definition(), &Profile::builtin_default(agent.id), &node).unwrap();
+                agent.resolve(&Profile::builtin_default(agent.id), &node).unwrap();
             locations.extend(
                 AccountPath::ALL
                     .into_iter()

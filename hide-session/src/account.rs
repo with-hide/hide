@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile, resolve};
+use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile};
 
 use crate::Agent;
 
@@ -40,7 +40,8 @@ pub(crate) fn sessions(home: &Path, agent: Agent) -> Result<Option<PathBuf>, &'s
             crate::environment::data_home()?.map(|path| path.as_os_str().to_os_string()),
         );
     }
-    let account = resolve(adapter.definition(), &Profile::builtin_default(adapter.id), &node)
+    let account = adapter
+        .resolve(&Profile::builtin_default(adapter.id), &node)
         .expect("the node's checked variables and a known home leave nothing to refuse");
     Ok(account.path(AccountPath::Sessions).map(Path::to_path_buf))
 }

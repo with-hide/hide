@@ -188,14 +188,15 @@ impl NodeEnv {
         self
     }
 
-    /// [`Self::with_variable`] for every account variable of `definition`,
-    /// read by `variable` (`hide_platform::host::variable` for the process).
+    /// [`Self::with_variable`] for every variable of an agent's `[account]`
+    /// `rule`, read by `variable` (`hide_platform::host::variable` for the
+    /// process).
     pub fn with_account_variables(
         mut self,
-        definition: &Definition,
+        rule: Option<&AccountRule>,
         variable: impl Fn(&str) -> Option<OsString>,
     ) -> Self {
-        for var in definition.account.iter().flat_map(|rule| &rule.vars) {
+        for var in rule.iter().flat_map(|rule| &rule.vars) {
             self = self.with_variable(&var.name, variable(&var.name));
         }
         self
@@ -298,10 +299,21 @@ pub fn resolve(
     profile: &Profile,
     node: &NodeEnv,
 ) -> Result<Account, Refusal> {
-    if profile.kind != definition.id {
+    resolve_rule(&definition.id, definition.account.as_ref(), profile, node)
+}
+
+/// [`resolve`] for the agent `kind` whose `[account]` is `rule`: what a
+/// built-in agent's adapter asks with the rule alone
+/// ([`crate::definition::builtin_account`]), with no screen rules compiled.
+pub fn resolve_rule(
+    kind: &str,
+    rule: Option<&AccountRule>,
+    profile: &Profile,
+    node: &NodeEnv,
+) -> Result<Account, Refusal> {
+    if profile.kind != kind {
         return Err(Refusal::OtherAgent);
     }
-    let rule = definition.account.as_ref();
     let account = profile
         .account
         .as_ref()

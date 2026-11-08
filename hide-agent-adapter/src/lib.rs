@@ -11,7 +11,7 @@
 pub mod account;
 pub use account::{
     Account, AccountKey, AccountRef, LaunchTarget, NodeEnv, Os, Place, Profile, ProfileId, Refusal,
-    default_folder, resolve,
+    default_folder, resolve, resolve_rule,
 };
 pub mod composer;
 mod declarations;
@@ -996,17 +996,22 @@ pub struct AgentAdapter {
 }
 
 impl AgentAdapter {
-    /// The agent's built-in definition, whose `[account]` names its folders.
-    pub fn definition(&self) -> &'static definition::Definition {
-        definition::builtin(self.id).expect("every adapter has a built-in definition")
+    /// The agent's `[account]`, from its built-in definition, read without
+    /// its screen rules ([`definition::builtin_account`]).
+    pub fn account_rule(&self) -> Option<&'static definition::AccountRule> {
+        definition::builtin_account(self.id)
+    }
+
+    /// [`resolve`] for this agent's built-in definition.
+    pub fn resolve(&self, profile: &Profile, node: &NodeEnv) -> Result<Account, Refusal> {
+        resolve_rule(self.id, self.account_rule(), profile, node)
     }
 
     /// The account the agent's built-in default profile runs in under `home`
     /// for a node that honours none of the agent's variables: the places Hide
     /// installs into, and those it reads at their default place.
     pub fn account_in(&self, home: &std::path::Path) -> Account {
-        resolve(
-            self.definition(),
+        self.resolve(
             &Profile::builtin_default(self.id),
             &NodeEnv::new(Some(home.to_path_buf())),
         )

@@ -215,11 +215,12 @@ fn home_unavailable(stage: &str, kind: std::io::ErrorKind) -> AiError {
 /// relative `CODEX_HOME` leaves the home unavailable rather than linking a
 /// path Codex would read against another folder.
 fn source_codex_dir() -> Result<PathBuf, std::io::ErrorKind> {
-    use hide_agent_adapter::{AccountPath, NodeEnv, Profile, Refusal, resolve};
+    use hide_agent_adapter::{AccountPath, NodeEnv, Profile, Refusal};
     let codex = hide_agent_adapter::AgentId::Codex.adapter();
     let node = NodeEnv::new(hide_platform::host::home_dir().ok())
-        .with_account_variables(codex.definition(), hide_platform::host::variable);
-    resolve(codex.definition(), &Profile::builtin_default(codex.id), &node)
+        .with_account_variables(codex.account_rule(), hide_platform::host::variable);
+    codex
+        .resolve(&Profile::builtin_default(codex.id), &node)
         .map_err(|refusal| match refusal {
             Refusal::NoAccountHome => std::io::ErrorKind::NotFound,
             _ => std::io::ErrorKind::InvalidInput,

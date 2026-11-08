@@ -25,10 +25,10 @@
 //! Windows account without Developer Mode, where Desk's Codex then does not
 //! start.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile, resolve};
+use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile};
 
 /// Desk's Codex configuration. Commands run with Desk's own `PATH`, not the
 /// login shell's or a snapshot of it, so the `hide` Desk put first is the
@@ -83,11 +83,10 @@ pub fn operator_sign_in(
     codex_home: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, String> {
     let codex = AgentId::Codex.adapter();
-    let mut node = NodeEnv::new(Some(home.to_path_buf()));
-    for var in codex.definition().account.iter().flat_map(|rule| &rule.vars) {
-        node = node.with_variable(&var.name, codex_home.map(std::ffi::OsStr::to_os_string));
-    }
-    resolve(codex.definition(), &Profile::builtin_default(codex.id), &node)
+    let node = NodeEnv::new(Some(home.to_path_buf()))
+        .with_account_variables(codex.account_rule(), |_| codex_home.map(OsStr::to_os_string));
+    codex
+        .resolve(&Profile::builtin_default(codex.id), &node)
         .map(|account| {
             account
                 .path(AccountPath::Login)

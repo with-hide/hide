@@ -914,9 +914,10 @@ pub const HOME_FOLDER_VARIABLES: &[&str] = &[
 /// the profile folder Windows keeps for the account, and wrote its trust
 /// table into the account's own `config.toml`, 2026-11-04).
 pub fn agent_home_variables() -> Vec<(&'static str, String)> {
-    hide_agent_adapter::definition::builtins()
+    hide_agent_adapter::ADAPTERS
         .iter()
-        .flat_map(|definition| definition.account.iter().flat_map(|rule| &rule.vars))
+        .filter_map(|agent| agent.account_rule())
+        .flat_map(|rule| &rule.vars)
         .filter(|var| var.isolated_home)
         .map(|var| {
             let default = var
