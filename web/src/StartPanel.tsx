@@ -5,7 +5,6 @@ import { rememberedSelection, modelToSend, selectKind, type AgentSelection } fro
 import { AgentPicker } from "./components/agent-picker";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
-import { Kbd } from "./components/ui/kbd";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "./components/ui/command";
@@ -34,8 +33,9 @@ import { followStartedPane } from "./opening";
 // and width, no backdrop, the keyboard in the text box. What is written is the
 // new agent's first prompt; Enter or Start sends one `agent_start_in_checkout`
 // and the panel then follows only the answer that carries its request id.
-// Under the text, one row says where (the device when it is another one, the
-// project, the branch) and one says who (the agent and its model) and starts.
+// Over the text, one quiet row says where (the device when it is another one,
+// the project › the branch); under it, one says who (the agent and its model)
+// and starts.
 
 /**
  * Follows the answer to the request the panel sent, whether or not the panel
@@ -116,8 +116,8 @@ function ProjectIcon({ project, own }: { project: StartProject; own: string }) {
   return project.deviceId === own ? <HomeIcon aria-hidden="true" /> : <ServerIcon aria-hidden="true" />;
 }
 
-/** A chip of the where row: a quiet button that names its value and opens its menu. */
-const CHIP = "h-auto max-w-full min-w-0 gap-xxs rounded-sm px-xs py-xxs text-caption font-normal";
+/** A chip of the where row: a quiet word that names its value and opens its menu. */
+const CHIP = "h-(--size-control-sm) max-w-full min-w-0 gap-xxs rounded-sm px-xs text-caption font-normal";
 
 /**
  * The project menu: each device's Home and projects, the window's own device
@@ -130,7 +130,7 @@ function ProjectPicker({ targets, project, target, own, disabled, onPick }: { ta
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.project")} data-start-target={target?.key ?? ""} data-start-project={project?.key ?? ""}>
+        <Button variant="ghost" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.project")} data-start-target={target?.key ?? ""} data-start-project={project?.key ?? ""}>
           {project ? <ProjectIcon project={project} own={own} /> : null}
           <span className="truncate font-medium">{project?.label ?? t("shell.noTarget")}</span>
           <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
@@ -182,7 +182,7 @@ function BranchPicker({ project, target, currentKey, disabled, onPick }: { proje
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.branch")} data-start-branch={target.key}>
+        <Button variant="ghost" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.branch")} data-start-branch={target.key}>
           <GitBranchIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
           <span className="truncate">{shown}</span>
           <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
@@ -325,40 +325,10 @@ function StartPanel({ actions }: { actions: Actions }) {
       data-start-panel="true"
       className="fixed left-1/2 top-(--size-settings-sheet-window-inset) z-50 flex w-(--size-search-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg"
     >
-      <Textarea
-        ref={field}
-        bare
-        rows={1}
-        value={text}
-        autoComplete="off"
-        spellCheck={false}
-        aria-label={t("shell.firstInstruction")}
-        placeholder={t("shell.instructionPrompt")}
-        data-start-text="true"
-        className="field-sizing-content max-h-(--size-start-text-max) min-h-(--size-control-lg) overflow-y-auto px-md pt-md pb-sm"
-        onChange={(event) => useStartPanel.getState().setText(event.target.value)}
-        onKeyDown={(event) => {
-          // Enter starts; Shift+Enter is a new line, and an Enter that ends a composition is neither.
-          if (event.key !== "Enter" || event.shiftKey || composingKey(event)) return;
-          event.preventDefault();
-          start();
-        }}
-      />
-      {failure ? (
-        <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
-          {"key" in failure ? t(failure.key) : failure.message}
-          {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
-        </p>
-      ) : null}
-      {offline ? (
-        <p role="status" data-start-offline={offline.deviceId} className="flex flex-wrap items-center gap-xs px-md pb-xs text-caption text-muted-foreground">
-          {t("startPanel.deviceOffline", { device: offline.deviceLabel })}
-          <Button variant="text" size="inline" onClick={() => actions.retryDevice(offline.deviceId)} data-start-reconnect={offline.deviceId}>{t("sidebar.reconnect")}</Button>
-        </p>
-      ) : null}
-      <div className="flex min-w-0 flex-wrap items-center gap-xs px-sm" data-start-where="true">
+      <div className="flex min-w-0 flex-wrap items-center gap-xxs px-sm pt-sm" data-start-where="true">
         {target && target.deviceId !== own ? <DeviceChip variant="remote" label={targets.groups.find((group) => group.deviceId === target.deviceId)?.deviceLabel ?? ""} /> : null}
         <ProjectPicker targets={targets} project={project} target={target} own={own} disabled={working || targets.groups.length === 0} onPick={(key) => useStartPanel.getState().setTarget(key)} />
+        {project && target && !project.home ? <span aria-hidden="true" className="text-caption text-muted-foreground">›</span> : null}
         {project && target && !project.home && target.kind !== "worktree" ? (
           <BranchPicker project={project} target={target} currentKey={targets.currentKey} disabled={working} onPick={(key) => useStartPanel.getState().setTarget(key)} />
         ) : null}
@@ -387,8 +357,40 @@ function StartPanel({ actions }: { actions: Actions }) {
       </div>
       {target?.kind === "worktree" && worktreeBranch && branchProblem(worktreeBranch) ? <p role="alert" className="px-md pt-xs text-caption text-destructive">{t(branchProblem(worktreeBranch)!)}</p> : null}
       {target?.kind === "worktree" && initialBase?.missing ? <p className="px-md pt-xs text-caption text-warning">{t("projectSettings.branchMissing", { branch: initialBase.missing, fallback: initialBase.branch })}</p> : null}
-      <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm">
+      <Textarea
+        ref={field}
+        bare
+        rows={1}
+        value={text}
+        autoComplete="off"
+        spellCheck={false}
+        aria-label={t("shell.firstInstruction")}
+        placeholder={t("shell.instructionPrompt")}
+        data-start-text="true"
+        className="field-sizing-content max-h-(--size-start-text-max) min-h-(--size-control-lg) overflow-y-auto px-md pt-xs pb-sm"
+        onChange={(event) => useStartPanel.getState().setText(event.target.value)}
+        onKeyDown={(event) => {
+          // Enter starts; Shift+Enter is a new line, and an Enter that ends a composition is neither.
+          if (event.key !== "Enter" || event.shiftKey || composingKey(event)) return;
+          event.preventDefault();
+          start();
+        }}
+      />
+      {failure ? (
+        <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
+          {"key" in failure ? t(failure.key) : failure.message}
+          {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
+        </p>
+      ) : null}
+      {offline ? (
+        <p role="status" data-start-offline={offline.deviceId} className="flex flex-wrap items-center gap-xs px-md pb-xs text-caption text-muted-foreground">
+          {t("startPanel.deviceOffline", { device: offline.deviceLabel })}
+          <Button variant="text" size="inline" onClick={() => actions.retryDevice(offline.deviceId)} data-start-reconnect={offline.deviceId}>{t("sidebar.reconnect")}</Button>
+        </p>
+      ) : null}
+      <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm" data-start-who="true">
         <AgentPicker
+          variant="ghost"
           actions={actions}
           value={selection}
           onChange={setSelection}
@@ -403,9 +405,9 @@ function StartPanel({ actions }: { actions: Actions }) {
           }
         />
         <span className="flex-1" />
-        <Kbd aria-hidden="true">⏎</Kbd>
         <Button size="default" disabled={!canStart} onClick={start} data-start-submit="true">
           {working ? t("shell.starting") : t("common.start")}
+          {working ? null : <span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span>}
         </Button>
       </div>
     </div>
