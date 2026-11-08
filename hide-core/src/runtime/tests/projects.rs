@@ -3630,7 +3630,9 @@ fn a_plain_folder_tab_goes_to_its_marked_workspace_and_marks_a_new_one_when_the_
 /// folder's tab whose only pane sits in a plain folder below it stays in the
 /// folder because its workspace carries the folder's owner mark, which the
 /// core's own engine saves; no row is made for the subfolder. A workspace
-/// without the mark is placed by its pane's cwd, as before.
+/// without the mark is placed by the deepest registered folder holding its
+/// pane's cwd, so it makes no row for the subfolder either (PRD
+/// home-folder-project B12, B13).
 #[test]
 fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_subfolder() {
     let path = owner_fixture("subfolder", false);
@@ -3692,7 +3694,8 @@ fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_su
     let mut unmarked = runtime();
     unmarked.snapshot.ui_state.workspace_registrations = vec![registration];
     assert!(unmarked.ingest_session(Ok(payload(serde_json::json!({})))));
-    assert_eq!(holding(&unmarked).as_deref(), Some(sub.as_str()));
+    assert_eq!(holding(&unmarked).as_deref(), Some(path.as_str()));
+    assert_eq!(rows(&unmarked), vec![path.clone()]);
     let _ = std::fs::remove_dir_all(&path);
 }
 

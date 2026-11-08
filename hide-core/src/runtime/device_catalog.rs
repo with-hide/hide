@@ -31,8 +31,21 @@ impl Runtime {
     ) -> RemoteSessionSnapshot {
         let empty = DeviceFacts::default();
         let facts = self.device_facts.get(target).unwrap_or(&empty);
-        let mut session =
-            device_catalog::group(target, raw, facts, self.device_worktrees.get(target));
+        let folders = self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .filter(|registration| registration.device_id == target)
+            .map(|registration| PathBuf::from(&registration.path))
+            .collect::<Vec<_>>();
+        let mut session = device_catalog::group(
+            target,
+            raw,
+            facts,
+            self.device_worktrees.get(target),
+            &folders,
+        );
         device_catalog::apply_registrations(
             target,
             &mut session,
@@ -928,6 +941,7 @@ impl Runtime {
     pub(super) fn forget_device_directories(&mut self, target: &str) {
         self.device_facts.remove(target);
         self.device_worktrees.remove(target);
+        self.device_homes.remove(target);
     }
 }
 
