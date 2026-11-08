@@ -9,7 +9,10 @@
 //! (`register::judge`, unconfirmed), which names the project root it would
 //! add and leaves out home, a folder outside home, the home dotfiles
 //! repository and a folder that is gone; folders of one root are one
-//! project carrying every source that named them (D-11).
+//! project carrying every source that named them (D-11). A root inside
+//! Hide's own folder (`~/.hide`, where Desk and Hide AI run their agents) is
+//! never a project to add, while a Hide worktree there still counts for the
+//! repository it belongs to, whose root is elsewhere.
 //!
 //! Every file is only read, opened without waiting and only when it is a
 //! regular file (`hide_platform::fs::open_regular`), and each read is capped
@@ -275,6 +278,7 @@ fn merge(
         .filter_map(|path| identity::canonical(&path).ok())
         .collect::<BTreeSet<_>>();
     let home_real = identity::canonical(home).unwrap_or_else(|_| home.to_path_buf());
+    let hide_folder = hide_kit::layout::hide_home(&home_real);
     let mut projects: Vec<(PathBuf, Vec<ImportSource>, u64)> = Vec::new();
     for (folder, sources) in folders {
         if Instant::now() >= deadline {
@@ -283,7 +287,7 @@ fn merge(
         let Ok(judged) = crate::register::judge(&folder, None, home) else {
             continue;
         };
-        if excluded.contains(&judged.root) {
+        if excluded.contains(&judged.root) || judged.root.starts_with(&hide_folder) {
             continue;
         }
         let at = newest(&sources).unwrap_or(0);
