@@ -11,6 +11,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { Sidebar } from "../sidebar";
 import { TitleRow } from "../TitleRow";
 import { SettingsGate } from "../SettingsSheet";
+import type { SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { withMissionAsk } from "./MissionScene";
@@ -51,6 +52,23 @@ export function sceneParams(params: URLSearchParams): SceneParams {
   return { theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
 }
 
+/**
+ * `project-folds` and `project-folds-open`: the hide project holds its two folds at once, its worktrees with no
+ * agents and its Inactive ones, folded or both open, so the rows a project holds can be told from the device's folds.
+ */
+function withProjectFolds(rest: SnapshotRest, open: boolean): SnapshotRest {
+  const workspaces = rest.navigator?.workspaces?.map((row) =>
+    row.id === "hide"
+      ? {
+          ...row,
+          session_folds: { empty: ["hide:ux", "hide:fix"], child_only: [], cleanup: [], empty_open: open, cleanup_open: false, open_prs: 0 },
+          inactive_checkouts: { ...row.inactive_checkouts, expanded: open },
+        }
+      : row,
+  );
+  return { ...rest, navigator: { ...rest.navigator, workspaces } };
+}
+
 export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, axis = false }: SceneParams) {
   const [folds, setFolds] = useState<SceneFolds>({ ...REFERENCE_FOLDS, frontDevice: front === "mini" ? "mini" : front === "offline" ? OFFLINE_DEVICE : "local" });
   const actions = useMemo(
@@ -71,7 +89,7 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
     const sized = width === null ? scene.rest : { ...scene.rest, ui_state: { ...scene.rest.ui_state, sidebar_width: width } };
     const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown" } };
     // `mission-ask`: a mission waits on the operator with no session row to carry it, so Needs You lists the mission itself.
-    const rest = state === "mission-ask" ? withMissionAsk(shown, "local", Date.now()) : shown;
+    const rest = state === "mission-ask" ? withMissionAsk(shown, "local", Date.now()) : state === "project-folds" || state === "project-folds-open" ? withProjectFolds(shown, state === "project-folds-open") : shown;
     useShellStore.setState({ rest, agents: scene.agents, connection: "live", ...(axis ? { focusedPaneId: "a1" } : {}) });
   }, [scene, width, rail, axis, state]);
 

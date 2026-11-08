@@ -1687,6 +1687,7 @@ The fold is the page's own and starts closed on a fresh load, so the list return
 A device's Projects list is its `Needs You · N` group, its `Done · N` group, then Pinned and the projects, then `No agents N` and `Inactive projects N`, and no row there names the device, since the whole list is that device's (with the rail rework of quick device-rail-badges).
 An agent row's title is its identity label at both densities: the rolling task, or the provider's name when no task exists; the engine's agent name and a workspace label never become display copy.
 Worktrees with no agents folds worktrees with no unresolved agent, excluding primary, front, dirty, unpushed and already inactive checkouts and one holding a named tab the operator kept ([Agent areas](#agent-areas)); a worktree whose unresolved agents are all delegated children is in no fold and has no line (`session_folds.child_only`, same exclusions), because Worktrees with no agents would be false for it; Cleanup gathers agent worktrees and missing folders at the bottom without assuming they have no live pane.
+A project's own `Worktrees with no agents N` and `Inactive N` rows stand as its worktree rows do, a glyph on the checkout's kind-glyph column (a crossed-out bot, a clock) and the name on the checkout's name column, so each reads as one of the project's rows; the device's `No agents N` and `Inactive projects N` folds draw no glyph and start at the list's edge.
 
 ### Purpose, pinning, and PR chrome
 

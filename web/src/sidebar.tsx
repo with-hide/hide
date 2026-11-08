@@ -3,7 +3,8 @@ import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { BotOffIcon, BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, ClockIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
@@ -771,6 +772,7 @@ function FoldRow({
   count,
   expanded,
   current = false,
+  glyph: Glyph,
   onToggle,
   ...data
 }: {
@@ -778,6 +780,8 @@ function FoldRow({
   count: number;
   expanded: boolean;
   current?: boolean;
+  /** A fold of a project's own worktrees draws a glyph on the checkout's kind-glyph column and its name on the checkout's name column, so it reads as one of the project's rows and not as the device's folds below. */
+  glyph?: LucideIcon;
   onToggle: () => void;
 } & Record<`data-${string}`, string>) {
   const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
@@ -785,11 +789,12 @@ function FoldRow({
     <RowButton
       aria-expanded={expanded}
       aria-current={current ? "true" : undefined}
-      className={cn("min-h-(--size-control-lg) gap-sm rounded-sm py-0 text-caption font-medium hover:text-foreground", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-subtle-foreground")}
+      className={cn("min-h-(--size-control-lg) rounded-sm py-0 text-caption font-medium hover:text-foreground", Glyph ? "gap-xs" : "gap-sm", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-subtle-foreground")}
       style={{ paddingLeft: PROJECT_COLUMN }}
       onClick={onToggle}
       {...data}
     >
+      {Glyph ? <Glyph aria-hidden="true" data-fold-glyph="true" className="size-(--size-checkout-icon) shrink-0 text-muted-foreground" /> : null}
       <span className="min-w-0 flex-1 truncate">
         {label} {count}
       </span>
@@ -1011,7 +1016,7 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
           {active.filter(drawn).map(checkoutRow)}
           {emptyFold.length > 0 ? <li>
             <FoldRow label={[t("agentSessions.emptyWorktrees"), workspace.session_folds!.open_prs > 0 ? t("agentSessions.openPrs", { count: workspace.session_folds!.open_prs }) : null].filter(Boolean).join(" · ")}
-              count={emptyFold.length} expanded={workspace.session_folds!.empty_open} current={hiding === "empty"}
+              glyph={BotOffIcon} count={emptyFold.length} expanded={workspace.session_folds!.empty_open} current={hiding === "empty"}
               onToggle={() => actions.toggleSessionFold(workspace.id)} data-empty-worktrees={workspace.id} />
             {workspace.session_folds!.empty_open ? <ul>{emptyFold.map(checkoutRow)}</ul> : null}
           </li> : null}
@@ -1019,6 +1024,7 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
             <li>
               <FoldRow
                 label={t("sidebar.inactive")}
+                glyph={ClockIcon}
                 count={inactiveDrawn.length}
                 expanded={workspace.inactive_checkouts.expanded}
                 current={hiding === "inactive"}
