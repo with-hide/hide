@@ -43,7 +43,7 @@
   "desktop.spec.ts › links: external links open in the default browser and the window stays on the daemon": 3.5,
   "desktop.spec.ts › reattach: a daemon that dies shows the shell's disconnected state, and the app follows the next one": 13.1,
   "desktop.spec.ts › uncaught: an exception and a rejection nothing in the host caught go to its log without a dialog, the app keeps running, and quit finishes": 3.6,
-  "device-home.spec.ts › a device's Home is made on its first start, the rail follows registration, and a device start lands on that device": 0.0,
+  "device-home.spec.ts › the rail follows registration, no ~/hide is made on a device, and a device start lands on that device": 0.0,
   "device-kit.spec.ts › a device an older Hide ran keeps only this build and no dead bridge folder": 0.0,
   "device-kit.spec.ts › a device gets the pinned Herdr beside its build and leaves a server on that release alone": 0.0,
   "device-kit.spec.ts › a device gets this Mac's kit, keeps a part the operator removed out until Reinstall, and gives the kit back on removal": 0.0,
