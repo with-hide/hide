@@ -1523,6 +1523,7 @@ mod tests {
             resume_path: Some(format!("/home/me/.claude/{terminal}.jsonl")),
             provider: "claude".to_owned(),
             name: "worker".to_owned(),
+            profile: None,
         }
     }
 
