@@ -168,6 +168,7 @@ test("the mission screen goes back to its pane, opens on its table from the side
     // ← <pane> goes back to the Conductor's pane; the lane holds no mission and the rail no Mission icon (PRD mission-screen B14, B18, B19).
     await page.locator("[data-mission-screen-back]").click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${opened.pane}"] .xterm-helper-textarea`)).toBeFocused();
     await expect(page.locator('[data-lane-tool="mission"]')).toHaveCount(0);
     await expect(page.locator('[data-detail="mission"]')).toHaveCount(0);
     // The sidebar's 미션 row opens the table, the mission in its group, never the last mission shown (B1, B2; D-04).

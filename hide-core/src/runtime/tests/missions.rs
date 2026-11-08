@@ -2891,7 +2891,28 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     let shown = |mission: Option<&str>| super::super::mission_events::MissionShownPayload {
         mission: mission.map(str::to_owned),
     };
-    assert!(runtime.mission_shown(shown(None)));
+    // The typed event carries it from the page; a mission the book does not hold reads as none.
+    let event = |mission: Value| explorer_event("mission_shown", json!({ "mission": mission }));
+    assert!(runtime.dispatch_json(&event(json!("mission-404"))));
+    assert_eq!(runtime.missions.shown, None);
+    assert!(runtime.dispatch_json(&event(json!("mission-1"))));
+    assert_eq!(runtime.missions.shown.as_deref(), Some("mission-1"));
+    assert!(runtime.dispatch_json(&event(Value::Null)));
+    // A payload with a field the event does not know is refused and changes nothing.
+    runtime.dispatch_json(&explorer_event(
+        "mission_shown",
+        json!({ "mission": "mission-1", "pane": "p1" }),
+    ));
+    assert_eq!(
+        runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("event.invalid_payload")
+    );
+    assert_eq!(runtime.missions.shown, None);
     assert!(!runtime.mission_shown(shown(None)));
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);

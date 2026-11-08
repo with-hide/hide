@@ -89,7 +89,7 @@ import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { useShellStore } from "./store";
-import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
+import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -1896,10 +1896,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * The sidebar's `미션` row, `Open missions` and a chord bound to the
      * retired `Toggle Mission tool` (PRD mission-screen B2, B21): the mission
      * screen on its table, whatever the center showed (D-04), the device the
-     * rail has in front.
+     * rail has in front, every project and 끝남 folded (B3, B4).
      */
     openMissions() {
-      ui().setMissions({ deviceId: null, selected: null, returnPane: null, scroll: 0 });
+      ui().setMissions(MISSION_ENTRY);
       ui().setScreen({ kind: "missions" });
     },
 
@@ -1918,7 +1918,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       if (mission.device_id !== frontDeviceId(rest())) this.focusDevice(mission.device_id);
       const returnPane = from?.paneId ?? (state.screen?.kind === "missions" ? state.missions.returnPane : null);
-      state.setMissions({ deviceId: mission.device_id, selected: missionId, returnPane });
+      // A chip that leaves this mission out lets go, so the list beside it holds the mission (B10).
+      const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
+      state.setMissions({ deviceId: mission.device_id, selected: missionId, returnPane, projectId });
       if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
     },
 
@@ -2547,6 +2549,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // keys itself while the pane is on screen; the terminal reports no
       // click for a focus it is given (`focusTerminal`).
       if (ui().screen?.kind === "workspace" && useShellStore.getState().focusedPaneId === paneId) focusTerminal(paneId);
+      // From the mission screen's `← <pane>` the pane is often the focused one
+      // already, so the core moves nothing: the Workspace comes back at once
+      // and the terminal takes the keys once it is drawn (PRD mission-screen B14).
+      else if (ui().screen?.kind === "missions" && useShellStore.getState().focusedPaneId === paneId) {
+        ui().setScreen({ kind: "workspace" });
+        requestAnimationFrame(() => focusTerminal(paneId));
+      }
     },
 
     /**
@@ -3315,7 +3324,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openViewAt(deviceId: string, checkoutPath: string, displayId: string) {
       const front = frontViewWorkspace();
       const state = ui();
-      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && front?.device_id === deviceId && front.path === checkoutPath) {
+      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && front?.device_id === deviceId && front.path === checkoutPath) {
         showDocuments();
         focusView(displayId, true);
         return;

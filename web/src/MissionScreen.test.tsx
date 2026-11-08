@@ -43,6 +43,7 @@ async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], 
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   initializeInterfaceI18n("en");
   useShellStore.setState({
+    connection: "live",
     agents,
     rest: {
       ...(missions ? { missions } : {}),
@@ -125,15 +126,23 @@ describe("the table (B2-B5)", () => {
 describe("a mission's detail (B10, B11, B22, D-16)", () => {
   it("opens beside the list from a row, tells the core which mission it shows, and ✕ returns to the table and tells it none", async () => {
     const { q, press, shown } = await mount();
-    expect(shown()).toEqual([null]);
+    // The table names no mission, and says nothing that would take another window's detail its events.
+    expect(shown()).toEqual([]);
     await press(q('[data-mission-row="mission-2"] [data-slot="row-overlay-button"]'));
     expect(q("[data-mission-screen-view]")?.dataset.missionScreenView).toBe("detail");
     expect(q("[data-mission-screen-detail]")?.dataset.missionScreenDetail).toBe("mission-2");
     expect(q('[data-mission-list-row="mission-2"]')?.getAttribute("aria-current")).toBe("true");
-    expect(shown()).toEqual([null, "mission-2"]);
+    expect(shown()).toEqual(["mission-2"]);
     await press(q("[data-mission-screen-close]"));
     expect(q("[data-mission-screen-view]")?.dataset.missionScreenView).toBe("table");
-    expect(shown()).toEqual([null, "mission-2", null]);
+    expect(shown()).toEqual(["mission-2", null]);
+  });
+
+  it("names its mission again when the connection comes back, since a dispatch while it was down was dropped (D-16)", async () => {
+    const { shown } = await mount({ place: { selected: "mission-1" } });
+    act(() => useShellStore.setState({ connection: "reconnecting" }));
+    act(() => useShellStore.setState({ connection: "live" }));
+    expect(shown()).toEqual(["mission-1", "mission-1"]);
   });
 
   it("steps to the next and previous mission in the list's order with ↓ and ↑ (B11)", async () => {
@@ -201,8 +210,20 @@ describe("opening a mission from anywhere (B2, B12, B13, D-04)", () => {
     expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
     expect(useUiStore.getState().missions).toMatchObject({ deviceId: "mini", selected: "mission-9", returnPane: "w1:p4" });
     expect(events.filter((event) => event.kind === "focus_device").map((event) => event.payload)).toEqual([{ device_id: "mini" }]);
-    // The sidebar row always opens the table on the device in front.
+    // The sidebar row always opens the table on the device in front, every project and 끝남 folded.
+    act(() => useUiStore.getState().setMissions({ projectId: "w2", closedAll: true }));
     act(() => actions.openMissions());
-    expect(useUiStore.getState().missions).toMatchObject({ deviceId: null, selected: null, returnPane: null });
+    expect(useUiStore.getState().missions).toEqual(MISSION_ENTRY);
+  });
+
+  it("lets go of a chip that leaves the mission out, so the list beside it holds the mission (B10)", async () => {
+    const { actions, q } = await mount({ place: { projectId: "w2" } });
+    act(() => actions.openMission("mission-1"));
+    expect(useUiStore.getState().missions.projectId).toBeNull();
+    expect(q('[data-mission-list-row="mission-1"]')?.getAttribute("aria-current")).toBe("true");
+    act(() => actions.openMission("mission-3"));
+    act(() => useUiStore.getState().setMissions({ projectId: "w2" }));
+    act(() => actions.openMission("mission-3"));
+    expect(useUiStore.getState().missions.projectId).toBe("w2");
   });
 });

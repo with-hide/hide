@@ -764,12 +764,17 @@ impl Runtime {
     }
 
     /// `mission_shown`: the mission the page's mission screen shows in its
-    /// detail, or none (PRD mission-screen D-16). Whether it changed.
+    /// detail, or none (PRD mission-screen D-16). Whether it changed. Only a
+    /// mission the book holds is kept, so the value is bounded by the book: a
+    /// page naming one just deleted reads as showing none.
     pub(super) fn mission_shown(&mut self, payload: MissionShownPayload) -> bool {
-        if self.missions.shown == payload.mission {
+        let shown = payload
+            .mission
+            .filter(|id| self.missions.book.get(id).is_some());
+        if self.missions.shown == shown {
             return false;
         }
-        self.missions.shown = payload.mission;
+        self.missions.shown = shown;
         true
     }
 

@@ -103,10 +103,19 @@ export function MissionScreen({ actions }: { actions: Actions }) {
     if (place.selected !== null && entries && !selected) useUiStore.getState().setMissions({ selected: null });
   }, [place.selected, entries, selected]);
   // The core sends the events of the mission the detail shows, and none once the screen goes (D-16).
+  // A dispatch made while the connection is down is dropped and a new core starts with none, so the
+  // value is sent again each time the connection comes back. A page that never named a mission sends
+  // no none either, so opening the table leaves another window's detail its events (last word wins).
+  const live = useShellStore((s) => s.connection === "live");
+  const named = useRef(false);
   useEffect(() => {
+    if (!live || (detail === null && !named.current)) return;
     actions.missionShown(detail);
-  }, [actions, detail]);
-  useEffect(() => () => actions.missionShown(null), [actions]);
+    named.current = detail !== null;
+  }, [actions, detail, live]);
+  useEffect(() => () => {
+    if (named.current) actions.missionShown(null);
+  }, [actions]);
 
   const projectLabel = (id: string) => projects.find((project) => project.id === id)?.label ?? null;
   return (
@@ -158,7 +167,9 @@ function Head({ device, count, connected, projects, projectId, returnPane, actio
   actions: Actions;
 }) {
   const { t } = useInterfaceTranslation();
-  const pane = useShellStore((s) => (returnPane ? allAgents(s.agents, s.rest?.status?.remote).find((row) => row.pane_id === returnPane)?.identity_label ?? null : null));
+  const agents = useShellStore((s) => s.agents);
+  const remote = useShellStore((s) => s.rest?.status?.remote);
+  const pane = useMemo(() => (returnPane ? allAgents(agents, remote).find((row) => row.pane_id === returnPane)?.identity_label ?? null : null), [returnPane, agents, remote]);
   return (
     <header className="flex shrink-0 flex-col gap-xs border-b border-border px-lg py-sm" data-mission-screen-head="true">
       {returnPane && pane ? (
@@ -211,7 +222,8 @@ function Skeleton() {
   );
 }
 
-const TABLE_COLUMNS = "grid grid-cols-[minmax(0,1fr)_var(--size-mission-table-project)_var(--size-mission-table-steps)_var(--size-mission-table-time)] items-center gap-x-md";
+/** The table's columns; a screen too narrow for the list beside the detail leaves out the project, which the chips still name (B23). */
+const TABLE_COLUMNS = "grid grid-cols-[minmax(0,1fr)_var(--size-mission-table-steps)_var(--size-mission-table-time)] missions-split:grid-cols-[minmax(0,1fr)_var(--size-mission-table-project)_var(--size-mission-table-steps)_var(--size-mission-table-time)] items-center gap-x-md";
 
 /**
  * The table (B2-B7): the groups with their counts, an empty group not drawn,
@@ -257,7 +269,7 @@ function Table({ groups, empty, filtered, connected, projectLabel, actions }: {
     >
       <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border bg-background py-xs text-caption text-muted-foreground")} aria-hidden="true">
         <span>{t("missionScreen.col.mission")}</span>
-        <span>{t("missionScreen.col.project")}</span>
+        <span className="hidden missions-split:block">{t("missionScreen.col.project")}</span>
         <span>{t("missionScreen.col.steps")}</span>
         <span className="text-right">{t("missionScreen.col.time")}</span>
       </div>
@@ -326,7 +338,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
           </span>
         )}
       </span>
-      <span className="pointer-events-none relative min-w-0 truncate text-caption text-subtle-foreground" title={project ?? undefined} data-mission-row-project={mission.workspace_id}>{project}</span>
+      <span className="pointer-events-none relative hidden min-w-0 truncate text-caption text-subtle-foreground missions-split:block" title={project ?? undefined} data-mission-row-project={mission.workspace_id}>{project}</span>
       <Steps mission={mission} />
       <span className="pointer-events-none relative text-right text-caption text-muted-foreground"><Time mission={mission} /></span>
     </div>
@@ -425,6 +437,11 @@ function List({ groups, selected, connected, actions }: { groups: { group: Missi
   const all = useUiStore((s) => s.missions.closedAll);
   const order = useMemo(() => listedMissions(groups, all), [groups, all]);
   const box = useRef<HTMLDivElement>(null);
+  // Opened from the table, whose row went with it, or from another screen, the keys land on the mission shown, so ↑ and ↓ work at once (B11).
+  useEffect(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) box.current?.querySelector<HTMLElement>('[aria-current="true"]')?.focus();
+  }, []);
   const step = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const index = order.findIndex((entry) => entry.mission.id === selected);
