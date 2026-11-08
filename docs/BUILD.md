@@ -649,6 +649,7 @@ There is no age-based deletion and no reliance on expiring Actions artifacts for
 The assembled site is capped at 4,096 files and 256 MiB, with at most 16 MiB per file and 30 seconds per HTTP read; exceeding a cap stops the release and asks for a host-limit review, without pruning protocols.
 
 The existing phone build's CSP is checked before upload and also installed as an HTTP header, with `frame-ancestors 'none'`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+Each retained protocol bundle under `/p/<N>/` is served with the policy its own page was built with, so a newer build that changes the policy leaves older bundles' headers matching their pages; the root and shared assets take the new build's policy, and the confirmation reads every page's header against its own page.
 The one exception is each protocol's `look-frame.html`, the frame an HTML View is drawn in: its own policy, which must keep `default-src`, `connect-src`, `form-action`, `frame-src` and `object-src` at `'none'` and name no `'self'`, is checked before upload and installed as its header with `frame-ancestors 'self'`, and the confirmation reads that header back ([ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion)).
 Scripts come only from the same site, with the narrow WASM compilation allowance; connections go only to the same site and `wss://relay.withhide.dev`.
 There are no external scripts or analytics in the phone app, and an analytics-enabled or Git-linked host project is refused.
