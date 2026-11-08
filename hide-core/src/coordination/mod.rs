@@ -689,37 +689,146 @@ pub struct SpawnRecord {
     pub reserved_at_unix_ms: u64,
 }
 
-impl SpawnRecord {
-    /// Whether the spawn has a brief it has not submitted yet.
-    pub(crate) fn brief_pending(&self) -> bool {
-        self.brief.is_some() && !self.briefed
+/// What became of a spawn's brief, read from the facts its record keeps,
+/// each written before the effect it names: `BriefTyping` before the send
+/// (an attempt, its answer not yet saved), `Briefed` or `BriefUnsent` after
+/// it, `BriefLaunched` before the start that carries it, `BriefConfirmed`
+/// when the agent's own record shows it. It is never stored on its own, so
+/// it cannot disagree with those facts; everything that asks what became of
+/// the brief (its first letter, whether the spawn may complete, whether it
+/// is typed, the logs of its agent's end) reads it here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BriefPhase {
+    /// The spawn has no brief.
+    None,
+    /// Nothing went in: never tried, or a send that was refused before it
+    /// typed anything (`BriefUnsent`).
+    NotTyped,
+    /// A send was reserved and its outcome not saved: it may have arrived.
+    Sending,
+    /// Typed into the pane, with no record of it from the agent yet.
+    Typed,
+    /// Sent through a queue an earlier build used, with no record yet.
+    Queued,
+    /// The send's answer was lost: it counts as sent.
+    Lost,
+    /// Carried by the agent's start as its prompt argument.
+    Launched,
+    /// The agent's own record shows it.
+    Confirmed,
+}
+
+impl BriefPhase {
+    /// The word a log gives for it; never "undelivered" for a brief that
+    /// may have arrived.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::NotTyped => "not_typed",
+            Self::Sending => "sending_unconfirmed",
+            Self::Typed => "typed_unconfirmed",
+            Self::Queued => "queued_unconfirmed",
+            Self::Lost => "lost_unconfirmed",
+            Self::Launched => "launched_unconfirmed",
+            Self::Confirmed => "confirmed",
+        }
     }
 
-    /// What became of the spawn's brief, as the log of its agent's end says
-    /// it: `none` without one, `not_typed` before it was submitted,
-    /// `confirmed` once the agent recorded it, else how it went in with no
-    /// record of it yet (`typed`, `launched`, `queued`, `lost`, each
-    /// `_unconfirmed`). Never "undelivered" for input that may have arrived.
-    pub(crate) fn brief_state(&self) -> &'static str {
+    /// Whether the brief went in, settled so: the spawn records its first
+    /// letter once its child is bound. A send whose outcome is not saved yet
+    /// is not, since it may still be refused.
+    pub(crate) fn went_in(self) -> bool {
+        matches!(
+            self,
+            Self::Typed | Self::Queued | Self::Lost | Self::Launched | Self::Confirmed
+        )
+    }
+
+    /// Whether nothing is left for the spawn to do with its brief, so binding
+    /// its child completes it.
+    pub(crate) fn settled(self) -> bool {
+        self == Self::None || self.went_in()
+    }
+}
+
+impl SpawnRecord {
+    /// What became of the spawn's brief ([`BriefPhase`]).
+    pub(crate) fn brief_phase(&self) -> BriefPhase {
         use crate::delivery::typed::SendRoute;
         if self.brief.is_none() {
-            return "none";
-        }
-        if !self.briefed {
-            return "not_typed";
+            return BriefPhase::None;
         }
         match &self.brief_input {
-            Some(input) if input.confirmed_at_unix_ms.is_some() => "confirmed",
-            Some(input) => match input.route {
-                SendRoute::Typed => "typed_unconfirmed",
-                SendRoute::Launch => "launched_unconfirmed",
-                SendRoute::Channel => "queued_unconfirmed",
-                SendRoute::Lost => "lost_unconfirmed",
+            Some(input) if input.confirmed_at_unix_ms.is_some() => BriefPhase::Confirmed,
+            Some(input) => match (input.route, self.briefed) {
+                (SendRoute::Launch, _) => BriefPhase::Launched,
+                (SendRoute::Lost, true) => BriefPhase::Lost,
+                (SendRoute::Lost, false) => BriefPhase::Sending,
+                (SendRoute::Typed, true) => BriefPhase::Typed,
+                (SendRoute::Channel, true) => BriefPhase::Queued,
+                (SendRoute::Typed | SendRoute::Channel, false) => BriefPhase::NotTyped,
             },
-            // A record an earlier build wrote before typed input was kept.
-            None => "typed_unconfirmed",
+            // A record an earlier build wrote before it kept the typing.
+            None if self.briefed => BriefPhase::Typed,
+            None => BriefPhase::NotTyped,
         }
     }
+}
+
+fn spawn_json(ledger: &Ledger, id: &str) -> Result<Value, String> {
+    ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.id == id)
+        .map(|spawn| json!(spawn))
+        .ok_or_else(|| "spawn_unavailable".into())
+}
+
+/// Records the first letter under spawn `id`'s intent once its child is bound
+/// and its brief went in, whichever came first: the brief the agent read,
+/// delivered, so the ledger and the wake-up line carry what the child was
+/// started on, and a letter the parent sends later under the same intent is
+/// this one. A letter the parent already holds under that intent stays as
+/// it is, so asking again never writes over it.
+fn first_letter(ledger: &mut Ledger, id: &str, now: u64) -> Result<(), String> {
+    let spawn = ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.id == id)
+        .ok_or("spawn_unavailable")?;
+    let Some(brief) = spawn.brief.clone() else {
+        return Ok(());
+    };
+    if !spawn.brief_phase().went_in() {
+        return Ok(());
+    }
+    let Some(child) = spawn
+        .child
+        .as_ref()
+        .and_then(|child| ledger.agents.iter().find(|record| &record.id == child))
+        .map(|record| record.actor.clone())
+    else {
+        return Ok(());
+    };
+    let intent = spawn.intent.clone();
+    let sender = resolve_actor(ledger, &spawn.parent)
+        .ok_or("parent_unavailable")?
+        .clone();
+    if crate::delivery::mailbox::existing_intent(ledger, &sender, &intent, now).is_some() {
+        return Ok(());
+    }
+    let letter = crate::delivery::mailbox::send(
+        ledger, &sender, &child, &intent, &brief, "request", None, now,
+    )?;
+    let letter = ledger
+        .letters
+        .iter_mut()
+        .find(|stored| stored.id == letter.id)
+        .ok_or("letter_unavailable")?;
+    letter.state = crate::delivery::ledger::State::Delivered;
+    letter.hook_confirmed = Some(true);
+    letter.bell_sent = true;
+    Ok(())
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -1560,7 +1669,8 @@ pub(crate) fn apply(
                 input.route = *route;
             }
             record.briefed = true;
-            Ok(json!(record))
+            first_letter(ledger, id, now)?;
+            spawn_json(ledger, id)
         }
         Mutation::BriefTyping { id } => {
             let parent = ledger
@@ -1682,7 +1792,8 @@ pub(crate) fn apply(
             let input = record.brief_input.as_mut().ok_or("brief_not_typed")?;
             // A record of any typing ends it once; a late one changes nothing.
             input.confirmed_at_unix_ms.get_or_insert(now);
-            Ok(json!(record))
+            first_letter(ledger, id, now)?;
+            spawn_json(ledger, id)
         }
         Mutation::BriefNoticed { id, attempt } => {
             if !input_authority(caller) {
@@ -1901,37 +2012,13 @@ pub(crate) fn apply(
                 .iter_mut()
                 .find(|spawn| &spawn.id == id)
                 .ok_or("spawn_unavailable")?;
-            let first_bind = spawn.child.is_none();
             spawn.child = Some(child);
-            let spawn = spawn.clone();
-            // The brief the agent already read is the first letter under the
-            // spawn's intent, delivered: the ledger and the wake-up line
-            // carry what the child was started on, and a letter the parent
-            // sends later under the same intent is this one.
-            if first_bind && let Some(brief) = spawn.brief.as_deref().filter(|_| spawn.briefed) {
-                let sender = resolve_actor(ledger, &spawn.parent)
-                    .ok_or("parent_unavailable")?
-                    .clone();
-                let letter = crate::delivery::mailbox::send(
-                    ledger,
-                    &sender,
-                    &record.actor,
-                    &spawn.intent,
-                    brief,
-                    "request",
-                    None,
-                    now,
-                )?;
-                let id = letter.id;
-                let letter = ledger
-                    .letters
-                    .iter_mut()
-                    .find(|letter| letter.id == id)
-                    .ok_or("letter_unavailable")?;
-                letter.state = crate::delivery::ledger::State::Delivered;
-                letter.hook_confirmed = Some(true);
-                letter.bell_sent = true;
-            }
+            first_letter(ledger, id, now)?;
+            let spawn = ledger
+                .spawns
+                .iter()
+                .find(|spawn| &spawn.id == id)
+                .ok_or("spawn_unavailable")?;
             Ok(json!(spawn))
         }
         Mutation::Complete { id } => {
@@ -3533,6 +3620,216 @@ mod tests {
         child.actor.device_id = device.into();
         child.project = Some("/fixture/topic".into());
         (ledger, actor, parent_id, id, child)
+    }
+
+    /// A pending spawn with a brief, its agent's start typed: what is left is
+    /// the brief's own transitions and the child's bind.
+    fn briefed_spawn() -> (Ledger, Actor, String, AgentRecord) {
+        let (mut ledger, parent, _, spawn, child) = pending_spawn();
+        ledger.spawns[0].brief = Some("Node api: add the call.".into());
+        apply(
+            &mut ledger,
+            &parent,
+            &Mutation::Typed { id: spawn.clone() },
+            2,
+        )
+        .unwrap();
+        (ledger, parent, spawn, child)
+    }
+
+    fn phase_of(ledger: &Ledger) -> BriefPhase {
+        ledger.spawns[0].brief_phase()
+    }
+
+    fn step(ledger: &mut Ledger, caller: &Actor, mutation: Mutation) {
+        apply(ledger, caller, &mutation, 3).unwrap();
+    }
+
+    /// with-hide/hide-private#717 review R2: the brief's phase is read from
+    /// the facts written before each effect, the agent's record first, so a
+    /// send reserved but not saved is one that may have arrived, a refused
+    /// one is not typed, a record that arrived before the send's outcome was
+    /// saved is confirmed, and a record an earlier build wrote keeps the
+    /// brief it submitted.
+    #[test]
+    fn a_briefs_phase_is_read_from_the_facts_written_before_each_effect() {
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let (mut ledger, parent, spawn, _) = briefed_spawn();
+        assert_eq!(phase_of(&ledger), BriefPhase::NotTyped);
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        assert_eq!(phase_of(&ledger), BriefPhase::Sending);
+        assert!(!phase_of(&ledger).went_in() && !phase_of(&ledger).settled());
+        step(
+            &mut ledger,
+            &input,
+            Mutation::BriefConfirmed { id: spawn.clone() },
+        );
+        assert!(!ledger.spawns[0].briefed);
+        assert_eq!(phase_of(&ledger), BriefPhase::Confirmed);
+
+        let (mut ledger, parent, spawn, _) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefUnsent { id: spawn.clone() },
+        );
+        assert_eq!(phase_of(&ledger), BriefPhase::NotTyped);
+        assert_eq!(phase_of(&ledger).word(), "not_typed");
+
+        for (route, phase) in [
+            (crate::delivery::typed::SendRoute::Lost, BriefPhase::Lost),
+            (crate::delivery::typed::SendRoute::Typed, BriefPhase::Typed),
+        ] {
+            let (mut ledger, parent, spawn, _) = briefed_spawn();
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::BriefTyping { id: spawn.clone() },
+            );
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::Briefed {
+                    id: spawn.clone(),
+                    route,
+                },
+            );
+            assert_eq!(phase_of(&ledger), phase);
+            assert!(phase.went_in() && phase.settled());
+        }
+
+        let (mut ledger, parent, spawn, _) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefLaunched {
+                id: spawn.clone(),
+                words: vec!["brief".into()],
+            },
+        );
+        assert_eq!(phase_of(&ledger), BriefPhase::Launched);
+
+        let (mut ledger, _, _, _) = briefed_spawn();
+        ledger.spawns[0].briefed = true;
+        ledger.spawns[0].brief_input = None;
+        assert_eq!(
+            phase_of(&ledger),
+            BriefPhase::Typed,
+            "an earlier build's record"
+        );
+        ledger.spawns[0].brief = None;
+        assert_eq!(phase_of(&ledger), BriefPhase::None);
+        assert!(BriefPhase::None.settled() && !BriefPhase::None.went_in());
+    }
+
+    fn intent_letters(ledger: &Ledger) -> Vec<crate::delivery::ledger::Letter> {
+        let intent = &ledger.spawns[0].intent;
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| &letter.intent == intent)
+            .cloned()
+            .collect()
+    }
+
+    /// with-hide/hide-private#717 review R1: the brief the child read is the
+    /// first letter under the spawn's intent exactly once, whether the child
+    /// was bound before the brief went in (a question held the brief) or
+    /// after, and binding again, saving the send again or its record leaves
+    /// that letter as it is; a letter the parent already sent under the
+    /// intent is never written over.
+    #[test]
+    fn the_briefs_first_letter_is_written_once_whether_the_bind_or_the_brief_comes_first() {
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let briefed = |spawn: &str| Mutation::Briefed {
+            id: spawn.to_owned(),
+            route: crate::delivery::typed::SendRoute::Typed,
+        };
+        let bind = |spawn: &str, child: &AgentRecord| Mutation::BindChild {
+            id: spawn.to_owned(),
+            record: child.clone(),
+        };
+
+        // Bound first, while the brief waits.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        assert!(intent_letters(&ledger).is_empty());
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        assert!(
+            intent_letters(&ledger).is_empty(),
+            "a send not saved may be refused"
+        );
+        step(&mut ledger, &parent, briefed(&spawn));
+        let letters = intent_letters(&ledger);
+        assert_eq!(letters.len(), 1);
+        assert_eq!(letters[0].body, "Node api: add the call.");
+        assert_eq!(letters[0].state, crate::delivery::ledger::State::Delivered);
+        assert_eq!(letters[0].hook_confirmed, Some(true));
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        step(&mut ledger, &parent, briefed(&spawn));
+        step(
+            &mut ledger,
+            &input,
+            Mutation::BriefConfirmed { id: spawn.clone() },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::Complete { id: spawn.clone() },
+        );
+        assert_eq!(intent_letters(&ledger), letters);
+
+        // The brief first, bound after.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(&mut ledger, &parent, briefed(&spawn));
+        assert!(
+            intent_letters(&ledger).is_empty(),
+            "no child to address yet"
+        );
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        assert_eq!(intent_letters(&ledger).len(), 1);
+
+        // A letter the parent sent under the intent stays its own.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        let intent = ledger.spawns[0].intent.clone();
+        crate::delivery::mailbox::send(
+            &mut ledger,
+            &parent,
+            &child.actor,
+            &intent,
+            "the parent's own",
+            "request",
+            None,
+            3,
+        )
+        .unwrap();
+        let before = intent_letters(&ledger);
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(&mut ledger, &parent, briefed(&spawn));
+        assert_eq!(intent_letters(&ledger), before);
     }
 
     /// PRD engine-bundle-3-core-owns D-11: the engine names a spawn's pane

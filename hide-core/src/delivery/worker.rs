@@ -1066,7 +1066,7 @@ fn run(
             }
             for (record, reason) in &ended {
                 // A spawn's child says what became of its brief when it ends
-                // (`SpawnRecord::brief_state`): an agent that ended with its
+                // (`SpawnRecord::brief_phase`): an agent that ended with its
                 // brief unconfirmed is told from one that took it.
                 let spawn = candidate
                     .spawns
@@ -1075,7 +1075,7 @@ fn run(
                 crate::diagnostic!(json!({"component":"coordination","kind":"agent.ended",
                     "agent_id":record.id,"machine":record.machine,"pane_id":record.pane,
                     "reason":reason.reason(),"spawn":spawn.map(|spawn| &spawn.id),
-                    "brief":spawn.map(|spawn| spawn.brief_state())}));
+                    "brief":spawn.map(|spawn| spawn.brief_phase().word())}));
             }
         }
         if saved.is_ok() && changed {

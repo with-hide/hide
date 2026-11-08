@@ -2241,6 +2241,11 @@ fn a_brief_a_question_held_is_typed_once_by_the_same_intent_even_after_the_agent
     let done = spawner.published();
     assert!(done.spawns[0].briefed && done.spawns[0].completed);
 
+    let letters = intent_letters(&spawner, "menu");
+    assert_eq!(letters.len(), 1, "the brief is the intent's first letter");
+    assert_eq!(letters[0].body, "reply JOURNEY-1");
+    assert_eq!(letters[0].state, ledger::State::Delivered);
+
     assert_eq!(ask().unwrap()["id"], child["id"]);
     assert_eq!(
         spawner.count("prompt_agent"),
@@ -2248,6 +2253,73 @@ fn a_brief_a_question_held_is_typed_once_by_the_same_intent_even_after_the_agent
         "a completed spawn types nothing"
     );
     assert_eq!(spawner.count("start_agent"), 1);
+    assert_eq!(intent_letters(&spawner, "menu"), letters);
+}
+
+fn intent_letters(spawner: &Spawner, intent: &str) -> Vec<ledger::Letter> {
+    spawner
+        .published()
+        .letters
+        .iter()
+        .filter(|letter| letter.intent == intent)
+        .cloned()
+        .collect()
+}
+
+/// #717 review: a brief the agent recorded before its send's outcome was
+/// saved (the spawn's answer was cut off after the typing) is confirmed, so
+/// the same intent types nothing more and completes the spawn, with the one
+/// first letter under its intent.
+#[test]
+fn a_brief_confirmed_before_its_send_was_saved_completes_the_same_intent_without_typing() {
+    let spawner = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *spawner.session.lock().unwrap() = None;
+    spawner.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    let ask = || spawner.spawn_briefed("cut", "reply JOURNEY-3");
+    ask().expect_err("the screen asks");
+    let mut writer = spawner.writer();
+    spawner.refresh(&mut writer);
+    wait_for("the writer's worker takes the at-rest batch", || {
+        writer.taken()
+    });
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    spawner.refresh(&mut writer);
+    wait_for("the core binds the agent", || {
+        spawner.published().spawns[0].child.is_some()
+    });
+    // The typing was reserved and the agent's record of it arrived; the
+    // answer that would have saved the send never did.
+    let spawn = spawner.published().spawns[0].id.clone();
+    crate::coordination::executor::mutate(
+        &spawner.client,
+        &authority(&spawner.actor),
+        &spawner.actor,
+        crate::coordination::Mutation::BriefTyping { id: spawn.clone() },
+    )
+    .unwrap();
+    spawner
+        .runtime
+        .lock()
+        .unwrap()
+        .post_brief_confirmed(&spawn, "hook");
+    wait_for("the agent's record of the brief is kept", || {
+        spawner.published().spawns[0]
+            .brief_input
+            .as_ref()
+            .is_some_and(|input| input.confirmed_at_unix_ms.is_some())
+    });
+    let held = spawner.published();
+    assert!(!held.spawns[0].briefed && !held.spawns[0].completed);
+
+    spawner.screen.store(SCREEN_READY, Ordering::SeqCst);
+    let child = ask().expect("the same intent completes the spawn");
+    assert_eq!(child["id"].as_str(), held.spawns[0].child.as_deref());
+    assert_eq!(spawner.count("prompt_agent"), 0, "nothing is typed again");
+    assert!(spawner.published().spawns[0].completed);
+    assert_eq!(intent_letters(&spawner, "cut").len(), 1);
+    assert_eq!(ask().unwrap()["id"], child["id"]);
+    assert_eq!(spawner.count("prompt_agent"), 0);
 }
 
 /// An agent that ends before it takes its brief is said to have ended, not
@@ -2315,5 +2387,5 @@ fn an_ended_wait_says_what_became_of_the_spawns_brief() {
     assert_eq!(ended(&typed)["brief"], "typed_unconfirmed");
     let mut confirmed = typed.published().spawns[0].clone();
     confirmed.brief_input.as_mut().unwrap().confirmed_at_unix_ms = Some(1);
-    assert_eq!(confirmed.brief_state(), "confirmed");
+    assert_eq!(confirmed.brief_phase().word(), "confirmed");
 }

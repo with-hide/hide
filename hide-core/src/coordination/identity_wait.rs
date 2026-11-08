@@ -313,14 +313,14 @@ pub(crate) fn reserve(
 /// The answer of a wait that ended with nothing registered, for the log of
 /// its settle (`lineage`), never for a caller: why it ended, and for a
 /// spawn's wait the spawn and what became of its brief
-/// (`SpawnRecord::brief_state`), so an agent that ended before it took its
+/// (`SpawnRecord::brief_phase`), so an agent that ended before it took its
 /// brief is told from one that ended after.
 fn ended(ledger: &Ledger, wait: &IdentityWait, reason: &str) -> Value {
     let mut answer = json!({"ended": reason});
     if let Owed::Spawn { spawn } = &wait.owed {
         answer["spawn"] = json!(spawn);
         if let Some(record) = ledger.spawns.iter().find(|record| &record.id == spawn) {
-            answer["brief"] = json!(record.brief_state());
+            answer["brief"] = json!(record.brief_phase().word());
         }
     }
     answer
@@ -401,11 +401,11 @@ fn bind(
             // same command asked again, which types it once and then binds
             // this same child; completing it here would answer that command
             // from the record with the brief never typed.
-            let brief_pending = ledger
+            let settled = ledger
                 .spawns
                 .iter()
-                .any(|record| &record.id == spawn && record.brief_pending());
-            if !brief_pending {
+                .any(|record| &record.id == spawn && record.brief_phase().settled());
+            if settled {
                 super::apply(
                     ledger,
                     &parent,

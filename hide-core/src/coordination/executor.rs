@@ -270,7 +270,7 @@ pub(crate) fn spawn_ref(
     }
 }
 
-pub(super) fn mutate(
+pub(crate) fn mutate(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -546,7 +546,8 @@ fn brief_words(
     if launched_before {
         return Ok(Some(reserved.launch_words.clone()));
     }
-    if reserved.briefed {
+    // A brief that went in, or may have, never rides a start again.
+    if reserved.brief_phase() != super::BriefPhase::NotTyped {
         return Ok(None);
     }
     Ok(launch_prompt(&reserved.kind, start_args, brief, here, form))
@@ -1656,7 +1657,18 @@ fn spawn(
         // reports its session only at its first turn (Codex, OpenCode 2)
         // reports it on this very turn. A spawn asked again after the brief
         // went in never submits it twice.
-        if let Some(brief) = reserved.brief.clone().filter(|_| !reserved.briefed) {
+        // A brief that went in, or whose outcome the agent's own record
+        // already settled (`BriefPhase::Confirmed` before `Briefed` was
+        // saved), is never typed again: the spawn goes on to bind and
+        // complete. One whose send was reserved and not saved is asked again,
+        // and its reservation answers that it may have arrived.
+        let phase = reserved.brief_phase();
+        if let Some(brief) = reserved.brief.clone().filter(|_| {
+            matches!(
+                phase,
+                super::BriefPhase::NotTyped | super::BriefPhase::Sending
+            )
+        }) {
             if hide_agent_adapter::adapter(kind).is_some_and(|row| row.key.brief_after_session()) {
                 // Its session start drops an Enter typed during it
                 // (`AgentId::brief_after_session`). Unseen within the wait,
