@@ -614,7 +614,40 @@ pub(crate) fn start_agent_checked(
     program: Option<crate::engine::StartProgram>,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Started, crate::agent_start::StartError> {
-    let launch = crate::launch::resolve(node, agent)?;
+    start_launched_checked(
+        engine,
+        node,
+        request_id,
+        pane_id,
+        shell,
+        shell_wait,
+        name,
+        crate::launch::resolve(node, agent)?,
+        args,
+        codex_daemon,
+        program,
+        check,
+    )
+}
+
+/// [`start_agent_checked`] of a start its machine already answered for
+/// (`launch::resolve`): a fork resolves it before its first effect outside
+/// Hide, and its agent starts with that answer.
+#[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
+pub(crate) fn start_launched_checked(
+    engine: &dyn Engine,
+    node: Option<&dyn crate::node_access::NodeLink>,
+    request_id: &str,
+    pane_id: &str,
+    shell: crate::agent_start::ShellStart,
+    shell_wait: Duration,
+    name: &str,
+    launch: crate::launch::Launch,
+    args: Vec<String>,
+    codex_daemon: crate::codex_launch::CodexDaemon,
+    program: Option<crate::engine::StartProgram>,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<Started, crate::agent_start::StartError> {
     let profile = launch.record();
     let start = engine
         .prepare_start(crate::engine::AgentLaunch {

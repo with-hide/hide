@@ -53,6 +53,9 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                 prompt,
             } => memory_ask(event, runtime, session, prompt).is_some(),
             HookCommand::Status { report } => valid_status(report),
+            HookCommand::AgentExec { failure } => failure.as_ref().is_none_or(|failure| {
+                failure.len() <= hide_node_link::panes::AGENT_EXEC_FAILURE_LIMIT
+            }),
             HookCommand::LetterPull {
                 prompt_digest,
                 session,
@@ -118,6 +121,7 @@ pub(crate) fn answer(
             None,
         ),
         HookCommand::Status { report } => status(core, cap, report),
+        HookCommand::AgentExec { failure } => agent_exec(core, cap, failure.clone()),
         HookCommand::Memory {
             event,
             runtime,
@@ -181,6 +185,20 @@ fn status(
             }));
             (reason.to_owned(), "Continue without the status report")
         })
+}
+
+/// What `hide agent exec` in the caller's pane reported of its profile's
+/// start, which ends the engine's wait for it.
+fn agent_exec(
+    core: &CoreHandle,
+    cap: &Capability,
+    failure: Option<String>,
+) -> Result<Value, Failure> {
+    cap.pane_terminal()
+        .ok_or("agent_pane_required")
+        .and_then(|_| core.agent_exec(&cap.context.device_id, &cap.pane_id, failure))
+        .map(|()| json!({"recorded": true}))
+        .map_err(|reason| (reason.to_owned(), "Continue starting the agent"))
 }
 
 fn workspace_info(core: &CoreHandle, cap: &Capability, desktop: bool) -> Result<Value, Failure> {

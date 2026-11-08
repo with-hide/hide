@@ -145,41 +145,56 @@ fn a_new_start_takes_its_choice_then_its_parents_then_the_project_then_the_machi
         ],
         &[("claude-code", "c"), ("codex", "x")],
     );
-    let parent = recorded("b", "b");
+    let parent = Parent::Profile(recorded("b", "b"));
     let project = ProfileId("a".to_owned());
     let chosen = Some((ProfileId("a".to_owned()), "a".to_owned()));
-    let pick = |chosen, parent, project| pick("claude", chosen, parent, project, Some(&profiles));
+    let pick =
+        |chosen, parent: &Parent, project| pick("claude", chosen, parent, project, Some(&profiles));
     assert_eq!(
-        picked(&pick(chosen.clone(), Some(&parent), None)),
+        picked(&pick(chosen.clone(), &parent, None)),
         Some("a".to_owned())
     );
     assert_eq!(
-        picked(&pick(None, Some(&parent), Some(&project))),
+        picked(&pick(None, &parent, Some(&project))),
         Some("b".to_owned())
     );
     assert_eq!(
-        picked(&pick(None, None, Some(&project))),
+        picked(&pick(None, &Parent::None, Some(&project))),
         Some("a".to_owned())
     );
-    assert_eq!(picked(&pick(None, None, None)), Some("c".to_owned()));
-    // A parent's profile the machine no longer lists falls through.
     assert_eq!(
-        picked(&pick(None, Some(&recorded("gone", "gone")), None)),
+        picked(&pick(None, &Parent::None, None)),
         Some("c".to_owned())
+    );
+    // A parent on the built-in default hands that down, over the project's
+    // and the machine's default.
+    let builtin = pick(None, &Parent::Default, Some(&project));
+    assert_eq!(builtin.profile(), None);
+    assert!(builtin.target.profile.is_default());
+    // A parent's profile the machine no longer lists is still the one asked
+    // for, so its machine refuses it by name rather than the child starting
+    // in another account.
+    let gone = pick(None, &Parent::Profile(recorded("gone", "old")), None);
+    assert_eq!(
+        gone.profile(),
+        Some((ProfileId("gone".to_owned()), "old".to_owned()))
     );
     // Another agent's default is never this one's.
     assert_eq!(
         picked(&super::pick(
             "claude",
             None,
-            None,
+            &Parent::None,
             None,
             Some(&machine(&profiles.profiles, &[("codex", "x")]))
         )),
         None
     );
     // A machine whose profiles were never read starts the built-in default.
-    assert_eq!(picked(&super::pick("claude", None, None, None, None)), None);
+    assert_eq!(
+        picked(&super::pick("claude", None, &Parent::None, None, None)),
+        None
+    );
 }
 
 #[test]
@@ -199,11 +214,14 @@ fn a_profile_named_by_a_start_must_be_one_its_machine_lists_for_that_agent() {
         let builtin = chosen("claude", "default", profiles).unwrap();
         assert!(builtin.0.is_default());
         // Named, it wins over the machine's default and a parent's profile.
-        let machine = machine(&[listed_profile("c", "claude-code", "c")], &[("claude-code", "c")]);
+        let machine = machine(
+            &[listed_profile("c", "claude-code", "c")],
+            &[("claude-code", "c")],
+        );
         let start = pick(
             "claude",
             Some(builtin),
-            Some(&recorded("c", "c")),
+            &Parent::Profile(recorded("c", "c")),
             None,
             Some(&machine),
         );

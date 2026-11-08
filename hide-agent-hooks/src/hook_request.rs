@@ -78,7 +78,19 @@ pub enum HookCommand {
     Status {
         report: HookStatusReport,
     },
+    /// What `hide agent exec` did with the profile's start the pane's shell
+    /// ran (PRD agent-profiles B22): it hands the pane to the agent's program
+    /// now (`failure` absent), or that program could not start, and
+    /// `failure` is the sentence that names the profile and the program. The
+    /// engine ends the start's wait with it; metadata only, like `Status`.
+    AgentExec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<String>,
+    },
 }
+
+/// The longest sentence an [`HookCommand::AgentExec`] failure carries.
+pub const AGENT_EXEC_FAILURE_LIMIT: usize = 1024;
 
 impl HookCommand {
     /// Only session guidance keeps a reference for the commands it advertises.

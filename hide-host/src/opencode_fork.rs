@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use hide_node_link::profiles::ProfileStart;
 use hide_node_link::protocol::{OPENCODE_FORK_TIME, OpenCodeFork};
 use hide_node_link::{ErrorCode, HostError};
 use hide_platform::process::{RunFailure, run_to_end};
@@ -25,18 +26,37 @@ use hide_session::opencode::ForkRoute;
 /// the node never read its id: the session stays in OpenCode's own list.
 const MAY_EXIST: &str = "a fork may exist in OpenCode's session list";
 
-/// Forks the root session `source` that OpenCode recorded in `cwd`.
+/// Forks the root session `source` that OpenCode recorded in `cwd`, running
+/// OpenCode as the fork's agent will run: with its profile's variables and
+/// program (`profile`, none for the built-in default).
 pub(crate) fn fork(
     home: &Path,
     source: &str,
     cwd: &Path,
+    profile: Option<&ProfileStart>,
     stop: &AtomicBool,
 ) -> Result<OpenCodeFork, HostError> {
-    // Found and run on the account's own search, as every program a node
-    // starts by name is, so a CLI installed as a script finds its interpreter.
-    fork_with(home, source, cwd, stop, || {
-        hide_platform::programs::command("opencode")
-    })
+    fork_with(home, source, cwd, stop, || opencode(profile))
+}
+
+/// The `opencode` command a fork runs: found and run on the account's own
+/// search, as every program a node starts by name is, so a CLI installed as
+/// a script finds its interpreter; the profile's own program in its place,
+/// with the words it starts with, and the profile's variables, as `hide
+/// agent exec` starts the agent (PRD agent-profiles D-26).
+fn opencode(profile: Option<&ProfileStart>) -> Command {
+    let mut command = match profile.and_then(|profile| profile.program.as_ref()) {
+        Some(program) => {
+            let mut command = hide_platform::programs::command(&program.file);
+            command.args(&program.leading);
+            command
+        }
+        None => hide_platform::programs::command("opencode"),
+    };
+    for (name, value) in profile.map_or(&[][..], |profile| &profile.env) {
+        command.env(name, value);
+    }
+    command
 }
 
 /// [`fork`] with the `opencode` command it runs, made only for a session in
@@ -67,8 +87,9 @@ fn fork_with(
 
 /// Runs `opencode api` to fork `source` on OpenCode's server. The CLI runs
 /// with the node's own environment, the one `fork_route` read OpenCode's
-/// database with (its data folder may be `XDG_DATA_HOME`). Once it has
-/// started, a run that ends without an id it can read says a fork may exist.
+/// database with (its data folder may be `XDG_DATA_HOME`), and the fork's
+/// profile's variables ([`opencode`]). Once it has started, a run that ends
+/// without an id it can read says a fork may exist.
 fn fork_on_server(
     mut command: Command,
     source: &str,
@@ -123,6 +144,44 @@ fn forked(answer: &str) -> Result<String, HostError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fork's OpenCode runs as the fork's agent will: its profile's own
+    /// program in place of `opencode`, with the words it starts with, and
+    /// the profile's variables (PRD agent-profiles D-26).
+    #[test]
+    fn a_profiles_fork_runs_its_program_with_its_variables() {
+        let profile = ProfileStart {
+            name: "gw".to_owned(),
+            account: hide_agent_adapter::AccountKey::Default,
+            version: 1,
+            env: vec![("OPENCODE_SERVER".to_owned(), "http://gw".to_owned())],
+            program: Some(hide_node_link::profiles::ProfileProgram {
+                file: "/opt/gw".to_owned(),
+                leading: vec!["--via".to_owned()],
+            }),
+            exec: "/opt/hide/hide".to_owned(),
+        };
+        let command = super::opencode(Some(&profile));
+        assert_eq!(command.get_program(), "/opt/gw");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["--via"]);
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == "OPENCODE_SERVER"
+                    && value == Some(std::ffi::OsStr::new("http://gw")))
+        );
+        let builtin = super::opencode(None);
+        assert!(
+            Path::new(builtin.get_program())
+                .file_stem()
+                .is_some_and(|stem| stem == "opencode")
+        );
+        assert!(
+            !builtin
+                .get_envs()
+                .any(|(name, _)| name == "OPENCODE_SERVER")
+        );
+    }
 
     #[test]
     fn the_new_session_is_read_from_the_servers_answer_and_held_to_the_id_rule() {

@@ -279,7 +279,14 @@ impl Runtime {
         device: &str,
         kind: Option<&str>,
     ) -> Option<(hide_agent_adapter::ProfileId, String)> {
-        crate::launch::pick(kind?, None, None, None, self.machine_profiles(device)).profile()
+        crate::launch::pick(
+            kind?,
+            None,
+            &crate::launch::Parent::None,
+            None,
+            self.machine_profiles(device),
+        )
+        .profile()
     }
 
     /// The profile `agent` runs with, when its pane's record describes it;
@@ -296,28 +303,35 @@ impl Runtime {
             .and_then(|launch| launch.profile.clone())
     }
 
-    /// The profile the agent `actor` runs with, when it is an agent of
-    /// `kind` and its pane's record describes it: the profile a child of the
-    /// same agent it starts on its own machine inherits (D-32).
+    /// What the agent `actor` hands a child of `kind` it starts on its own
+    /// machine (D-32): the profile it runs with, the built-in default
+    /// included, when it is an agent of `kind` and its pane's record
+    /// describes it; nothing otherwise.
     pub(crate) fn caller_launch_profile(
         &self,
         actor: &crate::delivery::Actor,
         kind: &str,
-    ) -> Option<crate::launch::LaunchProfile> {
+    ) -> crate::launch::Parent {
         if hide_agent_adapter::canonical_kind(&actor.kind)
             != hide_agent_adapter::canonical_kind(kind)
         {
-            return None;
+            return crate::launch::Parent::None;
         }
-        let launch = self.snapshot.ui_state.pane_launches.get(&actor.pane_id)?;
-        (launch_describes(
-            launch,
-            &actor.kind,
-            Some(&actor.name),
-            actor.session.as_deref(),
-        ) || launch_describes(launch, &actor.kind, None, actor.session.as_deref()))
-        .then(|| launch.profile.clone())
-        .flatten()
+        self.snapshot
+            .ui_state
+            .pane_launches
+            .get(&actor.pane_id)
+            .filter(|launch| {
+                launch_describes(
+                    launch,
+                    &actor.kind,
+                    Some(&actor.name),
+                    actor.session.as_deref(),
+                ) || launch_describes(launch, &actor.kind, None, actor.session.as_deref())
+            })
+            .map_or(crate::launch::Parent::None, |launch| {
+                crate::launch::Parent::recorded(launch.profile.clone())
+            })
     }
 
     /// The choice `agent` was started with, when its pane's record describes

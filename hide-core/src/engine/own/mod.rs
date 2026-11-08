@@ -45,6 +45,7 @@ use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
 mod creation;
+mod exec;
 pub(crate) mod herdr_session;
 mod ids;
 pub(crate) mod layout;
@@ -144,7 +145,16 @@ struct Shared {
     /// (PRD engine-bundle-4-herdr-removal D-22). Bounded by one restore's
     /// resumes.
     cut: Mutex<BTreeMap<String, String>>,
+    /// The profile's starts that wait for their executor's report
+    /// ([`exec`]).
+    execs: exec::Execs,
 }
+
+/// How long a profile's start waits for `hide agent exec` to report
+/// ([`exec`]): as long as a pane's shell gets to reach its prompt, since a
+/// Windows system can hold the executor's own start for many seconds while
+/// it scans a new copy (`hide_agent_hooks::hook_request`).
+const EXEC_WAIT: std::time::Duration = crate::agent_start::SHELL_WAIT;
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
 /// holders.
@@ -349,6 +359,7 @@ impl OwnEngine<'static> {
                 definitions: agents::Definitions::new(definitions),
                 early: Mutex::default(),
                 cut: Mutex::default(),
+                execs: exec::Execs::default(),
             }),
             gates: Vec::new(),
             saver: None,
@@ -2320,7 +2331,7 @@ impl<'g> Engine for OwnEngine<'g> {
             .ok_or_else(|| format!("no agent definition names {kind}"))?;
         let argv = launch.launch.line(agents::start_argv(
             definition,
-            launch.program.as_ref(),
+            launch.launch.agent_file(launch.program.as_ref()),
             crate::codex_launch::start_arguments(
                 &definition.id,
                 launch.codex_daemon,
@@ -2353,8 +2364,12 @@ impl<'g> Engine for OwnEngine<'g> {
             launch.args.clone(),
         )
         .map_err(|message| refused("agent_start_refused", message))?;
-        let argv = agents::start_argv(definition, launch.program.as_ref(), args)
-            .map_err(|message| refused("agent_start_refused", message))?;
+        let argv = agents::start_argv(
+            definition,
+            launch.launch.agent_file(launch.program.as_ref()),
+            args,
+        )
+        .map_err(|message| refused("agent_start_refused", message))?;
         // Herdr's condition for a start: the shell holds the terminal alone.
         let processes = self.processes(pane)?;
         if !processes.shell_holds_terminal() {
@@ -2379,6 +2394,14 @@ impl<'g> Engine for OwnEngine<'g> {
                     format!("the {} start cannot be typed into a shell", definition.id),
                 )
             })?;
+        // A profile's start runs `hide agent exec`, whose report says
+        // whether the agent's program started, which typing the line does
+        // not (PRD agent-profiles B22).
+        let exec = launch
+            .launch
+            .start()
+            .is_some()
+            .then(|| self.shared.execs.expect(pane));
         self.type_agent_start(
             pane,
             agents::PaneAgent::started(
@@ -2389,10 +2412,51 @@ impl<'g> Engine for OwnEngine<'g> {
             &line,
             launch.wakes,
         )?;
+        if let Some(exec) = exec {
+            match exec.wait(EXEC_WAIT) {
+                Some(None) => {}
+                Some(Some(failure)) => {
+                    if self.topology().end_unstarted(pane) {
+                        self.give_rules(pane);
+                        self.changed();
+                    }
+                    return Err(refused(crate::launch::PROFILE_REFUSED, failure));
+                }
+                // The line may not have run yet, or the executor could not
+                // reach its node: the start stands as every typed start
+                // does, and a report that comes later still ends it.
+                None => crate::diagnostic!(serde_json::json!({
+                    "component": "own_engine",
+                    "kind": "agent_exec.unreported",
+                    "pane": pane,
+                    "agent": definition.id,
+                })),
+            }
+        }
         Ok(StartedAgent {
             pane_id: pane.to_owned(),
             terminal_id: Some(pane.to_owned()),
         })
+    }
+
+    fn agent_exec(&self, pane: &str, failure: Option<String>) -> Answer<()> {
+        self.check()?;
+        let failed = failure.is_some();
+        // A start that waits ends its own provisional agent; a report no start
+        // waits for (one past its wait) ends the pane's starting agent here.
+        if !self.shared.execs.report(pane, failure) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "agent_exec.unawaited",
+                "pane": pane,
+                "failed": failed,
+            }));
+            if failed && self.topology().end_unstarted(pane) {
+                self.give_rules(pane);
+                self.changed();
+            }
+        }
+        Ok(())
     }
 
     fn agent_state(&self, _wait: Wait, target: &str) -> Answer<AgentState> {
@@ -4510,6 +4574,27 @@ mod tests {
     /// `hide agent exec` with the profile's variables as its arguments, never
     /// as a variable of the pane's shell (PRD agent-profiles D-26, B21); the
     /// test above types the built-in default's line, unchanged (B29).
+    /// Starts `start`, a profile's, with its executor reporting `failure`
+    /// once the start waits for it, as `hide agent exec` does.
+    fn start_reported(
+        engine: &OwnEngine,
+        start: &PreparedStart,
+        failure: Option<&str>,
+    ) -> Answer<StartedAgent> {
+        let pane = start.launch().pane_id.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !engine.shared.execs.waits(&pane) {
+                    std::thread::yield_now();
+                }
+                engine
+                    .agent_exec(&pane, failure.map(str::to_owned))
+                    .unwrap();
+            });
+            engine.start_agent(WAIT, start)
+        })
+    }
+
     #[test]
     fn a_profiles_start_is_typed_as_hide_agent_exec_with_its_variables_as_arguments() {
         let holders = Arc::new(Holders::default());
@@ -4535,7 +4620,7 @@ mod tests {
                 ..launch(&pane, "worker", "claude", &["--model", "it's"])
             })
             .unwrap();
-        engine.start_agent(WAIT, &start).unwrap();
+        start_reported(&engine, &start, None).unwrap();
         assert_eq!(
             holders.typed(&pane),
             "/opt/hide/hide agent exec --profile 'Claude · work' --env CLAUDE_CONFIG_DIR=/home/me/.claude-work -- claude --model 'it'\\''s'\r"
@@ -4546,8 +4631,102 @@ mod tests {
             [(pane.clone(), Some("claude-code".to_owned()))]
         );
         assert_eq!(
-            engine.delivery_agent(WAIT, "worker").unwrap().kind.as_deref(),
+            engine
+                .delivery_agent(WAIT, "worker")
+                .unwrap()
+                .kind
+                .as_deref(),
             Some("claude")
+        );
+    }
+
+    /// A profile's program that cannot start fails the start that typed
+    /// it, with the executor's sentence, and frees the agent's name at once
+    /// (PRD agent-profiles B22).
+    #[test]
+    fn a_profiles_start_whose_program_cannot_start_fails_and_frees_its_name() {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        let answered = hide_node_link::profiles::ProfileStart {
+            name: "gw".to_owned(),
+            account: hide_agent_adapter::AccountKey::Default,
+            version: 1,
+            env: Vec::new(),
+            program: Some(hide_node_link::profiles::ProfileProgram {
+                file: "/opt/gw".to_owned(),
+                leading: Vec::new(),
+            }),
+            exec: "/opt/hide/hide".to_owned(),
+        };
+        let start = engine
+            .prepare_start(AgentLaunch {
+                launch: crate::launch::Launch::answered("claude", "p1", answered),
+                ..launch(&pane, "worker", "claude", &[])
+            })
+            .unwrap();
+        let failure = "Claude · gw could not start /opt/gw: /usr/bin/nope is not a program here";
+
+        let refused = start_reported(&engine, &start, Some(failure)).unwrap_err();
+
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_REFUSED));
+        assert!(refused.message().contains(failure), "{refused:?}");
+        assert!(
+            engine.delivery_agent(WAIT, "worker").is_err(),
+            "the name is free for the next start"
+        );
+        assert!(!engine.shared.execs.waits(&pane));
+    }
+
+    /// A profile's own program takes the agent's place with the agent's
+    /// arguments alone: the words the agent's program starts with on this
+    /// machine (npm's script on Windows) are the agent's, not the wrapper's.
+    #[test]
+    fn a_profiles_program_replaces_the_agents_program_and_the_words_it_starts_with() {
+        let typed = |program: Option<hide_node_link::profiles::ProfileProgram>| {
+            let holders = Arc::new(Holders::default());
+            holders.idle_shell(41, "zsh");
+            let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+            let (_, _, pane) = engine
+                .create_workspace(WAIT, "/w", "w", true, Env::new())
+                .unwrap();
+            let answered = hide_node_link::profiles::ProfileStart {
+                name: "gw".to_owned(),
+                account: hide_agent_adapter::AccountKey::Default,
+                version: 1,
+                env: Vec::new(),
+                program,
+                exec: "/opt/hide/hide".to_owned(),
+            };
+            let start = engine
+                .prepare_start(AgentLaunch {
+                    launch: crate::launch::Launch::answered("claude", "p1", answered),
+                    program: Some(crate::engine::StartProgram {
+                        name: "claude".to_owned(),
+                        program: "/opt/node".to_owned(),
+                        leading: vec!["/opt/claude/cli.js".to_owned()],
+                    }),
+                    ..launch(&pane, "worker", "claude", &["--model", "x"])
+                })
+                .unwrap();
+            start_reported(&engine, &start, None).unwrap();
+            holders.typed(&pane)
+        };
+
+        assert_eq!(
+            typed(Some(hide_node_link::profiles::ProfileProgram {
+                file: "/opt/gw".to_owned(),
+                leading: vec!["--via".to_owned()],
+            })),
+            "/opt/hide/hide agent exec --profile 'Claude · gw' --program /opt/gw --leading --via -- claude --model x\r"
+        );
+        assert_eq!(
+            typed(None),
+            "/opt/hide/hide agent exec --profile 'Claude · gw' -- /opt/node /opt/claude/cli.js --model x\r",
+            "without a program of its own the profile starts the agent's as it always starts"
         );
     }
 

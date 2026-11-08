@@ -1951,6 +1951,26 @@ impl Topology {
         Ok(previous)
     }
 
+    /// Ends the start typed in `pane` whose program could not start (`hide
+    /// agent exec`'s report, PRD agent-profiles B22): its provisional agent
+    /// goes now rather than at its deadline, so its name is free for the
+    /// next start. An agent whose program showed is the pane's facts' to
+    /// end. Whether one went.
+    pub(super) fn end_unstarted(&mut self, pane: &str) -> bool {
+        let Ok(held) = self.pane_mut(pane) else {
+            return false;
+        };
+        if !held
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.starting(Instant::now()))
+        {
+            return false;
+        }
+        held.agent = None;
+        true
+    }
+
     /// A definite non-delivery withdraws only its own, still unconfirmed
     /// metadata. A hook, foreground fact, expiry or newer start wins.
     pub(super) fn finish_agent_start(

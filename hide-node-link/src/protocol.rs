@@ -1049,10 +1049,15 @@ pub enum Call {
     /// an [`OpenCodeFork`]: decided by the schema of the database holding it
     /// (`hide_session::opencode::fork_route`), and for OpenCode 2.x made by its
     /// server before the answer, within the node's own bound.
+    /// `profile` is the profile the fork's agent starts with, as its
+    /// machine answered it ([`Call::ProfileLaunch`]): OpenCode runs with its
+    /// variables and program, as the agent will (PRD agent-profiles D-26).
     #[serde(rename = "opencode_fork")]
     OpenCodeFork {
         source: String,
         cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<crate::profiles::ProfileStart>,
     },
     /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
     /// made, in the node account's own settings of that agent

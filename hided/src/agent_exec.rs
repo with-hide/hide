@@ -13,10 +13,16 @@
 //! variables reach that program alone and never the shell that typed the
 //! line. `--program` runs the profile's program (its wrapper), with the
 //! words `--leading` names before the agent's arguments, instead of the
-//! agent's own `<program>`, which still names it in a failure. A program
-//! that cannot start ends the start here, with a line in the pane that names
-//! the profile and the program, and the exit code a shell gives a command it
-//! could not find (127) or run (126).
+//! agent's own `<program>`, which still names it in a failure.
+//!
+//! It tells the pane's node what came of the start (`HookCommand::AgentExec`),
+//! which the start that typed the line waits for (PRD agent-profiles B22): it
+//! checks the program as the system will start it
+//! (`hide_platform::programs::runnable`) and reports the hand-over as it
+//! happens, or why the program cannot start. A program that cannot start
+//! ends the start here too, with a line in the pane that names the profile
+//! and the program, and the exit code a shell gives a command it could not
+//! find (127) or run (126).
 //!
 //! It runs before anything else in `hide` (`bin/hide.rs`): before the pane's
 //! own installation is handed the call (`pane_install::hand_off`), which
@@ -62,26 +68,73 @@ pub fn run(arguments: &[OsString]) -> Option<i32> {
         Some(program) => (program, &start.argv[1..]),
         None => (&start.argv[0], &start.argv[1..]),
     };
+    let failed = |why: &dyn std::fmt::Display, code| {
+        let failure = format!(
+            "{} could not start {}: {why}",
+            start.profile,
+            program.to_string_lossy()
+        );
+        report(Some(failure.clone()));
+        eprintln!("hide: {failure}. This pane is a shell again.");
+        code
+    };
+    let search = start
+        .env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    if let Err((why, code)) = startable(program, &search) {
+        return Some(failed(&why, code));
+    }
     let mut command = Command::new(program);
     command.args(&start.leading).args(rest);
     for (name, value) in &start.env {
         command.env(name, value);
     }
-    Some(match hide_platform::process::hand_over(command) {
-        Ok(code) => code,
-        Err(error) => {
-            let shown = program.to_string_lossy();
-            eprintln!(
-                "hide: {} could not start {shown}: {error}. This pane is a shell again.",
-                start.profile
-            );
-            if error.kind() == std::io::ErrorKind::NotFound {
-                NOT_FOUND
-            } else {
-                NOT_RUN
+    Some(
+        match hide_platform::process::hand_over(command, || report(None)) {
+            Ok(code) => code,
+            Err(error) => {
+                let code = if error.kind() == std::io::ErrorKind::NotFound {
+                    NOT_FOUND
+                } else {
+                    NOT_RUN
+                };
+                failed(&error, code)
             }
-        }
-    })
+        },
+    )
+}
+
+/// Whether `program` starts with `search` as its `PATH`, as the system
+/// will start it: a name found there, or a path, that this account can run
+/// (`hide_platform::programs::runnable`). Why not, and the exit code a shell
+/// gives it, otherwise.
+fn startable(program: &OsStr, search: &OsStr) -> Result<(), (String, i32)> {
+    let named = std::path::Path::new(program);
+    if named.components().count() > 1 {
+        return hide_platform::programs::runnable(named, Some(search)).map_err(|why| {
+            let code = if named.exists() { NOT_RUN } else { NOT_FOUND };
+            (why, code)
+        });
+    }
+    let name = program
+        .to_str()
+        .ok_or_else(|| ("its name is not text".to_owned(), NOT_FOUND))?;
+    let found = hide_platform::programs::Program::find(search, name)
+        .ok_or_else(|| (format!("{name} is not on this pane's PATH"), NOT_FOUND))?;
+    hide_platform::programs::runnable(found.path(), Some(search)).map_err(|why| (why, NOT_RUN))
+}
+
+/// Tells the pane's node what came of the start (`None`: the program has
+/// the pane now). A node that cannot be told leaves the start to its wait.
+fn report(failure: Option<String>) {
+    if let Ok(env) = crate::env::load() {
+        let _ = crate::workspace_cli::report_agent_exec(&env, failure);
+    }
 }
 
 fn parse(arguments: &[OsString]) -> Result<Start, String> {

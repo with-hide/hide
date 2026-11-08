@@ -1519,8 +1519,9 @@ A list that cannot be read keeps the last one, marked `unreadable`, and why goes
 
 Every start of an agent goes through `hide-core/src/launch.rs` (PRD agent-profiles D-26, D-27, D-32).
 A start names a `launch::Request`: the `LaunchTarget` (agent and profile id) and the name the start knew the profile by, which a refusal names.
-A new start picks it (`launch::pick`): the profile the start named, else its parent's when the parent is the same agent on the same machine, else the project's default (none until Project settings choose one), else the agent's default on that machine (`ProfileList`'s `defaults`), a parent's or a default that the machine no longer lists falling through to the next.
-An agent that comes back (a wake in its pane or dormant, a fork, a pane's Reopen, a closed tab's or pane's reopen, an archive's resume) names the profile its record keeps (`Request::recorded`).
+A new start picks it (`launch::pick`): the profile the start named, else its parent's when the parent is the same agent on the same machine (`launch::Parent`: the profile its launch record keeps, the built-in default included), else the project's default (none until Project settings choose one), else the agent's default on that machine (`ProfileList`'s `defaults`).
+A project's or machine default the machine no longer lists falls through to the next; a parent's profile is asked of the machine like a recorded one, so one that is gone refuses the child by name rather than starting it in another account.
+An agent that comes back (a wake in its pane or dormant, a fork, a pane's Reopen, a closed tab's or pane's reopen, an archive's resume, a View's `Reopen and send`, which resumes the View's opener with the profile `view_feedback::Opener` keeps) names the profile its record keeps (`Request::recorded`).
 `launch::resolve` turns the request into the `launch::Launch` that `engine::AgentLaunch` carries, and nothing else makes one, so no start function takes an agent's kind alone.
 It runs with the runtime lock released, on the thread that makes the start.
 
@@ -1534,7 +1535,12 @@ Its start line runs the `hide` beside that node, which the node names, with the 
 
 `hide agent exec` (`hided/src/agent_exec.rs`, run before anything else in `hide`) adds the variables to its own environment and hands the pane to the program (`hide_platform::process::hand_over`): on Unix it becomes the program, so the agent is the shell's own child and the variables never reach the shell (D-26, B21).
 On Windows it runs the program as its one child in a job that ends the program's whole tree with it, passes Ctrl-C and Ctrl-Break to the program while it waits, and ends with the program's exit code; the pane's foreground follows `hide.exe` to the agent behind it (`console_foreground`).
-`--program` runs the profile's own program (a wrapper) in place of the agent's, which still names the agent in a failure; the node checked that the program is there before anything was typed (B22), and one that disappeared since ends the start with a line in the pane that names the profile and the program, exit code 127 (not found) or 126, leaving the pane a shell.
+`--program` runs the profile's own program (a wrapper) in place of the agent's, with the agent's arguments alone: the words the agent's own program starts with on that machine (npm's script on Windows, `engine::StartProgram`) are dropped with it (`Launch::agent_file`), and the agent's program still names the agent in a failure.
+Before anything is typed the node checks that the program and the `hide` beside it are programs this account can start, a script's interpreter included (`hide_platform::programs::runnable`; B22).
+The start then waits for `hide agent exec` to say what came of it (`engine/own/exec.rs`): the executor checks the program again as it will start it and tells the pane's node through the hook connection (`HookCommand::AgentExec`) that it hands the pane over, or why the program cannot start.
+A program that cannot start fails the start that typed it with `profile_refused` and that sentence, frees the agent's name at once, and leaves the pane a shell with the same line and exit code 127 (not found) or 126.
+A start that hears nothing within 30 s (a Windows system can hold the executor's first start that long) stands as every typed start does, and a failure reported later still ends the pane's provisional agent.
+An OpenCode fork whose session OpenCode's server makes (`Call::OpenCodeFork`) answers its profile first, so a refused profile ends the fork before OpenCode makes anything, and runs that OpenCode with the profile's variables and program, as its agent will start.
 
 A start the machine does not answer for types nothing and is refused with a code its caller words:
 
@@ -1547,6 +1553,7 @@ A start the machine does not answer for types nothing and is refused with a code
 
 What started is kept as `launch::LaunchProfile` (the id, the name then, and the account), on the pane's launch record (`PaneLaunch::profile`), a sleep's (`SleepRecord`, `DormantRecord`), an archive member's (`ArchivedMember`), a closed agent's (`ClosedAgent`) and a fork's (`ForkRequest`), and on a spawn's record (`SpawnRecord::started_profile`).
 None, which every record a build before profiles saved holds, is the built-in default, and the field is left out of what is saved, so a record of the built-in default reads as it always did (`node_migration::upgrade_tests` loads each released state folder and checks that every agent it holds restarts with the built-in default's line).
+A Desk job waiting in its queue keeps the profile its spawn names beside the spawn rather than in it (`desk::QueuedJob`), since Desk 1.2.4 reads a spawn that names no field it does not know and starts empty on a store it cannot read.
 A restart asks again by id, so a renamed profile still starts and a removed one refuses the restart rather than starting the agent in another account.
 
 ## The platform layer

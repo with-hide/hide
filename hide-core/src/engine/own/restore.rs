@@ -156,7 +156,7 @@ struct Restarted {
 /// ready, or the line its shell opens with saying why not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Plan {
-    Resume(Resume),
+    Resume(Box<Resume>),
     Shell(String),
 }
 
@@ -248,7 +248,7 @@ fn plans(
                                 "hide: {shown}'s conversation is open in another pane, so this pane is a shell now."
                             ))
                         }
-                        Ok(()) => Plan::Resume(Resume {
+                        Ok(()) => Plan::Resume(Box::new(Resume {
                             pane: restart.pane.clone(),
                             kind: definition.id.clone(),
                             shown,
@@ -259,7 +259,7 @@ fn plans(
                             new_tab: None,
                             profile: described(launches, restart, agent)
                                 .and_then(|launch| launch.profile.clone()),
-                        }),
+                        })),
                     },
                 }
             }
@@ -516,7 +516,7 @@ impl OwnEngine<'static> {
         resumes.extend(given_back);
         for restart in &idle {
             match plans.get(&restart.pane) {
-                Some(Plan::Resume(resume)) => resumes.push(resume.clone()),
+                Some(Plan::Resume(resume)) => resumes.push((**resume).clone()),
                 Some(Plan::Shell(why)) => {
                     crate::diagnostic!(serde_json::json!({
                         "component": "own_engine",
@@ -708,7 +708,7 @@ impl OwnEngine<'static> {
                         workspace,
                         cwd: restart.cwd,
                     }),
-                    ..resume.clone()
+                    ..(**resume).clone()
                 }),
                 Some(Plan::Shell(why)) => crate::diagnostic!(serde_json::json!({
                     "component": "own_engine",
@@ -814,7 +814,7 @@ impl OwnEngine<'static> {
             .iter()
             .filter(|restart| started.contains(&restart.pane))
             .filter_map(|restart| match plans.get(&restart.pane) {
-                Some(Plan::Resume(resume)) => Some(resume.clone()),
+                Some(Plan::Resume(resume)) => Some((**resume).clone()),
                 _ => None,
             })
             .collect();
@@ -1077,17 +1077,18 @@ impl OwnEngine<'static> {
             Some((node, program)) => crate::start_prompt::start_program_file(node, program),
             None => Err(ByName::NodeUnanswered),
         };
-        let argv = agents::named_by_file(resume.argv.clone(), file.as_ref().ok());
-        let by_name = (argv.first() == resume.argv.first())
-            .then(|| file.as_ref().err().copied().unwrap_or(ByName::AsNamed));
         // A profile its machine no longer has, or refuses now, resumes
         // nothing: the pane stays a shell and says why (D-27, B20).
-        let argv = crate::launch::resolve(
+        let launch = crate::launch::resolve(
             node,
             &crate::launch::Request::recorded(&resume.kind, resume.profile.as_ref()),
         )
-        .map_err(|refusal| refusal.detail)?
-        .line(argv);
+        .map_err(|refusal| refusal.detail)?;
+        let argv =
+            agents::named_by_file(resume.argv.clone(), launch.agent_file(file.as_ref().ok()));
+        let by_name = (argv.first() == resume.argv.first())
+            .then(|| file.as_ref().err().copied().unwrap_or(ByName::AsNamed));
+        let argv = launch.line(argv);
         // The longest of the shells' lines, as a start is bounded.
         let longest =
             shell_line::longest(|shell| shell_line::resume_command(&argv, &resume.shown, shell))

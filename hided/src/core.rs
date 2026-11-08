@@ -108,6 +108,12 @@ enum Command {
         report: hide_node_link::panes::HookStatusReport,
         reply: Sender<Result<(), &'static str>>,
     },
+    AgentExec {
+        device_id: String,
+        pane_id: String,
+        failure: Option<String>,
+        reply: Sender<Result<(), &'static str>>,
+    },
     /// A read of the operator's agent definition folder, made off the owner
     /// thread with the development switch on.
     AgentDefinitions {
@@ -567,6 +573,26 @@ impl CoreHandle {
             })
             .map_err(|_| "hook_status_unavailable")?;
         result.recv().map_err(|_| "hook_status_unavailable")?
+    }
+
+    /// What `hide agent exec` in a pane reported of its profile's start,
+    /// handed to the pane's engine on the owner thread.
+    pub fn agent_exec(
+        &self,
+        device: &str,
+        pane: &str,
+        failure: Option<String>,
+    ) -> Result<(), &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentExec {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                failure,
+                reply,
+            })
+            .map_err(|_| "agent_exec_unavailable")?;
+        result.recv().map_err(|_| "agent_exec_unavailable")?
     }
 
     /// `hide agent catalog`, read on the owner thread. While the core says a
@@ -1498,6 +1524,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
+            }
+            Command::AgentExec {
+                device_id,
+                pane_id,
+                failure,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_exec(&device_id, &pane_id, failure));
             }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
             Command::AgentCatalog {

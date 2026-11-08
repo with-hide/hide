@@ -187,6 +187,15 @@ pub(crate) trait Engine: Send + Sync {
         Ok(false)
     }
 
+    /// What `hide agent exec` reported of the profile's start this engine
+    /// typed in `pane` (PRD agent-profiles B22): `None` that it hands the
+    /// pane to the agent's program, else why that program could not start.
+    /// The start's wait ([`Self::start_agent`]) ends with it; an engine that
+    /// types no profile's start has nothing waiting.
+    fn agent_exec(&self, _pane: &str, _failure: Option<String>) -> Answer<()> {
+        Ok(())
+    }
+
     // The session as a whole.
 
     /// Every workspace, tab, pane, layout and agent, with the focus.

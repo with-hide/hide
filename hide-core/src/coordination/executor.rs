@@ -295,19 +295,20 @@ pub(crate) fn mutate(
         STORE_TIMEOUT,
     )
 }
-/// The profile the caller runs with, when it is an agent of `kind` too: the
-/// one a child it starts on its own machine inherits (D-32).
+/// What the caller hands a child of `kind` it starts on its own machine
+/// (D-32): the profile it runs with when it is an agent of `kind` too.
 fn caller_profile(
     client: &Client,
     actor: &Actor,
     kind: &str,
-) -> Option<crate::launch::LaunchProfile> {
-    client
+) -> Result<crate::launch::Parent, String> {
+    Ok(client
         .runtime
-        .upgrade()?
+        .upgrade()
+        .ok_or("delivery_unavailable")?
         .lock()
-        .ok()?
-        .caller_launch_profile(actor, kind)
+        .map_err(|_| "delivery_unavailable")?
+        .caller_launch_profile(actor, kind))
 }
 
 pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
@@ -1310,20 +1311,20 @@ fn spawn(
         }
     })?;
     // The profile the child runs with (PRD agent-profiles D-32, B16): the
-    // one named, else its caller's when the caller is the same agent on the
-    // same machine, else the agent's default there.
+    // one named, else its caller's, the built-in default included, when the
+    // caller is the same agent on the same machine, else the agent's
+    // default there.
     let agent = crate::launch::pick(
         kind,
         profile
             .as_deref()
             .map(|name| crate::launch::chosen(kind, name, profiles.as_ref()))
             .transpose()?,
-        reserved
-            .machine
-            .is_none()
-            .then(|| caller_profile(client, actor, kind))
-            .flatten()
-            .as_ref(),
+        &if reserved.machine.is_none() {
+            caller_profile(client, actor, kind)?
+        } else {
+            crate::launch::Parent::None
+        },
         None,
         profiles.as_ref(),
     );

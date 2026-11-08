@@ -107,6 +107,13 @@ impl Launch {
         &self.kind
     }
 
+    /// What the profile's machine answered for it, `None` for the built-in
+    /// default: what a program the start runs before the agent's own (an
+    /// OpenCode fork's) runs with too.
+    pub(crate) fn start(&self) -> Option<&ProfileStart> {
+        self.profile.as_ref().map(|(_, start)| start)
+    }
+
     /// What the started agent's record keeps, `None` for the built-in
     /// default.
     pub(crate) fn record(&self) -> Option<LaunchProfile> {
@@ -115,6 +122,19 @@ impl Launch {
             name: start.name.clone(),
             account: start.account.clone(),
         })
+    }
+
+    /// `file`, what the node read the agent's own program to start from
+    /// (`engine::StartProgram`, npm's launcher and the script it runs on
+    /// Windows), unless the profile runs its own program in the agent's
+    /// place: that program then takes the agent's arguments alone, never the
+    /// words the agent's program started with (D-26).
+    pub(crate) fn agent_file<'a, T>(&self, file: Option<&'a T>) -> Option<&'a T> {
+        let wraps = self
+            .profile
+            .as_ref()
+            .is_some_and(|(_, start)| start.program.is_some());
+        file.filter(|_| !wraps)
     }
 
     /// `argv`, the agent's own start, as the pane's shell runs it: itself
@@ -293,33 +313,62 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
     })
 }
 
+/// What a new start's parent says of the profile the start runs with
+/// (D-32): a parent that is the same agent on the same machine hands its
+/// child the profile it runs with, the built-in default included.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Parent {
+    /// No parent hands one down: the start has none, or it is another
+    /// agent, on another machine, or one whose start Hide has no record of.
+    None,
+    /// The parent runs with the built-in default profile.
+    Default,
+    /// The parent runs with this profile; whether its machine still has it
+    /// is the machine's to answer when the child starts ([`resolve`]).
+    Profile(LaunchProfile),
+}
+
+impl Parent {
+    /// What an agent whose start Hide recorded hands down: the profile its
+    /// record keeps, or the built-in default when it keeps none.
+    pub(crate) fn recorded(profile: Option<LaunchProfile>) -> Self {
+        profile.map_or(Self::Default, Self::Profile)
+    }
+}
+
 /// The profile a new start of `kind` runs with when no record names one
-/// (D-32): the one the start chose, then its parent's when the parent is the
-/// same agent on the same machine, then the project's default (`project`,
-/// which Project settings choose), then the agent's default on the machine
-/// (`profiles`). A choice the machine does not list, or lists as being
-/// removed, is the caller's to refuse ([`chosen`]); a parent's, project's or
-/// machine default that is gone falls through to the next.
+/// (D-32): the one the start chose, then its parent's ([`Parent`]), then the
+/// project's default (`project`, which Project settings choose), then the
+/// agent's default on the machine (`profiles`). A choice the machine does not
+/// list, or lists as being removed, is the caller's to refuse ([`chosen`]);
+/// a parent's profile is asked of its machine, which refuses a removed one
+/// by name; a project's or machine default that is gone falls through to
+/// the next.
 pub(crate) fn pick(
     kind: &str,
     chosen: Option<(ProfileId, String)>,
-    parent: Option<&LaunchProfile>,
+    parent: &Parent,
     project: Option<&ProfileId>,
     profiles: Option<&ProfilesSnapshot>,
 ) -> Request {
     let listed = |id: &ProfileId| listed(kind, id, profiles);
-    let profile = chosen
-        .or_else(|| {
-            parent
-                .filter(|parent| listed(&parent.id).is_some())
-                .map(|parent| (parent.id.clone(), parent.name.clone()))
-        })
-        .or_else(|| project.and_then(listed))
-        .or_else(|| {
-            let agent = hide_agent_adapter::adapter(kind)?.id;
-            let id = profiles?.defaults.get(agent)?;
-            listed(&ProfileId(id.clone()))
-        });
+    if let Some(chosen) = chosen {
+        return Request::new(kind, Some(chosen));
+    }
+    match parent {
+        Parent::Default => return Request::new(kind, None),
+        Parent::Profile(profile) => {
+            let named =
+                listed(&profile.id).unwrap_or_else(|| (profile.id.clone(), profile.name.clone()));
+            return Request::new(kind, Some(named));
+        }
+        Parent::None => {}
+    }
+    let profile = project.and_then(listed).or_else(|| {
+        let agent = hide_agent_adapter::adapter(kind)?.id;
+        let id = profiles?.defaults.get(agent)?;
+        listed(&ProfileId(id.clone()))
+    });
     Request::new(kind, profile)
 }
 

@@ -1410,12 +1410,17 @@ pub fn handle_with_progress(
                     .map_err(antigravity_fork_refusal)?,
             )
         }
-        Call::OpenCodeFork { source, cwd } => {
+        Call::OpenCodeFork {
+            source,
+            cwd,
+            profile,
+        } => {
             let home = env.home("opencode_fork_home_unavailable")?;
             to_value(crate::opencode_fork::fork(
                 Path::new(&home),
                 &source,
                 &absolute(&cwd)?,
+                profile.as_ref(),
                 &env.stop,
             )?)
         }
