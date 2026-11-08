@@ -90,7 +90,6 @@ async function localFiles(root, prefix = '') {
 // scripts in a sandbox of their own origin, and may load what a generated page needs but never talk back. It is framed
 // only by the app, so every other file keeps `frame-ancestors 'none'`.
 const FRAME = /^p\/[1-9][0-9]*\/look-frame\.html$/;
-const FRAME_ROUTE = '^/p/[1-9][0-9]*/look-frame\\.html$';
 function framePolicy(html) {
   const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
   const directives = new Map(policy?.split(';').map(d => { const [key, ...values] = d.trim().split(/\s+/); return [key, values.join(' ')]; }));
@@ -169,14 +168,22 @@ export async function preparePhone({ source, dist, stage, secrets, fetcher = fet
   await put(output, 'phone-site.json', JSON.stringify(manifest));
   await mkdir(resolve(stage, '.vercel'), { recursive: true });
   await writeFile(resolve(stage, '.vercel/project.json'), JSON.stringify({ projectId: project.id, orgId: project.accountId }));
+  const headers = csp => ({ 'Content-Security-Policy': csp, 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' });
+  // Each protocol's bundle is served with the policy its own page was built with: a retained older bundle keeps
+  // its policy when a newer build changes the current one. Every route matches a path apart from the others.
+  const bundles = [];
+  for (const number of numbers) {
+    const own = contentPolicy(await readFile(resolve(output, `p/${number}/index.html`), 'utf8'));
+    bundles.push({ src: `^/p/${number}/(?!look-frame\\.html$).*$`, headers: headers(`${own}; frame-ancestors 'none'`), continue: true });
+  }
   const frames = [];
   for (const path of Object.keys(files).filter(p => FRAME.test(p))) {
     const frame = framePolicy(await readFile(resolve(output, path), 'utf8'));
-    frames.push({ src: `^/${path.replaceAll('.', '\\.')}$`, headers: { 'Content-Security-Policy': `${frame}; frame-ancestors 'self'`,
-      'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }, continue: true });
+    frames.push({ src: `^/${path.replaceAll('.', '\\.')}$`, headers: headers(`${frame}; frame-ancestors 'self'`), continue: true });
   }
   await writeFile(resolve(stage, '.vercel/output/config.json'), JSON.stringify({ version: 3, routes: [
-    { src: `^/(?!${FRAME_ROUTE.slice(2, -1)}$).*$`, headers: { 'Content-Security-Policy': `${policy}; frame-ancestors 'none'`, 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }, continue: true },
+    { src: '^/(?!p/[1-9][0-9]*/).*$', headers: headers(`${policy}; frame-ancestors 'none'`), continue: true },
+    ...bundles,
     ...frames,
     { src: '/', dest: '/index.html' },
     { src: '/p/([1-9][0-9]*)/', dest: '/p/$1/index.html' },
