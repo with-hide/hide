@@ -394,15 +394,21 @@ fn the_default_profile_follows_the_named_account_its_node_chose() {
         account.path(AccountPath::State),
         Some(under(&home(), ".omp/agent").as_path())
     );
-    // A name that leaves the profiles folder is refused.
+    // A name that leaves the profiles folder is refused, as a name, not as
+    // a folder.
     for name in ["../escape", ".hidden", "a/b"] {
         let bad = node().with_variable("OMP_PROFILE", Some(name.into()));
+        let refused = resolve(omp, &Profile::builtin_default("omp"), &bad);
         assert_eq!(
-            resolve(omp, &Profile::builtin_default("omp"), &bad),
-            Err(Refusal::NodeVariable {
+            refused,
+            Err(Refusal::NodeAccountName {
                 variable: "OMP_PROFILE".to_owned()
             }),
             "{name}"
+        );
+        assert_eq!(
+            refused.unwrap_err().to_string(),
+            "OMP_PROFILE is not a profile name of letters, digits, -, _ and ."
         );
     }
     // A profile of its own sets its name whatever the node chose.
