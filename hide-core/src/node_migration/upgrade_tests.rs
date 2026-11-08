@@ -44,15 +44,22 @@ fn fixtures() -> Vec<PathBuf> {
     folders
 }
 
+/// Copies a released folder the way the release left it: every file and
+/// folder private to the account, as a core writes them. Git keeps only the
+/// bytes, and a store the core reads is refused when others can read it.
 fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
+    use std::io::Write;
+    hide_platform::fs::private::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
         let target = to.join(entry.file_name());
         if entry.file_type().unwrap().is_dir() {
             copy_tree(&entry.path(), &target);
         } else {
-            std::fs::copy(entry.path(), &target).unwrap();
+            hide_platform::fs::private::create_new_file(&target)
+                .unwrap()
+                .write_all(&std::fs::read(entry.path()).unwrap())
+                .unwrap();
         }
     }
 }
