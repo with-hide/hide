@@ -28,7 +28,7 @@ const KIDS = [
   ["Codex", "tab latency", "measuring p50"],
 ].map(([agent, task, line, rt, rb, toast]) => ({ agent, task, line, toast,
   ring: rt && `<div class="box"><small>${rt}</small>${rb}</div>`,
-  boot: [["dim", `${agent} · ~/hide`], ["", `Reading the ${task} task`], ["dim", "Thinking…"], ["", line]] }));
+  boot: [["dim", `${agent} · ~/projects/hide`], ["", `Reading the ${task} task`], ["dim", "Thinking…"], ["", line]] }));
 const N = KIDS.length, ASK = 1;
 const OTHER_TASKS = [
   { a: "Codex", n: "billing webhooks", p: "acme-api", t: ["retrying 3 events", "verifying signatures", "running 41 tests", "writing the replay job"] },
@@ -132,7 +132,7 @@ function build() {
   timers.forEach(clearTimeout); timers = [];
   layer.innerHTML = ""; $("toasts").innerHTML = ""; $("needsRows").innerHTML = "";
   const lead = document.createElement("div"); lead.className = "pane lead";
-  lead.innerHTML = `<div class="h"><i class="d"></i>${img("Claude Code")}<b>Claude Code</b> · ~/hide · release-1.2</div>
+  lead.innerHTML = `<div class="h"><i class="d"></i>${img("Claude Code")}<b>Claude Code</b> · ~/projects/hide · release-1.2</div>
     <div class="r2" id="ot-r2"><span class="kidbtn" id="ot-kidbtn">${FORK}<span id="ot-kidn">0</span></span><span id="ot-r2txt"></span></div><div class="t"></div>`;
   layer.appendChild(lead);
   panes = [lead, ...KIDS.map((k) => {
@@ -220,7 +220,7 @@ async function run() {
 
   // ---- 1. Tiled
   setChapter(0);
-  say("dim", "Claude Code · ~/hide"); say("", "");
+  say("dim", "Claude Code · ~/projects/hide"); say("", "");
   const ask = say("me caret", "› "); await sleep(450);
   await type(ask, "ship 1.2. split it up and run everything in parallel", 36);
   await sleep(300); say("", ""); say("ac", `Splitting 1.2 into ${N} jobs, one worker each.`); await sleep(550);
