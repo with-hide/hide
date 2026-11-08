@@ -1483,7 +1483,7 @@ Each session reader's root is the default account's `sessions` place (`hide_sess
 `scripts/check-agent-folders.sh` keeps it that way: production Rust that names an agent's account folder (`.claude`, `.codex`, `.pi/agent`, `.omp`, `.grok`, agy's `.gemini` folders, OpenCode's folders and database) outside that agent's own modules and the files it lists with a reason fails `verify`.
 `hide-agent-adapter/tests/it/account.rs` holds `resolve`'s contract for the seven agents: the default account, an account of its own, and the inputs refused, with the expected places written by hand from the agents' own documentation and source, on the macOS, Linux and Windows lanes.
 
-Decided in #PRNUM.
+Decided in #2271.
 
 ## The platform layer
 
