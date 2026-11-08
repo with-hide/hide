@@ -115,10 +115,9 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
     >
       <span className="flex w-full min-w-0 items-center gap-sm">
         <span
-          className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
+          className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
           data-phone-mission-pill={first?.kind ?? mission.status}
         >
-          {first ? <span aria-hidden="true">!</span> : null}
           {pill}
         </span>
         <span className="min-w-0 flex-1 break-keep text-title font-medium text-foreground wrap-anywhere">{mission.title}</span>
