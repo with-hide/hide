@@ -88,7 +88,12 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "native_identity_unavailable"
             | "brief_not_submitted"
             | "agent_not_started"
-            | "pane_busy"),
+            | "pane_busy"
+            | crate::launch::PROFILE_GONE
+            | crate::launch::PROFILES_UNSUPPORTED
+            | crate::launch::PROFILE_REFUSED
+            | crate::launch::PROFILE_UNANSWERED
+            | crate::launch::PROFILE_UNCONFIRMED),
             detail,
         )) => (code, Some(detail)),
         Some((code, detail))

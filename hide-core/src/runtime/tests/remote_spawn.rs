@@ -1234,7 +1234,11 @@ fn a_spawn_whose_profiles_program_did_not_start_closes_the_tab_it_opened() {
     let refused = spawner
         .spawn(Some("here"), Some(DEVICE), "kernel-refused")
         .expect_err("its program did not start");
-    assert!(refused.contains(sentence), "{refused}");
+    assert_eq!(
+        split_refusal(&refused),
+        (crate::launch::PROFILE_REFUSED, Some(sentence)),
+        "its own code, with the executor's sentence"
+    );
     assert_eq!(spawner.count("start_agent"), 1);
     assert_eq!(spawner.count("close_pane"), 1, "the tab it opened closed");
     let record = &spawner.ledger().spawns[0];

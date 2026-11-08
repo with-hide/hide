@@ -599,6 +599,13 @@ pub(crate) fn start_agent(
             {
                 PANE_BUSY_REFUSAL.to_owned()
             }
+            // A profile's program that did not start, or whose start is not
+            // known, by its own code, with the executor's sentence.
+            crate::agent_start::StartError::Engine(EngineError::Refused { code, message })
+                if crate::launch::ends_a_start(&code) =>
+            {
+                crate::coordination::refusal(&code, &message)
+            }
             other => start_error_message(other),
         };
         NotStarted { refusal, unused }

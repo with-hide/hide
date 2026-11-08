@@ -1710,6 +1710,19 @@ fn launch_agent(
         {
             Launch::Failed(AgentFailure::reason(code))
         }
+        // A profile's program that did not start fails the task by the
+        // profile's own reason, as a profile refused before typing does; one
+        // whose start is not known may run.
+        Err(StartError::Engine(EngineError::Refused { code, message }))
+            if code == crate::launch::PROFILE_REFUSED =>
+        {
+            Launch::Failed(AgentFailure::with_detail(code, message))
+        }
+        Err(StartError::Engine(EngineError::Refused { code, message }))
+            if code == crate::launch::PROFILE_UNCONFIRMED =>
+        {
+            Launch::Unknown(AgentFailure::with_detail(code, message))
+        }
         Err(StartError::Engine(EngineError::Refused { code, message })) => Launch::Failed(
             AgentFailure::with_detail("agent_start.refused_by_herdr", format!("{code}: {message}")),
         ),
@@ -4980,6 +4993,44 @@ mod tests {
             methods_of(&requests_of(&server)),
             ["pane_processes", "start_agent"]
         );
+    }
+
+    /// A task's agent whose profile's program did not start fails the task
+    /// by the profile's own reason, with the executor's sentence; one whose
+    /// start is not known may run, so the task says so rather than failing.
+    #[test]
+    fn a_profiles_program_that_did_not_start_fails_the_task_by_the_profiles_reason() {
+        let sentence = "Claude Code · gw could not start /opt/gw: Bad CPU type in executable";
+        for (code, unknown) in [
+            (crate::launch::PROFILE_REFUSED, false),
+            (crate::launch::PROFILE_UNCONFIRMED, true),
+        ] {
+            let server = server(vec![shell_ready(), refused(code, sentence)]);
+            let outcome = launch_with_prompt(
+                &*server,
+                Some(&Starts(StartForm::Program)),
+                7,
+                PendingAgentStart {
+                    resume_reference: None,
+                    resume_scope: None,
+                    pane_id: "w1:p1".into(),
+                    kind: "claude".into(),
+                    prompt: None,
+                    args: Vec::new(),
+                    codex_daemon: Default::default(),
+                    shell: crate::agent_start::ShellStart::Plain,
+                    made_worktree: None,
+                    profile: None,
+                },
+            );
+            let failure = match outcome {
+                TaskAgentOutcome::Failed(failure) if !unknown => failure,
+                TaskAgentOutcome::Unknown(failure) if unknown => failure,
+                other => panic!("{code}: {other:?}"),
+            };
+            assert_eq!(failure.reason, code);
+            assert_eq!(failure.detail.as_deref(), Some(sentence));
+        }
     }
 
     /// A machine that has the agent and starts it as `0` says.
