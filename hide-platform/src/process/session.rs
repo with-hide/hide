@@ -3,13 +3,17 @@
 //! its shell exits.
 //!
 //! Unix: the pane's program leads a session of its own (the PTY's `setsid`),
-//! so its tree is every process of that session and every process under one
-//! of them. Ending it sends the hangup, then the terminate, then the kill
-//! signal, each to every member found by a fresh look, and it has ended once
-//! every member ever found is gone and two looks in a row find none. A
-//! process that left the session and was handed to init before a look (a
-//! daemon that double-forked) is no member: that is the boundary terminals
-//! keep.
+//! so its tree is every process of that session, every session a member
+//! found before leads, and every process under one of them. A member that
+//! left with `setsid` (Codex's plugin sync, which runs `git` in a session of
+//! its own) is found under the member that started it, and what its session
+//! starts afterwards is found by that session's id, also once its parents
+//! have ended and init took it. Ending it sends the hangup, then the
+//! terminate, then the kill signal, each to every member found by a fresh
+//! look, and it has ended once every member ever found is gone and two looks
+//! in a row find none. A process that left the session and was handed to
+//! init before any look found it or a process above it (a daemon that
+//! double-forked) is no member: that is the boundary terminals keep.
 //!
 //! Windows: a kill-on-close job, made before the pane's program starts and
 //! held by this process alone, which the program joins before it runs
@@ -118,6 +122,10 @@ mod sys {
         leader_started: Option<u64>,
         /// Every member ever found, by pid, with its start time.
         found: BTreeMap<u32, u64>,
+        /// The members found leading a session of their own, by pid, with
+        /// their start time: each names a session whose processes are
+        /// members.
+        leaders: BTreeMap<u32, u64>,
     }
 
     impl Session {
@@ -126,6 +134,7 @@ mod sys {
                 leader: None,
                 leader_started: None,
                 found: BTreeMap::new(),
+                leaders: BTreeMap::new(),
             })
         }
 
@@ -139,6 +148,7 @@ mod sys {
                 leader: Some(leader),
                 leader_started: Some(started),
                 found,
+                leaders: BTreeMap::new(),
             })
         }
 
@@ -162,11 +172,13 @@ mod sys {
 
         /// The members running now, each with its start time: the leader
         /// while it is the process it was, every process whose session is
-        /// the leader's pid, and every process under one of them. A pid
-        /// stays reserved as a session id while any process of that session
-        /// lives, so no later process can take the leader's pid while a
-        /// member remains; once one has, the session is over and the pid
-        /// names another, which has no member of this one.
+        /// the leader's pid or a session a member found before leads, and
+        /// every process under one of them or under a member found before
+        /// that still runs. A pid stays reserved as a session id while any
+        /// process of that session lives, so no later process can take a
+        /// leader's pid while a member remains; once one has, that session
+        /// is over and the pid names another, which has no member of this
+        /// one.
         fn look(&self) -> io::Result<Vec<(u32, u64)>> {
             let Some(sid) = self.leader else {
                 return Ok(Vec::new());
@@ -174,7 +186,8 @@ mod sys {
             if self.sid_taken(sid) {
                 return Ok(Vec::new());
             }
-            let mut members: Vec<u32> = Vec::new();
+            let sessions = self.sessions(sid);
+            let mut members: Vec<(u32, u32)> = Vec::new();
             for pid in crate::process::sys::all_pids()? {
                 if pid <= 1 || pid == std::process::id() {
                     continue;
@@ -182,12 +195,31 @@ mod sys {
                 // SAFETY: `getsid` takes a pid and has no memory effects;
                 // Linux and macOS answer for a process of another session.
                 let session = unsafe { libc::getsid(pid as libc::pid_t) };
-                if session == sid as libc::pid_t {
-                    members.push(pid);
+                if session > 0 && sessions.contains(&(session as u32)) {
+                    members.push((pid, session as u32));
                 }
             }
-            let roots = members.clone();
+            // A found member's pid taken while the table was read names
+            // another session from then on: its processes are dropped.
+            let sessions = self.sessions(sid);
+            let mut members: Vec<u32> = members
+                .into_iter()
+                .filter(|(_, session)| sessions.contains(session))
+                .map(|(pid, _)| pid)
+                .collect();
+            let mut roots = members.clone();
+            roots.extend(
+                self.found
+                    .iter()
+                    .filter(|(pid, started)| {
+                        !members.contains(pid) && Self::still_runs(**pid, **started)
+                    })
+                    .map(|(pid, _)| *pid),
+            );
             for root in roots {
+                if !members.contains(&root) {
+                    members.push(root);
+                }
                 for below in crate::process::descendants(root).unwrap_or_default() {
                     if !members.contains(&below) {
                         members.push(below);
@@ -213,14 +245,47 @@ mod sys {
             Ok(running)
         }
 
+        /// The session ids whose processes are members: the leader's, and
+        /// the pid of every member found leading a session of its own (a
+        /// helper started with `setsid`) while no other process holds it.
+        /// While that session has a process left its pid stays reserved, so
+        /// the session named is the found member's own, also after it ended.
+        fn sessions(&self, sid: u32) -> Vec<u32> {
+            let mut sessions = vec![sid];
+            for (pid, started) in &self.leaders {
+                if *pid != sid && !Self::pid_taken(*pid, Some(*started)) {
+                    sessions.push(*pid);
+                }
+            }
+            sessions
+        }
+
+        /// Records the members a look found, and which of them lead a
+        /// session of their own now: one can call `setsid` after it was
+        /// first found, so each look asks again.
+        fn record(&mut self, now: &[(u32, u64)]) {
+            for (pid, started) in now {
+                self.found.entry(*pid).or_insert(*started);
+                // SAFETY: `getsid` takes a pid and has no memory effects.
+                let session = unsafe { libc::getsid(*pid as libc::pid_t) };
+                if session == *pid as libc::pid_t && Self::still_runs(*pid, *started) {
+                    self.leaders.entry(*pid).or_insert(*started);
+                }
+            }
+        }
+
         /// Whether a process other than the adopted leader runs under the
         /// leader's pid: one started after the leader ended, or any process
         /// at all when the leader had ended before it was adopted.
         fn sid_taken(&self, sid: u32) -> bool {
-            match crate::process::start_time(sid) {
-                Ok(started) => {
-                    crate::process::is_alive(sid) && self.leader_started != Some(started)
-                }
+            Self::pid_taken(sid, self.leader_started)
+        }
+
+        /// Whether a process other than the one that started at `started`
+        /// runs under `pid` (any process, when `started` is unknown).
+        fn pid_taken(pid: u32, started: Option<u64>) -> bool {
+            match crate::process::start_time(pid) {
+                Ok(now) => crate::process::is_alive(pid) && started != Some(now),
                 Err(_) => false,
             }
         }
@@ -232,9 +297,8 @@ mod sys {
         }
 
         fn send(&mut self, signal: libc::c_int) -> io::Result<()> {
-            for (pid, started) in self.look()? {
-                self.found.entry(pid).or_insert(started);
-            }
+            let now = self.look()?;
+            self.record(&now);
             for (pid, started) in &self.found {
                 // Read again right before the signal, so a pid another
                 // process took since it was found is never signalled.
@@ -252,9 +316,7 @@ mod sys {
         fn quiet(&mut self) -> io::Result<bool> {
             let now = self.look()?;
             let fresh = now.is_empty();
-            for (pid, started) in now {
-                self.found.entry(pid).or_insert(started);
-            }
+            self.record(&now);
             Ok(fresh
                 && self
                     .found
@@ -321,8 +383,9 @@ mod sys {
     mod tests {
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
 
-        use super::Session;
+        use super::{Session, SessionEnd};
 
         const ROLE: &str = "HIDE_PLATFORM_SESSION_TEST_LEADER";
 
@@ -372,6 +435,152 @@ mod sys {
             let _ = leader.wait();
             assert_eq!(members, vec![pid]);
             assert_eq!(taken, Vec::<u32>::new());
+        }
+
+        const HELPER_LEADER: &str = "HIDE_PLATFORM_SESSION_TEST_HELPER_LEADER";
+        const HELPER: &str = "HIDE_PLATFORM_SESSION_TEST_HELPER";
+
+        /// This test binary in the role `name`, saying nothing.
+        fn role(name: &str) -> Command {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    &format!("process::session::sys::tests::{name}"),
+                    "--test-threads=1",
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        }
+
+        fn in_a_session_of_its_own(command: &mut Command) {
+            // SAFETY: `setsid` is async-signal-safe and touches no memory.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+
+        /// A pane's program that starts a helper in a session of its own, as
+        /// Codex starts its plugin sync, and lives until it is ended, or a
+        /// minute.
+        #[test]
+        #[allow(clippy::disallowed_methods)] // the program sleeps to stay alive
+        fn helper_leader_role() {
+            let Some(folder) = std::env::var_os(HELPER_LEADER) else {
+                return;
+            };
+            let mut helper = role("helper_role");
+            helper.env(HELPER, folder);
+            in_a_session_of_its_own(&mut helper);
+            let mut helper = helper.spawn().unwrap();
+            std::thread::sleep(Duration::from_secs(60));
+            let _ = helper.kill();
+            let _ = helper.wait();
+        }
+
+        /// The helper: it ignores the hangup and the terminate, writes its
+        /// pid, and once the program above it has ended it forks a process
+        /// of its session, writes that pid and exits, so nothing that runs
+        /// is above that process and init takes it, as a `git` Codex's sync
+        /// starts once Codex ended.
+        #[test]
+        #[allow(clippy::disallowed_methods)] // the helper polls its parent
+        fn helper_role() {
+            let Some(folder) = std::env::var_os(HELPER) else {
+                return;
+            };
+            let folder = std::path::PathBuf::from(folder);
+            let write = |name: &str, pid: u32| {
+                let part = folder.join(format!("{name}.part"));
+                std::fs::write(&part, pid.to_string()).unwrap();
+                std::fs::rename(part, folder.join(name)).unwrap();
+            };
+            // SAFETY: setting a signal's disposition to ignore runs no code.
+            unsafe {
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                libc::signal(libc::SIGTERM, libc::SIG_IGN);
+            }
+            // SAFETY: `getppid` takes nothing and cannot fail.
+            let parent = unsafe { libc::getppid() };
+            write("helper", std::process::id());
+            let deadline = Instant::now() + Duration::from_secs(60);
+            // SAFETY: as above.
+            while unsafe { libc::getppid() } == parent {
+                if Instant::now() >= deadline {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            // SAFETY: the child calls only async-signal-safe functions: it
+            // keeps the ignored hangup and terminate, so only a kill ends
+            // it, and the alarm ends it after a minute if nothing does.
+            let late = unsafe { libc::fork() };
+            if late == 0 {
+                unsafe {
+                    libc::alarm(60);
+                    loop {
+                        libc::pause();
+                    }
+                }
+            }
+            assert!(late > 0, "fork: {}", std::io::Error::last_os_error());
+            write("late", late as u32);
+        }
+
+        /// A helper the program started in a session of its own is found
+        /// under the program, and a process it starts once the program has
+        /// ended is found by that session's id, though nothing that runs is
+        /// above it: the pane's end ends it too, as it must end the `git`
+        /// Codex's plugin sync runs (with-hide/hide-private#658).
+        #[test]
+        fn a_process_a_found_helper_starts_in_its_own_session_ends_with_the_pane() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut program = role("helper_leader_role");
+            program.env(HELPER_LEADER, folder.path());
+            in_a_session_of_its_own(&mut program);
+            let mut program = program.spawn().unwrap();
+            let mut session = Session::new().unwrap();
+            session.adopt(program.id()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let helper = std::fs::read_to_string(folder.path().join("helper"))
+                    .ok()
+                    .and_then(|text| text.parse::<u32>().ok());
+                if helper.is_some_and(|pid| session.members().unwrap().contains(&pid)) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the helper never ran under the program"
+                );
+                crate::process::pause(Duration::from_millis(10));
+            }
+            let ended = session.end(Duration::from_secs(10));
+            let _ = program.wait();
+            let late = std::fs::read_to_string(folder.path().join("late"))
+                .ok()
+                .and_then(|text| text.parse::<u32>().ok());
+            let outlived = late.filter(|pid| crate::process::is_alive(*pid));
+            if let Some(pid) = outlived {
+                // SAFETY: `kill` takes plain integers and has no memory effects.
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
+            assert!(matches!(ended, Ok(SessionEnd::Ended)), "{ended:?}");
+            assert!(
+                late.is_some(),
+                "the helper started nothing once the program ended"
+            );
+            assert_eq!(
+                outlived, None,
+                "the helper's late process outlived the pane's end"
+            );
         }
     }
 }
