@@ -191,19 +191,26 @@ fn shown(runtime: &mut Runtime) -> crate::model::SidebarAgentSnapshot {
     runtime.snapshot.navigator.agents[0].clone()
 }
 
-/// D-07, D-21, B11, B12: a declaration is laid on a working row and on one
-/// with its own question, stands in Needs You after the operator read it,
-/// leads the row's own question and gives it back when it goes.
+/// D-07, D-21, B11, B12, B15: a declaration is laid on a working row, on one
+/// with its own question and on a blocked one, stands in Needs You after the
+/// operator read it, leads the row's own ask on its row and on its pane's
+/// head, and gives the row's question back when it goes.
 #[test]
 fn a_persons_turn_holds_a_working_or_asking_row_and_gives_its_own_question_back() {
     let root = tempfile::tempdir().unwrap();
     let (runtime, _, _, _) = fixture(root.path());
     let mut runtime = runtime.lock().unwrap();
     let sender = registered_sender(&mut runtime);
-    for (activity, own) in [("working", None), ("stopped", Some("question"))] {
+    for (activity, own, blocked) in [
+        ("working", None, false),
+        ("stopped", Some("question"), false),
+        ("stopped", Some("question"), true),
+    ] {
         let mut ledger = ledger_with_sender(&sender);
         runtime.publish_delivery(Arc::new(ledger.clone()), true);
-        runtime.snapshot.navigator.agents = vec![sender_row(activity, own)];
+        let mut row = sender_row(activity, own);
+        row.blocked = blocked;
+        runtime.snapshot.navigator.agents = vec![row];
         let before = shown(&mut runtime);
         declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 7);
         runtime.publish_delivery(Arc::new(ledger.clone()), true);
@@ -217,6 +224,19 @@ fn a_persons_turn_holds_a_working_or_asking_row_and_gives_its_own_question_back(
         assert!(lead.own);
         let ask = row.state.ask.clone().unwrap();
         assert_eq!(ask.more, usize::from(own.is_some()), "{activity}");
+        let band = crate::agent_state::header::of(
+            &super::pane("sender", "/checkouts/fixture"),
+            Some(&row),
+            None,
+            None,
+        )
+        .band
+        .expect("the pane's head asks it");
+        assert!(
+            band.kind == "answer"
+                && matches!(band.subject, Some(AskSubject::HumanTurn { ref place, .. }) if place == "github.com/login"),
+            "{activity} blocked={blocked}: {band:?}"
+        );
         // Read, it stays (Hide AI cannot take it down either: no label is
         // read for it).
         runtime.snapshot.navigator.agents[0].unread = false;

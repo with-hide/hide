@@ -189,12 +189,23 @@ pub(crate) fn of(
     let Some(agent) = agent else {
         return Header::default();
     };
-    let own = own_ask(agent);
+    // A person's turn leads whatever else the pane or its descendants ask,
+    // and its own stands on a working or blocked pane too (PRD ask-human
+    // D-07, D-21, B15).
+    let human = agent.human_turn.as_ref();
+    let own = if human.is_some_and(|lead| lead.own) {
+        Some("answer")
+    } else {
+        own_ask(agent)
+    };
     // The pane's own approval, answer or unread block comes before a raised
     // descendant's ask; a block the operator has read and a stop come after
     // it, so a child's new ask is not hidden behind one already seen.
-    let leads = matches!(own, Some("approval" | "answer"))
-        || agent.state.verb == super::RequestVerb::Blocked;
+    let leads = human.map_or(
+        matches!(own, Some("approval" | "answer"))
+            || agent.state.verb == super::RequestVerb::Blocked,
+        |lead| lead.own,
+    );
     if !leads && let Some(lead) = agent.raised.first() {
         return Header {
             request: turn_request(agent),
@@ -260,6 +271,7 @@ pub(crate) fn of(
             // about the work around it. An Approval has no command the core
             // read, and that line is not one, so it carries no reason.
             reason: match kind {
+                _ if human.is_some() => None,
                 "answer" => agent.detail.clone(),
                 "approval" => None,
                 _ => agent
@@ -267,7 +279,7 @@ pub(crate) fn of(
                     .as_ref()
                     .and_then(|request| request.line.clone()),
             },
-            since_unix_ms: agent.state.request_since,
+            since_unix_ms: human.map_or(agent.state.request_since, |lead| lead.since_unix_ms),
             read: !agent.unread,
             action: None,
             more: if kind == "stopped" {
