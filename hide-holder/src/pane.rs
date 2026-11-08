@@ -43,6 +43,14 @@ const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
 /// is waited on per frame.
 pub const SYNC_LIMIT: Duration = Duration::from_secs(1);
 
+/// The pixel size, width and height, the holder gives a cell. It stands in
+/// for the screen's, which the holder never knows and which differs per
+/// screen that draws the pane: the cell and text-area pixel questions
+/// (XTWINOPS 14t, 16t) are answered with it, and a program that asks for
+/// pointer events in pixels (mode 1016) is told them in it, so the two
+/// agree. Claude Code asks for pixels to hear a drag past the pane's edge.
+pub const CELL_PIXELS: (u32, u32) = (10, 20);
+
 /// What a wheel turned into.
 pub enum Wheel {
     /// Bytes for the program: a mouse report or an arrow key.
@@ -80,6 +88,9 @@ pub struct Pane {
     /// connection has taken yet: only the latest, since each write replaces
     /// the clipboard.
     clipboard: Option<Vec<u8>>,
+    /// The cell of the last pointer event reported in cells, so a motion
+    /// that stays in it is not reported again, as Ghostty reports motion.
+    reported_cell: Option<(u16, u16)>,
 }
 
 /// What the pane's facts are made from, read under the pane's lock.
@@ -104,6 +115,9 @@ impl Pane {
     pub fn new(size: Size, theme: Option<&Theme>) -> Result<Self, String> {
         let mut terminal = Terminal::new(size.cols, size.rows, SCROLLBACK_BYTES)
             .map_err(|error| format!("the terminal parser: {error}"))?;
+        terminal
+            .resize(size.cols, size.rows, CELL_PIXELS.0, CELL_PIXELS.1)
+            .map_err(|error| format!("the terminal parser's cell size: {error}"))?;
         let replies = Arc::new(Mutex::new(Vec::new()));
         terminal
             .set_write_pty_callback({
@@ -141,6 +155,7 @@ impl Pane {
             cwd: None,
             bells: 0,
             clipboard: None,
+            reported_cell: None,
         };
         let theme = theme.cloned().unwrap_or(Theme {
             foreground: None,
@@ -176,13 +191,6 @@ impl Pane {
             self.terminal.write(&bytes[start..end]);
             self.take_replies(answers);
             match mark {
-                Mark::SizeQuery => {
-                    let (rows, cols) = (
-                        self.terminal.rows().unwrap_or(0),
-                        self.terminal.cols().unwrap_or(0),
-                    );
-                    answers.extend_from_slice(format!("\x1b[8;{rows};{cols}t").as_bytes());
-                }
                 Mark::CursorShape(shape) => self.shaped = shape != 0,
                 Mark::Reset => self.shaped = false,
                 Mark::SyncStart => self.sync_since = Some(now),
@@ -291,11 +299,13 @@ impl Pane {
             .take(&self.terminal, &self.defaults, self.shaped, everything)
     }
 
-    /// Resizes the parser; answers what it says of the new size, which with
-    /// no pixel size known is nothing (D-9).
+    /// Resizes the parser, its cells [`CELL_PIXELS`] each; answers what it
+    /// says of the new size (D-9).
     pub fn resize(&mut self, size: Size, answers: &mut Vec<u8>) -> Result<(), hide_vt::Error> {
         self.everything = true;
-        let resized = self.terminal.resize(size.cols, size.rows, 0, 0);
+        let resized = self
+            .terminal
+            .resize(size.cols, size.rows, CELL_PIXELS.0, CELL_PIXELS.1);
         self.take_replies(answers);
         resized
     }
@@ -394,8 +404,8 @@ impl Pane {
     }
 
     /// A pointer event as the program asked to be told of it, or `None` when
-    /// it tracks no mouse, or asked for pixels, which are not known.
-    pub fn mouse(&self, mouse: &Mouse) -> Result<Option<Vec<u8>>, hide_vt::Error> {
+    /// it tracks no mouse.
+    pub fn mouse(&mut self, mouse: &Mouse) -> Result<Option<Vec<u8>>, hide_vt::Error> {
         let button = mouse.button.map(|button| match button {
             MouseButton::Left => hide_vt::MOUSE_BUTTON_LEFT,
             MouseButton::Middle => hide_vt::MOUSE_BUTTON_MIDDLE,
@@ -406,26 +416,44 @@ impl Pane {
             MouseAction::Release => hide_vt::MOUSE_ACTION_RELEASE,
             MouseAction::Motion => hide_vt::MOUSE_ACTION_MOTION,
         };
-        self.report(action, button, (mouse.col, mouse.row), mouse.modifiers)
+        self.report(
+            action,
+            button,
+            (mouse.col, mouse.row),
+            mouse.outside,
+            mouse.modifiers,
+        )
     }
 
+    /// Encodes a pointer event at `cell`, or at `outside` when a held button
+    /// dragged the pointer past the grid: in pixels for a program that asked
+    /// for them (mode 1016), where a position past the edge is told as it is,
+    /// negative or past the last pixel, as Ghostty tells a drag out of its
+    /// surface; in cells otherwise, at the grid's cell nearest it.
     fn report(
-        &self,
+        &mut self,
         action: hide_vt::ffi::GhosttyMouseAction,
         button: Option<hide_vt::ffi::GhosttyMouseButton>,
         (col, row): (u16, u16),
+        outside: Option<(i32, i32)>,
         modifiers: Modifiers,
     ) -> Result<Option<Vec<u8>>, hide_vt::Error> {
-        if !self.terminal.mouse_tracking_enabled()?
-            || self.terminal.mode_get(hide_vt::MODE_MOUSE_SGR_PIXELS)?
-        {
+        if !self.terminal.mouse_tracking_enabled()? {
             return Ok(None);
         }
         let cols = self.terminal.cols()?;
         let rows = self.terminal.rows()?;
+        let cell = (
+            col.min(cols.saturating_sub(1)),
+            row.min(rows.saturating_sub(1)),
+        );
+        let pixels = self.terminal.mode_get(hide_vt::MODE_MOUSE_SGR_PIXELS)?;
+        let motion = action == hide_vt::MOUSE_ACTION_MOTION;
+        if !pixels && motion && self.reported_cell == Some(cell) {
+            return Ok(None);
+        }
         let mut encoder = hide_vt::MouseEncoder::new()?;
         encoder.set_from_terminal(&self.terminal);
-        encoder.set_size(u32::from(cols), u32::from(rows), 1, 1);
         let mut event = hide_vt::MouseEvent::new()?;
         event.set_action(action);
         match button {
@@ -433,12 +461,40 @@ impl Pane {
             None => event.clear_button(),
         }
         event.set_mods(mods(modifiers));
-        event.set_position(
-            f32::from(col.min(cols.saturating_sub(1))),
-            f32::from(row.min(rows.saturating_sub(1))),
-        );
+        if pixels {
+            let (width, height) = CELL_PIXELS;
+            encoder.set_size(
+                u32::from(cols) * width,
+                u32::from(rows) * height,
+                width,
+                height,
+            );
+            // Past the edge, a motion is reported only while a button is
+            // held, as Ghostty reports a drag out of its surface.
+            encoder.set_any_button_pressed(motion && button.is_some());
+            // A cell past the edge is held to a grid's reach either side, so
+            // its pixel always fits the report.
+            let reach = i32::from(u16::MAX);
+            let (x, y) = outside.map_or((i32::from(cell.0), i32::from(cell.1)), |(x, y)| {
+                (x.clamp(-reach, reach), y.clamp(-reach, reach))
+            });
+            // The middle of the cell.
+            event.set_position(
+                (x as f32 + 0.5) * width as f32,
+                (y as f32 + 0.5) * height as f32,
+            );
+        } else {
+            encoder.set_size(u32::from(cols), u32::from(rows), 1, 1);
+            event.set_position(f32::from(cell.0), f32::from(cell.1));
+        }
         let bytes = encoder.encode(&event)?;
-        Ok((!bytes.is_empty()).then_some(bytes))
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        if !pixels {
+            self.reported_cell = Some(cell);
+        }
+        Ok(Some(bytes))
     }
 
     /// A wheel, as Herdr routes it: a report to a program that tracks the
@@ -460,6 +516,7 @@ impl Pane {
                     hide_vt::MOUSE_ACTION_PRESS,
                     Some(button),
                     scroll.cell.unwrap_or((0, 0)),
+                    None,
                     scroll.modifiers,
                 )? {
                     Some(bytes) => Wheel::Input(bytes),
@@ -778,7 +835,7 @@ mod tests {
         );
         assert_eq!(
             asked,
-            "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\
+            "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\x1b[4;480;800t\x1b[6;20;10t\
              \x1b]10;rgb:ffff/ffff/ffff\x07\x1b]4;1;rgb:cccc/6666/6666\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
              \x1bP1+r5463\x1b\\\x1bP>|libghostty\x1b\\\x1b[?2004;2$y"
         );
@@ -794,9 +851,14 @@ mod tests {
     }
 
     #[test]
-    fn pixel_questions_go_unanswered_while_the_cell_size_is_unknown() {
+    fn pixel_questions_are_answered_with_the_stand_in_cell_size() {
         let mut pane = pane();
-        assert_eq!(answers(&mut pane, &[b"\x1b[14t\x1b[16t\x1b[?2048h"]), "");
+        // 80 by 24 cells of 10 by 20 pixels; a size report (mode 2048)
+        // stays unsent.
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b[14t\x1b[16t\x1b[?2048h"]),
+            "\x1b[4;480;800t\x1b[6;20;10t"
+        );
         let mut resized = Vec::new();
         pane.resize(
             Size {
@@ -807,7 +869,10 @@ mod tests {
         )
         .unwrap();
         assert!(resized.is_empty(), "{resized:?}");
-        assert_eq!(answers(&mut pane, &[b"\x1b[18t"]), "\x1b[8;30;100t");
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b[18t\x1b[14t"]),
+            "\x1b[8;30;100t\x1b[4;600;1000t"
+        );
     }
 
     #[test]
@@ -896,6 +961,15 @@ mod tests {
             col,
             row,
             modifiers: Modifiers::default(),
+            outside: None,
+        }
+    }
+
+    fn drag(col: u16, row: u16, outside: Option<(i32, i32)>) -> Mouse {
+        Mouse {
+            action: MouseAction::Motion,
+            outside,
+            ..press(col, row)
         }
     }
 
@@ -916,9 +990,50 @@ mod tests {
             pane.mouse(&press(3, 4)).unwrap().as_deref(),
             Some(&b"\x1b[<0;4;5M"[..])
         );
-        // Pixels the holder does not know.
-        answers(&mut pane, &[b"\x1b[?1016h"]);
-        assert_eq!(pane.mouse(&press(3, 4)).unwrap(), None);
+    }
+
+    #[test]
+    fn a_program_that_asks_for_pixels_hears_a_drag_past_the_edge_in_pixels() {
+        let mut pane = pane();
+        answers(&mut pane, &[b"\x1b[?1002h\x1b[?1006h\x1b[?1016h"]);
+        let said = |pane: &mut Pane, mouse: &Mouse| {
+            String::from_utf8(pane.mouse(mouse).unwrap().unwrap()).unwrap()
+        };
+        // A cell is 10 by 20 pixels, told at its middle.
+        assert_eq!(said(&mut pane, &press(3, 4)), "\x1b[<0;35;90M");
+        assert_eq!(
+            said(&mut pane, &drag(4, 0, Some((4, -3)))),
+            "\x1b[<32;45;-50M"
+        );
+        assert_eq!(
+            said(&mut pane, &drag(4, 0, Some((4, -4)))),
+            "\x1b[<32;45;-70M"
+        );
+        assert_eq!(
+            said(&mut pane, &drag(79, 23, Some((85, 30)))),
+            "\x1b[<32;855;610M"
+        );
+        let release = Mouse {
+            action: MouseAction::Release,
+            ..press(5, 6)
+        };
+        assert_eq!(said(&mut pane, &release), "\x1b[<0;55;130m");
+    }
+
+    #[test]
+    fn a_drag_past_the_edge_is_told_in_cells_once_at_the_nearest_cell() {
+        let mut pane = pane();
+        answers(&mut pane, &[b"\x1b[?1002h\x1b[?1006h"]);
+        assert!(pane.mouse(&press(4, 1)).unwrap().is_some());
+        assert_eq!(
+            pane.mouse(&drag(4, 0, Some((4, -1)))).unwrap().as_deref(),
+            Some(&b"\x1b[<32;5;1M"[..])
+        );
+        assert_eq!(pane.mouse(&drag(4, 0, Some((4, -2)))).unwrap(), None);
+        assert_eq!(
+            pane.mouse(&drag(4, 1, None)).unwrap().as_deref(),
+            Some(&b"\x1b[<32;5;2M"[..])
+        );
     }
 
     fn wheel_input(pane: &mut Pane, lines: i16) -> Option<Vec<u8>> {

@@ -1475,12 +1475,14 @@ impl Inner {
                 column,
                 row,
                 modifiers,
+                outside,
             } => {
                 let mouse = hide_holder_protocol::Mouse {
                     action,
                     button,
                     col: column,
                     row,
+                    outside,
                     // The screen's bits (shift 1, ctrl 2, alt 4, meta 8) are
                     // the protocol's.
                     modifiers: hide_holder_protocol::Modifiers(modifiers),

@@ -503,6 +503,28 @@ fn a_pointer_event_reaches_the_controlled_panes_node_for_any_program() {
             column: 7,
             row: 3,
             modifiers: 1,
+            outside: None,
+        }]
+    );
+    // A drag past the pane's top edge carries the cell it reached.
+    runtime.dispatch_json(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "terminal_mouse",
+            "payload": {"pane_id": pane_id, "action": "motion", "button": "left",
+                        "column": 7, "row": 0, "outside": {"column": 7, "row": -2}}
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        sent(&terminals),
+        [TerminalControl::Mouse {
+            pane: pane_id.to_owned(),
+            action: MouseAction::Motion,
+            button: Some(MouseButton::Left),
+            column: 7,
+            row: 0,
+            modifiers: 0,
+            outside: Some((7, -2)),
         }]
     );
     runtime.dispatch_json(&press("w-click:p2"));

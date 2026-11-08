@@ -236,6 +236,11 @@ pub enum Capability {
     /// [`HolderMessage::Clipboard`]. A node that does not accept it, as one
     /// built before it does not, is sent none, and the write is dropped.
     Clipboard,
+    /// The holder reads a [`Mouse`] that carries [`Mouse::outside`]; a node
+    /// sends one only to a holder whose welcome names this, since an older
+    /// holder reads the longer message as malformed and closes the
+    /// connection.
+    MouseOutside,
     /// A capability this build does not know, kept by name so a side can
     /// answer with the ones it does.
     Other(String),
@@ -253,6 +258,7 @@ impl Capability {
             Self::ForegroundUnread => "foreground_unread",
             Self::Submit => "submit",
             Self::Clipboard => "clipboard",
+            Self::MouseOutside => "mouse_outside",
             Self::Other(name) => name,
         }
     }
@@ -268,6 +274,7 @@ impl Capability {
             "foreground_unread" => Self::ForegroundUnread,
             "submit" => Self::Submit,
             "clipboard" => Self::Clipboard,
+            "mouse_outside" => Self::MouseOutside,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -850,6 +857,11 @@ pub struct Mouse {
     pub col: u16,
     pub row: u16,
     pub modifiers: Modifiers,
+    /// The cell under the pointer when a held button dragged it past the
+    /// grid's edge, so a column or row below zero or past the last one;
+    /// `col` and `row` then name the grid's cell nearest it. `None` over the
+    /// grid. Sent only to a holder that names [`Capability::MouseOutside`].
+    pub outside: Option<(i32, i32)>,
 }
 
 /// A wheel turned by `lines`, positive up, over a cell when the node knows
@@ -1414,6 +1426,10 @@ pub fn write_client(writer: &mut impl Write, message: &ClientMessage) -> io::Res
             payload.extend_from_slice(&mouse.col.to_le_bytes());
             payload.extend_from_slice(&mouse.row.to_le_bytes());
             payload.push(mouse.modifiers.0);
+            if let Some((col, row)) = mouse.outside {
+                payload.extend_from_slice(&col.to_le_bytes());
+                payload.extend_from_slice(&row.to_le_bytes());
+            }
             write_frame(writer, kind::MOUSE, &payload)
         }
         ClientMessage::Scroll(scroll) => {
@@ -1632,12 +1648,19 @@ pub fn read_client(reader: &mut impl Read) -> Result<ClientMessage, FrameError> 
                     )));
                 }
             };
+            let (col, row, modifiers) = (payload.u16()?, payload.u16()?, payload.u8()?);
+            let outside = if payload.0.is_empty() {
+                None
+            } else {
+                Some((payload.u32()? as i32, payload.u32()? as i32))
+            };
             ClientMessage::Mouse(Mouse {
                 action,
                 button,
-                col: payload.u16()?,
-                row: payload.u16()?,
-                modifiers: Modifiers(payload.u8()?),
+                col,
+                row,
+                modifiers: Modifiers(modifiers),
+                outside,
             })
         }
         kind::SCROLL => ClientMessage::Scroll(Scroll {
@@ -2550,6 +2573,7 @@ mod tests {
                 col: 3,
                 row: 7,
                 modifiers: Modifiers(Modifiers::CTRL | Modifiers::SHIFT),
+                outside: None,
             }),
             ClientMessage::Mouse(Mouse {
                 action: MouseAction::Motion,
@@ -2557,6 +2581,15 @@ mod tests {
                 col: 0,
                 row: 0,
                 modifiers: Modifiers::default(),
+                outside: None,
+            }),
+            ClientMessage::Mouse(Mouse {
+                action: MouseAction::Motion,
+                button: Some(MouseButton::Left),
+                col: 4,
+                row: 0,
+                modifiers: Modifiers::default(),
+                outside: Some((4, -3)),
             }),
             ClientMessage::Scroll(Scroll {
                 lines: -3,

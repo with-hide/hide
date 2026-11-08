@@ -140,6 +140,8 @@ type SelectGesture = {
 type ProgramGesture = {
   kind: "program";
   cell: { column: number; row: number };
+  /** The cell the pointer reached past the grid's edge, or null over the grid. */
+  outside: { column: number; row: number } | null;
   /** The motion waiting for the next animation frame. */
   motion: number | null;
   modifiers: number;
@@ -762,11 +764,42 @@ function pointAt(instance: Instance, geometry: CellGeometry, pointer: { clientX:
   return { row: viewTop(instance) + cellAt(geometry, pointer).row, column };
 }
 
-function sendMouse(instance: Instance, action: "press" | "release" | "motion", cell: { column: number; row: number }, modifiers: number) {
+/**
+ * The cell under the pointer as if the grid went on past its edges: a column
+ * or row below zero or past the last one outside it, or null over the grid.
+ */
+function outsideAt(geometry: CellGeometry, event: { clientX: number; clientY: number }): { column: number; row: number } | null {
+  const { rect, cols, rows, colWidth, rowHeight } = geometry;
+  if (colWidth <= 0 || rowHeight <= 0) return null;
+  const column = Math.floor((event.clientX - rect.left) / colWidth);
+  const row = Math.floor((event.clientY - rect.top) / rowHeight);
+  return column < 0 || column >= cols || row < 0 || row >= rows ? { column, row } : null;
+}
+
+/**
+ * Sends a pointer event at `cell`; `outside` is where a held button dragged
+ * the pointer past the grid, which the holder tells a program that asked for
+ * pixels as it is and any other at `cell`, the grid's nearest.
+ */
+function sendMouse(
+  instance: Instance,
+  action: "press" | "release" | "motion",
+  cell: { column: number; row: number },
+  modifiers: number,
+  outside: { column: number; row: number } | null = null,
+) {
   instance.dispatch({
     schema_version: 2,
     kind: "terminal_mouse",
-    payload: { pane_id: instance.paneId, action, button: "left", column: cell.column, row: cell.row, modifiers },
+    payload: {
+      pane_id: instance.paneId,
+      action,
+      button: "left",
+      column: cell.column,
+      row: cell.row,
+      modifiers,
+      ...(outside ? { outside } : {}),
+    },
   });
 }
 
@@ -806,7 +839,7 @@ function onMouseDown(instance: Instance, event: MouseEvent) {
   // is told it now, so it does not keep the button held.
   const blur = () => {
     const gesture = instance.gesture;
-    if (gesture?.kind === "program") sendMouse(instance, "release", gesture.cell, gesture.modifiers);
+    if (gesture?.kind === "program") sendMouse(instance, "release", gesture.cell, gesture.modifiers, gesture.outside);
     endGesture(instance);
   };
   window.addEventListener("mousemove", move, true);
@@ -819,7 +852,7 @@ function onMouseDown(instance: Instance, event: MouseEvent) {
   };
   if (program) {
     clearSelection(instance);
-    instance.gesture = { kind: "program", cell, motion: null, modifiers, listeners };
+    instance.gesture = { kind: "program", cell, outside: null, motion: null, modifiers, listeners };
     sendMouse(instance, "press", cell, modifiers);
     return;
   }
@@ -844,13 +877,17 @@ function onPointerMove(instance: Instance, event: MouseEvent) {
     const geometry = cellGeometry(instance);
     if (!geometry) return;
     const cell = cellAt(geometry, event);
-    if (cell.column === gesture.cell.column && cell.row === gesture.cell.row) return;
+    const outside = outsideAt(geometry, event);
+    const reached = outside ?? cell;
+    const was = gesture.outside ?? gesture.cell;
+    if (reached.column === was.column && reached.row === was.row) return;
     gesture.cell = cell;
+    gesture.outside = outside;
     gesture.modifiers = pointerModifiers(event);
     // One motion per animation frame, at the cell the pointer reached.
     gesture.motion ??= requestAnimationFrame(() => {
       gesture.motion = null;
-      if (instance.gesture === gesture) sendMouse(instance, "motion", gesture.cell, gesture.modifiers);
+      if (instance.gesture === gesture) sendMouse(instance, "motion", gesture.cell, gesture.modifiers, gesture.outside);
     });
     return;
   }
@@ -865,9 +902,9 @@ function onPointerUp(instance: Instance, event: MouseEvent) {
     if (gesture.motion !== null) {
       cancelAnimationFrame(gesture.motion);
       gesture.motion = null;
-      sendMouse(instance, "motion", gesture.cell, gesture.modifiers);
+      sendMouse(instance, "motion", gesture.cell, gesture.modifiers, gesture.outside);
     }
-    sendMouse(instance, "release", gesture.cell, pointerModifiers(event));
+    sendMouse(instance, "release", gesture.cell, pointerModifiers(event), gesture.outside);
   } else if (!gesture.dragged) {
     // A click the program hears only if it tracks the mouse.
     sendMouse(instance, "press", gesture.press, gesture.modifiers);

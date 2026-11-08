@@ -22,6 +22,7 @@ fn press(action: MouseAction) -> ClientMessage {
         col: 3,
         row: 4,
         modifiers: Modifiers::default(),
+        outside: None,
     })
 }
 
@@ -172,7 +173,7 @@ fn questions_are_answered_once_each_in_order_with_no_node_connected() {
         holder.read(5).0.contains("asked")
     });
     script.wait_heard(
-        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b]10;rgb:ffff/ffff/ffff\x07\
+        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b[4;480;800t\x1b]10;rgb:ffff/ffff/ffff\x07\
           \x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\",
     );
 
@@ -182,7 +183,7 @@ fn questions_are_answered_once_each_in_order_with_no_node_connected() {
     connection.wait_closed();
     script.go(2);
     script.wait_heard(
-        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b]10;rgb:ffff/ffff/ffff\x07\
+        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b[4;480;800t\x1b]10;rgb:ffff/ffff/ffff\x07\
           \x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
           \x1b]10;rgb:1010/2020/3030\x07\x1b]10;rgb:abab/cdcd/efef\x07\
           \x1b]10;rgb:1010/2020/3030\x07",
