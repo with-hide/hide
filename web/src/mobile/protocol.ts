@@ -233,11 +233,11 @@ export type StartKind = string;
 
 /** One place a start can go; the folder it names never reaches the phone. */
 export type StartTarget = {
-  /** `home:<device_id>` for a device's Home, else the checkout's id. */
+  /** The checkout's id. */
   id: string;
   device_id: string;
-  /** The place on the device; null is the device's Home. */
-  place: string | null;
+  /** The place on the device: `project · branch`, or a folder's name. */
+  place: string;
   /** The device's name; null is the core's own machine, named from the catalog's `core_platform`. */
   device_label: string | null;
   connected: boolean;

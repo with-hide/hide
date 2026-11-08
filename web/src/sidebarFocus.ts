@@ -4,13 +4,11 @@ import type { AgentRow, Workspace } from "./snapshot";
 /**
  * Every pane the sidebar draws a row for when no checkout is folded: each
  * checkout's roots and the children and grandchildren of the roots opened,
- * and the raised Needs You and Done rows. The Home has no row of its own
- * (PRD sidebar-titlebar-refresh D-06), so its agents are drawn only raised.
+ * and the raised Needs You and Done rows.
  */
 export function sidebarPanes(workspaces: readonly Workspace[], scope: AgentScope | null): Set<string> {
   const panes = new Set<string>();
   for (const workspace of workspaces) {
-    if (workspace.is_home) continue;
     for (const checkout of workspace.checkouts) for (const row of checkout.agent_scope.sidebar_tree.visible_rows) panes.add(row.pane_id);
   }
   for (const raised of scope?.raised ?? []) for (const ref of [...raised.shown, ...raised.more]) panes.add(ref.pane_id);

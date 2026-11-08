@@ -29,7 +29,6 @@ export function ServerSessionScene({ scene: kind, theme, scale, content, state =
       workspace.label = content === "long" ? "한글과 English가 섞인 매우 긴 프로젝트 이름" : "herdr-ide";
       checkout.branch = content === "long" ? "feature/매우-긴-한글과-English-checkout-name" : "main";
       workspace.is_git = state !== "folder";
-      workspace.is_home = state === "home";
       // A stale header keeps its last CI answers, dimmed by a failed read (PRD git-freshness B22).
       const ciObserved = state === "stale" ? { freshness: "failed" as const, read_at_unix_ms: Date.now() - 6 * 60_000 } : { freshness: "fresh" as const, read_at_unix_ms: Date.now() };
       scene.rest.workspace_view.git = {

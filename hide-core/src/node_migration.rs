@@ -218,6 +218,18 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     ),
     (
         CORE_STATE,
+        "/home_retire/*/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/home_retire/*/registration_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
         "/recent_checkouts/*/device_id",
         Mechanism::Rewritten,
         Moves::Device,
@@ -1544,6 +1556,9 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
     for row in each(value, "recent_checkouts") {
         changed |= rewrite(row.get_mut("device_id"), node);
     }
+    for row in each(value, "home_retire") {
+        changed |= rewrite(row.get_mut("device_id"), node);
+    }
     // The front tab's slot and each other tab's.
     if let Some(detail) = value.get_mut("detail") {
         changed |= rewrite_slot_devices(detail, node);
@@ -1932,6 +1947,10 @@ mod tests {
             .tap_insert(
                 "stray_dismissals",
                 json!({"workspace:a:checkout:1": {"head": "aaa", "at_unix_ms": 1}}),
+            )
+            .tap_insert(
+                "home_retire",
+                json!([{"device_id": "local", "registration_id": "workspace:a"}]),
             )
             .tap_insert("add_project_folder", json!("/Users/me/work"))
             .tap_insert(

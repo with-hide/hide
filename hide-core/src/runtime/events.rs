@@ -925,9 +925,6 @@ pub(super) struct AgentStartInCheckoutPayload {
     /// home-device-rail D-22).
     #[serde(default)]
     pub(super) device_id: Option<String>,
-    /// Start in the device's Home rather than a checkout (D-04, D-13).
-    #[serde(default)]
-    pub(super) home: bool,
     pub(super) provider: String,
     /// The agent's first prompt, sent once the agent is ready (an issue
     /// started on a checkout that is not a new worktree).
@@ -4424,6 +4421,8 @@ impl Runtime {
                     session_open_folds: current.session_open_folds,
                     // Recorded by the core when a Rename lands.
                     operator_tab_names: current.operator_tab_names,
+                    // Settled by the helper's answer.
+                    home_retire: current.home_retire,
                     expanded_paths: payload.expanded_paths,
                     device_expanded_paths: payload
                         .device_expanded_paths

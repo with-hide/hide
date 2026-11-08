@@ -1141,15 +1141,16 @@ pub fn handle_with_progress(
                 Path::new(&home),
             )?)
         }
-        Call::HomeSync { projects } => {
-            let home = env.home("HOME is not set, so Hide's Home folder has no place to live")?;
+        Call::HomeRetire { keep_empty, settle } => {
+            let home =
+                env.home("HOME is not set, so the old Home folder has no place to be found")?;
             if !Path::new(&home).is_absolute() {
                 return Err(HostError::new(
                     ErrorCode::Unsupported,
-                    "HOME is not an absolute path, so Hide's Home folder has no place to live",
+                    "HOME is not an absolute path, so the old Home folder has no place to be found",
                 ));
             }
-            to_value(crate::home::sync(Path::new(&home), &projects)?)
+            to_value(crate::home::retire(Path::new(&home), keep_empty, settle)?)
         }
         Call::Kit {
             action,

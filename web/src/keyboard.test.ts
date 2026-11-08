@@ -40,7 +40,6 @@ function world(front: "local" | "mini"): SnapshotRest {
           session: {
             workspaces: [
               { agent_scope: emptyScope(), id: "remote:mini:workspace:w1", label: "web", device_id: "mini", checkouts: [remoteCheckout] },
-              { agent_scope: emptyScope(), id: "remote:mini:workspace:home", label: "hide", device_id: "mini", is_home: true, checkouts: [] },
             ],
             agents: [],
             active_tab_ids: {},
@@ -94,7 +93,7 @@ describe("Recent Panels across devices (PRD home-device-rail B39)", () => {
     expect(sent[0]).toMatchObject({ kind: "remote_control", payload: { target_id: "mini", action: "focus_tab", tab_id: "remote:mini:tab:t1", focus_device: true } });
   });
 
-  it("lists every connected device's projects for Recent Projects, never a device's Home", () => {
+  it("lists every connected device's projects for Recent Projects", () => {
     const local = world("local");
     const cycle = projectCycle(local)!;
     expect(cycle.items.map((item) => [item.title, item.chip?.label ?? null])).toEqual([

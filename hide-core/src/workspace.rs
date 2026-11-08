@@ -137,7 +137,6 @@ pub fn registration(
         path: path::to_wire_lossy(&path),
         device_id: device_id.to_owned(),
         pinned: false,
-        home: false,
     })
 }
 
@@ -168,7 +167,6 @@ pub fn inspect_registered(
         paths,
     );
     workspace.pinned = registration.pinned;
-    workspace.is_home = registration.home;
     apply_primary_checkout(&mut workspace, registration.primary_checkout_id.as_deref());
     workspace
 }
@@ -761,7 +759,6 @@ fn adopt_registration(workspace: &mut WorkspaceSnapshot, registration: &Workspac
     workspace.registered = true;
     workspace.temporary = false;
     workspace.pinned = registration.pinned;
-    workspace.is_home = registration.home;
     workspace.device_id = registration.device_id.clone();
     workspace.remote_target_id = None;
     for checkout in &mut workspace.checkouts {
@@ -851,7 +848,6 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<Wo
                     last_activity_unix_ms: None,
                     checkouts: Vec::new(),
                     pinned: false,
-                    is_home: false,
                     inactive_checkouts: Default::default(),
                     session_folds: Default::default(),
                     removal: Default::default(),
@@ -1165,7 +1161,6 @@ fn inspect(
         session_workspace_ids: Vec::new(),
         last_activity_unix_ms: None,
         pinned: false,
-        is_home: false,
         checkouts,
         inactive_checkouts: Default::default(),
         session_folds: Default::default(),
@@ -1844,7 +1839,6 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: Vec::new(),
             pinned: false,
-            is_home: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -1913,7 +1907,6 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: Vec::new(),
             pinned: false,
-            is_home: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),

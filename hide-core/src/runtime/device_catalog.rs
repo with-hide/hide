@@ -1338,7 +1338,6 @@ impl Runtime {
                 path: registrable.root,
                 device_id: device.to_owned(),
                 pinned: false,
-                home: false,
             });
         self.persist_ui_state();
         crate::diagnostic!(serde_json::json!({

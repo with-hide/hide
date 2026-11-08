@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, FolderIcon, GitBranchIcon, HomeIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, FolderIcon, GitBranchIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { rememberedSelection, modelToSend, selectKind, type AgentSelection } from "./agentPicker";
@@ -110,28 +110,21 @@ export function StartPanelHost({ actions }: { actions: Actions }) {
   return open ? <StartPanel actions={actions} /> : null;
 }
 
-/** A Home is this window's own machine's (the house) or another machine's (the server), the core's included on a node's window. */
-function ProjectIcon({ project, own }: { project: StartProject; own: string }) {
-  if (!project.home) return <FolderIcon aria-hidden="true" />;
-  return project.deviceId === own ? <HomeIcon aria-hidden="true" /> : <ServerIcon aria-hidden="true" />;
-}
-
 /** A chip of the where row: a quiet word that names its value and opens its menu. */
 const CHIP = "h-(--size-control-sm) max-w-full min-w-0 gap-xxs rounded-sm px-xs text-caption font-normal";
 
 /**
- * The project menu: each device's Home and projects, the window's own device
- * first. Choosing one starts on its main checkout; a device that is not
+ * The project menu: each device's projects, the window's own device first. Choosing one starts on its main checkout; a device that is not
  * connected is listed and cannot be chosen.
  */
-function ProjectPicker({ targets, project, target, own, disabled, onPick }: { targets: StartTargets; project: StartProject | null; target: StartTarget | null; own: string; disabled: boolean; onPick: (key: string) => void }) {
+function ProjectPicker({ targets, project, target, disabled, onPick }: { targets: StartTargets; project: StartProject | null; target: StartTarget | null; disabled: boolean; onPick: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className={CHIP} disabled={disabled} aria-label={t("startPanel.project")} data-start-target={target?.key ?? ""} data-start-project={project?.key ?? ""}>
-          {project ? <ProjectIcon project={project} own={own} /> : null}
+          {project ? <FolderIcon aria-hidden="true" /> : null}
           <span className="truncate font-medium">{project?.label ?? t("shell.noTarget")}</span>
           <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
         </Button>
@@ -156,7 +149,7 @@ function ProjectPicker({ targets, project, target, own, disabled, onPick }: { ta
                       }}
                       data-start-target-option={row.branches[0]!.key}
                     >
-                      <ProjectIcon project={row} own={own} />
+                      <FolderIcon aria-hidden="true" />
                       <span className="min-w-0 flex-1 truncate">{row.label}</span>
                       {row.key === project?.key ? <CheckIcon aria-hidden="true" className="text-primary" /> : null}
                     </CommandItem>
@@ -299,6 +292,11 @@ function StartPanel({ actions }: { actions: Actions }) {
   }, []);
 
   const canStart = target !== null && target.disabled === null && selection.kind !== "terminal" && !working && (target.kind !== "worktree" || (worktreeProject !== null && branchProblem(worktreeBranch) === null));
+  // A device with no project has nothing to start in: Add a project takes the start's place.
+  const addProject = () => {
+    useStartPanel.getState().close();
+    actions.openAddProject(targets.frontDeviceId);
+  };
   const start = () => {
     if (!canStart || !target || selection.kind === "terminal") return;
     const id = startRequestId();
@@ -308,7 +306,7 @@ function StartPanel({ actions }: { actions: Actions }) {
       return;
     }
     actions.startAgent({
-      target: target.kind === "home" ? { home: true } : { checkoutPath: target.checkoutPath },
+      target: { checkoutPath: target.checkoutPath },
       deviceId: target.deviceId,
       provider: selection.kind,
       model: modelToSend(selection),
@@ -327,9 +325,9 @@ function StartPanel({ actions }: { actions: Actions }) {
     >
       <div className="flex min-w-0 flex-wrap items-center gap-xxs px-sm pt-sm" data-start-where="true">
         {target && target.deviceId !== own ? <DeviceChip variant="remote" label={targets.groups.find((group) => group.deviceId === target.deviceId)?.deviceLabel ?? ""} /> : null}
-        <ProjectPicker targets={targets} project={project} target={target} own={own} disabled={working || targets.groups.length === 0} onPick={(key) => useStartPanel.getState().setTarget(key)} />
-        {project && target && !project.home ? <span aria-hidden="true" className="text-caption text-muted-foreground">›</span> : null}
-        {project && target && !project.home && target.kind !== "worktree" ? (
+        <ProjectPicker targets={targets} project={project} target={target} disabled={working || targets.groups.length === 0} onPick={(key) => useStartPanel.getState().setTarget(key)} />
+        {project && target ? <span aria-hidden="true" className="text-caption text-muted-foreground">›</span> : null}
+        {project && target && target.kind !== "worktree" ? (
           <BranchPicker project={project} target={target} currentKey={targets.currentKey} disabled={working} onPick={(key) => useStartPanel.getState().setTarget(key)} />
         ) : null}
         {project && target?.kind === "worktree" ? (
@@ -405,10 +403,17 @@ function StartPanel({ actions }: { actions: Actions }) {
           }
         />
         <span className="flex-1" />
-        <Button size="default" disabled={!canStart} onClick={start} data-start-submit="true">
-          {working ? t("shell.starting") : t("common.start")}
-          {working ? null : <span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span>}
-        </Button>
+        {target === null && !working ? (
+          <Button size="default" onClick={addProject} data-start-add-project="true">
+            <PlusIcon aria-hidden="true" />
+            {t("firstRun.home.addProject")}
+          </Button>
+        ) : (
+          <Button size="default" disabled={!canStart} onClick={start} data-start-submit="true">
+            {working ? t("shell.starting") : t("common.start")}
+            {working ? null : <span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span>}
+          </Button>
+        )}
       </div>
     </div>
   );

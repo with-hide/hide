@@ -339,6 +339,8 @@ type UiStore = {
   notice: Notice | null;
   /** The management dialog a sidebar menu opened, or null. */
   workspaceDialog: WorkspaceDialog | null;
+  /** The device Add a project opens on, set by the surface that opened it (the start panel's empty device); null follows the focused device. */
+  addProjectDevice: string | null;
   /** The pane whose plan chip is pinned open by its press or ⇧⌘U (PRD hide-plan B7). */
   planPane: string | null;
   /**
@@ -417,6 +419,7 @@ type UiStore = {
   setCycle: (cycle: Cycle | null) => void;
   setNotice: (notice: Notice | null) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
+  setAddProjectDevice: (device: string | null) => void;
   setPlanPane: (paneId: string | null) => void;
   setWatchedTask: (id: number | null) => void;
   setFocusWhenListed: (paneId: string | null) => void;
@@ -498,6 +501,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   cycle: null,
   notice: null,
   workspaceDialog: null,
+  addProjectDevice: null,
   planPane: null,
   watchedTask: null,
   focusWhenListed: null,
@@ -580,6 +584,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setCycle: (cycle) => set({ cycle }),
   setNotice: (notice) => set({ notice }),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),
+  setAddProjectDevice: (addProjectDevice) => set({ addProjectDevice }),
   setPlanPane: (planPane) => set({ planPane }),
   setWatchedTask: (watchedTask) => set({ watchedTask }),
   setFocusWhenListed: (focusWhenListed) => set({ focusWhenListed }),

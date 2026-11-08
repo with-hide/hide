@@ -130,7 +130,7 @@ struct StoredUiState {
     #[serde(default)]
     focused_checkout_id: Option<String>,
     #[serde(default)]
-    workspace_registrations: Vec<WorkspaceRegistration>,
+    workspace_registrations: Vec<StoredRegistration>,
     /// Read one by one, so a registration this build cannot place (an SSH
     /// alias and a node that dials in together, or neither, as only a hand
     /// edit writes) is dropped with a diagnostic instead of making the whole
@@ -274,6 +274,49 @@ struct StoredUiState {
     /// renamed again. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
     operator_tab_names: BTreeMap<String, String>,
+    /// Absent unless the retirement of an old Home (`~/hide`) is pending.
+    #[serde(default)]
+    home_retire: Vec<crate::model::HomeRetirement>,
+}
+
+/// A registration as stored. `home` is only ever read: the release before
+/// the retirement of Home (PRD retire-hide-home) flagged a device's Home
+/// registration with it, and `decode` records one pending retirement for it
+/// and leaves the registration exactly as stored (B8, B13); the next save
+/// drops the flag.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StoredRegistration {
+    #[serde(flatten)]
+    registration: WorkspaceRegistration,
+    #[serde(default, skip_serializing)]
+    home: bool,
+}
+
+/// The registrations as an ordinary list, and one pending retirement per
+/// registration the older store flagged as its device's Home. The registration
+/// stays as it was (name and pin) until its helper answers what `~/hide`
+/// holds, so nothing is decided before the folder has been looked at; it is
+/// an ordinary pinned project meanwhile (D-04, D-08).
+fn read_registrations(
+    stored: Vec<StoredRegistration>,
+) -> (
+    Vec<WorkspaceRegistration>,
+    Vec<crate::model::HomeRetirement>,
+) {
+    let mut retirements = Vec::new();
+    let registrations = stored
+        .into_iter()
+        .map(|stored| {
+            if stored.home {
+                retirements.push(crate::model::HomeRetirement {
+                    device_id: stored.registration.device_id.clone(),
+                    registration_id: stored.registration.id.clone(),
+                });
+            }
+            stored.registration
+        })
+        .collect();
+    (registrations, retirements)
 }
 
 /// Settings › Issues as stored. `default_agent` is only ever read: it named
@@ -666,6 +709,13 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 crate::missions::ConductorSettings::default()
             }),
     };
+    let (workspace_registrations, flagged) = read_registrations(stored.workspace_registrations);
+    let mut home_retire = stored.home_retire;
+    for retirement in flagged {
+        if !home_retire.contains(&retirement) {
+            home_retire.push(retirement);
+        }
+    }
     let disposition = if unrecognized.is_empty() {
         LoadDisposition::Loaded
     } else {
@@ -715,7 +765,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             browser_shortcut_bindings: stored.browser_shortcut_bindings,
             focused_device_id: stored.focused_device_id,
             focused_checkout_id: stored.focused_checkout_id,
-            workspace_registrations: stored.workspace_registrations,
+            workspace_registrations,
+            home_retire,
             device_registrations: stored.device_registrations,
             machine_label: stored.machine_label,
             accent_hex: stored.accent_hex,
@@ -907,7 +958,16 @@ pub fn save(
         browser_shortcut_bindings: state.browser_shortcut_bindings.clone(),
         focused_device_id: state.focused_device_id.clone(),
         focused_checkout_id: state.focused_checkout_id.clone(),
-        workspace_registrations: state.workspace_registrations.clone(),
+        workspace_registrations: state
+            .workspace_registrations
+            .iter()
+            .cloned()
+            .map(|registration| StoredRegistration {
+                registration,
+                home: false,
+            })
+            .collect(),
+        home_retire: state.home_retire.clone(),
         device_registrations: state.device_registrations.clone(),
         machine_label: state.machine_label.clone(),
         accent_hex: state.accent_hex.clone(),
@@ -1610,6 +1670,51 @@ mod tests {
         let _ = fs::remove_dir(root);
     }
 
+    /// PRD retire-hide-home D-04, D-08: a store the release before wrote, with
+    /// a registration flagged `home`, loads that registration as it was stored
+    /// (an ordinary pinned project) and one pending retirement for its device;
+    /// the next save carries neither the flag nor a second entry, and the
+    /// pending entry survives a relaunch until the helper answers.
+    #[test]
+    fn an_older_stores_home_flag_becomes_a_pending_retirement_once() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let older = r#"{"schema_version":1,"expanded_paths":[],"workspace_registrations":[
+            {"id":"workspace:home","label":"Home","path":"/Users/me/hide","device_id":"test-node","pinned":true,"home":true},
+            {"id":"workspace:alpha","label":"Alpha","path":"/repo/alpha","device_id":"test-node"}]}"#;
+        fs::write(&path, older).unwrap();
+
+        let (state, sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        let registered: Vec<_> = state
+            .workspace_registrations
+            .iter()
+            .map(|registration| (registration.label.as_str(), registration.pinned))
+            .collect();
+        assert_eq!(registered, [("Home", true), ("Alpha", false)]);
+        assert_eq!(
+            state.home_retire,
+            [crate::model::HomeRetirement {
+                device_id: "test-node".to_owned(),
+                registration_id: "workspace:home".to_owned(),
+            }]
+        );
+
+        save(&path, &state, &sizes).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(
+            written["workspace_registrations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|registration| registration.get("home").is_none()),
+            "{written}"
+        );
+        let (again, _, _) = load(&path);
+        assert_eq!(again.home_retire, state.home_retire);
+        assert_eq!(again.workspace_registrations, state.workspace_registrations);
+    }
+
     /// B5. A pinned registration comes back pinned, and a store written before
     /// registrations carried the flag loads every project unpinned with no
     /// warning.
@@ -1626,7 +1731,6 @@ mod tests {
                 path: "/repo/alpha".to_owned(),
                 device_id: "local".to_owned(),
                 pinned: true,
-                home: false,
             }],
             ..UiStateSnapshot::default()
         };

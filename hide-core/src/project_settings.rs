@@ -222,8 +222,7 @@ fn display_name(typed: &str) -> Result<Option<String>, &'static str> {
 
 /// Gives each project the name the operator set for it on its device and
 /// root. A project without one keeps the label the catalog gave it, its
-/// registration's or its folder's; the Home is Hide's own folder and keeps
-/// its name.
+/// registration's or its folder's.
 pub(crate) fn apply_names(
     records: &BTreeMap<String, ProjectSettings>,
     projects: &mut [crate::model::WorkspaceSnapshot],
@@ -231,7 +230,7 @@ pub(crate) fn apply_names(
     if records.values().all(|record| record.name.is_none()) {
         return;
     }
-    for project in projects.iter_mut().filter(|project| !project.is_home) {
+    for project in projects.iter_mut() {
         if let Some(name) = get(records, &project.device_id, &project.path)
             .and_then(|record| record.name.as_deref())
         {

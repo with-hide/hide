@@ -1728,15 +1728,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A new tab in a checkout, or in a device's Home (`home`), with the
-     * provider started in it (D-05); `terminal` is the tab alone. `prompt` is
+     * A new tab in a checkout with the provider started in it (D-05); `terminal` is the tab alone. `prompt` is
      * the agent's first prompt, sent once it is ready, `model` a catalog id
      * (absent is the CLI's default), and `requestId` how the surface finds its
      * own answer among the core's receipts. A device's start names `deviceId`;
      * this machine's leaves it out.
      */
     startAgent(request: {
-      target: { checkoutPath: string } | { home: true };
+      target: { checkoutPath: string };
       deviceId?: string;
       provider: AgentKind;
       model?: string | null;
@@ -1753,7 +1752,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         schema_version: 2,
         kind: "agent_start_in_checkout",
         payload: {
-          ...("checkoutPath" in request.target ? { checkout_path: request.target.checkoutPath } : { home: true }),
+          checkout_path: request.target.checkoutPath,
           ...(request.deviceId ? deviceField(request.deviceId, localDeviceId(rest())) : {}),
           provider: request.provider,
           ...(request.model ? { model: request.model } : {}),
@@ -3404,8 +3403,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openOverlay("find");
     },
 
-    /** Add a project: the dialog, whose ways depend on the host chosen and on whether this window has a folder picker (`hostWays`). */
-    openAddProject() {
+    /** Add a project: the dialog, whose ways depend on the host chosen and on whether this window has a folder picker (`hostWays`). `device` is the host it opens on, the focused device without one. */
+    openAddProject(device: string | null = null) {
+      ui().setAddProjectDevice(device);
       ui().openOverlay("add_project");
     },
 

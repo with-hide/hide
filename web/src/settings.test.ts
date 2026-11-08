@@ -272,7 +272,7 @@ describe("settings rules", () => {
     expect(terms).not.toMatch(/Herdr/);
     expect(terms).toContain("Files still in use stay");
     expect(terms).not.toMatch(/daemon_auto_start|per pane/);
-    expect(terms).toContain("~/hide");
+    expect(terms).not.toContain("~/hide");
     expect(terms).not.toContain("changes no hook");
   });
 });

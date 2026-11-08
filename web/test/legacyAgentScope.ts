@@ -69,7 +69,7 @@ export function legacyProject<T extends Workspace>(project: T, agents: readonly 
   const scope = legacyScope(members, agents);
   for (const lens of members) scope.work[lens.agent.pane_id] = legacyWork(lens);
   scope.places_live = true;
-  for (const checkout of project.checkouts) for (const tab of checkout.tabs ?? []) for (const pane of tab.panes) scope.places[pane.id] ??= { project_id: project.id, checkout_id: checkout.id, kind: project.is_home ? "home" : !project.is_git && project.checkouts.length === 1 ? "folder" : "checkout" };
+  for (const checkout of project.checkouts) for (const tab of checkout.tabs ?? []) for (const pane of tab.panes) scope.places[pane.id] ??= { project_id: project.id, checkout_id: checkout.id, kind: !project.is_git && project.checkouts.length === 1 ? "folder" : "checkout" };
   const physical = agents.filter((agent) => owners.has(agent.pane_id));
   physicalScope(scope, physical);
   for (const checkout of project.checkouts) {
@@ -158,12 +158,12 @@ export function legacyRest(rest: SnapshotRest, agents: AgentRow[]): SnapshotRest
   const projects = (rest.navigator?.workspaces ?? []).map((p) => legacyProject(p, agents));
   const remotes = (rest.status?.remote ?? []).map((r) => ({ ...r, session: r.session ? { ...r.session, workspaces: (r.session.workspaces ?? []).map((p) => legacyProject(p, r.session!.agents ?? [])) } : r.session }));
   const deviceScopes = new Map<string, AgentScope>();
-  const local = legacyScope(scopeAgents(projects.filter((p) => !p.is_home).map((workspace) => ({ workspace, agents, device: null }))), agents);
+  const local = legacyScope(scopeAgents(projects.map((workspace) => ({ workspace, agents, device: null }))), agents);
   physicalScope(local, agents);
   deviceScopes.set(localId, local);
   for (const remote of remotes) {
     const all = remote.session?.agents ?? [];
-    const members = scopeAgents((remote.session?.workspaces ?? []).filter((p) => !p.is_home).map((workspace) => ({ workspace, agents: all, device: remote.target_id })));
+    const members = scopeAgents((remote.session?.workspaces ?? []).map((workspace) => ({ workspace, agents: all, device: remote.target_id })));
     const scope = legacyScope(members, all);
     physicalScope(scope, remote.state === "connected" ? all : []);
     deviceScopes.set(remote.target_id, scope);
@@ -248,7 +248,7 @@ function legacyRaised(projects: readonly Workspace[], listed: readonly ListedAge
   const drawn = new Set<string>(), owners: Record<string, string> = {};
   for (const project of projects) for (const checkout of project.checkouts) for (const tab of checkout.tabs ?? []) for (const pane of tab.panes) {
     drawn.add(pane.id);
-    if (!project.is_home && owners[pane.id] === undefined) owners[pane.id] = checkout.id;
+    if (owners[pane.id] === undefined) owners[pane.id] = checkout.id;
   }
   const raised: AgentScope["raised"] = [];
   for (const [group, cap] of [["needs_you", 5], ["done", 3]] as const) {
@@ -257,8 +257,8 @@ function legacyRaised(projects: readonly Workspace[], listed: readonly ListedAge
   }
   return { raised, owners };
 }
-export function projectRows(workspaces: Workspace[], groups: Parameters<typeof drawProjectRows>[1], listed: ListedAgent[], home: Workspace | null = null, open: readonly string[] = []) {
-  return drawProjectRows(workspaces, groups, listed, { ...emptyScope(), ...legacyRaised(home ? [...workspaces, home] : workspaces, listed) }, open);
+export function projectRows(workspaces: Workspace[], groups: Parameters<typeof drawProjectRows>[1], listed: ListedAgent[], open: readonly string[] = []) {
+  return drawProjectRows(workspaces, groups, listed, { ...emptyScope(), ...legacyRaised(workspaces, listed) }, open);
 }
 export function projectListNumbers(numbers: Parameters<typeof drawProjectNumbers>[0], rows: Parameters<typeof drawProjectNumbers>[1], workspaces: readonly Workspace[]) {
   return drawProjectNumbers(numbers, rows, { ...emptyScope(), ...legacyRaised(workspaces, []) });

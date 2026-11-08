@@ -366,6 +366,28 @@ fn released_facts(
             .map(|member| session_fact(&text(&member["kind"]), &text(&member["native_session_id"])))
             .collect(),
     );
+    // A device's old Home (PRD retire-hide-home): the registration as the
+    // release stored it, flagged `home`, which this build keeps as it was and
+    // records as a pending retirement.
+    facts.insert(
+        "old homes",
+        core["workspace_registrations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|row| row["home"] == true)
+            // By its name and folder: a device's registration id is renamed
+            // with the device, and the loaded retirement must follow it, one
+            // for each Home (two share the name).
+            .map(|row| {
+                format!(
+                    "{} {}",
+                    row["label"].as_str().unwrap_or_default(),
+                    row["path"].as_str().unwrap_or_default()
+                )
+            })
+            .collect(),
+    );
     facts.insert(
         "ledger agents",
         json(fixture, DELIVERY_LEDGER)["agents"]
@@ -528,6 +550,18 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
             .collect(),
     );
     loaded.insert(
+        "old homes",
+        ui.home_retire
+            .iter()
+            .filter_map(|retirement| {
+                ui.workspace_registrations
+                    .iter()
+                    .find(|registration| registration.id == retirement.registration_id)
+                    .map(|registration| format!("{} {}", registration.label, registration.path))
+            })
+            .collect(),
+    );
+    loaded.insert(
         "ledger agents",
         crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER))
             .map(|ledger| ledger.agents)
@@ -545,6 +579,8 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
         let optional = match *store {
             "sleep records" => true,
             "dormant sleeps" => !pi_slept,
+            // An old Home is written by the releases that kept one.
+            "old homes" => true,
             _ => false,
         };
         if facts.is_empty() && !optional {
@@ -556,6 +592,29 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
             if !loaded[store].contains(fact) {
                 failures.push(format!("{store}: {fact} was not loaded"));
             }
+        }
+        // Each old Home is one pending retirement, no more and no fewer.
+        if *store == "old homes" && loaded[store].len() != facts.len() {
+            failures.push(format!(
+                "{} old Homes were released, {} pending retirements were loaded",
+                facts.len(),
+                loaded[store].len()
+            ));
+        }
+    }
+    // A pending retirement names the device its registration was moved to, so
+    // a device re-owned by the move is still asked about its own folder.
+    for retirement in &ui.home_retire {
+        let device = ui
+            .workspace_registrations
+            .iter()
+            .find(|registration| registration.id == retirement.registration_id)
+            .map(|registration| registration.device_id.as_str());
+        if device != Some(retirement.device_id.as_str()) {
+            failures.push(format!(
+                "the pending retirement of {} names {}, its registration {device:?}",
+                retirement.registration_id, retirement.device_id
+            ));
         }
     }
     // A later build wakes a dormant sleep only from a record that still

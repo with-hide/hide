@@ -12,7 +12,7 @@ The web shell's Workspace screen follows the approved S6 proposal, its View area
 Web owner: `web/src/WorkspaceScreen.tsx`, `web/src/workspace.ts`, `web/src/LaneDivider.tsx`, `web/src/TreeButton.tsx`, `web/src/laneCalls.ts`, `web/src/ViewAreas.tsx`, `web/src/Tools.tsx`, `web/src/viewLayout.ts`, `web/src/viewDrag.ts`, `web/src/viewFocus.ts`.
 
 The Workspace's path and icons sit in the center of the window's top row (see [The window's top row](#the-windows-top-row)); there is no toolbar row under it.
-The path is `project / checkout`, where the project opens that project's panel on the Overview's Projects (PRD sidebar-task-lens B41), led by the device's colored band when the Workspace is not this Mac's; a tab in Home reads `~/hide`, since Home is no project.
+The path is `project / checkout`, where the project opens that project's panel on the Overview's Projects (PRD sidebar-task-lens B41), led by the device's colored band when the Workspace is not this Mac's.
 After the path, a Git checkout shows a small neutral FileDiff and the whole checkout's uncommitted tracked/untracked status-record count; zero is hidden, and a rename can count as two records because rename folding is disabled.
 Clicking the count opens Changes idempotently and leaves terminal keyboard ownership in place; its tooltip explains the count, while a conflict, loading, unavailable or stale read has a distinct small mark and never claims a clean tree.
 Upstream differences use ↑/↓ counts against the tracking branch, with zero counts drawn as a quiet compare mark and no-upstream/gone distinct; the counts compare with the remote as Hide last fetched it (PRD git-freshness D-01, D-02).
@@ -49,7 +49,7 @@ Changing device, checkout, connection or HEAD fences old results; the front chec
 On narrow widths the relative age disappears before the subject, then the subject contracts to the commit icon, preserving the path, count and trailing tools; details remain keyboard reachable and Escape returns to their triggers.
 Compact commit and CI buttons keep their own icon and text footprint even when the open sidebar leaves less space than the window width; they never overflow into Overview or Open server.
 When the shell disconnects, retained upstream claims disappear until the connection is live again, and a conflict count's accessible name identifies the total changed records before the conflicted subset.
-Home and ordinary folders carry no Git header.
+Ordinary folders carry no Git header.
 Web owners: `WorkspaceTitleBar` in `web/src/WorkspaceScreen.tsx` and `web/src/CheckoutGitHeader.tsx`; core owner: `hide-core/src/runtime/checkout_git.rs`, read by `hide-core/src/checkout_git.rs` on the existing Changes pump.
 Its right end holds two tool icons, in this order: Overview and `Open server`; the lane's tools are on the rail (see The right lane).
 `Open server` (a globe): one known listener opens directly as a page among the lane's documents, and multiple listeners open a compact keyboard picker.
@@ -1594,7 +1594,7 @@ Under the pointer or keyboard focus a project or folder row shows `+` and `⋯` 
 `⋯` (`More actions for <project>`) opens the row's menu under itself; both are keyboard stops and answer Enter and Space, and the menu keeps them shown while it is open.
 Elsewhere nothing on a row stands for its menu: a right-click, or the menu key or ⇧F10 on the focused row, opens it, as it does on project and folder rows too.
 Project, checkout and agent rows each have one (PRD sidebar-context-menus), and every other item runs at once; only `Remove project…`, `Delete worktree…` and `Close tab…` go through their existing confirmations.
-A project row's menu is `Project settings` and `Rename project…` (except on Home), `New worktree…`, `New tab in main` (a new tab in the checkout the home glyph marks, brought to the front), then the reveal and `Copy path`, then `Pin` or `Unpin` and `Remove project…`, on every project row, registered or not.
+A project row's menu is `Project settings` and `Rename project…`, `New worktree…`, `New tab in main` (a new tab in the checkout the home glyph marks, brought to the front), then the reveal and `Copy path`, then `Pin` or `Unpin` and `Remove project…`, on every project row, registered or not.
 `Rename project…` opens [Project settings](#project-settings) on its first page with the name field focused and its text selected.
 A checkout row's menu is `Open` (the row's open, without unfolding its agents), `New tab here`, `Open pull request #n` while GitHub knows one, then `Set purpose…`, `Set as default checkout`, `Copy branch name`, `Copy path`, `Open in VS Code` and the reveal, then the one removal that fits the row: `Delete worktree…` in the destructive color on a linked worktree, and `Remove project…` on a Git project's main checkout or a plain folder's checkout, the same confirmation as the project row's, which removes the registration and leaves the files.
 Every checkout row offers its removal, so a row under `정리할 것` whose project row is not drawn (every checkout of the project is in that fold, such as a registered folder whose folder is gone) can still be removed from the sidebar; what a missing folder cannot do (`New tab here`, `New group…`, `Set as default checkout`) stays in the menu, disabled with the reason.
@@ -1679,7 +1679,7 @@ A checkout whose root came from another checkout prefixes its purpose line with 
 Folding a project by its row or chevron, or using a checkout chevron changes the list only: the center, the focused pane and tab, read state, groups and running processes stay as they were.
 Before the first snapshot arrives the Agents and Projects lists say they are connecting rather than drawing an empty list, and a local Projects list with no registered project says so in a line with no button of its own.
 An `Add project` row sits directly under the `미션` row (see The mission screen), drawn whether or not a project is registered, with the current chord (`⇧⌘N`, `Alt+Shift+N` off macOS; none in a browser tab) on its right and no + on the section titles; it is the sidebar's one Add project (PRD first-run-onboarding B51, B52).
-The sidebar has no Home row (PRD sidebar-titlebar-refresh D-06, D-07): a Home agent is found and opened from Needs You and Done, the 태스크 list and ⌘K, the ⌘N start panel can target the Home, and ⌥n numbers the visible rows without it.
+The sidebar has no Home row (PRD sidebar-titlebar-refresh D-06, D-07; Hide keeps no Home since PRD retire-hide-home): an agent started with no project's row is found and opened from Needs You and Done, the 태스크 list and ⌘K, and ⌥n numbers the visible rows.
 Every device's sidebar starts with the Search row and the shared Overview row, under the device title in the window's top row, followed by one project/checkout/root list with no mode strip.
 Overview shows its glyph, label, Needs You count and current shortcut; zero, an absent snapshot or a disconnected device hides the count.
 The top row's Overview icon has an accessible Overview name and count description, a Needs You dot above zero and a tooltip with its current shortcut.
@@ -1714,7 +1714,7 @@ While a checkout's agent rows are closed, its status badge ends line one; openin
 A checkout's second line is its purpose, after the parent checkout it was raised from when there is one, with the last-commit age ending it on the time column; it is drawn only while the checkout's agent rows are folded and it has a purpose or a raising parent, so an opened checkout, or one with agents and neither, is one line.
 A checkout with neither, or one whose Git facts have not been read yet, is one line, with its age on that line.
 Workspace disclosure persists across launches and hides only the nested agent rows, preserving selection, running panes, and raised attention rows.
-The web shell draws the raised groups at the top of the Projects list as `Needs You · N` and then `Done · N`, each left out while empty: the agents of that group whose pane a listed project's checkout or the Home owns, in the core's order, on the Agents list's own row with its place line, drawn whatever their project, checkout or parent has folded, never unfolded themselves, and opened as the Agents row opens.
+The web shell draws the raised groups at the top of the Projects list as `Needs You · N` and then `Done · N`, each left out while empty: the agents of that group whose pane a listed project's checkout owns, in the core's order, on the Agents list's own row with its place line, drawn whatever their project, checkout or parent has folded, never unfolded themselves, and opened as the Agents row opens.
 A raised group draws at most its five (Needs You) or three (Done) most recent agents; the rest wait behind a `More N` fold row under them, styled as the inactive folds, which opens them below itself, and N in the group's heading stays the whole count.
 The fold is the page's own and starts closed on a fresh load, so the list returns to its short form; an agent folded there keeps its ⌥n number on its checkout row.
 A device's Projects list is its `Needs You · N` group, its `Done · N` group, then Pinned and the projects, then `No agents N` and `Inactive projects N`, and no row of the device's own names the device, since the rest of the list is that device's (with the rail rework of quick device-rail-badges).
@@ -1895,18 +1895,16 @@ Removing the project that holds the focused checkout moves focus and pane select
 An add that lands mid-removal cancels the removal and says so, rather than losing the project it just opened a pane in; a completed removal disappears from the snapshot and a repeated request is a quiet no-op.
 A row the engine shows without a registration offers `Remove project…` too: its confirmation counts its panes the same way and says the row goes with them, the confirmation closes those panes, and the row leaves once the engine drops its workspace; a timeout leaves the row with the reason in the error banner, and repeating the removal closes the panes that remain.
 
-## Home
+## Retired Home
 
-Core owner: `hide-core/src/runtime/home.rs`, `hide-host/src/home.rs` (see ARCHITECTURE.md, Home). Web owner: `web/src/devices.ts`; the sidebar draws no Home row (see Sidebar hierarchy).
+Core owner: `hide-core/src/runtime/home_retire.rs`, `hide-host/src/home.rs` (see ARCHITECTURE.md, Retiring Home). Web owner: `web/src/startTargets.ts`, `web/src/StartPanel.tsx`.
 
-Each device has one Home, `~/hide` in that account's home directory, for work that belongs to no project or to several.
-Nothing is made on a device until its Home is first used: the first agent or tab started there makes `~/hide` with one link per project registered on that device and Hide's `AGENTS.md` with a `CLAUDE.md` link to it, and a device whose Home was never used has no `~/hide`.
-On Windows Home holds no link: its `AGENTS.md` names each project and its folder, and an agent started there is given those folders as it is on every system.
-Once a device has a Home, registering a project there adds its link and removing the registration removes only that link, never the project's folder; two projects with one folder name get distinct link names.
-A link whose project folder moved away is dropped at the next sync with nothing on screen, only a diagnostic line.
-The home folder as a project is never linked or listed in Home (PRD home-folder-project B15): `~/hide` gains no link to home, its `AGENTS.md` does not list it, and an agent started in Home is not given home as an extra folder.
-A `~/hide` that Hide did not make is left untouched, and the start that wanted it says so where it was asked for, in the start panel, with what to do.
-A Home agent reads and edits the projects through their links, the change shows on that project's checkout row, and its own row is found in Needs You and Done, the 태스크 list and ⌘K.
+Hide keeps no Home (PRD retire-hide-home): no `~/hide` is made, no start target, sidebar row, project menu or phone target is named Home, and an agent or a tab always starts in a project's checkout.
+A start with no project to start in offers `프로젝트 추가` in place of its start control, which opens Add a project with the front device as Host; the phone's start sheet and the empty screen offer the same.
+The first launch after the update removes, on each device, only what the old Home's marker lists as Hide's: its links, its guide and its `CLAUDE.md`.
+A link the operator changed, any file they added and a `~/hide` with no marker stay as they are.
+When anything is left in `~/hide`, or Hide recorded a session or an open pane there, it stays as an ordinary pinned project named `hide`, and the agents that ran in Home read and resume as that project's agents; otherwise the empty folder and its registration go.
+Nothing is shown while this runs: a failure keeps the project and goes to the diagnostic log, and the next launch tries again; a device whose helper has not updated is left alone until it does.
 
 ## First run
 
@@ -2090,7 +2088,7 @@ In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the ti
 ⇧⌘ would have been the shorter chord, but macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so three tiles could never be reached; ⌘1-9 belongs to the tabs.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
-Removing the device in front moves the front to This Mac; that device's agents and its `~/hide` stay on it, and the rail stays.
+Removing the device in front moves the front to This Mac; that device's agents stay on it, and the rail stays.
 
 A right-click on the rail offers `기기 목록 숨기기`.
 While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), `기기 추가…` and `기기 목록 표시`.
@@ -2129,11 +2127,11 @@ The start panel starts an agent supported by the shared adapter with a first ins
 It remains independent of the inline group/draft start: a successful start makes its own tab in the target checkout's selected group rather than consuming the draft whose form happens to be open.
 ⌘N opens it in the desktop app, where it is also File › Start agent; in a browser tab ⌘N stays the browser's and `에이전트 시작…` in ⌘K, found by typing, opens it, on every screen.
 It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its text box, `에이전트에게 무엇을 요청할까요?`, which grows with what is written to about six lines and then scrolls; Enter starts, Shift+Enter is a new line, and an Enter that ends an input method's composition does neither.
-Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's Home.
+Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's most recently used project.
 Over the text is where, one quiet row of words: the device when the target is another device's (its chip in the other-device colour), then the project `›` the branch; under the text is who, the agent kind and the model menus drawn as words that light on hover, and `시작 ⏎`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, typed once the agent's screen takes input or handed to the CLI as its own argument where that is proven (ARCHITECTURE.md, the first prompt).
-The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's Home while the Overview with no project chip or Settings is; a device's surface in front makes that device the target's.
-The project menu lists the front device's Home and projects, then each other device's under its name, with a separator between devices, a check on the chosen project and a search field; a device that is not connected is listed with `연결 안 됨` and its projects cannot be chosen.
-Choosing a project starts on its main checkout; the branch menu, drawn for a project and never for a Home, lists that project's checkouts by branch with its main checkout first, marked `기본`, then the checkout in front, marked `지금`, then the rest as the catalog lists them, with a search field and, for a Git project, `새 브랜치에서 시작…` at its end.
+The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's most recently used project while the Overview with no project chip or Settings is, or `프로젝트 추가` in place of the start control when it has none; a device's surface in front makes that device the target's.
+The project menu lists the front device's projects, then each other device's under its name, with a separator between devices, a check on the chosen project and a search field; a device that is not connected is listed with `연결 안 됨` and its projects cannot be chosen.
+Choosing a project starts on its main checkout; the branch menu, lists that project's checkouts by branch with its main checkout first, marked `기본`, then the checkout in front, marked `지금`, then the rest as the catalog lists them, with a search field and, for a Git project, `새 브랜치에서 시작…` at its end.
 `새 브랜치에서 시작…` puts a new branch's name field, its base (the project's saved base, else its default branch) and an `✕` where the branch chip was; the start then creates that worktree and starts the agent in it, and `✕` goes back to the project's main checkout.
 A target whose device stops answering after it was chosen stays chosen: the panel says `<device> · 연결 안 됨` with `다시 연결` and holds `시작` until the device answers, and never moves the start to another target.
 The kind menu holds Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity with their provider marks; the model menu is `CLI 기본값` then the chosen kind's catalog (Antigravity's from `agy models`, started with `--model`), and changing the kind takes that kind's list and the model last chosen for it.
@@ -2142,7 +2140,7 @@ While the catalog is being read or cannot be read, the model menu shows the reme
 Every supported agent start, here or in a dialog, is remembered by the core with its model, `CLI 기본값` included, so the next open preselects that kind and its model with no `recent` mark; the target is not remembered and follows what is in front on every open.
 Escape or a press outside closes the panel and keeps the text for the next open; a start that goes clears it.
 The panel follows only the answer carrying its own request id, even after it closes: a refusal or a failed start shows its reason inside the panel and keeps the text, and a start that went brings the center to the new pane, on a device by moving the rail, the sidebar and the center together.
-The page opens that Workspace only after the core has selected the correlated pane and its checkout lists it, including the first start after setup or in Home.
+The page opens that Workspace only after the core has selected the correlated pane and its checkout lists it, including the first start after setup.
 A newer page visit cancels that pending presentation; the answer never sends a second focus request or closes an Overview opened over work.
 An agent that fails to start after its tab opened puts its text back in the draft with the reason, unless a new draft took its place, so the next ⌘N shows both; the reason stays until the text changes.
 A start with no answer in 90 seconds, the core's own limit for one, says so inside the panel.
@@ -2410,7 +2408,7 @@ In front of an agent pane the thing is that agent; in the Workspace elsewhere it
 Under Related, `Recent` lists the checkouts last brought to the front (PRD cmdk-recent), newest first, at most five, as the same checkout row Related uses: the branch over the project, and the device's chip after the title while the checkout is not on the device in front.
 It leaves out the checkout in front and every checkout Related already lists, and fills the five from the rest of the record.
 The core keeps the record (`ui_state.recent_checkouts`, ten checkouts, newest first, saved with the rest of the UI state and so still there after a restart): a checkout is recorded whenever it comes to the front by any path (the sidebar, ⌥1-9, ⌘K, the engine's own focus, a device's focus), moves to the top if it is already there, and the oldest leaves past ten.
-A device's Home is never recorded.
+
 Choosing a Recent row opens that checkout, bringing its device forward when it is on another one.
 A checkout of a connected device is that device's live row; one a connected catalog no longer lists is not drawn, and the core drops the record of a project unregistered, a worktree removed through Hide or a device removed (a worktree deleted outside Hide only stops being drawn, and its record ages out of the ten).
 A checkout of a device that is not connected stays as a dimmed row drawn from the names the record kept (the branch, the project and the device's name): arrows pass over it, its detail names the checkout and offers nothing, and Enter does nothing and says nothing.
@@ -2494,7 +2492,6 @@ Unread weight is never reused to mean parent, child, delegated, or selected.
 ## Project settings
 
 A Git project or plain folder's gear, project menu and the Overview's project panel (Projects tab) open the same Project settings dialog without selecting or folding that project.
-Home has no project settings entry.
 The gear shares the reserved action space with New work and More, appears on hover, keyboard focus or an open menu, and stays visible on devices without hover.
 Closing the dialog with Escape or its close button restores the opener's focus and leaves the screen, selected device and checkout unchanged.
 
@@ -2926,8 +2923,8 @@ A child whose parent is not in the list is a row of its group again.
 Local sleeping conversations appear as separate rows in the core-selected group, with Wake or Check status and no conversation detail or reply bar.
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.
 With no agents the list is one line, 실행 중인 에이전트가 없어요.
-The header's `+`, 에이전트 시작, opens the start sheet: a text box for what to do, the target (This Mac's Home first, then This Mac's checkouts, then each device's Home and checkouts, a device that is not connected disabled with 연결 안 됨), the shared kind and model menus, both preselected from the desktop's remembered choice, and 시작.
-The target names the core's machine as its system does in the phone's language (`이 Mac · 홈`, `이 PC · 홈`), and reads `홈` alone until the targets arrive.
+The header's `+`, 에이전트 시작, opens the start sheet: a text box for what to do, the target (This Mac's checkouts, then each device's checkouts, or `컴퓨터에서 프로젝트를 먼저 추가하세요` when the machine has no project, a device that is not connected disabled with 연결 안 됨), the shared kind and model menus, both preselected from the desktop's remembered choice, and 시작.
+Each target reads the machine as its system does in the phone's language, then the project and branch (`이 Mac · app · main`); the menu is empty until the targets arrive.
 시작 starts the agent there; once it appears in the list the phone opens its detail.
 The desktop does not follow a phone start: the visible tab and the keyboard stay where the operator has them, and the new agent only appears in the sidebar and the lists like any other.
 Pressing 시작 again for the same text and choice after a lost answer sends the same request id, and hided starts one agent for it.

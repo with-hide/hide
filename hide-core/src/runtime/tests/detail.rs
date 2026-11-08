@@ -219,7 +219,6 @@ fn removing_the_chosen_project_shows_every_project() {
             path: "/srv/api".to_owned(),
             device_id: "mini".to_owned(),
             pinned: false,
-            home: false,
         });
     assert!(event(
         &mut runtime,

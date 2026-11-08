@@ -531,12 +531,6 @@ impl LaunchDialect {
         })
     }
 
-    /// Verified launch dialects that accept repeated extra permission roots.
-    /// A checkout cwd is independent of this optional CLI argument.
-    pub const fn accepts_extra_directories(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex | Self::Omp | Self::Cursor)
-    }
-
     pub const fn closes_pane_when_sleeping(self) -> bool {
         !matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
     }

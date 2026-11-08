@@ -193,7 +193,7 @@ pub(super) mod fixture {
                 "agents": [], "devices": [{"id": "local", "label": null}],
                 "workspaces": [{
                     "id": "w1", "label": "hide", "path": "/private/never-send/repo", "device_id": "local",
-                    "is_git": true, "is_home": false, "checkouts": [{"github": {
+                    "is_git": true, "checkouts": [{"github": {
                         "failure_category": null, "available": true, "loading": false, "stale": false,
                         "last_success_at_unix_ms": 5, "unread_queries": [],
                     }, "path": "/private/never-send/repo"}],

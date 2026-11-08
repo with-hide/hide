@@ -107,7 +107,7 @@ impl Runtime {
         let front = self.front_repository();
         let mut repositories: Vec<(RepositoryKey, bool)> = Vec::new();
         for workspace in self.catalog_workspaces() {
-            if !workspace.is_git || workspace.is_home {
+            if !workspace.is_git {
                 continue;
             }
             let key = (workspace.device_id.clone(), workspace.path.clone());
@@ -142,7 +142,8 @@ impl Runtime {
     fn front_repository(&self) -> Option<RepositoryKey> {
         let (workspace, checkout) = self.front_checkout()?;
         let (workspace, _) = self.catalog_checkout(workspace, checkout)?;
-        (workspace.is_git && !workspace.is_home)
+        workspace
+            .is_git
             .then(|| (workspace.device_id.clone(), workspace.path.clone()))
     }
 

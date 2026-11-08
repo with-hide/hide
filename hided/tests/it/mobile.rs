@@ -1089,6 +1089,7 @@ async fn core_answers(shell: &mut Socket, request_id: &str, window: Duration) ->
 #[tokio::test]
 async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_core() {
     let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path());
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
     let running = hided::start_daemon(env(dir.path(), &fake.bin))
@@ -1097,8 +1098,8 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
     let mut shell = renderer(&running).await;
     let (mut socket, phone_id, credential) = paired_phone(&running, &mut shell).await;
     let catalog = open_sheet(&mut socket).await;
-    assert_eq!(catalog["targets"][0]["id"], home_target().as_str());
-    let start = |request_id: &str| json!({"type": "start_agent", "request_id": request_id, "text": "테스트 고쳐줘", "target": home_target().as_str(), "kind": "claude"});
+    let target = first_target(&catalog);
+    let start = |request_id: &str| json!({"type": "start_agent", "request_id": request_id, "text": "테스트 고쳐줘", "target": target.as_str(), "kind": "claude"});
     // A connection with no credential never reaches the vocabulary (B45).
     let (mut stranger, refused) = phone(running.port, &"0".repeat(64)).await;
     assert_eq!(refused["type"], "refused");
@@ -1192,6 +1193,7 @@ async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
 #[tokio::test]
 async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() {
     let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path());
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
     let running = hided::start_daemon(env(dir.path(), &fake.bin))
@@ -1199,8 +1201,8 @@ async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() 
         .unwrap();
     let mut shell = renderer(&running).await;
     let (mut socket, _phone_id, _credential) = paired_phone(&running, &mut shell).await;
-    open_sheet(&mut socket).await;
-    let start = json!({"type": "start_agent", "request_id": "retry-1", "text": "테스트 고쳐줘", "target": home_target().as_str(), "kind": "claude"});
+    let target = first_target(&open_sheet(&mut socket).await);
+    let start = json!({"type": "start_agent", "request_id": "retry-1", "text": "테스트 고쳐줘", "target": target.as_str(), "kind": "claude"});
     send_phone(&mut socket, start.clone()).await;
     let first = start_result(&mut socket, "retry-1").await;
     assert_ne!(first["reason"], "unknown_target", "{first}");
@@ -1222,6 +1224,7 @@ async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() 
 #[tokio::test]
 async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
     let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path());
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
     let running = hided::start_daemon(env(dir.path(), &fake.bin))
@@ -1229,15 +1232,11 @@ async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
         .unwrap();
     let mut shell = renderer(&running).await;
     let (mut socket, _phone_id, _credential) = paired_phone(&running, &mut shell).await;
-    open_sheet(&mut socket).await;
+    let offered = first_target(&open_sheet(&mut socket).await);
     for (request_id, target, kind, reason) in [
         ("bad-target", "/etc", "claude", "unknown_target"),
-        (
-            "bad-kind",
-            home_target().as_str(),
-            "terminal",
-            "unknown_kind",
-        ),
+        ("bad-kind", offered.as_str(), "terminal", "unknown_kind"),
+        ("old-home", "home:local", "claude", "unknown_target"),
     ] {
         send_phone(
             &mut socket,
@@ -1257,7 +1256,7 @@ async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
     }
     send_phone(
         &mut socket,
-        json!({"type": "start_agent", "request_id": "not a valid id", "text": "x", "target": home_target().as_str(), "kind": "claude"}),
+        json!({"type": "start_agent", "request_id": "not a valid id", "text": "x", "target": offered.as_str(), "kind": "claude"}),
     )
     .await;
     loop {
@@ -1270,9 +1269,28 @@ async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
     running.stop();
 }
 
-/// The phone's start target for this machine's Home: `home:<node id>`.
-fn home_target() -> String {
-    format!("home:{}", hide_platform::host::machine_id().unwrap())
+/// A project registered in the state folder before the daemon starts, so the
+/// start sheet has a target (Hide keeps no Home to start in: PRD
+/// retire-hide-home D-01). It needs no pane, so no holder starts.
+fn seed_project(dir: &Path) {
+    let project = dir.canonicalize().unwrap().join("work");
+    std::fs::create_dir_all(&project).unwrap();
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let node = hide_platform::host::machine_id().unwrap();
+    std::fs::write(
+        state.join("core-state.json"),
+        json!({"schema_version": 1, "expanded_paths": [], "workspace_registrations": [
+            {"id": "workspace:work", "label": "work", "path": project.to_string_lossy(), "device_id": node, "pinned": true}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// The id of the first target a start catalog lists.
+fn first_target(catalog: &Value) -> String {
+    catalog["targets"][0]["id"].as_str().unwrap().to_owned()
 }
 
 /// The desktop app's agent notifications share the phone's follower but not

@@ -91,8 +91,6 @@ const KEYS = new Map<string, MessageKey>([
   ["worktree.remove_ignored_changed", "coreError.worktree.ignoredChanged"],
   ["worktree.remove_discard_unconfirmed", "coreError.worktree.discardUnconfirmed"],
   ["worktree.remove_blocked", "coreError.worktree.blocked"],
-  ["home.conflict", "coreError.home.conflict"],
-  ["home.unavailable", "coreError.home.unavailable"],
 
   ["pr_link.busy", "coreError.prLink.busy"],
 

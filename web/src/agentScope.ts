@@ -43,7 +43,7 @@ export type AgentScope = {
   has_working: boolean;
   relations: Record<string, { issues: string[]; project_id: string; checkout_id: string; rows: { pane_id: string; occurrence: number; depth: number; tag: "here" | "parent" | null; caption_parent: string | null }[] }[]>;
   listed: { pane_id: string; device_id: string; device_label: string | null; remote: boolean; index: number }[];
-  places: Record<string, { project_id: string; checkout_id: string; kind: "home" | "folder" | "checkout" }>;
+  places: Record<string, { project_id: string; checkout_id: string; kind: "folder" | "checkout" }>;
   places_live: boolean;
   /** A project's or, on a device's scope, every project's tasks (`agent_scope.tasks`, PRD overview-device-tasks D-05, sidebar-task-lens D-40); absent while there are none. */
   tasks?: ProjectTasksScope;
