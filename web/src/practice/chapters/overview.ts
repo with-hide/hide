@@ -6,7 +6,7 @@ import { TOUR_WORLD, type TourModel } from "../worlds/tour";
 export default chapter<TourModel>({
   id: "overview",
   number: 1,
-  version: 3,
+  version: 4,
   world: TOUR_WORLD,
   quest: true,
   preview: "zones",
@@ -17,7 +17,8 @@ export default chapter<TourModel>({
     { id: "search", quest: true, target: "[data-sidebar-search]", side: "right", command: "search", gesture: { click: true }, done: (model) => model.searched },
     // While the palette is up it holds the keyboard; the guide comes back to the next step when Esc or ⏎ closes it.
     { id: "center", target: "[data-agent-area]", side: "right" },
-    { id: "lane", target: "[data-lane-slot]", side: "left" },
+    // The lane starts closed; the tool rail opens it on the tool pressed.
+    { id: "lane", quest: true, target: '[data-lane-tool="project"]', side: "left", gesture: { click: true }, done: (model) => model.tool === "project" },
     { id: "tools", target: "[data-lane-tool]", side: "left" },
     { id: "devices", target: "[data-device-rail]", side: "right" },
     { id: "end", zones: true, side: "center" },
