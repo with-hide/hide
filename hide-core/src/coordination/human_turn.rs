@@ -289,7 +289,10 @@ mod tests {
                 "https://github.com/login/device?user_code=WDJB-MJHT#step=2",
                 "https://github.com/login/device?user_code=WDJB-MJHT#step=2",
             ),
-            ("x-apple.systempreferences://Privacy?Camera", "x-apple.systempreferences://Privacy?Camera"),
+            (
+                "x-apple.systempreferences://Privacy?Camera",
+                "x-apple.systempreferences://Privacy?Camera",
+            ),
             ("1Password", "1Password"),
             (
                 "System Settings › Privacy & Security?\n Camera",

@@ -95,7 +95,11 @@ fn an_agent_holds_one_declaration_and_says_what_each_command_did() {
     };
     assert_eq!(clear(&mut ledger), json!(Outcome::Cleared));
     // B4: the place goes with the declaration.
-    assert!(!serde_json::to_string(&ledger).unwrap().contains("1Password"));
+    assert!(
+        !serde_json::to_string(&ledger)
+            .unwrap()
+            .contains("1Password")
+    );
     assert_eq!(clear(&mut ledger), json!(Outcome::NothingToClear));
 }
 
@@ -150,7 +154,11 @@ fn only_the_operator_settles_the_standing_declaration_and_an_end_takes_it_down()
     .unwrap();
     assert!(ledger.human_turns.is_empty());
     // B4: the place goes with it.
-    assert!(!serde_json::to_string(&ledger).unwrap().contains("github.com/login"));
+    assert!(
+        !serde_json::to_string(&ledger)
+            .unwrap()
+            .contains("github.com/login")
+    );
 }
 
 /// B29: every step of a declaration is logged with who and the kind, and
@@ -167,8 +175,7 @@ fn the_diagnostic_log_never_carries_the_place() {
         declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 1);
         declare(&mut ledger, &sender, HumanKind::Permission, CODE_PLACE, 2);
         apply(&mut ledger, &sender, &Mutation::AskHuman { turn: None }, 3).unwrap();
-        let id = declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 4)["declaration"]
-            ["id"]
+        let id = declare(&mut ledger, &sender, HumanKind::Auth, CODE_PLACE, 4)["declaration"]["id"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -380,9 +387,7 @@ fn with_store(
 /// place anywhere.
 fn assert_place_gone_from(path: &std::path::Path) {
     wait_for("the saved ledger dropped the place", || {
-        !std::fs::read_to_string(path)
-            .unwrap()
-            .contains("WDJB-MJHT")
+        !std::fs::read_to_string(path).unwrap().contains("WDJB-MJHT")
     });
 }
 
@@ -422,10 +427,7 @@ fn done_sends_one_letter_that_waits_for_no_answer_and_takes_the_turn_down() {
     assert!(letter.sender.operator_owned());
     assert_eq!(letter.kind, "report");
     assert!(!letter.waiting_answer, "the agent owes no answer");
-    assert_eq!(
-        letter.body.lines().next(),
-        Some("운영자가 처리함: 인증")
-    );
+    assert_eq!(letter.body.lines().next(), Some("운영자가 처리함: 인증"));
     // B4, B18: the letter stays after the turn goes, so it never names the
     // place.
     assert!(!letter.body.contains("WDJB-MJHT"), "{}", letter.body);
