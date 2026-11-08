@@ -64,7 +64,7 @@ It is laid on the Conductor's row while the Conductor holds the mission, else on
 The row then stands in Needs You and its line reads `<node> · <why>` (`mission.attention.reason.*`; `mission.attention` names it in notifications), with the node's title as the plain sentence for a surface that does not know the cause; the bell and the phone word it in their own language from the same subject, and a Desk card reads it as a decision.
 Several asks on one row are oldest first with `외 N건` for the rest, as for a plan review and a mission decision.
 With neither row standing, the mission itself is one Needs You item above the agent rows (its title and `<node> · <why>`, `외 N건` for the rest, with `이어받기` and that node's choices), which opens its map and is counted in the device's Needs You number with the agents, and the operator is also told once by a notice; a toast or a push alone never stands in for it (PRD mission-node-simple D-19, [delivery.md](delivery.md#missions)).
-It is a question the core lays, not one of the seven escalation causes of Delegated escalation, and adds no status, mark, colour or group.
+It is a question the core lays, not one of the eight escalation causes of Delegated escalation, and adds no status, mark, colour or group.
 
 ### A handed plan step adds no status
 
@@ -80,6 +80,21 @@ The same rule holds for a device's rows.
 A mission decision, and a mission node's attention (above), follow the same path (`plans.rs::lay_reviews_on`), laid again whenever the plan book or the mission book moves; a decision's `detail` is its line, cut to a row's width, and an attention's is the node's title, so a phone page or service worker that does not know the cause draws the plain sentence.
 A row that has both a plan waiting for review and a mission decision carries the one asked first and counts the other behind it, as the root's other asks are counted (`외 N건`, needs-you-cleanup D-13).
 Input an agent has not confirmed follows the same path, laid on the pane rather than a session, since a child that never took its brief may have no session yet: `{cause: "input_unconfirmed", input: "brief" | "letter", spent, held}`, worded `브리프 확인 안 됨` or `편지 확인 안 됨`, `브리프 못 받음` or `편지 못 받음` only when a composer read saw the text still there (`held`), and `· 재시도 다 씀` once its typings are spent (`agents.input.*`); the core lays it only once no parent can clear the screen ([delivery.md: Input an agent did not take](delivery.md#input-an-agent-did-not-take)), and a delegated child's ask rises to its root as the seventh escalation cause.
+
+### A person's turn an agent declares
+
+An agent at a step only a person can take, a sign-in, an unlock, an app or system permission, says so with `hide agent ask-human auth|permission <where>` (PRD ask-human D-02, D-03); it adds no status, mark colour or group, and Hide AI's own reading of a blocked turn stays for an agent that does not say it.
+The declaration is the core's, one per registration in the delivery ledger (`Ledger::human_turns`, `coordination/human_turn.rs`), so it outlives a sleep and a restart, and nothing Hide AI reads takes it down (D-07, D-16); a URL place keeps no query or fragment (D-04).
+It goes only when the operator presses Done, when the operator sends that agent a message of their own from its pane or the phone's conversation, when the agent runs `--clear`, or when its registration ends (D-08); a message typed and not sent leaves it.
+The core lays it on the declaring row as the question it is, `ask_subject` `{cause: "human_turn", id, kind, place, device}`, on a working row and on one with its own question or block too, ahead of every other ask on the row, which are counted behind it (`외 N건`, D-21); the row's `human_turn` names the declaration a row leads with, its own or a raised one, for the key and Done.
+A delegated child's declaration is the eighth escalation cause, `human_turn`, checked before every other: its lineage root stands in Needs You with the child's ask leading its asks, whatever the parents between are doing, and those parents take only the descendant signal (`human:<id>`), which turns them unread (D-06, D-17).
+Several declarations under one root show the one declared first, with the rest behind it; Done on the root settles only that one, and each also stands on its own row in the tree (D-20).
+The mark is the warning badge with a key in place of the `!` (`StatusMark` `human`), on the declaring row and the root only, named `사람 차례`; its line is `<kind word> · <place>`, `인증` or `허용` (`agents.human.*`), the place plain text the operator can select and never a link (D-09, D-15), with the device's chip when it runs on a connected device.
+The pane head of the declaring agent and of its root say it with Done, as an own ask leads a pane's band (`agent_state/header.rs`).
+Done is one event (`human_turn_done`, the declaration's id) from the two lists, the pane head, the Overview, the tree and the phone, disabled with the connection's reason while the declaring agent's device is not connected; it sends the agent one report letter, which wakes it when it sleeps and waits for no answer, then takes the declaration down, so a press from two surfaces sends one letter ([delivery.md: A person's turn](delivery.md#a-persons-turn)).
+A new declaration is one notice on the desktop and the phone under the existing switches, worded `사람 차례 · <kind word> · <place> · <device>`, and a replacing one is a new notice; the notification ledger keeps the declarations it announced (`Seen` in `turn.rs::push`), so a declaration raised under a root already in Needs You is announced once too, and a restart announces nothing again (D-11).
+A mission worker's declaration rises to its Conductor's row like any delegated child's, and on the map it is only its node's waiting reason, a key and `<kind word> · <place>`, never a mission attention or a 내 차례 item of the mission (D-18).
+Regression owners: `hide-core/src/runtime/tests/human_turn.rs`, the escalation tests in `agent_state/escalation.rs`, `each_persons_turn_is_announced_once_with_what_and_where` in `hided/src/mobile/push.rs`, and `web/e2e/ask-human.spec.ts`.
 
 ## agent_status provenance and background waits
 
@@ -246,7 +261,7 @@ A turn the label read as finished (`done`) is not hidden by the background tasks
 The Done notification goes out as for any finished turn, and opening the row reads it; a task that wakes the agent starts a new turn, which decides the mark again.
 A `waiting` or `unfinished` verdict, or none (Hide AI off included), keeps the row in progress on its background tasks, and children, a reply being made or running checks keep it in progress whatever the verdict (B28).
 A merely ready or finished descendant is quiet, and one whose activity the engine reports as unknown does not make its root wait, because a waiting state the projection cannot vouch for is not drawn.
-A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the seven escalation causes raises it (Delegated escalation).
+A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the eight escalation causes raises it (Delegated escalation).
 A delegated row that waits on its own (`background` or `reply`) is Working, like a delegated row that is running, and its ancestors' counts take it as working; its root waits on it only while it waits on a background task, because a reply is made by the agent that answers, not by the row that asked; an ordinary delegated row that waits for nothing keeps Seen.
 
 A reply wait ends when nothing is making the answer, even while the letter is still open in the ledger.
@@ -421,7 +436,7 @@ Four say whose move is next, and their shapes alone tell them apart; `unknown` s
 
 The ring does not turn (D-02): its dashes, not motion, tell waiting from work, on every surface, the ones with no second line (tabs, pane headers, the ⌃Tab switcher, ⌘K, the child tree popover) included (D-25, B36).
 When the agent starts working again the dashes close, and when a turn ends with a wait left they open.
-A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer, so it draws `waiting` in the working colour while its line keeps the request's warning colour, dimmed, and never the resting ring a parent's children button would show ahead of a working sibling; one of the seven escalation causes still makes it `turn`.
+A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer, so it draws `waiting` in the working colour while its line keeps the request's warning colour, dimmed, and never the resting ring a parent's children button would show ahead of a working sibling; one of the eight escalation causes still makes it `turn`.
 Colour never carries the distinction alone: the mark's name and the word that leads its line are its hover text and part of the row's accessible name (`markWords` in `web/src/agentRow.ts`), as in `내 차례 · 질문` or `읽을 것 · 일 남음`.
 
 How a stop ended is the label's verdict (`axes.rs::stop_verdict`): finished, or unfinished (work left); a label `waiting` that nothing proves is running is work left too, since nothing will wake the agent (status-marks D-17).
@@ -466,7 +481,7 @@ A subtree close is undone by one Reopen closed: the parent and its descendants c
 Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `hide-core/src/runtime/tests/tree_close.rs`.
 
 Needs You and Done belong to operator-owned roots.
-A delegated row stays Working or Seen; under the seven conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
+A delegated row stays Working or Seen; under the eight conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
 The raised row keeps its own demand, mark, status word and group; what changes is that it is drawn bright and its root carries the ask.
 Done is therefore scoped to the lineage root: a delegated child that finishes leaves a dimmed Seen row, and the completion the operator acts on is the root's.
 
@@ -924,7 +939,7 @@ A Hide AI row for a home is on the phone's list, and in these transitions, only 
 Here “on” means Agent summaries is enabled and the current session has a proven label.
 Before a proven label exists, an unavailable provider or failed analysis adds no generated title or sentence; an existing proven label can remain while an analysis is unavailable.
 “Off” means Agent summaries is disabled, including Hide AI being off; native session facts, engine lifecycle, lineage, read state and notification settings still apply.
-The table describes operator-owned roots; delegated rows and the seven escalation causes keep their ownership rules above.
+The table describes operator-owned roots; delegated rows and the eight escalation causes keep their ownership rules above.
 Sentences keep their original language in every mode.
 
 | Surface or condition | Hide AI on | Hide AI off |
