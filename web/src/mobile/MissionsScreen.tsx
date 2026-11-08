@@ -104,7 +104,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
   const first = turn[0] ?? null;
   const line = rowLine(mission, first);
   const text = line ? rowLineText(line, t) : null;
-  const pillKey = missionPillKey(mission, first);
+  const pill = t(missionPillKey(mission, first));
   return (
     <RowButton
       aria-label={t("missionTool.open", { title: mission.title })}
@@ -114,14 +114,12 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
       onClick={() => openMission(mission.id)}
     >
       <span className="flex w-full min-w-0 items-center gap-sm">
-        {pillKey ? (
-          <span
-            className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
-            data-phone-mission-pill={first?.kind ?? mission.status}
-          >
-            {t(pillKey)}
-          </span>
-        ) : null}
+        <span
+          className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
+          data-phone-mission-pill={first?.kind ?? mission.status}
+        >
+          {pill}
+        </span>
         <span className="min-w-0 flex-1 break-keep text-title font-medium text-foreground wrap-anywhere">{mission.title}</span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>

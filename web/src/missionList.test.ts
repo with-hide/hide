@@ -96,14 +96,17 @@ describe("a mission whose Conductor has not got its letters (hide-private issue 
 });
 
 describe("the turn pill words the operator's action (B6)", () => {
-  it("names the action, and a row without a Conductor draws none since its button says it", () => {
+  it("names the action in every language, and says 이어받기 for a mission no Conductor holds", async () => {
+    const { initializeInterfaceI18n } = await import("./i18n/instance");
     const asked = mission("a", { decision: "?" });
-    expect(missionPillKey(asked, missionEntry(asked, () => null).turn[0] ?? null)).toBe("missionTool.pill.answer");
-    expect(missionPillKey(asked, { kind: "landing", git: true })).toBe("missionTool.pill.join");
-    expect(missionPillKey(asked, { kind: "landing" })).toBe("missionTool.pill.merge");
-    expect(missionPillKey(asked, { kind: "worker_blocked" })).toBe("missionTool.pill.blocked");
-    expect(missionPillKey(asked, { kind: "attention" })).toBe("missionTool.pill.attention");
-    expect(missionPillKey(asked, { kind: "takeover" })).toBeNull();
+    const word = (language: "en" | "ko" | "zh-CN" | "ja", turn: Parameters<typeof missionPillKey>[1]) => initializeInterfaceI18n(language).getFixedT(null, "translation")(missionPillKey(asked, turn));
+    const turns = [{ kind: "decision" }, { kind: "landing" }, { kind: "landing", git: true }, { kind: "worker_blocked" }, { kind: "letters" }, { kind: "attention" }, { kind: "takeover" }] as const;
+    const words = (language: "en" | "ko" | "zh-CN" | "ja") => turns.map((turn) => word(language, turn));
+    expect(words("ko")).toEqual(["답하기", "머지하기", "합치기", "막힌 곳 보기", "편지 읽기", "확인하기", "이어받기"]);
+    expect(words("en")).toEqual(["Answer", "Merge", "Join", "See what's stuck", "Read letters", "Take a look", "Take over"]);
+    expect(words("zh-CN")).toEqual(["去回答", "去合并", "去汇合", "查看受阻处", "读信件", "去查看", "接手"]);
+    expect(words("ja")).toEqual(["答える", "マージする", "合流する", "停止箇所を見る", "手紙を読む", "確認する", "引き継ぐ"]);
     expect(missionPillKey(mission("b", {}), null)).toBe("mission.pill.running");
+    initializeInterfaceI18n("en");
   });
 });

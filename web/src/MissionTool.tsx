@@ -218,13 +218,12 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
   );
 }
 
-/** The state pill: what the operator does on their turn, in the decision colour, else the map head's own pill; a row that carries its action as a button (takeover) draws none. */
+/** The state pill: what the operator does on their turn, in the decision colour, else the map head's own pill; a takeover row draws none, since its 이어받기 button is the action. */
 function Pill({ mission, turn }: { mission: Mission; turn: TurnItem | null }) {
   const { t } = useInterfaceTranslation();
-  const key = missionPillKey(mission, turn);
-  if (!key) return null;
+  if (turn?.kind === "takeover") return null;
   if (turn) {
-    return <span className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}>{t(key)}</span>;
+    return <span className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", PILL_TONE.hold)} data-mission-row-pill={turn.kind}>{t(missionPillKey(mission, turn))}</span>;
   }
   return (
     <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", STATE_PILL_TONE[mission.status])} data-mission-row-pill={mission.status}>
