@@ -2,7 +2,7 @@ import type { Catalog, Catalogs } from "../../schema";
 
 // The several-agents flow's words (`practice/chapters/agents.ts`).
 const en = {
-  "practice.agents.title": "Run several agents",
+  "practice.agents.title": "Run several agents yourself",
   "practice.agents.summary": "Start another agent by words or by hand, answer what waits on you first, look at what an agent opened, go back and forth, and close and reopen",
   "practice.agents.words.quest": "Ask the lead for a reviewer",
   "practice.agents.words.kick": "Say it in words",
@@ -51,7 +51,7 @@ const en = {
 };
 
 const ko = {
-  "practice.agents.title": "에이전트 여러 개 돌리기",
+  "practice.agents.title": "에이전트 여러 개 직접 돌리기",
   "practice.agents.summary": "말로 에이전트를 더 띄우고, 손으로도 열고, 내 차례부터 답하고, 에이전트가 열어 준 걸 보고, 오가고, 닫았다 되살려요",
   "practice.agents.words.quest": "리더에게 리뷰어 부탁하기",
   "practice.agents.words.kick": "말로 시켜요",
@@ -100,7 +100,7 @@ const ko = {
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
-  "practice.agents.title": "同时运行多个智能体",
+  "practice.agents.title": "亲自运行多个智能体",
   "practice.agents.summary": "用话再开一个智能体，也可以手动开，先答“轮到你”的，查看智能体打开的东西，来回切换，关闭再重开",
   "practice.agents.words.quest": "请主智能体开一个审查者",
   "practice.agents.words.kick": "用话说",
@@ -149,7 +149,7 @@ const zhCN = {
 } satisfies Catalog<typeof en>;
 
 const ja = {
-  "practice.agents.title": "エージェントを何本も動かす",
+  "practice.agents.title": "エージェントを自分で何本も動かす",
   "practice.agents.summary": "言葉でもう一本起動し、手でも開き、「自分の番」から答え、エージェントが開いたものを見て、行き来し、閉じて開き直します",
   "practice.agents.words.quest": "リードにレビュアーを頼む",
   "practice.agents.words.kick": "言葉で頼みます",
