@@ -431,19 +431,16 @@ fn project_holding<'a>(
     device: &str,
     cwd: &str,
 ) -> Option<&'a ScopeProject> {
-    projects
+    let places = projects
         .iter()
-        .filter(|project| project.device_id == device)
-        .filter_map(|project| {
+        .enumerate()
+        .flat_map(|(index, project)| {
             std::iter::once(&project.root)
                 .chain(&project.checkouts)
-                .filter(|owner| super::within(cwd, owner))
-                .map(|owner| owner.len())
-                .max()
-                .map(|depth| (project, depth))
+                .map(move |owner| (index, (project.device_id.clone(), owner.clone())))
         })
-        .max_by_key(|(_, depth)| *depth)
-        .map(|(project, _)| project)
+        .collect::<Vec<_>>();
+    super::store::deepest_owner(&places, device, cwd).map(|&index| &projects[index])
 }
 
 fn project_value(project: &ScopeProject) -> Value {

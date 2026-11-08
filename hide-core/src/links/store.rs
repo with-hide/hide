@@ -1110,7 +1110,7 @@ impl LinkStore {
             else {
                 continue;
             };
-            if let Some(index) = projects.iter().position(|project| project.key == key) {
+            if let Some(index) = projects.iter().position(|project| project.key == *key) {
                 owner.insert(session.key.clone(), index);
             }
         }
@@ -1808,7 +1808,7 @@ impl LinkStore {
                     Some(places) => places,
                     None => places.insert(self.registered_places()?),
                 };
-                deepest_owner(places, &row.key.device, &place) == Some(project.key.as_str())
+                deepest_owner(places, &row.key.device, &place) == Some(&project.key)
             } else {
                 names.contains(&row.repo_name)
             };
@@ -3206,16 +3206,16 @@ struct NamedRow {
 
 /// The project whose registered place holding `place` on `device` is the
 /// deepest, so a folder inside a project nested in another is the inner one's.
-fn deepest_owner<'a>(
-    places: &'a [(String, DevicePath)],
+pub(super) fn deepest_owner<'a, K>(
+    places: &'a [(K, DevicePath)],
     device: &str,
     place: &str,
-) -> Option<&'a str> {
+) -> Option<&'a K> {
     places
         .iter()
         .filter(|(_, (at, path))| at == device && within(place, path))
         .max_by_key(|(_, (_, path))| path.trim_end_matches('/').len())
-        .map(|(key, _)| key.as_str())
+        .map(|(key, _)| key)
 }
 
 /// What a pass over one project's pull requests reads once: the project row,
