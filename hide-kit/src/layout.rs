@@ -31,6 +31,12 @@ pub fn home_retirement(home: &Path) -> PathBuf {
     hide_home(home).join("home-retiring.json")
 }
 
+/// Where the helper writes the old Home's marker whole before it renames it
+/// back into a folder that lost it; only the helper writes here.
+pub fn home_retirement_marker(home: &Path) -> PathBuf {
+    hide_home(home).join("home-retiring-marker.json")
+}
+
 /// Pinned CLIs shared by local keyless journey runs, never operator executables.
 pub fn journey_cli_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/journey-clis")

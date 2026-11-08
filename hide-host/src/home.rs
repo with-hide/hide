@@ -416,12 +416,45 @@ fn finish_leftover(user_home: &Path, retiring: &Path, record: &Retiring) -> Host
     // Back to its own address, with the marker it had, so the next call reads
     // it as the folder Hide's cleanup was on. A `~/hide` that exists again is
     // never replaced: the folder and the record stay, and the call fails.
-    if !retiring.join(MARKER_FILE).exists() {
-        std::fs::write(retiring.join(MARKER_FILE), &record.marker)
-            .map_err(|error| io_error(&error, "The marker could not be put back"))?;
-    }
+    put_marker_back(user_home, retiring, record)?;
     rename_no_replace(retiring, &user_home.join(HOME_DIR_NAME))
         .map_err(|error| io_error(&error, "The folder set aside could not go back to ~/hide"))
+}
+
+/// Gives the folder its marker again when it has none. The slot is looked at
+/// without following a link: a plain file there is left (its content is
+/// `read_marker`'s to judge), and anything else is the operator's, never
+/// written through or replaced, so the call fails and the folder and the
+/// record stay. The marker is written whole to Hide's own file beside the
+/// record, which only Hide writes, and then renamed into the slot without
+/// replacing, so the slot holds nothing or the whole marker at every moment
+/// and a stop in between is redone from the record.
+fn put_marker_back(user_home: &Path, retiring: &Path, record: &Retiring) -> HostResult<()> {
+    let slot = retiring.join(MARKER_FILE);
+    match std::fs::symlink_metadata(&slot) {
+        Ok(metadata) if metadata.is_file() => return Ok(()),
+        Ok(_) => {
+            return Err(HostError::new(
+                ErrorCode::Io,
+                "Something that is not a file sits where ~/hide's marker was; it is left as it is",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(&error, "The marker's place could not be read")),
+    }
+    let staged = hide_kit::layout::home_retirement_marker(user_home);
+    atomic::write_file_durable(&staged, record.marker.as_bytes(), DurableAccess::Private).map_err(
+        |error| {
+            HostError::new(
+                ErrorCode::Io,
+                format!("The marker could not be put back: {error}"),
+            )
+        },
+    )?;
+    rename_no_replace(&staged, &slot).map_err(|error| {
+        let _ = std::fs::remove_file(&staged);
+        io_error(&error, "The marker could not be put back")
+    })
 }
 
 fn remove_file(home: &Path, name: &str, retired: &mut HomeRetired) -> HostResult<()> {
@@ -1105,6 +1138,64 @@ mod tests {
         let settled = retire(dir.path(), false, true).unwrap();
         assert!(settled.kept);
         assert_eq!(names(&home), ["late.md"]);
+    }
+
+    /// The marker comes back whole or not at all: a stop in the middle of
+    /// writing it (Hide's own half-written file) is redone from the record, a
+    /// file of the operator's named like any temporary stays, and a link in
+    /// the marker's place is never followed or replaced.
+    #[test]
+    fn the_marker_put_back_is_whole_and_never_written_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        std::fs::write(home.join("late.md"), "mine").unwrap();
+        std::fs::write(home.join(".hide-home.json.0123456789abcdef"), "mine").unwrap();
+        let retiring = set_aside_as(dir.path(), &home);
+        std::fs::remove_file(retiring.join(MARKER_FILE)).unwrap();
+        // Stopped while writing: Hide's own file holds half a marker.
+        let staged = hide_kit::layout::home_retirement_marker(dir.path());
+        std::fs::write(&staged, "{\"vers").unwrap();
+        for _ in 0..2 {
+            let retired = retire(dir.path(), false, false).unwrap();
+            assert!(retired.kept && retired.marked, "{retired:?}");
+            assert_eq!(
+                names(&home),
+                [MARKER_FILE, ".hide-home.json.0123456789abcdef", "late.md"]
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join(".hide-home.json.0123456789abcdef")).unwrap(),
+                "mine"
+            );
+            assert!(!staged.exists() && !record_path(dir.path()).exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_markers_place_is_not_followed_and_the_retirement_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        std::fs::write(home.join("late.md"), "mine").unwrap();
+        let retiring = set_aside_as(dir.path(), &home);
+        std::fs::remove_file(retiring.join(MARKER_FILE)).unwrap();
+        let outside = dir.path().join("outside.json");
+        std::os::unix::fs::symlink(&outside, retiring.join(MARKER_FILE)).unwrap();
+        assert!(retire(dir.path(), false, false).is_err());
+        assert!(!outside.exists());
+        assert!(
+            std::fs::symlink_metadata(retiring.join(MARKER_FILE))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(record_path(dir.path()).exists() && !home.exists());
+
+        std::fs::remove_file(retiring.join(MARKER_FILE)).unwrap();
+        let retired = retire(dir.path(), false, false).unwrap();
+        assert!(retired.kept && retired.marked, "{retired:?}");
+        assert_eq!(names(&home), [MARKER_FILE, "late.md"]);
+        assert!(!outside.exists());
     }
 
     /// A `~/hide` that exists again is never replaced: the folder set aside
