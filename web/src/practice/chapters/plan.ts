@@ -17,6 +17,7 @@ export default chapter<PlanModel>({
   version: 1,
   world: PLAN_WORLD,
   quest: true,
+  preview: "checklist",
   steps: [
     { id: "intro", target: PANE, side: "inside" },
     // Any words ask: the agent puts its plan up for review before it changes anything.

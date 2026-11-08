@@ -208,9 +208,6 @@
   "web/src/overviewGraphNodes.tsx": {
     "button": 4
   },
-  "web/src/practice/PracticeApp.tsx": {
-    "button": 3
-  },
   "web/src/practice/PracticeCoach.tsx": {
     "button": 11
   },

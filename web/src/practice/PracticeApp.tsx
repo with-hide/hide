@@ -16,6 +16,15 @@ import { CHAPTERS, nextChapter } from "./chapters";
 import { PRACTICE_CHANNEL, type ChapterProgress, type PracticeMessage, type PracticeProgress, type ShellAnswer } from "./channel";
 import { holdPageClipboard } from "./clipboard";
 import { HUB_CSS } from "./coachStyle";
+import { keyParts } from "./PracticeCoach";
+import { PracticePreview, PREVIEW_CSS } from "./PracticePreview";
+import { Button } from "../components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../components/ui/dialog";
+import { Kbd, KbdGroup } from "../components/ui/kbd";
+import { RowButton } from "../components/ui/row-button";
+import { hostKind, keySystem } from "../host";
+import { commandLabel } from "../shortcutLabels";
+import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { PracticePlayer, type OperatorChoices } from "./PracticePlayer";
 import { composingKey } from "../keys";
 
@@ -136,63 +145,91 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
     const next = nextChapter(playing.chapter);
     return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={start} onHub={() => setPlaying(null)} onLeave={leave} />;
   }
-  return <PracticeHub progress={progress} unsaved={unanswered && !answer} onStart={start} onLeave={leave} />;
+  return <PracticeHub progress={progress} operator={operator} unsaved={unanswered && !answer} onStart={start} onLeave={leave} />;
 }
 
-function PracticeHub({ progress, unsaved, onStart, onLeave }: { progress: PracticeProgress; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void; onLeave: () => void }) {
+type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void; onLeave: () => void };
+
+/** `id`'s chord on this host with the operator's bindings as keycap parts, or null where the host has none. */
+function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
+  const host = hostKind();
+  const command = hostRegistry(operator, host, keySystem()).registry.find((row) => row.id === id);
+  return command && hostChord(command, host) ? keyParts(commandLabel(id, operator)) : null;
+}
+
+/**
+ * The chapter list: a card per chapter with the move it teaches playing on the
+ * one chosen, and pressing a card opens what the chapter has the learner do
+ * before it starts.
+ */
+export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: HubProps) {
   const { t } = useInterfaceTranslation();
   const rows = CHAPTERS.map((chapter) => ({ chapter, status: chapterStatus(chapter, progress[chapter.id]), step: progress[chapter.id]?.step ?? 0 }));
   const firstOpen = rows.findIndex((row) => row.status !== "done");
   const [chosen, setChosen] = useState(firstOpen === -1 ? 0 : firstOpen);
+  const [opened, setOpened] = useState<number | null>(null);
+  const cards = useRef<(HTMLButtonElement | null)[]>([]);
   const play = useCallback((at: number, fromStart: boolean) => {
     const row = rows[at]!;
     onStart(row.chapter, !fromStart && row.status === "paused" ? row.step : 0);
   }, [onStart, rows]);
+  const choose = useCallback((at: number) => {
+    setChosen(at);
+    cards.current[at]?.focus();
+  }, []);
 
   useEffect(() => {
+    if (opened !== null) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || composingKey(event)) return;
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+      if (step) {
         event.preventDefault();
-        setChosen((at) => Math.max(0, Math.min(rows.length - 1, at + (event.key === "ArrowDown" ? 1 : -1))));
+        choose(Math.max(0, Math.min(rows.length - 1, chosen + step)));
       } else if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) {
         event.preventDefault();
-        play(chosen, false);
+        setOpened(chosen);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chosen, play, rows.length]);
+  }, [choose, chosen, opened, rows.length]);
 
+  const open = opened === null ? null : rows[opened]!;
   return (
     <div className="ph-page" data-practice-hub>
-      <style>{HUB_CSS}</style>
+      <style>{HUB_CSS}{PREVIEW_CSS}</style>
       <main className="ph-col">
         <div className="ph-head">
           <h1>{t("practice.hubTitle")}</h1>
-          <button type="button" className="ph-leave" onClick={onLeave} data-practice-leave>{t("practice.leave")}</button>
+          <Button variant="secondary" onClick={onLeave} data-practice-leave>{t("practice.leave")}</Button>
         </div>
         <p className="ph-lead">{t("practice.hubLead")}</p>
         <p className="ph-again">{t("practice.hubAgain")}</p>
-        <ol className="ph-list">
+        <ol className="ph-grid">
           {rows.map((row, at) => {
-            const total = row.chapter.steps.length;
             const id = row.chapter.id;
             return (
-              <li key={id} className={`ph-row${at === chosen ? " on" : ""}`} data-practice-hub-chapter={id} data-status={row.status} onMouseEnter={() => setChosen(at)}>
-                <span className={`ph-num ${row.status}`}>{row.status === "done" ? "✓" : row.chapter.number}</span>
-                <div className="ph-text">
-                  <small>{t("practice.chapter", { number: row.chapter.number })} · {t("practice.steps", { count: total })}</small>
-                  <b>{t(`practice.${id}.title` as never)}</b>
-                  <span>{t(`practice.${id}.summary` as never)}</span>
-                </div>
-                <span className={`ph-chip ${row.status}`}>{row.status === "paused" ? t("practice.status.paused", { index: row.step + 1, total }) : t(`practice.status.${row.status}`)}</span>
-                <div className="ph-acts">
-                  {row.status === "paused" ? <button type="button" className="ph-sub" onClick={() => play(at, true)} data-practice-from-start>{t("practice.fromStart")}</button> : null}
-                  <button type="button" className="ph-go" onClick={() => play(at, false)} data-practice-play>
-                    {row.status === "paused" ? t("practice.continue") : row.status === "done" ? t("practice.replay") : t("practice.start")}
-                  </button>
-                </div>
+              <li key={id} className="ph-cell" style={{ animationDelay: `${at * 60}ms` }}>
+                <RowButton
+                  ref={(node) => { cards.current[at] = node; }}
+                  className={`ph-card${at === chosen ? " on" : ""}`}
+                  data-practice-hub-chapter={id}
+                  data-status={row.status}
+                  onMouseEnter={() => setChosen(at)}
+                  onFocus={() => setChosen(at)}
+                  onClick={() => setOpened(at)}
+                >
+                  <PracticePreview kind={row.chapter.preview} playing={at === chosen && opened === null} />
+                  <span className="ph-meta">
+                    <span className="ph-top">
+                      <small>{t("practice.chapter", { number: row.chapter.number })}</small>
+                      <StatusChip status={row.status} step={row.step} total={row.chapter.steps.length} />
+                    </span>
+                    <b>{t(`practice.${id}.title` as never)}</b>
+                    <span className="ph-sum">{t(`practice.${id}.summary` as never)}</span>
+                  </span>
+                </RowButton>
               </li>
             );
           })}
@@ -200,6 +237,62 @@ function PracticeHub({ progress, unsaved, onStart, onLeave }: { progress: Practi
         <p className="ph-keys">{t("practice.hubKeys")}</p>
         {unsaved ? <p className="ph-note" data-practice-unsaved>{t("practice.hubUnsaved")}</p> : null}
       </main>
+      <Dialog open={open !== null} onOpenChange={(next) => { if (!next) setOpened(null); }}>
+        {open ? <ChapterDetail row={open} operator={operator} onPlay={(fromStart) => play(opened!, fromStart)} returnTo={() => cards.current[opened!] ?? null} /> : null}
+      </Dialog>
     </div>
+  );
+}
+
+function StatusChip({ status, step, total }: { status: ChapterStatus; step: number; total: number }) {
+  const { t } = useInterfaceTranslation();
+  return <span className={`ph-chip ${status}`}>{status === "paused" ? t("practice.status.paused", { index: step + 1, total }) : t(`practice.status.${status}`)}</span>;
+}
+
+type HubRow = { chapter: PracticeChapter; status: ChapterStatus; step: number };
+
+/** What a chapter has the learner do, with the keys this host presses for each, and the way to start it. */
+function ChapterDetail({ row, operator, onPlay, returnTo }: { row: HubRow; operator: OperatorChoices; onPlay: (fromStart: boolean) => void; returnTo: () => HTMLElement | null }) {
+  const { t } = useInterfaceTranslation();
+  const { chapter, status } = row;
+  const tasks = chapter.quest ? chapter.steps.filter((step) => step.quest) : [];
+  const go = useRef<HTMLButtonElement>(null);
+  return (
+    <DialogContent
+      className="ph-detail"
+      showCloseButton
+      returnFocusTo={returnTo}
+      onOpenAutoFocus={(event) => { event.preventDefault(); go.current?.focus(); }}
+      data-practice-detail={chapter.id}
+    >
+      <PracticePreview kind={chapter.preview} playing large />
+      <div className="ph-body">
+        <small>{t("practice.chapter", { number: chapter.number })} · {t("practice.steps", { count: chapter.steps.length })}</small>
+        <DialogTitle className="ph-title">{t(`practice.${chapter.id}.title` as never)}</DialogTitle>
+        <DialogDescription className="ph-desc">{t(`practice.${chapter.id}.summary` as never)}</DialogDescription>
+        {tasks.length ? (
+          <>
+            <p className="ph-learn-head">{t("practice.learn")}</p>
+            <ol className="ph-learn">
+              {tasks.map((step) => {
+                const keys = step.command ? chordParts(step.command, operator) : null;
+                return (
+                  <li key={step.id}>
+                    <span>{t(`practice.${chapter.id}.${step.id}.quest` as never)}</span>
+                    {keys ? <KbdGroup>{keys.map((part, at) => <Kbd key={at}>{part}</Kbd>)}</KbdGroup> : null}
+                  </li>
+                );
+              })}
+            </ol>
+          </>
+        ) : null}
+      </div>
+      <DialogFooter className="ph-foot">
+        {status === "paused" ? <Button variant="text" onClick={() => onPlay(true)} data-practice-from-start>{t("practice.fromStart")}</Button> : null}
+        <Button ref={go} variant="secondary" onClick={() => onPlay(false)} data-practice-play>
+          {status === "paused" ? t("practice.continue") : status === "done" ? t("practice.replay") : t("practice.start")}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   );
 }

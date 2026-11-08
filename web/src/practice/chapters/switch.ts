@@ -10,6 +10,7 @@ export default chapter<SwitchModel>({
   version: 2,
   world: SWITCH_WORLD,
   quest: true,
+  preview: "switch",
   steps: [
     { id: "recent", quest: true, target: '[data-pane-view="pay"]', side: "inside", command: "recent_area_tab", done: (model) => model.left !== null },
     // Whichever agent the learner went back to, the project before is the other one.

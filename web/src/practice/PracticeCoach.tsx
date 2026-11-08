@@ -270,7 +270,7 @@ const same = (a: Rect | null, b: Rect | null) => a === b || (!!a && !!b && Math.
 const MODIFIERS = "⇧⌘⌥⌃";
 
 /** A chord label as keycaps: "⇧⌘B" as ⇧ ⌘ B, "Ctrl+Shift+B" as Ctrl Shift B. */
-function keyParts(label: string): string[] {
+export function keyParts(label: string): string[] {
   if (label.includes("+")) return label.split("+");
   return [...label].reduce<string[]>((parts, glyph) => {
     const last = parts[parts.length - 1];

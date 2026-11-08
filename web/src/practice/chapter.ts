@@ -57,6 +57,9 @@ export type PracticeStep<M = unknown> = {
   scene?: number;
 };
 
+/** The move a chapter's card plays on the practice list (`PracticePreview.tsx`). */
+export type PracticePreviewKind = "mission" | "zones" | "split" | "switch" | "rows" | "children" | "search" | "lane" | "checklist";
+
 export type PracticeChapter<M = unknown> = {
   /** The catalog prefix (`practice.<id>.title`, `practice.<id>.<step>.title`) and the chapter's file name. */
   id: string;
@@ -68,6 +71,8 @@ export type PracticeChapter<M = unknown> = {
   steps: PracticeStep<M>[];
   /** Whether the quest card lists the steps; a look-only tour has nothing to tick. */
   quest: boolean;
+  /** The move its card plays on the list. */
+  preview: PracticePreviewKind;
 };
 
 /** Types a chapter against its own world, then lets the list hold chapters of every world. */

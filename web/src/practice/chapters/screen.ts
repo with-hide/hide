@@ -19,6 +19,7 @@ export default chapter<ScreenModel>({
   version: 4,
   world: SCREEN_WORLD,
   quest: true,
+  preview: "split",
   steps: [
     { id: "split", quest: true, target: '[data-pane-view="lead"]', side: "inside", command: "split_right", done: (model) => panesOf(t1(model).root).length === 2 },
     { id: "jump", quest: true, target: '[data-pane-view="lead"]', side: "inside", command: "select_agent_1", done: (model) => panesOf(t1(model).root).length === 2 && focusedPane(model) === "lead" },

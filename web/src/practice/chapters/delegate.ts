@@ -14,6 +14,7 @@ export default chapter<DelegateModel>({
   version: 2,
   world: DELEGATE_WORLD,
   quest: true,
+  preview: "children",
   steps: [
     { id: "intro", target: pane(LEAD), side: "inside" },
     { id: "spawn", quest: true, target: pane(LEAD), side: "inside", gesture: say("Hand the tests to a Codex child"), done: (model) => model.stage >= 1 },

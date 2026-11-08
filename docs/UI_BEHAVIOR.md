@@ -2224,7 +2224,7 @@ With nothing to move, import or read, no dialog, row or Settings group shows.
 
 ## Practice window
 
-Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters/` the chapters, `worlds/` what they play in, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts` and `web/src/i18n/resources/practice/`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
+Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePreview.tsx` its cards' drawings, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters/` the chapters, `worlds/` what they play in, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts` and `web/src/i18n/resources/practice/`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
 
 The practice window teaches Hide on a practice screen: the shell's own sidebar, panes, lane and keyboard, drawn over a scripted world with no agent, project, file or engine behind it.
 `Practice Hide` in the Help menu and the line under Add project on the Home with no project open it on the chapter list; the first run's `Try it on a practice screen first` and the sidebar's invitation open it on chapter 0; the desktop app opens one window of its own, `Hide 연습` by name, 85% of the main window's size and against its lower right, so the main window's title row and sidebar still show beside it and the practice is never taken for Hide itself, and a browser tab opens one tab of its own; asking again brings the open one forward, and an ask for a chapter plays that chapter there from its first step.
@@ -2239,8 +2239,11 @@ It is not a ⌘K row, because ⌘K goes to things and runs no command but two ([
 The window wears `Hide 연습` as its title while it lists and while it plays, and `Hide로 돌아가기` is always on it: at the right of the list's heading, and at the right of the top center's chapter name while a chapter plays.
 It closes the practice window, and the desktop app brings the main window forward, as it does whenever the practice window closes; a browser tab the shell opened closes back to the shell's tab.
 The list's lead says that no real agent, project or file is touched and that the learner may pick only the chapters they need, and a smaller line under it that Help (?) > Practice Hide opens it again any time.
-It opens on the chapter list: each chapter's number, title, one line of what it covers and its step count, its state (`새로`, `<n> / <m>에서 멈춤`, `✓ 봄`, or `바뀜` when the chapter's steps changed since it was played), and one button: `시작`, `이어서`, or `다시 보기`, with `처음부터` beside `이어서`.
-↑ and ↓ choose a chapter and ⏎ plays it; the first chapter not yet seen is chosen at first.
+It opens on the chapter list, a grid of cards that come in one after another (at once where the system asks for reduced motion).
+Each card is one press and shows a small drawing of the shell playing the one move its chapter teaches (`PracticePreview.tsx`), then the chapter's number, its state (`새로`, `<n> / <m>에서 멈춤`, `✓ 봄`, or `바뀜` when the chapter's steps changed since it was played), its title and one line of what it covers.
+The drawing is shapes only, never a name, a number or an agent's words, and only the chosen card's plays; the others hold the move's middle, and with reduced motion every card holds it.
+Pressing a card opens it as a dialog: the drawing playing, the chapter's number and step count, its title and line, `해 볼 것` with the tasks its quest card lists and each one's keys on this host with the operator's bindings (a look-only chapter lists none), and one button, `시작`, `이어서` or `다시 보기`, with `처음부터` beside `이어서`; the button holds the keyboard, so ⏎ plays the chapter, and Esc closes the dialog back to its card.
+The arrow keys choose a card, ⏎ opens it, and the first chapter not yet seen is chosen at first.
 `이어서` plays the steps before the stopping point again on its own, quickly, the way ⏎ would, so the screen reaches the state that step needs.
 A chapter seen once stays seen when it is played again.
 Every start of a chapter, from the list, from `처음부터`, from `이전` over a step that changed the screen, or the next chapter from its end card, begins on the shell screen as the page first loaded it: an overlay, a focus, a relationship move still waiting or a copy left by the run before never carries into it (`freshShell` in `PracticeApp.tsx`).
@@ -2303,7 +2306,8 @@ A tool step ends when the lane shows that tool, whether by its chord or its rail
 
 A chapter is three new files and no change to a shared one, so chapters written side by side do not meet in a file.
 
-- `web/src/practice/chapters/<id>.ts` default-exports the chapter (`chapter()` in `chapter.ts`): its `id` (the file's name and its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
+- `web/src/practice/chapters/<id>.ts` default-exports the chapter (`chapter()` in `chapter.ts`): its `id` (the file's name and its catalog prefix), a `number`, a `version`, the `world` it plays in, the `preview` its card plays on the list, and its steps.
+  A chapter picks one of the drawings `PracticePreview.tsx` has; a move none of them shows is a new drawing there.
   `chapters.ts` lists every file there by number and refuses a file whose chapter has another id or a number another chapter has; the next chapter is the next number there is, so a gap is allowed.
 - `web/src/i18n/resources/practice/<id>.ts` default-exports the chapter's words in every language, under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`.
   `web/src/practice/words.ts` joins every file there when the chapters load, refusing a key outside its file's chapter, and adds them to the window's words; they stay out of the shared catalog (`practice.ts` keeps only the guide's own words), because the desktop host bundles that catalog without Vite, and the catalog and copy checks read them beside it.
