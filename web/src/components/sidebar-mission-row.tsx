@@ -47,8 +47,10 @@ export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk
  * the line a carried one reads (`확인 필요 · <node> · <why>`, `외 N건`).
  * Under it are 이어받기, which starts a Conductor for the mission, and the
  * node's own choices for its cause; opening the row opens the mission's map.
+ * The 프로젝트 list's Needs You and the 태스크 list's 내 차례 both draw it;
+ * `data-*` lands on the row's open button, such as the 태스크 list's arrow-key mark.
  */
-export function SidebarMissionRow({ ask, inset, actions }: { ask: MissionAsk; inset: string; actions: Actions }) {
+export function SidebarMissionRow({ ask, inset, actions, ...data }: { ask: MissionAsk; inset: string; actions: Actions } & Record<`data-${string}`, string>) {
   const { t } = useInterfaceTranslation();
   const name = [ask.mission.title, t("mission.attention"), ask.node.title].join(", ");
   return (
@@ -59,6 +61,7 @@ export function SidebarMissionRow({ ask, inset, actions }: { ask: MissionAsk; in
           size="inline"
           aria-label={name}
           data-mission-ask-open={ask.mission.id}
+          {...data}
           className="absolute inset-0 rounded-sm focus-visible:ring-inset"
           onClick={() => actions.openMission(ask.mission.id)}
         />

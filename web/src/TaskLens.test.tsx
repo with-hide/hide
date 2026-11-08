@@ -7,6 +7,7 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
 import type { AgentScope, TaskCardScope, TaskState } from "./agentScope";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { withMissionAsk } from "./gallery/MissionScene";
 import { clientI18n } from "./i18n/translator";
 import type { AgentRow, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
@@ -201,6 +202,34 @@ it("in 프로젝트별 draws one group per project, the asking project first, wi
   expect([...container.querySelectorAll('[data-task-group="hide"] ul[aria-label]')].map((list) => list.getAttribute("aria-label"))).toEqual(["읽을 것", "작업 중"]);
   expect(container.querySelector('[data-task-group-head="project"]')?.textContent).toBe("site내 차례 1");
   expect([...container.querySelectorAll('[data-task-group-head="project"]')][1]?.textContent).toBe("herdr-ide읽을 것 1작업 중 2");
+});
+
+it.each(["status", "project"] as const)("in %s draws a mission that is its own Needs You item in 내 차례 with its choices, counted with the tasks as the 프로젝트 list counts it (UI_BEHAVIOR, Needs You)", async (view) => {
+  const agents = [row("works"), row("ask", {}, { group: "needs_you" })];
+  const cards = [card("works", "working", "hide-main"), card("ask", "needs_you", "site-main")];
+  const rest = withMissionAsk(snapshot(agents, cards, view), "local", Date.UTC(2026, 10, 1));
+  const { container, sent } = await render(rest, agents);
+  const mission = container.querySelector<HTMLElement>("[data-mission-ask]")!;
+  expect(mission.getAttribute("data-mission-ask")).toBe("mission-1");
+  expect([...mission.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["이어받기", "끝으로"]);
+  if (view === "status") {
+    expect(heads(container)).toEqual(["내 차례2", "작업 중1"]);
+    // The mission row stands first in 내 차례, and the arrow keys reach it as a row.
+    const needsYou = container.querySelector('[data-task-group="needs_you"]')!;
+    expect(needsYou.querySelector("li")?.hasAttribute("data-mission-ask")).toBe(true);
+    const head = needsYou.querySelector<HTMLElement>('[data-task-focus="group"]')!;
+    head.focus();
+    await act(async () => head.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    expect(document.activeElement?.getAttribute("data-mission-ask-open")).toBe("mission-1");
+  } else {
+    // The mission's project asks, so it stands with the other asking project, under its own 내 차례 band.
+    expect([...container.querySelectorAll("[data-task-group]")].map((group) => group.getAttribute("data-task-group"))).toEqual(["hide", "site"]);
+    expect(container.querySelector('[data-task-group="hide"] [data-task-band-list="needs_you"] [data-mission-ask]')).not.toBeNull();
+    expect(container.querySelector('[data-task-group="hide"] [data-task-group-head="project"]')?.textContent).toBe("herdr-ide내 차례 1작업 중 1");
+  }
+  await act(async () => mission.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
+  await act(async () => mission.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
+  expect(sent.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toMatchObject([{ mission: "mission-1", action: "done" }]);
 });
 
 it("in 프로젝트별 puts a project whose only turn is a block first, as a block is the operator's turn (status-marks B32)", async () => {
