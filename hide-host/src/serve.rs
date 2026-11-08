@@ -1536,7 +1536,7 @@ pub fn handle_with_progress(
             // The hooks keep their records in the folder of the installation
             // that started their pane, which is this node's own.
             let install = crate::kit::running_install().map(|install| install.id);
-            let folder = hide_agent_hooks::owed::folder_of(&home, install.as_deref());
+            let folder = hide_kit::layout::owed_confirmations_of(&home, install.as_deref());
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since| {

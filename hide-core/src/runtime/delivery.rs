@@ -2719,13 +2719,14 @@ pub(crate) mod tests {
         observation.status_changed_at_unix_ms = hook + 2;
     }
 
-    /// The engine reports a turn of the pane that began and ended between
-    /// two reads: idle again, its state sequence moved, at `at`.
-    pub(crate) fn turn_between_reads(runtime: &mut Runtime, pane: &str, at: u64) {
+    /// The engine's state of the pane moves to `status` at `at` without a
+    /// read seeing what came between, as a turn that began and ended between
+    /// two reads does.
+    pub(crate) fn state_moved(runtime: &mut Runtime, pane: &str, status: &str, at: u64) {
         let observation = runtime.delivery_observations.get_mut(pane).unwrap();
         observation.state_change_seq = Some(observation.state_change_seq.unwrap_or(0) + 2);
         observation.status_changed_at_unix_ms = at;
-        observation.engine("idle");
+        observation.engine(status);
     }
 
     /// The pane's turn ends at `at`: the engine reports it idle from then on.

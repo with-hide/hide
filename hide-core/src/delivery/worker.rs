@@ -922,7 +922,7 @@ fn apply(ledger: &mut Ledger, request: &Request, now: u64) -> Result<(Value, boo
             // The handover is counted before the answer leaves, so a receipt
             // that never comes cannot make the same letter ride every tool;
             // the count moves nothing on screen.
-            mailbox::record_tool_handover(ledger, &intake);
+            mailbox::record_tool_handover(ledger, &intake, now);
             return Ok((json!(intake), false));
         }
         command => mailbox::apply_in(

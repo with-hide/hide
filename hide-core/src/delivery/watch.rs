@@ -1205,6 +1205,7 @@ mod tests {
             bell_line: None,
             bell_turn: None,
             handed: false,
+            handed_at_unix_ms: None,
             intake_from: None,
             immediate: false,
             forced: false,

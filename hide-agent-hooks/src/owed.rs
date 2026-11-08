@@ -125,11 +125,30 @@ pub fn owe(
 /// it: the node answers the core's ask with it, and the core confirms the
 /// letters of the record's session that wait for it. `None` when nothing is
 /// owed, and for a record past a letter's deadline or damaged, which is
-/// dropped; one the system does not let it read now is left for a later ask.
+/// dropped; one the system does not let it take now is left for a later ask.
+///
+/// The record is moved aside before it is read, so a hook that misses
+/// again meanwhile writes a record of its own for the next ask rather than
+/// adding to one being forgotten. A record of a session that ended in the
+/// pane is handed over and forgotten too: the core confirms nothing by it,
+/// and its letters end at their deadline as they would.
 pub fn take(folder: &Path, pane: &str, now: u64) -> Option<Owed> {
     let path = path(folder, pane);
-    let record = read(&path).ok()?;
-    let _ = std::fs::remove_file(&path);
+    let file_name = path.file_name()?.to_str()?;
+    let taken = folder.join(format!(".{file_name}.taken"));
+    hide_platform::fs::atomic::replace_file(&path, &taken).ok()?;
+    let record = match read(&taken) {
+        Ok(record) => record,
+        Err(_) => {
+            // Back under its name for a later ask, unless a new miss took
+            // the name meanwhile.
+            if hide_platform::fs::atomic::rename_no_replace_path(&taken, &path).is_err() {
+                let _ = std::fs::remove_file(&taken);
+            }
+            return None;
+        }
+    };
+    let _ = std::fs::remove_file(&taken);
     record
         .filter(|record| !expired(record, now))
         .map(|record| Owed {
@@ -242,6 +261,22 @@ mod tests {
         owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
         std::fs::write(path(&folder(home.path()), "w1:p1"), b"{").unwrap();
         assert_eq!(taken(home.path(), "w1:p1", NOW), None);
+        assert_eq!(count(&folder(home.path())), 0);
+    }
+
+    /// A record being taken is moved aside first, so a hook that misses
+    /// meanwhile keeps a record of its own for the next ask instead of
+    /// adding to the one being forgotten.
+    #[test]
+    fn a_miss_after_a_take_is_kept_for_the_next_ask() {
+        let home = tempfile::tempdir().unwrap();
+        owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
+        assert!(taken(home.path(), "w1:p1", NOW).is_some());
+        owe(home.path(), "w1:p1", "s1", &ids(&["letter-2"]), NOW).unwrap();
+        assert_eq!(
+            taken(home.path(), "w1:p1", NOW).map(|owed| owed.ids),
+            Some(ids(&["letter-2"]))
+        );
         assert_eq!(count(&folder(home.path())), 0);
     }
 

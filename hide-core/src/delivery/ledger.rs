@@ -97,6 +97,14 @@ pub struct Letter {
     /// field at its next save.
     #[serde(default)]
     pub handed: bool,
+    /// When a hook last handed the letter over, at a prompt (`handed`) or at
+    /// a tool (`tool_handovers`), on the core's clock: a rest whose state
+    /// moved after it is a rest that hook had ended before, when the core
+    /// asks the pane's machine for a confirmation it could not send
+    /// (`Doorbell::settle_owed`). Null until handed, and for a letter an
+    /// older build handed.
+    #[serde(default)]
+    pub handed_at_unix_ms: Option<u64>,
     /// Where the letter's wait for intake began: on its recipient machine's
     /// clock while the ledger keeps one (`Ledger::node_clocks`), on the wall
     /// clock otherwise; null is its creation on the wall clock.

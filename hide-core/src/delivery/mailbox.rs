@@ -236,6 +236,7 @@ pub(crate) fn send(
         bell_line: None,
         bell_turn: None,
         handed: false,
+        handed_at_unix_ms: None,
         immediate: false,
         forced: false,
         tool_handovers: 0,
@@ -483,7 +484,7 @@ pub fn apply_in(
             let intake = pull_in(ledger, actor, language, Bundling::of(command))?;
             // Handed over now, whether or not the hook's confirmation, a
             // second process inside its last 400 ms, ever arrives.
-            mark_handed(ledger, &intake);
+            mark_handed(ledger, &intake, now);
             Ok(json!(intake))
         }
         // An agent no bell rings for takes its letters on its next prompt,
@@ -800,7 +801,7 @@ pub(crate) fn gap_pull(
 
 /// Counts the handover of the letters `intake` carries, so that a letter
 /// whose receipt never comes is handed over at most [`TOOL_HANDOVERS`] times.
-pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool {
+pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake, now: u64) -> bool {
     let mut changed = false;
     for letter in ledger
         .letters
@@ -808,6 +809,7 @@ pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool
         .filter(|letter| intake.ids.contains(&letter.id))
     {
         letter.tool_handovers = letter.tool_handovers.saturating_add(1);
+        letter.handed_at_unix_ms = Some(now);
         changed = true;
     }
     changed
@@ -815,13 +817,14 @@ pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool
 
 /// Marks the pending letters `intake` hands over as handed: no bell is typed
 /// for them again.
-fn mark_handed(ledger: &mut Ledger, intake: &Intake) {
+fn mark_handed(ledger: &mut Ledger, intake: &Intake, now: u64) {
     for letter in ledger
         .letters
         .iter_mut()
         .filter(|letter| letter.state == State::Pending && intake.ids.contains(&letter.id))
     {
         letter.handed = true;
+        letter.handed_at_unix_ms = Some(now);
     }
 }
 
@@ -1610,7 +1613,7 @@ mod tests {
             .unwrap();
             assert_eq!(intake.ids, ids);
             assert!(!intake.context.contains("late-body"));
-            record_tool_handover(&mut ledger, &intake);
+            record_tool_handover(&mut ledger, &intake, 1001);
             apply(
                 &mut ledger,
                 &recipient,
@@ -2134,13 +2137,13 @@ mod tests {
             // the next prompt; its batch-mate still goes.
             for _ in 0..TOOL_HANDOVERS {
                 let intake = tool_pull(&ledger, &recipient, Some(1000), 1001).unwrap();
-                assert!(record_tool_handover(&mut ledger, &intake), "{kind}");
+                assert!(record_tool_handover(&mut ledger, &intake, 1001), "{kind}");
             }
             assert_eq!(ledger.letters[1].tool_handovers, TOOL_HANDOVERS);
             assert!(pull(&ledger, Some(1000), 1001).is_empty(), "{kind}: spent");
             assert_eq!(pull(&ledger, Some(1000), 1000 + wait), ids[..1], "{kind}");
             let none = tool_pull(&ledger, &recipient, Some(1000), 1001).unwrap();
-            assert!(!record_tool_handover(&mut ledger, &none), "{kind}");
+            assert!(!record_tool_handover(&mut ledger, &none, 1001), "{kind}");
             // A letter past its deadline is not handed over.
             ledger.letters[1].created_at_unix_ms = 0;
             assert!(pull(&ledger, Some(1000), 61 * 60_000).is_empty(), "{kind}");
