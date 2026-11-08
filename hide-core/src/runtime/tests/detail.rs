@@ -144,6 +144,8 @@ fn a_practice_chapter_counts_its_start_and_end_once() {
     assert_eq!(statistics.take(), []);
     // A flow that was folded into another sends nothing; the one it was folded into counts.
     assert!(practice_event(&mut runtime, "screen", 9, true));
+    assert!(practice_event(&mut runtime, "find", 9, true));
+    assert!(practice_event(&mut runtime, "project", 9, true));
     assert_eq!(statistics.take(), []);
     assert!(practice_event(&mut runtime, "agents", 0, false));
     assert_eq!(
@@ -152,6 +154,21 @@ fn a_practice_chapter_counts_its_start_and_end_once() {
             chapter: PracticeChapter::Agents,
             stage: PracticeStage::Started
         }]
+    );
+    assert!(practice_event(&mut runtime, "devices", 0, false));
+    assert!(practice_event(&mut runtime, "day", 0, false));
+    assert_eq!(
+        statistics.take(),
+        [
+            Event::Practice {
+                chapter: PracticeChapter::Devices,
+                stage: PracticeStage::Started
+            },
+            Event::Practice {
+                chapter: PracticeChapter::Day,
+                stage: PracticeStage::Started
+            }
+        ]
     );
 }
 

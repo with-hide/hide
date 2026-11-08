@@ -77,9 +77,9 @@ pub enum PracticeChapter {
     Mission,
     Overview,
     Agents,
-    Find,
     Plan,
-    Project,
+    Devices,
+    Day,
 }
 
 impl PracticeChapter {
@@ -88,9 +88,9 @@ impl PracticeChapter {
             "mission" => Self::Mission,
             "overview" => Self::Overview,
             "agents" => Self::Agents,
-            "find" => Self::Find,
             "plan" => Self::Plan,
-            "project" => Self::Project,
+            "devices" => Self::Devices,
+            "day" => Self::Day,
             _ => return None,
         })
     }
@@ -256,9 +256,9 @@ impl Event {
                         PracticeChapter::Mission => "mission",
                         PracticeChapter::Overview => "overview",
                         PracticeChapter::Agents => "agents",
-                        PracticeChapter::Find => "find",
                         PracticeChapter::Plan => "plan",
-                        PracticeChapter::Project => "project",
+                        PracticeChapter::Devices => "devices",
+                        PracticeChapter::Day => "day",
                     },
                 ),
                 (

@@ -4,7 +4,7 @@
 // bringing it back with Restore session.
 
 import { chapter } from "../chapter";
-import { DAY_WORLD, findsLogin, openedLogin, readsIssue, restoredLogin, type DayModel } from "../worlds/day";
+import { DAY_WORLD, findsLogin, ISSUE_KEY, openedLogin, readsIssue, restoredLogin, type DayModel } from "../worlds/day";
 
 const QUERY = { type: { input: "[data-history-query]", text: "login" } };
 
@@ -21,7 +21,7 @@ export default chapter<DayModel>({
     { id: "work", target: "[data-overview-body]", side: "center" },
     { id: "tabs", target: "[data-overview-navigation]", side: "bottom" },
     { id: "backlog", quest: true, target: '[data-main-tab="backlog"]', side: "bottom", gesture: { click: true }, shown: "[data-overview-backlog]" },
-    { id: "issue", quest: true, target: "[data-backlog-row]", side: "bottom", gesture: { click: true }, done: readsIssue },
+    { id: "issue", quest: true, target: `[data-backlog-row="${ISSUE_KEY}"]`, side: "bottom", gesture: { click: true }, done: readsIssue },
     { id: "history", quest: true, target: '[data-main-tab="history"]', side: "bottom", gesture: { click: true }, shown: "[data-overview-history]" },
     // Any word of a session finds it, not only the one the bubble suggests.
     { id: "search", quest: true, target: "[data-history-query]", side: "bottom", gesture: QUERY, done: findsLogin },

@@ -7,7 +7,7 @@
 // does, so nothing here is drawn twice.
 
 import type { AgentScope, ProjectTasksScope } from "../../agentScope";
-import type { AgentRow, AgentState, IssueDetail, SessionRecord, SessionSearchStatus, SessionWorkSearch, Task, TaskOperation, TaskSource, WorkSession, Workspace } from "../../snapshot";
+import type { AgentRow, AgentState, IssueDetail, SessionRecord, SessionSearchOptions, SessionSearchStatus, SessionWorkSearch, Task, TaskOperation, TaskSource, WorkSession, Workspace } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
 import { agent, applyDesk, deskSnapshot, oneTabDesk, shellScreen, type DeskModel, type PracticePane, type PracticePlace } from "./kit";
 
@@ -51,7 +51,7 @@ export const ISSUE_KEY = `github:${REPOSITORY}#${ISSUES[0]![0]}`;
  * record is open, the issue whose detail is open, and the start that brought a
  * session back.
  */
-export type DayModel = { desk: DeskModel; query: string | null; record: string | null; issue: string | null; restore: { requestId: string | null; session: string } | null };
+export type DayModel = { desk: DeskModel; query: string | null; options: SessionSearchOptions | undefined; record: string | null; issue: string | null; restore: { requestId: string | null; session: string } | null };
 
 /** Whether History's last query holds `session` by whole words of its title or requests, as a learner types a word they remember. */
 function finds(query: string | null, past: Past): boolean {
@@ -90,7 +90,7 @@ function initial(): DayModel {
   const desk = oneTabDesk({ id: "lead", agent: lead, title: "Fix the checkout 500" });
   const copy: PracticePane = { id: "copy", agent: rested("copy", "Update the receipt email", false, 3, "The new receipt is sent"), title: "Update the receipt email" };
   const tabs = [...desk.tabs, { id: "t2", name: null, root: { type: "pane" as const, pane_id: copy.id }, focused: copy.id, zoomed: false }];
-  return { desk: { ...desk, panes: [...desk.panes, copy], tabs, groups: [{ id: null, name: null, tabs: tabs.map((tab) => tab.id) }], nextId: 3 }, query: null, record: null, issue: null, restore: null };
+  return { desk: { ...desk, panes: [...desk.panes, copy], tabs, groups: [{ id: null, name: null, tabs: tabs.map((tab) => tab.id) }], nextId: 3 }, query: null, options: undefined, record: null, issue: null, restore: null };
 }
 
 /** The desk with a session back in a tab of its own and in front, as the core leaves it once Restore session's agent has started. */
@@ -114,7 +114,7 @@ function sessionSearch(model: DayModel, nowMs: number): SessionWorkSearch {
   const query = model.query ?? "";
   const hits = PAST.filter((past) => !query.trim() || finds(query, past) || [past.title, ...past.requests.map(([, text]) => text)].some((text) => text.toLowerCase().includes(query.trim().toLowerCase())));
   return {
-    query, loading: false, failure: null, next_cursor: null,
+    query, options: model.options, loading: false, failure: null, next_cursor: null,
     results: hits.map((past) => {
       const asked = past.requests.map(([hoursAgo, text], offset) => ({ kind: "request" as const, text, at_unix_ms: nowMs - hoursAgo * HOUR_MS, request_offset: offset }));
       const matches = query.trim() ? asked.filter((one) => one.text.toLowerCase().includes(query.trim().toLowerCase())) : asked.slice(0, 1);
@@ -216,7 +216,7 @@ function apply(model: DayModel, event: CoreEvent): DayModel | null {
   const p = event.payload;
   switch (event.kind) {
     case "session_work_search":
-      return { ...model, query: String(p.query ?? "") };
+      return { ...model, query: String(p.query ?? ""), options: p.options as SessionSearchOptions | undefined };
     case "session_record_open": {
       const session = p.session as WorkSession | undefined;
       const past = PAST.find((one) => one.session.session_id === session?.session_id);

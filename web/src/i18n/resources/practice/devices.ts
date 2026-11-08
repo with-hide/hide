@@ -35,9 +35,9 @@ const en = {
 
 const ko = {
   "practice.devices.title": "여러 컴퓨터로 운영하기",
-  "practice.devices.summary": "기기 레일, 컴퓨터가 나를 기다린다는 표시, 다른 컴퓨터를 앞으로 가져오기, 거기서 탭 열기, 돌아오기",
+  "practice.devices.summary": "기기 목록, 컴퓨터가 나를 기다린다는 표시, 다른 컴퓨터를 앞으로 가져오기, 거기서 탭 열기, 돌아오기",
   "practice.devices.rail.kick": "컴퓨터마다 네모 하나",
-  "practice.devices.rail.title": "레일에 내 컴퓨터가 늘어서 있어요",
+  "practice.devices.rail.title": "기기 목록에 내 컴퓨터가 늘어서 있어요",
   "practice.devices.rail.text": "이 Mac이 지금 쓰는 노트북이에요. Hide가 닿는 다른 컴퓨터는 그 아래 네모로 나와요. 누르면 그 컴퓨터의 일이 앞으로 와요.",
   "practice.devices.mark.kick": "열기 전에",
   "practice.devices.mark.title": "표시가 있으면 내 차례예요",
@@ -61,7 +61,7 @@ const ko = {
   "practice.devices.back.title": "이 Mac 누르기",
   "practice.devices.back.text": "내 프로젝트와 에이전트가 떠날 때 그대로 돌아와요.",
   "practice.devices.end.kick": "둘 다 눈에 들어와요",
-  "practice.devices.end.title": "컴퓨터는 둘, 레일은 하나",
+  "practice.devices.end.title": "컴퓨터는 둘, 기기 목록은 하나",
   "practice.devices.end.text": "네모의 표시로 어디서 나를 기다리는지 보고, 그 네모를 눌러 가요.",
 } satisfies Catalog<typeof en>;
 

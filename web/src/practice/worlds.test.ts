@@ -159,7 +159,7 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
   // Esc closes a palette mid-step; ⏎ alone has to bring it back (docs/UI_BEHAVIOR.md, Adding a chapter).
   it("gives every step done inside a palette the command that opens it", () => {
     for (const step of chapter.steps) {
-      const inPalette = step.target?.includes("[data-palette]") || (step.gesture !== undefined && "type" in step.gesture && "input" in step.gesture.type);
+      const inPalette = step.target?.includes("[data-palette]") || (step.gesture !== undefined && "type" in step.gesture && "input" in step.gesture.type && step.gesture.type.input.includes("[data-palette"));
       if (inPalette) expect(step.command, step.id).toBeDefined();
     }
   });
