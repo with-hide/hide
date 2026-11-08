@@ -3,8 +3,9 @@ use super::*;
 
 /// The store's step budgets are the worker's; these tests read what a step
 /// leaves, so every store here is measured on a clock that does not move.
+static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
 fn open(path: &Path) -> Result<Store, &'static str> {
-    static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
     Store::open_with_clock(path, || *START)
 }
 
@@ -1066,6 +1067,38 @@ fn a_version_3_store_converts_to_under_half_its_size_and_answers_as_before() {
         )
         .unwrap();
     assert_eq!(outcome.updated, 1);
+}
+
+/// A version 3 store at its page limit, with no free page, as a build
+/// before the calls format left the operator's on 2026-11-08, opens and
+/// converts: the first step frees its calls' pages before the calls tables
+/// take some.
+#[test]
+fn a_version_3_store_at_its_page_limit_opens_and_converts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = hide_kit::layout::usage_store(dir.path());
+    let now = instant("2026-11-07");
+    let calls = operator_like(CONVERT_BATCH * 2 + 100, "node-a", now);
+    let borrowed: Vec<_> = calls
+        .iter()
+        .map(|(device, agent, event)| (device.as_str(), *agent, event.clone()))
+        .collect();
+    let v3 = V3::write(&path, &borrowed, &source());
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("VACUUM;").unwrap();
+    let free: u64 = db
+        .pragma_query_value(None, "freelist_count", |r| r.get(0))
+        .unwrap();
+    assert_eq!(free, 0);
+    let pages: u64 = db
+        .pragma_query_value(None, "page_count", |r| r.get(0))
+        .unwrap();
+    drop(db);
+    let mut store = Store::open_limited(&path, || *START, pages).unwrap();
+    while store.converting().unwrap() {
+        store.convert().unwrap();
+    }
+    answers_as(&mut store, &v3, now);
 }
 
 /// A conversion stopped between steps goes on where it stopped after a
