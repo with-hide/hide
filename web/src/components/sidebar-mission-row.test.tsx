@@ -58,7 +58,7 @@ it("gives the next node its own choices once the first one's choice is sent", as
   const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
   useShellStore.setState({ rest, connection: "live" });
   const [first] = missionAsks([mission], [mission.id]);
-  const next = { ...first!, node: { ...first!.node, key: "screen", title: "API 쓰는 화면" }, attention: { ...first!.attention, reason: "worker_ended" as const, since_unix_ms: first!.attention.since_unix_ms + 1 } };
+  const next = { ...first!, node: { ...first!.node, key: "screen", title: "API 쓰는 화면" }, attention: { ...first!.attention, reason: "worker_ended" as const, choices: ["drop" as const], since_unix_ms: first!.attention.since_unix_ms + 1 } };
   const sent: unknown[] = [];
   const actions = createActions((event) => sent.push(event));
   const container = document.createElement("ul");
@@ -71,6 +71,7 @@ it("gives the next node its own choices once the first one's choice is sent", as
     await draw(next);
     const drop = container.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
     expect(drop.disabled).toBe(false);
+    await act(async () => drop.click());
     await act(async () => drop.click());
     expect(sent.map((event) => (event as { payload: { node: string; action: string } }).payload)).toMatchObject([{ node: first!.node.key, action: "done" }, { node: "screen", action: "drop" }]);
   } finally {

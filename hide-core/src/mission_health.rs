@@ -135,9 +135,12 @@ fn node_acts(
     {
         acts.push(Act::Clear { node: at });
     }
-    // A worker that ended with the node not done (B11).
+    // A worker that ended with work of its own left on the node (B11): a
+    // pull request that only waits on CI, a review or the merge goes on
+    // without one, and a stale answer decides nothing about it (B24).
     if node.status == NodeStatus::Working
         && fact.worker == Some(WorkerLife::Ended)
+        && worker_waits(node, facts.pulls) == Some(false)
         && let Some(agent) = &node.agent_id
     {
         raise(
@@ -385,10 +388,17 @@ fn still_holds(
         return false;
     }
     match attention.reason {
+        // Gone too once the node no longer needs its worker, by the rule
+        // that raised it.
         AttentionReason::WorkerEnded => {
-            node.agent_id == attention.agent && fact.worker == Some(WorkerLife::Ended)
+            node.agent_id == attention.agent
+                && fact.worker == Some(WorkerLife::Ended)
+                && worker_waits(node, facts.pulls) != Some(true)
         }
-        AttentionReason::WakeRefused => fact.worker != Some(WorkerLife::Running),
+        AttentionReason::WakeRefused => {
+            fact.worker != Some(WorkerLife::Running)
+                && worker_waits(node, facts.pulls) != Some(true)
+        }
         AttentionReason::MergedUnproven => !fact.unmet.is_empty(),
         AttentionReason::PrClosed => match facts.pulls {
             // A pull request of the node's, or the outside one it follows,
@@ -589,20 +599,23 @@ fn last_review_at(node: &MissionNode) -> Option<u64> {
         .max()
 }
 
-/// Whether the node's worker has nothing to push for now: its current pull
-/// request is merged, or waits on CI, a review or the merge with nothing
-/// failed and no line of the node failed. None while GitHub's answer does
-/// not hold the pull request.
+/// Whether the node's worker has nothing to do for now, so the node goes on
+/// without it: no line of the node failed and its current pull request is
+/// merged, or waits on CI, a review or the merge (the merge queue too) with
+/// nothing failed. A node with no pull request or a failed line needs its
+/// worker; None while GitHub's answer does not hold the pull request. The
+/// one rule the quiet warning, the ended worker's raise (B11) and a refused
+/// wake's raise read.
 fn worker_waits(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> Option<bool> {
-    let Some(number) = node.current_pr() else {
-        return Some(false);
-    };
-    let pull = find(pulls?, number)?;
     let failed = node
         .criteria
         .iter()
         .any(|line| line.state == crate::mission_criteria::CriterionState::Fail);
-    Some(pull.badge == PullRequestBadge::Merged || (waits_on_others(pull) && !failed))
+    let Some(number) = node.current_pr().filter(|_| !failed) else {
+        return Some(false);
+    };
+    let pull = find(pulls?, number)?;
+    Some(pull.badge == PullRequestBadge::Merged || waits_on_others(pull))
 }
 
 #[cfg(test)]
@@ -846,6 +859,83 @@ mod tests {
                 agent: Some("agent-a".into()),
             }]
         );
+    }
+
+    /// B11: an ended worker is raised only while the node needs one: its
+    /// pull request failed CI, is a draft or one of its lines failed. One
+    /// that is green, still runs its CI or sits in the merge queue goes on
+    /// without it (mission-38 flaky-phone, PR #2185), and a stale answer
+    /// raises nothing about a node with a pull request.
+    #[test]
+    fn an_ended_worker_is_raised_only_while_the_node_needs_one() {
+        let mut m = running(&["a"]);
+        m.nodes[0].prs = vec![7];
+        let ended = || vec![worker(WorkerLife::Ended)];
+        let raised = [Act::Raise {
+            node: 0,
+            reason: AttentionReason::WorkerEnded,
+            pr: None,
+            agent: Some("agent-a".into()),
+        }];
+        let green = pull(7, "feat/a", PullRequestBadge::Open);
+        let mut queued = green.clone();
+        queued.work.queue = crate::model::MergeQueuePlace::At(1);
+        let mut running_ci = green.clone();
+        running_ci.checks = PullRequestChecks::Pending;
+        for goes_on in [green.clone(), queued, running_ci] {
+            let pulls = listed(vec![goes_on.clone()]);
+            assert!(
+                evaluate(&m, &facts(Some(&pulls), ended())).is_empty(),
+                "{goes_on:?}"
+            );
+        }
+        let mut failing = green.clone();
+        failing.checks = PullRequestChecks::Failed;
+        let mut draft = green.clone();
+        draft.is_draft = true;
+        for stuck in [failing, draft] {
+            let pulls = listed(vec![stuck]);
+            assert_eq!(evaluate(&m, &facts(Some(&pulls), ended())), raised);
+        }
+        assert!(evaluate(&m, &facts(None, ended())).is_empty());
+        // A failed line is the worker's to fix whatever GitHub says.
+        m.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Fail;
+        let pulls = listed(vec![green]);
+        assert_eq!(evaluate(&m, &facts(Some(&pulls), ended())), raised);
+        assert_eq!(evaluate(&m, &facts(None, ended())), raised);
+    }
+
+    /// B2, B11: a raised ended worker or refused wake goes once the node's
+    /// pull request goes on without its worker, and stands while it fails
+    /// or GitHub's answer is stale.
+    #[test]
+    fn a_raised_ended_worker_clears_once_its_pull_request_goes_on() {
+        for (reason, life) in [
+            (AttentionReason::WorkerEnded, WorkerLife::Ended),
+            (AttentionReason::WakeRefused, WorkerLife::Asleep),
+        ] {
+            let mut m = running(&["a"]);
+            m.nodes[0].prs = vec![7];
+            let mut raised = attention(reason, Some(7));
+            raised.agent = Some("agent-a".into());
+            m.nodes[0].attention = Some(raised);
+            let mut queued = pull(7, "feat/a", PullRequestBadge::Open);
+            queued.work.queue = crate::model::MergeQueuePlace::At(2);
+            let pulls = listed(vec![queued.clone()]);
+            assert_eq!(
+                evaluate(&m, &facts(Some(&pulls), vec![worker(life)])),
+                [Act::Clear { node: 0 }],
+                "{reason:?}"
+            );
+            assert!(evaluate(&m, &facts(None, vec![worker(life)])).is_empty());
+            queued.checks = PullRequestChecks::Failed;
+            let pulls = listed(vec![queued]);
+            assert!(
+                !evaluate(&m, &facts(Some(&pulls), vec![worker(life)]))
+                    .contains(&Act::Clear { node: 0 }),
+                "{reason:?}"
+            );
+        }
     }
 
     /// B12: a pull request closed without its merge is raised only while

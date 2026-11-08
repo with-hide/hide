@@ -1331,7 +1331,8 @@ export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean };
+/** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[] };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
@@ -1603,7 +1604,8 @@ export type Mission = {
  * What the mission rules both screens share read of a node (`missionEntry`, `turnItems`, `missionCells`): the desktop's `MissionNode` and the
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "attention" | "landing" | "agent_runtime">;
+/** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime"> & { attention: Omit<MissionAttention, "choices"> | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters"> & {
   conductor: Pick<Mission["conductor"], "present">;

@@ -3,8 +3,9 @@
 // `state` parameter: plan, running (every card look: working, review with its
 // checkers, done with a merge left, in main, outside, reopened by a defect),
 // rejected (running, with the search fix's check failed and one reviewer's
-// rejection, its short reason first), decision (a decision, a failed node, a stuck worker and an outside PR
-// closed unmerged in the operator's turn), decision-sent (its answer waiting
+// rejection, its short reason first), decision (a decision, a failed node whose worker ended, raised to the
+// operator with its PR's CI failure beside the choices, a stuck worker and an outside PR closed unmerged in the
+// operator's turn), decision-sent (its answer waiting
 // for the Conductor's turn), decision-unreadable (its answer waiting on a
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // the engine confirming it), stack (the merge order), no-conductor, stale, failed
@@ -153,12 +154,12 @@ function plan(state: string, now: number): MissionNode[] {
     node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), agent_id: "agent-1481", plan: workerPlan("worker-1481", ["빈 목록 재현", "필터 상태 보존", "구현 PR"], 3), launched: { agent_id: "agent-1481", agent: "codex", model: "Astra 2", effort: "high" }, ...done(40, 14), pr: 1501, pr_state: "mergeable", landing: MERGE_LEFT, stage: 3, hide: { action: "done", at_unix_ms: ago(26) }, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, pr_url: "https://github.com/with-hide/hide/pull/1505", stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
-      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) } } : { ...review(30), pr_state: "pending" as const }),
+      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) }, agent_runtime: "ended" as const, attention: { reason: "worker_ended" as const, pr: null, to: "operator" as const, since_unix_ms: ago(2), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } } : { ...review(30), pr_state: "pending" as const }),
       ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", tally: { passed: stack ? 2 : 1, total: 2 }, checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", landing: stack && state !== "no-conductor" ? MERGE_LEFT : MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")),
       // Merged with a line left unrecorded and no Conductor to ask: it waits on the operator (PRD mission-node-simple B13, B14).
-      ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "operator" as const, since_unix_ms: ago(6), on_row: false, item: true } } : {}) }),
+      ...(state === "no-conductor" ? { status: "working" as const, finished_at_unix_ms: null, landing: null, criteria_met: 0, criteria: [own(1, "목록 API가 페이지를 나눠 준다", "open"), ci("pass")], attention: { reason: "merged_unproven" as const, pr: 1503, to: "operator" as const, since_unix_ms: ago(6), on_row: false, item: true, choices: ["done" as const] } } : {}) }),
     node("fix-1487", `${no(1487)} 수정`, {
       depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, pr_url: "https://github.com/with-hide/hide/pull/1506", stage: 3, reopened: stack ? 0 : 1, branch: "fix/1487-reopen-cells",
       plan: workerPlan("worker-1487", ["reopen 재현 테스트", "셀 초기화 순서 고치기", "실제 세션 replay", "전체 검사", "구현 PR"], stack ? 5 : 2),
@@ -166,7 +167,7 @@ function plan(state: string, now: number): MissionNode[] {
       ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ...(stack ? [] : [line("d1", "defect", "open", { text: "다시 열면 첫 셀만 비어 있다", found_by: "check-1487" })]), ci(stack ? "pass" : "open")),
     }),
     node("check-1487", `${no(1487)} 실제 앱 확인`, { kind: "verify", delivery: null, depends_on: ["fix-1487"], worker: sonnet, ...(stack ? done(16, 6) : {}), line: stack ? "5개 항목 통과" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "all", checkers: [checker(sonnet, stack ? "pass" : "open")] })) }),
-    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4), on_row: false, item: false } : null }),
+    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } : null }),
     decision
       ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "working", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
       : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), agent_id: "agent-screen", launched: { agent_id: "agent-screen", agent: "codex", model: "Sol", effort: null }, pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),

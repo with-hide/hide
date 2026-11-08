@@ -7,7 +7,7 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
-import type { DetailSlot, Mission, MissionAttention, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
+import type { DetailSlot, Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
 export const MISSION_GROUPS = ["turn", "running", "merge_wait", "closed"] as const;
@@ -101,7 +101,7 @@ export type RowLine<N extends MissionNodeBrief = MissionNodeBrief> =
   | { kind: "takeover"; left: number }
   | { kind: "letters"; letters: MissionHeldLetters }
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
-  | { kind: "attention"; node: N; attention: MissionAttention }
+  | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
   | { kind: "landing"; nodes: N[]; join: boolean }
   | { kind: "planning" }
   | { kind: "now"; first: N; others: number };

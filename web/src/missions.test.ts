@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, type EscalationCause } from "./missions";
-import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, type EscalationCause } from "./missions";
+import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -155,7 +155,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator" });
+const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator", choices: ["leave", "drop"] });
 
 describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () => {
   it("reads each status as waiting, in progress or done, a node someone has to look at in the decision colour, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
@@ -508,7 +508,6 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
       const words = attentionWords(node("n", { attention: raised("operator", reason, 12) }), t);
       expect(words?.who).toBe("You");
       expect(words?.why).not.toMatch(/mission\.|\{\{/);
-      expect(attentionChoices(reason).length).toBeGreaterThan(0);
     }
     for (const action of contract.mission_operator_action) expect(english).toHaveProperty(`mission.operator.${action}`);
     for (const action of contract.mission_hide_action) expect(english).toHaveProperty(`mission.hide.${action}`);
@@ -528,11 +527,16 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(missionAsks([orphan], [])).toEqual([]);
   });
 
-  it("offers the choices each reason takes", () => {
-    expect(attentionChoices("merged_unproven")).toEqual(["done"]);
-    expect(attentionChoices("worker_ended")).toEqual(["drop"]);
-    expect(attentionChoices("unplanned_pr")).toEqual(["attach", "leave"]);
-    expect(attentionChoices("conductor_failed")).toEqual(["resume", "drop"]);
+  it("names the pull request a raise is about, with the state the project's list reads", () => {
+    const pull = (number: number, state: PullRequest["state"]) => ({ number, title: "", url: "", badge: "open", review: null, is_draft: false, state }) as PullRequest;
+    const ended = raised("operator", "worker_ended");
+    const at = node("n", { pr: 7, pr_state: "pending" });
+    expect(attentionPr(node("n"), ended, [])).toBeNull();
+    expect(attentionPr(at, ended, [pull(7, "failed")])).toEqual({ number: 7, state: "failed" });
+    expect(attentionPr(at, ended, null)).toEqual({ number: 7, state: "pending" });
+    // A raise about another pull request names it, with no state the node's would lend it.
+    expect(attentionPr(at, raised("operator", "unplanned_pr", 12), null)).toEqual({ number: 12, state: null });
+    expect(attentionPr(node("o", { kind: "external", external: { pr: 1232 } }), ended, null)?.number).toBe(1232);
   });
 
   it("says what Hide did last and why", () => {

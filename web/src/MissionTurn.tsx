@@ -73,7 +73,8 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
         <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>
           <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-sm">
             <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span>
-            <NodeChip node={item.node} onSelect={onSelect} />
+            {/* The pull request stands beside the choices, with its state. */}
+            <NodeChip node={item.node} onSelect={onSelect} pr={false} />
             <span className="min-w-0 flex-1 truncate text-body" title={why}>{why}</span>
           </span>
           <AttentionChoices key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} />
@@ -103,9 +104,9 @@ function Row({ children, ...data }: { children: ReactNode } & Record<`data-${str
 }
 
 /** A node named in 내 차례, which picks it on the map (B25): its title, with its pull request's mark when it has one (PRD mission-tool B18). */
-function NodeChip({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
+function NodeChip({ node, onSelect, pr: withPr = true }: { node: MissionNode; onSelect: (key: string) => void; pr?: boolean }) {
   // The pull request a node waits on now is its last one (D-10).
-  const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+  const pr = withPr ? (node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null)) : null;
   return (
     <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs bg-muted px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-mission-turn-node={node.key}>
       <span className="min-w-0 truncate">{node.title}</span>

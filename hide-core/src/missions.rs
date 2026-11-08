@@ -264,6 +264,29 @@ impl AttentionReason {
         matches!(self, Self::ConductorFailed)
     }
 
+    /// The operator's choices for a raise of this reason, in the order the
+    /// screen draws them (B15, B16): `leave` first while a Conductor holds
+    /// the mission, which hands the raise to it, or for an unplanned pull
+    /// request, which it leaves outside the nodes; then what the reason
+    /// takes; `drop` last, which the screen sends only on a second press. A
+    /// failed Conductor's raise has no one to hand it to. The one list the
+    /// view sends and the operator's answer is checked against.
+    pub fn choices(self, conductor: bool) -> Vec<OperatorAction> {
+        use OperatorAction::{Attach, Done, Drop, Leave, Resume};
+        let own: &[OperatorAction] = match self {
+            Self::MergedUnproven => &[Done],
+            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused | Self::CloseRefused => &[Drop],
+            Self::UnplannedPr => &[Attach],
+            Self::ConductorFailed => &[Resume, Drop],
+        };
+        let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
+        leave
+            .then_some(Leave)
+            .into_iter()
+            .chain(own.iter().copied())
+            .collect()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MergedUnproven => "merged_unproven",
@@ -423,7 +446,8 @@ pub enum OperatorAction {
     Drop,
     /// 노드에 붙이기: the unplanned pull request joins the node.
     Attach,
-    /// 그대로 두기.
+    /// Conductor에게 맡기기, or 그대로 두기 with no Conductor: settles the
+    /// raise and leaves the rest to the Conductor.
     Leave,
     /// 다시 진행: the node works again.
     Resume,
@@ -2928,6 +2952,22 @@ impl MissionStore {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// B15, B16 (with-hide/hide#2227): `leave` comes first while a Conductor
+    /// holds the mission, and for an unplanned pull request also without
+    /// one; `drop` comes last; a failed Conductor's raise is never handed on.
+    #[test]
+    fn each_raise_offers_its_choices_handing_it_on_first_and_dropping_last() {
+        use OperatorAction::{Attach, Done, Drop, Leave, Resume};
+        assert_eq!(AttentionReason::WorkerEnded.choices(true), [Leave, Drop]);
+        assert_eq!(AttentionReason::WorkerEnded.choices(false), [Drop]);
+        assert_eq!(AttentionReason::MergedUnproven.choices(true), [Leave, Done]);
+        assert_eq!(AttentionReason::UnplannedPr.choices(false), [Leave, Attach]);
+        assert_eq!(
+            AttentionReason::ConductorFailed.choices(true),
+            [Resume, Drop]
+        );
+    }
     use super::*;
 
     #[test]
