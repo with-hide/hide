@@ -475,6 +475,7 @@ Hand-written store fixtures only hold the fields their author thought of: the fi
 Every release adds its folder.
 `node_migration::upgrade_tests` runs the start's migrations over a copy of every folder, with the node id its `node.json` names, exactly as `hided` runs them before the core reads the folder, and fails on a refusal, a device held or not named by its machine id, a store a current loader does not use as it was written, a changed count of projects, letters or Memory cards, or a second start that writes anything.
 It is a suite of the `hide-core` library, not of a `tests/it` binary, because the loaders it holds the folder to are the crate's own.
+It copies each folder private to the account, as a core writes its files, because git keeps only the bytes and a loader refuses a store others can read; the `rust workspace` lane runs it on Linux and a step of `windows check` on Windows, where privacy is the file's access list.
 
 A change that stores a device or machine id adds a step to the scenario that makes a release write it, and the release that ships the change adds the first folder that carries it; when released builds already write the field, the change regenerates their folders with the new step.
 A scenario step a release itself refuses is recorded as not done in `<tag>.json` beside the folder, with the release's answer.
