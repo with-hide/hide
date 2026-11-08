@@ -281,16 +281,12 @@ fn launch_beside(
             ));
         }
     };
-    let program = match profile
-        .program
-        .as_deref()
-        .map(|program| (program, program_start(program)))
-    {
+    let program = match profile.program.as_deref().map(program_start) {
         None => None,
-        Some((_, Some(found))) => Some(found),
-        Some((program, None)) => {
+        Some(Ok(found)) => Some(found),
+        Some(Err(why)) => {
             return refused(format!(
-                "the profile {} runs {program}, which is not a program this machine finds",
+                "the profile {} cannot start its program: {why}",
                 profile.name
             ));
         }
@@ -319,56 +315,43 @@ fn launch_beside(
 
 /// How the profile's `program` starts here: a bare name found as a pane's
 /// shell finds an agent's program (`hide_platform::programs::account_path`),
-/// or an absolute path that is a file, each read as it starts
-/// (`hide_platform::programs::Start`). `None` when there is no such program.
-fn program_start(program: &str) -> Option<ProfileProgram> {
-    use hide_platform::programs::{Program, Start, account_path};
+/// or an absolute path, each a program this account can start
+/// (`hide_platform::programs::runnable`) and read as it starts
+/// (`hide_platform::programs::Start`). Why it cannot start otherwise.
+fn program_start(program: &str) -> Result<ProfileProgram, String> {
+    use hide_platform::programs::{Program, Start, account_path, runnable};
+    let search = account_path().ok_or("this account's PATH cannot be read")?;
     let named = Path::new(program);
     let found = if named.components().count() > 1 {
-        if !named.is_absolute() || !runnable(named) {
-            return None;
+        if !named.is_absolute() {
+            return Err(format!("{program} is not an absolute path"));
         }
-        Program::named(named.to_path_buf(), account_path()?)
+        Program::at(named, search)?
     } else {
-        Program::find(&account_path()?, program)?
+        let found = Program::find(&search, program)
+            .ok_or_else(|| format!("{program} is not a program this machine finds"))?;
+        runnable(found.path(), Some(found.search()))?;
+        found
     };
     let (file, leading) = match found.start() {
         Start::Direct { program, leading } => (program, leading),
         Start::Batch => (found.into_path(), Vec::new()),
     };
-    Some(ProfileProgram {
-        file: file.into_os_string().into_string().ok()?,
-        leading: leading
-            .into_iter()
-            .map(std::ffi::OsString::into_string)
-            .collect::<Result<_, _>>()
-            .ok()?,
-    })
-}
-
-/// Whether `path` is a file this account may run.
-fn runnable(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
+    let text = |word: std::ffi::OsString| {
+        word.into_string()
+            .map_err(|_| format!("{program} starts with a path that is not text"))
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        metadata.is_file()
-    }
+    Ok(ProfileProgram {
+        file: text(file.into_os_string())?,
+        leading: leading.into_iter().map(text).collect::<Result<_, _>>()?,
+    })
 }
 
 /// The `hide` beside the node's own program `own`, which runs a profile's
 /// start (`hide agent exec`): the node and it come from one build.
 fn exec_command(own: &Path) -> Result<String, String> {
     let exec = own.with_file_name(format!("hide{}", std::env::consts::EXE_SUFFIX));
-    if !exec.is_file() {
-        return Err(format!("{} is missing", exec.display()));
-    }
+    hide_platform::programs::runnable(&exec, None)?;
     exec.into_os_string()
         .into_string()
         .map_err(|_| "its hide command's path is not text".to_owned())
@@ -1128,11 +1111,13 @@ mod tests {
     fn package(node: &Node) -> PathBuf {
         let bin = node.root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(
-            bin.join(format!("hide{}", std::env::consts::EXE_SUFFIX)),
-            b"",
-        )
-        .unwrap();
+        let hide = bin.join(format!("hide{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&hide, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hide, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         bin.join(format!("hided{}", std::env::consts::EXE_SUFFIX))
     }
 
@@ -1196,7 +1181,7 @@ mod tests {
             launch("codex", &id, Some(&own)),
             ProfileLaunch::Refused {
                 text: format!(
-                    "the profile gateway runs {}, which is not a program this machine finds",
+                    "the profile gateway cannot start its program: {} is not a file",
                     missing.display()
                 )
             }
