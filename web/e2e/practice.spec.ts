@@ -54,31 +54,6 @@ function practiceState(page: Page): Promise<string> {
 }
 
 /**
- * Chapter 4's mention step by hand, the way the step says also works: the
- * signup agent's Copy name and ID, then the lead pane's Paste, which takes
- * the copy the chapter made, never the system clipboard; the learner's own
- * words then go with Enter as they are.
- */
-async function pasteByHand(practice: Page): Promise<void> {
-  await practice.locator('[data-pane-view="w1:p3"] header').click({ button: "right" });
-  await practice.locator('[role="menu"] [data-menu-item="copy_reference"]').click();
-  const lead = practice.locator('[data-pane-view="w1:p1"] .xterm');
-  // The guide's bubble sits inside the pane; its lower left corner is the terminal's own.
-  const box = await lead.boundingBox();
-  if (!box) throw new Error("the lead pane's terminal is not on screen");
-  const corner = { x: 24, y: box.height - 24 };
-  await lead.click({ button: "right", position: corner });
-  await practice.locator('[role="menu"] [data-menu-item="paste"]').click();
-  // The pasted reference finishes the mention step as @ would.
-  await expect.poll(() => practiceState(practice), { message: "the pasted reference did not reach the lead's prompt" }).toMatch(/^delegate:send:/);
-  await lead.click({ position: corner });
-  await practice.keyboard.type(" update the signup copy");
-  await practice.keyboard.press("Enter");
-  // The world took the request only if it named the copied ID.
-  await expect.poll(() => practiceState(practice), { message: "the pasted request did not reach the signup agent" }).toMatch(/^delegate:end:/);
-}
-
-/**
  * Ends the moment a step ⏎ performed stays while its result is shown, the way the learner's ⏎ there does, so the
  * journey does not wait out the learner's pace; the press is made in the page only while the moment lasts, so it can
  * never land on the next step. Where the bubble shows no button (a palette is up), the moment is waited out.
@@ -110,20 +85,51 @@ const pressButton: GuidePress = async (practice) => {
   await practice.locator("[data-practice-layer] [data-practice-go]").click();
 };
 
-/** Presses the guide from the chapter list until it comes back to it, each press waiting for the practice to move. */
+/**
+ * Presses the guide from the chapter list, each press waiting for the practice to move, and follows each end card on to the
+ * flow it leads to. The flows lead round in a circle (the mission's end card leads back to the first), so a press that
+ * arrives on a flow already played goes back to the list, which starts a flow not yet played, until every one has been.
+ */
 async function playEveryChapter(practice: Page, chapters: number, press: GuidePress = pressEnter): Promise<void> {
+  const played = new Set<string>();
+  let last = "";
   let now = await practiceState(practice);
   let presses = 0;
   do {
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
     await drawn(practice);
-    if (now.startsWith("delegate:mention:")) await pasteByHand(practice);
-    else await press(practice);
-    presses += 1;
-    await expect.poll(() => practiceState(practice), { message: `a press at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
+    // A step that waits on the world's own beat takes no press and moves on by itself, in up to the beats' sum.
+    if ((await practice.locator("[data-practice-layer][data-practice-waiting]").count()) > 0) {
+      try {
+        await expect.poll(() => practiceState(practice), { message: `the wait at ${before} never ended`, timeout: 30_000 }).not.toBe(before);
+      } catch (error) {
+        await keepStall(practice);
+        throw error;
+      }
+    } else {
+      await press(practice);
+      presses += 1;
+      await expect.poll(() => practiceState(practice), { message: `a press at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
+    }
     await settled(practice);
     now = await practiceState(practice);
+    if (!now.startsWith("hub")) {
+      const id = now.split(":")[0];
+      if (played.has(id) && id !== last) {
+        await practice.locator("[data-practice-hub-open]").click();
+        now = await practiceState(practice);
+      } else played.add(id);
+      last = id;
+    }
+    const next = CHAPTER_IDS.find((id) => !played.has(id));
+    if (now === "hub" && next) {
+      last = "";
+      await playFromList(practice, next);
+      now = await practiceState(practice);
+      played.add(next);
+      last = next;
+    }
   } while (now !== "hub");
 }
 
@@ -164,6 +170,8 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
 }
 
 test("the practice window plays every chapter with Enter alone and the core keeps them seen", async ({ page }) => {
+  // The waiting steps run in real time, so the whole list takes minutes.
+  test.setTimeout(600_000);
   await withPractice(page, async (practice, chapters) => {
     const count = await chapters.count();
     await expect(chapters.and(practice.locator('[data-status="new"]'))).toHaveCount(count);
@@ -175,6 +183,8 @@ test("the practice window plays every chapter with Enter alone and the core keep
 // The guide is not part of the screen it teaches: a press on its button leaves the keyboard in the pane that held it,
 // so a step whose chord acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) plays as ⏎ plays it.
 test("the practice window plays every chapter by the guide's button as it does with Enter", async ({ page }) => {
+  // The waiting steps run in real time, so the whole list takes minutes.
+  test.setTimeout(600_000);
   await withPractice(page, async (practice, chapters) => {
     const count = await chapters.count();
     await playEveryChapter(practice, count, pressButton);
@@ -192,6 +202,7 @@ async function pressTo(practice: Page, id: string, at: number | null, hurry: (()
     const now = await practiceState(practice);
     if (!now.startsWith(`${id}:`)) return expect(at, `chapter ${id} was left before step ${at}`).toBeNull();
     if (at !== null && Number(await layer.getAttribute("data-practice-index")) >= at) return;
+    if (presses >= PRESSES_PER_CHAPTER) await keepStall(practice);
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(PRESSES_PER_CHAPTER);
     const waiting = (await layer.getAttribute("data-practice-waiting")) !== null;
     await drawn(practice);

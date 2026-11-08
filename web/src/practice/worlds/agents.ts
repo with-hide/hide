@@ -260,6 +260,11 @@ function apply(model: AgentsModel, event: CoreEvent): AgentsModel | null {
     }
     case "close_pane":
       return closePane(model, String(p.pane_id), p.confirmed === true);
+    // ⌘W closes the tab holding the keyboard; a practice tab holds one pane, so that pane closes with it.
+    case "close_tab": {
+      const panes = panesOf(model.tabs.find((tab) => tab.id === p.tab_id)?.root ?? { type: "pane", pane_id: "" });
+      return panes.length === 1 ? closePane(model, panes[0]!, p.confirmed === true) : null;
+    }
     case "reopen_closed": {
       const back = reopen(model);
       return back && visited(back);

@@ -9,6 +9,8 @@ import { AGENTS_WORLD, besideLead, inReviewer, LEAD, REV, reopenedAsClosed, show
 
 const pane = (id: string) => `[data-pane-view="${id}"]`;
 const row = (id: string) => `[data-task-row="${id}"]`;
+/** The reviewer's row, or, once it was closed and reopened, the row of the pane that brought it back (`ag<n>`). */
+const REVIEWER_ROW = `${row(REV)}, [data-task-row^="ag"]`;
 const say = (pane: string, text: string) => ({ type: { pane, text } });
 
 export default chapter<AgentsModel>({
@@ -28,12 +30,12 @@ export default chapter<AgentsModel>({
     { id: "ask", quest: true, target: row(REV), side: "right", gesture: { click: true }, done: (model) => model.looked || model.stage >= 4 },
     { id: "answer", quest: true, target: pane(REV), side: "inside", gesture: say(REV, "Yes, run it"), done: (model) => model.stage >= 4 },
     { id: "finishes", target: row(REV), side: "right", wait: true, done: (model) => model.stage >= 5 },
-    // The row marked 볼 것 brings the agent and the file it opened forward in the lane.
-    { id: "look", quest: true, target: row(REV), side: "right", gesture: { click: true }, done: (model) => model.viewed },
-    // The reviewer is finished, so closing it asks nothing; Reopen closed tab brings it back with its conversation.
+    // The reviewer is finished, so closing it asks nothing; Reopen closed tab brings it back with its conversation, its View still waiting.
     { id: "close", quest: true, target: pane(REV), side: "inside", command: "close_tab", done: (model) => model.closed.length > 0 },
     { id: "reopen", quest: true, target: "[data-agent-area]", side: "inside", command: "reopen_closed_tab", done: reopenedAsClosed },
     { id: "switch", quest: true, target: "[data-agent-area]", side: "inside", command: "recent_area_tab", done: (model) => model.switched && !inReviewer(model) },
+    // The row marked 볼 것 brings the agent and the file it opened forward in the lane.
+    { id: "look", quest: true, target: REVIEWER_ROW, side: "right", gesture: { click: true }, done: (model) => model.viewed },
     { id: "changes", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: showsExplorer },
   ],
 });

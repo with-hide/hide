@@ -42,7 +42,16 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
     expect(AGENTS_WORLD.apply(asking(), typedInto("docs", "yes\r"))).toBeNull();
   });
 
-  it("marks the finished reviewer 볼 것 and shows its file only when that row is pressed", () => {
+  it("brings a closed reviewer back with its conversation and its View still waiting", () => {
+    const closed = apply(looking(), { kind: "close_tab", payload: { tab_id: "t3" } });
+    expect(doneAt("close", closed)).toBe(true);
+    expect(AGENTS_WORLD.panes(closed)).not.toContain(REV);
+    const back = apply(closed, { kind: "reopen_closed", payload: {} });
+    expect(doneAt("reopen", back)).toBe(true);
+    expect(rows(back).find((one) => one.look)?.look?.label).toBe("review-notes.md");
+  });
+
+  it("marks the reviewer 볼 것 and shows its file only when that row is pressed", () => {
     const model = looking();
     expect(doneAt("finishes", model)).toBe(true);
     expect(row(model, REV).mark).toBe("look");
@@ -55,12 +64,8 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
     expect(AGENTS_WORLD.snapshot(seen, Date.now()).frames!.documents!.file1!.contents_utf8).toContain("Review of the checkout fix");
   });
 
-  it("brings a closed reviewer back with its conversation, and goes back to the lead after", () => {
-    const seen = apply(looking(), focus(REV, { reveal_unseen: true }));
-    const closed = apply(seen, { kind: "close_pane", payload: { pane_id: REV } });
-    expect(doneAt("close", closed)).toBe(true);
-    const back = apply(closed, { kind: "reopen_closed", payload: {} });
-    expect(doneAt("reopen", back)).toBe(true);
+  it("goes back to the lead after the reviewer came back", () => {
+    const back = apply(apply(looking(), { kind: "close_tab", payload: { tab_id: "t3" } }), { kind: "reopen_closed", payload: {} });
     expect(doneAt("switch", back)).toBe(false);
     expect(doneAt("switch", apply(back, focus(LEAD)))).toBe(true);
   });

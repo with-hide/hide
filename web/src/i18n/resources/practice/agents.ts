@@ -70,7 +70,7 @@ const ko = {
   "practice.agents.answer.kick": "질문이 왔어요",
   "practice.agents.answer.title": "그 터미널에서 답하기",
   "practice.agents.answer.text": "리뷰어가 테스트를 돌려도 되는지 물어요. 그 터미널에서 좋다고 답해요.",
-  "practice.agents.finishes.kick": "일하는 중",
+  "practice.agents.finishes.kick": "작업 중",
   "practice.agents.finishes.title": "리뷰어가 테스트를 돌려요",
   "practice.agents.finishes.text": "끝나면 메모를 열어 줘요. 잠깐이에요.",
   "practice.agents.look.quest": "열어 준 것 보기",
