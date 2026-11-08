@@ -1328,6 +1328,11 @@ fn spawn(
         None,
         profiles.as_ref(),
     );
+    // The child's machine answers for its profile before the spawn makes
+    // its pane, so a profile that is gone or a program that cannot run
+    // leaves no pane behind (PRD agent-profiles B20, B22).
+    let launch = crate::launch::resolve(node.as_deref(), &agent)
+        .map_err(|refusal| crate::live::start_error_message(refusal.into()))?;
     // A device that stops answering partway leaves the spawn reserved and
     // resumable: the caller is told the device is unavailable, and the same
     // command continues once it answers again.
@@ -1659,7 +1664,7 @@ fn spawn(
                 shell,
                 answer_by.saturating_duration_since(Instant::now()),
                 name,
-                &agent,
+                launch.clone(),
                 start_args,
                 codex_daemon,
                 form.as_ref()

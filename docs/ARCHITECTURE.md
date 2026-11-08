@@ -1523,7 +1523,7 @@ A new start picks it (`launch::pick`): the profile the start named, else its par
 A project's or machine default the machine no longer lists falls through to the next; a parent's profile is asked of the machine like a recorded one, so one that is gone refuses the child by name rather than starting it in another account.
 An agent that comes back (a wake in its pane or dormant, a fork, a pane's Reopen, a closed tab's or pane's reopen, an archive's resume, a View's `Reopen and send`, which resumes the View's opener with the profile `view_feedback::Opener` keeps) names the profile its record keeps (`Request::recorded`).
 `launch::resolve` turns the request into the `launch::Launch` that `engine::AgentLaunch` carries, and nothing else makes one, so no start function takes an agent's kind alone.
-It runs with the runtime lock released, on the thread that makes the start.
+It runs with the runtime lock released, on the thread that makes the start; a spawn, a fork and a closed tab's or pane's reopen ask it before they make a pane or touch one, so a refused profile leaves no pane behind and a reopen keeps its shell with the refusal as its one notice.
 
 The built-in default starts as every agent always has: its line is the agent's program and arguments, nothing is asked of the machine, and no account variable is set (B29).
 Any other profile is asked of the node of the machine that runs the pane (`ProfileLaunch`), so an edit counts from the next start (D-11) and a start of a profile its machine no longer has is refused by name (B20).

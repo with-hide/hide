@@ -13,7 +13,7 @@ use crate::checkout_owner::open::create_tab_in;
 use crate::fork::{ForkPlacement, ForkRequest};
 use crate::live::{
     CONTROL_WAIT, LiveContext, confirm_session_launch, current_session, failed, fetch_session,
-    start_error_message, start_launched_checked,
+    start_agent_checked, start_error_message,
 };
 use crate::runtime::Runtime;
 
@@ -266,7 +266,7 @@ fn run_agent_fork_with_registration(
                 pane_id
             }
         };
-        let started = start_launched_checked(
+        let started = start_agent_checked(
             mutation_engine,
             Some(node),
             &format!("hide-core:fork:{}:start", request.name),

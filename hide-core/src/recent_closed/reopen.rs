@@ -938,9 +938,29 @@ fn start_or_degrade_agent(
         profile: agent.profile.clone(),
         session_id: session_id.cloned(),
     };
+    // The profile the agent ran with is asked once, before the pane is
+    // touched: one that is gone keeps the shell and says so, rather than
+    // reading as a resume that failed (PRD agent-profiles D-27, B20).
+    let request = crate::launch::Request::recorded(&agent.kind, agent.profile.as_ref());
+    let profile = match crate::launch::resolve(node, &request) {
+        Ok(profile) => profile,
+        Err(refusal) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "recent_closed",
+                "kind": "reopen.profile_refused",
+                "pane_id": pane_id,
+                "agent": agent.kind,
+                "code": refusal.code,
+            }));
+            notices.push(format!(
+                "Agent could not be started; the shell was kept: {}",
+                refusal.detail
+            ));
+            return None;
+        }
+    };
     let interrupted_reused_agent = interrupt_reused_agent(engine, pane_id);
     let pane_was_clear = matches!(&interrupted_reused_agent, Ok(false));
-    let request = crate::launch::Request::recorded(&agent.kind, agent.profile.as_ref());
     let resume = resume_arguments(agent);
     if let Some(mut args) = resume {
         args.extend(launch.iter().cloned());
@@ -954,7 +974,7 @@ fn start_or_degrade_agent(
             crate::agent_start::ShellStart::Plain,
             crate::agent_start::SHELL_WAIT,
             &name,
-            &request,
+            profile.clone(),
             args,
             codex_daemon,
             program.clone(),
@@ -983,7 +1003,7 @@ fn start_or_degrade_agent(
         crate::agent_start::ShellStart::Plain,
         crate::agent_start::SHELL_WAIT,
         &name,
-        &request,
+        profile,
         launch,
         codex_daemon,
         program,
@@ -1130,6 +1150,64 @@ mod tests {
             notices.len(),
             1,
             "the lost conversation is said: {notices:?}"
+        );
+    }
+
+    /// A machine whose profile is gone answers every ask that way.
+    struct ProfileGone;
+
+    impl crate::node_access::NodeLink for ProfileGone {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            assert!(matches!(
+                call,
+                hide_node_link::protocol::Call::ProfileLaunch { .. }
+            ));
+            Ok(
+                serde_json::to_value(hide_node_link::profiles::ProfileLaunch::Gone)
+                    .unwrap()
+                    .into(),
+            )
+        }
+    }
+
+    /// A closed agent whose profile is gone keeps its shell and says so
+    /// once, touching nothing in the pane: no resume that reads as failed,
+    /// and no new conversation in another account (PRD agent-profiles B20).
+    #[test]
+    fn a_closed_agent_whose_profile_is_gone_keeps_the_shell_and_says_why() {
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let mut notices = Vec::new();
+        let started = start_or_degrade_agent(
+            fake.engine().as_ref(),
+            Some(&ProfileGone),
+            "key",
+            0,
+            "pane",
+            &ClosedAgent {
+                kind: "claude".into(),
+                session_id: Some("session".into()),
+                launch: Default::default(),
+                profile: Some(crate::launch::LaunchProfile {
+                    id: hide_agent_adapter::ProfileId("p-work".into()),
+                    name: "work".into(),
+                    account: hide_agent_adapter::AccountKey::Folder("/home/me/.claude-work".into()),
+                }),
+            },
+            crate::codex_launch::CodexDaemon::Unsupported,
+            &Default::default(),
+            None,
+            &mut notices,
+        );
+        assert_eq!(started, None);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].starts_with("Agent could not be started; the shell was kept: ")
+                && notices[0].contains("profile work is gone"),
+            "{notices:?}"
         );
     }
 

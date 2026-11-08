@@ -539,8 +539,10 @@ pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> C
     }
 }
 
-/// `node` runs the pane (`agent_start::start_at_shell_checked`); none
-/// when it cannot be reached. The pane's shell gets `shell_wait`, at most
+/// `launch` is the start its machine answered for (`launch::resolve`),
+/// which the caller asks before it makes anything the start needs. `node`
+/// runs the pane (`agent_start::start_at_shell_checked`); none when it
+/// cannot be reached. The pane's shell gets `shell_wait`, at most
 /// `agent_start::SHELL_WAIT`, to finish starting; one that had not (stopped
 /// at a question, not at its prompt, or not reading its line yet) is refused
 /// as `agent_start::SHELL_STARTING` with the screen's last line when there
@@ -554,7 +556,7 @@ pub(crate) fn start_agent(
     shell: crate::agent_start::ShellStart,
     shell_wait: Duration,
     name: &str,
-    agent: &crate::launch::Request,
+    launch: crate::launch::Launch,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
@@ -567,7 +569,7 @@ pub(crate) fn start_agent(
         shell,
         shell_wait,
         name,
-        agent,
+        launch,
         args,
         codex_daemon,
         program,
@@ -599,42 +601,10 @@ pub(crate) struct Started {
     pub(crate) profile: Option<crate::launch::LaunchProfile>,
 }
 
+/// [`start_agent`] with an admission `check` the start asks before its
+/// effect.
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
 pub(crate) fn start_agent_checked(
-    engine: &dyn Engine,
-    node: Option<&dyn crate::node_access::NodeLink>,
-    request_id: &str,
-    pane_id: &str,
-    shell: crate::agent_start::ShellStart,
-    shell_wait: Duration,
-    name: &str,
-    agent: &crate::launch::Request,
-    args: Vec<String>,
-    codex_daemon: crate::codex_launch::CodexDaemon,
-    program: Option<crate::engine::StartProgram>,
-    check: &dyn Fn() -> Result<(), String>,
-) -> Result<Started, crate::agent_start::StartError> {
-    start_launched_checked(
-        engine,
-        node,
-        request_id,
-        pane_id,
-        shell,
-        shell_wait,
-        name,
-        crate::launch::resolve(node, agent)?,
-        args,
-        codex_daemon,
-        program,
-        check,
-    )
-}
-
-/// [`start_agent_checked`] of a start its machine already answered for
-/// (`launch::resolve`): a fork resolves it before its first effect outside
-/// Hide, and its agent starts with that answer.
-#[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
-pub(crate) fn start_launched_checked(
     engine: &dyn Engine,
     node: Option<&dyn crate::node_access::NodeLink>,
     request_id: &str,
