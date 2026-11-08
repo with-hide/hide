@@ -312,7 +312,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
   });
 });
 
-test("the lane chord brings the card back with its tool and alone, and the slot button opens another checkout's closed lane (lane-two-columns B15, B22)", async ({ page }) => {
+test("the lane chord brings the card back with its tool and alone, and another checkout in front shows no card of this tab's (lane-two-columns B15, B22)", async ({ page }) => {
   await openWork(page, async ({ work, daemon }) => {
     const screen = page.locator("[data-workspace-screen]");
     const slot = page.locator('[data-lane-tool="detail"]');
@@ -339,8 +339,9 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     await expect(card).toBeVisible();
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
 
-    // A checkout whose lane was never opened: the window's slot still holds
-    // the card, and its button opens that checkout's lane on it (B22).
+    // Another checkout in front, whose lane was never opened: the card belongs
+    // to the Agent tab it was opened in, so this checkout's tab shows none and
+    // the rail has no slot button for it (B22).
     const other = path.join(daemon.home, "projects", "other");
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, "README.md"), "# other\n");
@@ -350,10 +351,14 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     await expect(otherRow).toHaveCount(1, { timeout: 20_000 });
     await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click();
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
-    await expect(slot).toHaveAttribute("aria-pressed", "false");
-    await slot.click();
+    await expect(slot).toHaveCount(0);
+    await expect(card).toHaveCount(0);
+
+    // Back in the first checkout's tab its card is there, and its button
+    // is the way to it.
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+    await expect(slot).toHaveCount(1);
     await expect(card).toBeVisible();
-    await expect(slot).toHaveAttribute("aria-pressed", "true");
   });
 });
 
