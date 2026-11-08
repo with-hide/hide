@@ -130,7 +130,13 @@ pub(super) fn raise_for(
         }));
         return Vec::new();
     }
-    let raise_key = act_key(&mission.nodes[at], &format!("raise:{cause}"));
+    let mut raise_key = act_key(&mission.nodes[at], &format!("raise:{cause}"));
+    // A refused close is about the whole mission as it stands: one raised
+    // again after a node went back to work and finished again is another
+    // question, with its own letter and history entry.
+    if reason == AttentionReason::CloseRefused {
+        raise_key = format!("{raise_key}:{}", close_key(mission));
+    }
     // A cause the node cannot remember is not raised: raised with no
     // memory of it, it would come again once settled (B27).
     if !mission.nodes[at].note_handled(cause) {
@@ -784,7 +790,20 @@ impl Runtime {
                     let Some(mission) = self.missions.book.get_mut(id) else {
                         continue;
                     };
+                    let cleared = mission.nodes[node]
+                        .attention
+                        .as_ref()
+                        .map(|attention| (attention.reason, attention.cause()));
                     settle(id, &mut mission.nodes[node], "hide");
+                    // A refused close that stopped holding because a node
+                    // went back to work did not end the mission's closing:
+                    // the next refusal is raised again, not held back as
+                    // the one already handled.
+                    if let Some((AttentionReason::CloseRefused, cause)) = cleared {
+                        mission.nodes[node]
+                            .handled
+                            .retain(|handled| *handled != cause);
+                    }
                     changed = true;
                 }
                 Act::Wake {

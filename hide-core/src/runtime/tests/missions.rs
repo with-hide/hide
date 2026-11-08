@@ -8406,3 +8406,71 @@ fn a_refused_close_is_not_closed_by_the_operator_once_a_node_works_again() {
     runtime.drive_mission_health(now + 2);
     assert!(node_view(&runtime, "fix").attention.is_none());
 }
+
+/// A refused close the evaluation took away because another node worked
+/// again is not held back as handled: once that node finishes again and the
+/// close is refused again, the question comes back with its own history
+/// entry, so the mission is never left running with nothing to answer.
+#[test]
+fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
+    use crate::mission_criteria::CriterionState;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let mut second = mission.nodes[0].clone();
+        second.key = "second".into();
+        mission.nodes.push(second);
+        mission.nodes[0].done_head = None;
+    }
+    checkout_at(&mut runtime, OTHER_HEAD);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        node_view(&runtime, "fix").attention.unwrap().reason,
+        AttentionReason::CloseRefused
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 1);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("second", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 2);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(AttentionReason::CloseRefused),
+        "the close was refused again, so the choice to close is reachable again"
+    );
+    let raised = runtime.missions.events["mission-1"]
+        .events
+        .iter()
+        .filter(|event| event.reason == Some(AttentionReason::CloseRefused))
+        .filter_map(|event| event.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        raised.len(),
+        2,
+        "each question has its own entry: {raised:?}"
+    );
+}
