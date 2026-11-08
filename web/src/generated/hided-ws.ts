@@ -790,7 +790,7 @@ export interface AgentNotice {
      */
     detail?: string | null;
     /**
-     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on, `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up, `human_turn` is a step only a person can take that the agent declared with `hide agent ask-human`: its declaration `id`, `kind` (`auth` or `permission`, human_kind in snapshot-wire-enums.json), the `place` the person acts at and the `device` it runs on, absent for the core's own machine (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
+     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on, `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json; `unmet`, for a refused close, is how many finished nodes have a line empty, absent otherwise), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up, `human_turn` is a step only a person can take that the agent declared with `hide agent ask-human`: its declaration `id`, `kind` (`auth` or `permission`, human_kind in snapshot-wire-enums.json), the `place` the person acts at and the `device` it runs on, absent for the core's own machine (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
      */
     subject?:
       | null
@@ -813,6 +813,7 @@ export interface AgentNotice {
             | "conductor_failed"
             | "wake_refused"
             | "close_refused";
+          unmet?: number;
         }
       | {
           cause: "input_unconfirmed";

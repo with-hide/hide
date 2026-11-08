@@ -168,7 +168,7 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     case "worker_blocked":
       return `${line.node.title} · ${line.line ?? t(`mission.turn.cause.${line.cause}`)}`;
     case "attention":
-      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t)}`;
+      return `${line.node.title} · ${attentionReasonText(line.attention.reason, line.attention.pr, t, line.attention.unmet_nodes)}`;
     case "landing":
       return `${t(line.join ? "mission.turn.join" : "mission.turn.merge")} ${line.nodes.map((node) => (node.pr != null ? `#${node.pr}` : node.title)).join(" → ")}`;
     case "planning":

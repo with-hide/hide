@@ -68,7 +68,7 @@ export function useMissionPlace(ask: MissionAsk): string | null {
 
 /** The line a carried ask reads, for the mission's oldest waiting node: `확인 필요 · <node> · <why>`, `외 N건`. */
 export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?: string }) {
-  const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node: ask.node.title, reason: ask.attention.reason } };
+  const line = { verb: "answer" as const, what: null, more: ask.more, subject: { cause: "mission_attention" as const, node: ask.node.title, reason: ask.attention.reason, unmet: ask.attention.unmet_nodes } };
   return <AskLine ask={line} className={className} />;
 }
 

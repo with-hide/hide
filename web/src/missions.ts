@@ -821,7 +821,9 @@ function prWords(pr: number | null, t: TFunction<"translation">): string {
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">): string {
+export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+  // A refused close says how many finished nodes have a line empty when the core counted them.
+  if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
   return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });
 }
 
@@ -873,7 +875,7 @@ export function projectAsks(asks: readonly MissionAsk[], projectId: string | nul
 export function attentionWords(node: MissionNode, t: TFunction<"translation">): { who: string; why: string } | null {
   const attention = node.attention;
   if (!attention) return null;
-  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t) };
+  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes) };
 }
 
 /**

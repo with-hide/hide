@@ -269,22 +269,25 @@ impl AttentionReason {
     /// the mission, which hands the raise to it, or for an unplanned pull
     /// request, which it leaves outside the nodes; then what the reason
     /// takes; `drop` last, which the screen sends only on a second press. A
-    /// failed Conductor's raise has no one to hand it to. The one list the
-    /// view sends and the operator's answer is checked against.
+    /// failed Conductor's raise has no one to hand it to. A refused close
+    /// has its one way out first (`done`, which closes the mission as done
+    /// with the empty lines passed on the operator's word) and no `drop`,
+    /// since every node's work is finished. The one list the view sends and
+    /// the operator's answer is checked against.
     pub fn choices(self, conductor: bool) -> Vec<OperatorAction> {
         use OperatorAction::{Attach, Done, Drop, Leave, Resume};
         let own: &[OperatorAction] = match self {
-            Self::MergedUnproven => &[Done],
-            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused | Self::CloseRefused => &[Drop],
+            Self::MergedUnproven | Self::CloseRefused => &[Done],
+            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused => &[Drop],
             Self::UnplannedPr => &[Attach],
             Self::ConductorFailed => &[Resume, Drop],
         };
         let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
-        leave
-            .then_some(Leave)
-            .into_iter()
-            .chain(own.iter().copied())
-            .collect()
+        let leave = leave.then_some(Leave).into_iter();
+        if self == Self::CloseRefused {
+            return own.iter().copied().chain(leave).collect();
+        }
+        leave.chain(own.iter().copied()).collect()
     }
 
     pub fn as_str(self) -> &'static str {
@@ -440,7 +443,9 @@ pub struct HideMark {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatorAction {
-    /// 끝으로: past the lines left open, as the operator's decision.
+    /// 끝으로: past the lines left open, as the operator's decision; for a
+    /// refused close, 완료로 닫기, which does it for every finished node and
+    /// closes the mission.
     Done,
     /// 노드 제외.
     Drop,
@@ -803,6 +808,15 @@ pub struct MissionNode {
     /// mission's machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_folder: Option<(String, String)>,
+    /// The commit the node's work folder was on when it was done, for a
+    /// node without a pull request: the commit its check command is judged
+    /// against from then on, because the folder keeps moving after a finish
+    /// (the worker merges into main, later commits, the folder goes away)
+    /// and a finish does not lose its proof to that. Gone once the node is
+    /// not done; a node done before this field existed has none, and its
+    /// check is judged against the folder as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_head: Option<String>,
     /// The proof that a direct change's branch is in main, which a mission
     /// waiting for its branches waits on (B17, B18): of that branch only,
     /// while the node stays done.
@@ -1013,6 +1027,7 @@ impl MissionNode {
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
+        self.done_head = None;
     }
 
     /// A change at work delivered by pull request: the node a push is asked
@@ -2109,6 +2124,7 @@ pub(crate) fn apply_plan(
                 commit: None,
                 folder: None,
                 remote_folder: None,
+                done_head: None,
                 in_main: None,
                 branch_ahead: None,
                 outside_round: 0,
@@ -2347,6 +2363,11 @@ pub(crate) fn apply_patch(
     // branch, or the node at work again, waits for a read of its own (B17).
     if next.branch != node.branch || next.status != NodeStatus::Done {
         next.in_main = None;
+    }
+    // The proof frozen at a finish goes with it: work taken up again is
+    // judged against its folder, and a fresh check.
+    if next.status != NodeStatus::Done {
+        next.done_head = None;
     }
     Ok(next)
 }
@@ -2967,6 +2988,10 @@ pub(crate) mod tests {
             AttentionReason::ConductorFailed.choices(true),
             [Resume, Drop]
         );
+        // A refused close closes as done first, hands on after, and never
+        // drops a node whose work is finished.
+        assert_eq!(AttentionReason::CloseRefused.choices(true), [Done, Leave]);
+        assert_eq!(AttentionReason::CloseRefused.choices(false), [Done]);
     }
     use super::*;
 
