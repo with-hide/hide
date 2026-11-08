@@ -102,8 +102,14 @@ fn kept_word(word: &str) -> String {
             .map_or(0, |(i, c)| i + c.len_utf8())
     });
     let (prefix, url) = word.split_at(start);
+    // A word that writes a `://` the crate cannot read could still carry a
+    // user and password, so it is left out rather than kept as written.
+    if url.contains("://") && url::Url::parse(url).is_err() {
+        return String::new();
+    }
     match url_word(url) {
-        Some(kept) if kept.is_empty() && prefix.is_empty() && closing.is_empty() => String::new(),
+        // Nothing a person could go to is left of it, so the word goes.
+        Some(kept) if kept.is_empty() => String::new(),
         Some(kept) => format!("{prefix}{kept}{closing}"),
         None => format!("{word}{closing}"),
     }
@@ -430,6 +436,9 @@ mod tests {
                 "[sign-in](github.com/login)",
             ),
             ("(https://user:pw@host.example/x?t=1)", "(host.example/x)"),
+            // A URL the crate cannot read, or with nothing left, is left out.
+            ("at https://user:pw@host.example:99999/x", "at"),
+            ("at (https://?code=1)", "at"),
             ("(github.com/login?t=1).", "(github.com/login)."),
             ("https://github.com/login?t=1,", "github.com/login,"),
             ("[why?](github.com/login?t=1)", "[why?](github.com/login)"),
