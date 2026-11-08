@@ -58,28 +58,16 @@ pub struct HumanTurn {
 /// The longest place, in characters, after it is cut (D-21).
 pub const PLACE_LIMIT: usize = 300;
 
-/// The place as it is kept: one line, a URL without its scheme, query and
-/// fragment, which can carry one-time tokens that would otherwise reach
-/// the screen, a notification and the phone (D-04). Anything that is not
-/// a URL is kept as written.
+/// The place as it is kept: one line, each URL in it without its `http`
+/// scheme, its user and password, query and fragment, which can carry
+/// one-time tokens that would otherwise reach the screen, a notification
+/// and the phone (D-04). Every other word is kept as written.
 pub fn place_of(raw: &str) -> Result<String, &'static str> {
-    let line = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.is_empty() {
-        return Err("human_place_required");
-    }
-    let place = if looks_like_url(&line) {
-        let bare = line
-            .strip_prefix("https://")
-            .or_else(|| line.strip_prefix("http://"))
-            .unwrap_or(&line);
-        bare.split(['?', '#'])
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches('/')
-            .to_owned()
-    } else {
-        line
-    };
+    let place = raw
+        .split_whitespace()
+        .map(|word| url_word(word).unwrap_or_else(|| word.to_owned()))
+        .collect::<Vec<_>>()
+        .join(" ");
     if place.is_empty() {
         return Err("human_place_required");
     }
@@ -89,26 +77,57 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
     Ok(place)
 }
 
-/// A URL with a scheme (`https://…`, `myapp://…`), or a bare host and path
-/// (`github.com/login?…`): one word whose part before the first `/`, `?`
-/// or `#` is a dotted host.
-fn looks_like_url(line: &str) -> bool {
-    if line.contains(char::is_whitespace) {
-        return false;
+/// A word that is a URL, as it is kept: one with a scheme (`https://…`,
+/// `myapp://…`), or a bare host and what follows it (`github.com/login?…`,
+/// `localhost:3000/cb?…`, `192.168.1.5:8080/x`). None for any other word.
+fn url_word(word: &str) -> Option<String> {
+    let (scheme, rest) = match word.split_once("://") {
+        Some((scheme, rest))
+            if !scheme.is_empty()
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) =>
+        {
+            (Some(scheme), rest)
+        }
+        Some(_) => return None,
+        None => (None, word),
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    // A bare word is a URL only when a host stands before a path, query or fragment.
+    if scheme.is_none() && (tail.is_empty() || !is_host(host_port)) {
+        return None;
     }
-    if let Some((scheme, _)) = line.split_once("://") {
-        return !scheme.is_empty()
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-    }
-    let host = line.split(['/', '?', '#']).next().unwrap_or_default();
-    let mut labels = host.split('.');
-    host.contains('.')
-        && host.len() < line.len()
-        && labels.all(|label| {
-            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        })
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    let kept = format!("{host_port}{path}");
+    let kept = kept.trim_end_matches('/');
+    Some(match scheme {
+        Some(scheme)
+            if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") =>
+        {
+            format!("{scheme}://{kept}")
+        }
+        _ => kept.to_owned(),
+    })
+}
+
+/// A host with an optional port: `localhost`, or dotted labels of letters,
+/// digits and `-` (an IPv4 address included).
+fn is_host(host_port: &str) -> bool {
+    let host = match host_port.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
+        Some(_) => return false,
+        None => host_port,
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || (host.contains('.')
+            && host.split('.').all(|label| {
+                !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            }))
 }
 
 /// What a declaration did (B1, B5, B6).
@@ -306,8 +325,15 @@ pub(crate) fn done_letter(turn: &HumanTurn) -> String {
 /// The intent Done's letter is sent under: one letter per declaration
 /// however many surfaces press it (B18).
 pub(crate) fn done_intent(turn: &HumanTurn) -> String {
-    format!("ask-human-done:{}", turn.id)
+    format!("{DONE_INTENT}{}", turn.id)
 }
+
+/// Whether a letter's intent is a Done's (`done_intent`).
+pub(crate) fn is_done_intent(intent: &str) -> bool {
+    intent.starts_with(DONE_INTENT)
+}
+
+const DONE_INTENT: &str = "ask-human-done:";
 
 #[cfg(test)]
 mod tests {
@@ -331,6 +357,24 @@ mod tests {
             place_of("x-apple.systempreferences://Privacy?Camera").unwrap(),
             "x-apple.systempreferences://Privacy"
         );
+        // A port, a machine name, an address and a user and password are a
+        // URL's too, and a URL inside a sentence keeps nothing secret either.
+        for (raw, kept) in [
+            ("localhost:3000/cb?code=1", "localhost:3000/cb"),
+            ("example.com:8443/cb?code=abc", "example.com:8443/cb"),
+            ("192.168.1.5:8080/x?t=1", "192.168.1.5:8080/x"),
+            (
+                "https://user:token@host.example/path?x=1",
+                "host.example/path",
+            ),
+            ("http://localhost:8080/#/login", "localhost:8080"),
+            (
+                "Sign in at https://github.com/login?return_to=secret then",
+                "Sign in at github.com/login then",
+            ),
+        ] {
+            assert_eq!(place_of(raw).unwrap(), kept, "{raw}");
+        }
     }
 
     #[test]

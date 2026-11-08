@@ -331,7 +331,18 @@ fn done_sends_one_letter_that_waits_for_no_answer_and_takes_the_turn_down() {
         letter.body.lines().next(),
         Some("운영자가 처리함: 인증 · github.com/login")
     );
-    assert!(super::super::agent_sleep::letters::wakes(letter));
+    assert!(
+        letter.wakes_a_sleeper(),
+        "the operator's Done wakes a sleeping agent"
+    );
+    // Only the operator's Done: another report of the operator's, such as a
+    // View's comment, and the same words from an agent wait as before.
+    let mut other = letter.clone();
+    other.intent = "view-feedback:1".into();
+    assert!(!other.wakes_a_sleeper());
+    let mut from_agent = letter.clone();
+    from_agent.sender = sender.clone();
+    assert!(!from_agent.wakes_a_sleeper());
     // No row waits on a reply to it: the operator has no row.
     let guard = runtime.lock().unwrap();
     let ledger = guard.delivery_state().unwrap();
@@ -363,4 +374,47 @@ fn the_operators_own_message_takes_the_turn_down_without_a_letter() {
             .is_ok_and(|ledger| ledger.human_turns.is_empty())
     });
     assert!(letters_to(&runtime, &sender.pane_id).is_empty());
+}
+
+/// B18: Done on a declaration whose agent's pane is neither seen nor asleep
+/// takes the turn down with no letter, since none could reach the agent.
+#[test]
+fn done_for_an_agent_no_letter_can_reach_takes_the_turn_down() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _worker, sender, id) = with_store(root.path());
+    runtime
+        .lock()
+        .unwrap()
+        .delivery_observations
+        .remove(&sender.pane_id);
+    runtime.lock().unwrap().human_turn_done(&id);
+    wait_for("the declaration settled", || {
+        runtime
+            .lock()
+            .unwrap()
+            .delivery_state()
+            .is_ok_and(|ledger| ledger.human_turns.is_empty())
+    });
+    assert!(letters_to(&runtime, &sender.pane_id).is_empty());
+}
+
+/// B11, B15: the declaring agent's registration moving to another pane lays
+/// the rows again, so the turn follows it; a ledger that moved nothing of
+/// the kind lays nothing.
+#[test]
+fn a_declaring_agents_move_to_another_pane_lays_the_rows_again() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _, _, _) = fixture(root.path());
+    let mut runtime = runtime.lock().unwrap();
+    let sender = registered_sender(&mut runtime);
+    let mut ledger = ledger_with_sender(&sender);
+    declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 1);
+    runtime.publish_delivery(Arc::new(ledger.clone()), true);
+    let laid = runtime.plans.human_edit;
+    ledger.next_id += 1;
+    runtime.publish_delivery(Arc::new(ledger.clone()), true);
+    assert_eq!(runtime.plans.human_edit, laid, "nothing of the turn moved");
+    ledger.agents[0].actor.pane_id = "moved".into();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(runtime.plans.human_edit, laid + 1);
 }

@@ -1579,6 +1579,12 @@ pub struct SidebarAgentSnapshot {
     pub letters_waiting: Option<u32>,
     /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
     pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// On a parent between a declaring descendant and its lineage root: the
+    /// person's turns raised below it, oldest first, which its pane's head
+    /// draws as the root's does (PRD ask-human B15). Its row stays as it was;
+    /// only the head reads this.
+    #[serde(skip)]
+    pub human_below: Vec<crate::agent_state::escalation::RaisedAsk>,
     /// Derived: the person's turn this row leads with (PRD ask-human), its
     /// own declaration or the oldest one its descendants raised to it, which
     /// draws the key, the `<kind> · <place>` line and Done. Absent from the

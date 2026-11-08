@@ -311,7 +311,7 @@ impl Runtime {
             .iter()
             .filter(|letter| {
                 letter.state == State::Pending
-                    && wakes(letter)
+                    && letter.wakes_a_sleeper()
                     && !self.letter_wakes.failed.contains_key(&letter.id)
                     // A letter whose bell rang or that woke its recipient
                     // once waits for it to look, as one to an awake agent.
@@ -460,14 +460,14 @@ impl Runtime {
         }
     }
 
-    /// The pending letters that wake the agent asleep on `route` (`wakes`).
+    /// The pending letters that wake the agent asleep on `route` (`Letter::wakes_a_sleeper`).
     fn route_letters(&self, ledger: &Ledger, route: &Route) -> Vec<String> {
         ledger
             .letters
             .iter()
             .filter(|letter| {
                 letter.state == State::Pending
-                    && wakes(letter)
+                    && letter.wakes_a_sleeper()
                     && self
                         .asleep_route(&letter.recipient)
                         .is_some_and(|(sleeps, _)| sleeps == *route)
@@ -620,12 +620,4 @@ fn note_body(recipient: &str, kind: &str, letter: &str, reason: &str) -> String 
     format!(
         "{recipient} was asleep and could not be woken, so your {kind} letter {letter} was not delivered: {why} ({reason}).\nSend it again to try waking {recipient} once more, or give the work to another agent."
     )
-}
-
-/// Whether a letter wakes a sleeping recipient: one that asks something of
-/// it (`request`, `block`), or any the operator sent, which the operator
-/// wants acted on now: a Done on its person's turn (PRD ask-human B20) or a
-/// View's comments.
-pub(in crate::runtime) fn wakes(letter: &crate::delivery::ledger::Letter) -> bool {
-    matches!(letter.kind.as_str(), "request" | "block") || letter.sender.operator_owned()
 }

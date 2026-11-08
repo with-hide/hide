@@ -206,7 +206,14 @@ pub(crate) fn of(
             || agent.state.verb == super::RequestVerb::Blocked,
         |lead| lead.own,
     );
-    if !leads && let Some(lead) = agent.raised.first() {
+    // A parent between the root and a declaring descendant draws the
+    // person's turns raised below it, as the root does (PRD ask-human B15).
+    let raised = if agent.raised.is_empty() {
+        &agent.human_below
+    } else {
+        &agent.raised
+    };
+    if !leads && let Some(lead) = raised.first() {
         return Header {
             request: turn_request(agent),
             band: Some(Band {
@@ -218,7 +225,7 @@ pub(crate) fn of(
                     pane_id: lead.open_pane_id.clone(),
                     label: lead.title.clone(),
                 }),
-                more: agent.raised.len() - 1,
+                more: raised.len() - 1,
                 raised: Some(lead.clone()),
                 subject: None,
             }),

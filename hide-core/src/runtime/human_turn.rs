@@ -3,6 +3,7 @@
 //! down (B18), and the operator's own message to the agent takes it down
 //! with no letter (B22). The ledger worker writes both, never under the
 //! runtime's lock.
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
@@ -46,27 +47,42 @@ impl Runtime {
             }));
             return false;
         };
-        let letter = self
-            .operator_prepare(
-                &record.actor.pane_id,
-                crate::delivery::Command::Send {
-                    target: record.actor.pane_id.clone(),
-                    intent: human_turn::done_intent(&turn),
-                    body: human_turn::done_letter(&turn),
-                    // A report waits for no answer; a letter from the
-                    // operator still wakes a sleeping agent (docs/delivery.md).
-                    kind: "report".into(),
-                    now: false,
-                    force: false,
-                },
-            )
-            .map_err(|code| self.settle_failed(&turn, "letter", &code))
-            .ok();
-        if letter.is_none() {
-            // Nothing reached the agent, so the declaration stays for the
-            // operator to press again.
+        if self.settling(&turn.id) {
             return false;
         }
+        let letter = match self.operator_prepare_waking(
+            &record.actor.pane_id,
+            crate::delivery::Command::Send {
+                target: record.actor.pane_id.clone(),
+                intent: human_turn::done_intent(&turn),
+                body: human_turn::done_letter(&turn),
+                // A report waits for no answer; the operator's Done still
+                // wakes a sleeping agent (`Letter::wakes_a_sleeper`).
+                kind: "report".into(),
+                now: false,
+                force: false,
+            },
+        ) {
+            Ok(letter) => Some(letter),
+            // The agent's pane is neither seen nor asleep, so no letter can
+            // reach it; the operator still said the turn is done, and it goes.
+            Err(code) if code == "target_unavailable" => {
+                crate::diagnostic!(json!({
+                    "component": "coordination",
+                    "kind": "ask_human.done_unaddressed",
+                    "declaration_id": turn.id,
+                    "agent_id": record.id,
+                    "pane_id": record.actor.pane_id,
+                }));
+                None
+            }
+            Err(code) => {
+                // Nothing reached the agent, so the declaration stays for
+                // the operator to press again.
+                self.settle_failed(&turn, "letter", &code);
+                return false;
+            }
+        };
         self.settle(Settle {
             letter,
             clear: match self.operator_settle(&turn, Settled::Done) {
@@ -97,6 +113,13 @@ impl Runtime {
             }),
             Err(code) => self.settle_failed(&turn, "clear", &code),
         }
+    }
+
+    /// Whether declaration `id` already has a settle under way.
+    fn settling(&self, id: &str) -> bool {
+        self.human_turns_settling
+            .lock()
+            .is_ok_and(|settling| settling.contains(id))
     }
 
     /// The live registration and declaration `matches` picks.
@@ -142,45 +165,67 @@ impl Runtime {
     /// settle follows a letter only once the letter is saved, so a Done
     /// whose letter failed leaves the declaration for another press.
     fn settle(&self, settle: Settle) {
+        let settling = Arc::clone(&self.human_turns_settling);
+        let Ok(mut under_way) = settling.lock() else {
+            return;
+        };
+        if !under_way.insert(settle.declaration.clone()) {
+            return;
+        }
+        drop(under_way);
+        let declaration = settle.declaration.clone();
+        let release = Arc::clone(&settling);
+        let released = declaration.clone();
         let spawned = std::thread::Builder::new()
             .name("hide-human-turn".into())
             .spawn(move || {
-                if let Some(letter) = settle.letter
-                    && let Err(code) = letter.run(SETTLE_CALL)
-                {
-                    crate::diagnostic!(json!({
-                        "component": "coordination",
-                        "kind": "ask_human.settle_failed",
-                        "declaration_id": settle.declaration,
-                        "step": "letter",
-                        "code": code,
-                    }));
-                    return;
-                }
-                let Clear {
-                    client,
-                    authority,
-                    actor,
-                    mutation,
-                } = settle.clear;
-                if let Err(code) =
-                    crate::coordination::executor::mutate(&client, &authority, &actor, mutation)
-                {
-                    crate::diagnostic!(json!({
-                        "component": "coordination",
-                        "kind": "ask_human.settle_failed",
-                        "declaration_id": settle.declaration,
-                        "step": "clear",
-                        "code": code,
-                    }));
+                Self::write_settle(settle);
+                if let Ok(mut under_way) = release.lock() {
+                    under_way.remove(&released);
                 }
             });
         if let Err(error) = spawned {
+            if let Ok(mut under_way) = settling.lock() {
+                under_way.remove(&declaration);
+            }
             crate::diagnostic!(json!({
                 "component": "coordination",
                 "kind": "ask_human.settle_failed",
+                "declaration_id": declaration,
                 "step": "thread",
                 "code": error.to_string(),
+            }));
+        }
+    }
+
+    fn write_settle(settle: Settle) {
+        if let Some(letter) = settle.letter
+            && let Err(code) = letter.run(SETTLE_CALL)
+        {
+            crate::diagnostic!(json!({
+                "component": "coordination",
+                "kind": "ask_human.settle_failed",
+                "declaration_id": settle.declaration,
+                "step": "letter",
+                "code": code,
+            }));
+            return;
+        }
+        let Clear {
+            client,
+            authority,
+            actor,
+            mutation,
+        } = settle.clear;
+        if let Err(code) =
+            crate::coordination::executor::mutate(&client, &authority, &actor, mutation)
+        {
+            crate::diagnostic!(json!({
+                "component": "coordination",
+                "kind": "ask_human.settle_failed",
+                "declaration_id": settle.declaration,
+                "step": "clear",
+                "code": code,
             }));
         }
     }

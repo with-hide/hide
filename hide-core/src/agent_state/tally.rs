@@ -418,9 +418,10 @@ pub mod phone {
         pub human_turn: Option<Value>,
         /// Every declaration on the row and the ones raised to it, so a new
         /// one is announced once even while the row already stands in Needs
-        /// You (B5, B17). Used only by notice transport.
+        /// You (B5, B17), by declaration id with what each says. Used only by
+        /// notice transport.
         #[serde(skip)]
-        pub human_turns: std::collections::BTreeSet<String>,
+        pub human_turns: std::collections::BTreeMap<String, AskSubject>,
         pub status_code: String,
         pub demand: String,
         /// Present while the agent's process is ended and its pane holds a
@@ -1056,9 +1057,12 @@ pub mod phone {
                             .flatten()
                             .map(|ask| ask.get("subject")),
                     )
-                    .filter_map(|subject| match subject_of(subject)? {
-                        AskSubject::HumanTurn { id, .. } => Some(id),
-                        _ => None,
+                    .filter_map(|subject| {
+                        let subject = subject_of(subject)?;
+                        match &subject {
+                            AskSubject::HumanTurn { id, .. } => Some((id.clone(), subject.clone())),
+                            _ => None,
+                        }
                     })
                     .collect(),
                 status_code: str_of(agent, "status_code").to_owned(),

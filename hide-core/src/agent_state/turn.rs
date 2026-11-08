@@ -213,7 +213,15 @@ fn human_lead(agent: &SidebarAgentSnapshot) -> Option<crate::model::HumanTurnLea
         _ => None,
     });
     match (own, raised) {
-        (Some(own), Some(raised)) if raised.since_unix_ms < own.since_unix_ms => Some(raised),
+        // Option orders None first, so an unknown time never wins.
+        (Some(own), Some(raised))
+            if matches!(
+                (raised.since_unix_ms, own.since_unix_ms),
+                (Some(raised), Some(own)) if raised < own
+            ) =>
+        {
+            Some(raised)
+        }
         (Some(own), _) => Some(own),
         (None, raised) => raised,
     }
@@ -1228,7 +1236,12 @@ pub mod push {
             let now = effective(projection);
             let states: BTreeMap<AgentKey, Seen> = now
                 .iter()
-                .map(|(key, (state, agent))| (key.clone(), (*state, agent.human_turns.clone())))
+                .map(|(key, (state, agent))| {
+                    (
+                        key.clone(),
+                        (*state, agent.human_turns.keys().cloned().collect()),
+                    )
+                })
                 .collect();
             let Some(last) = self.last.replace(states) else {
                 return (Vec::new(), BTreeSet::new());
@@ -1241,8 +1254,14 @@ pub mod push {
                     .cloned()
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
                     .unwrap_or((Effective::Other, BTreeSet::new()));
-                let declared_now = !agent.human_turns.is_subset(&declared);
-                if before == *state && !(declared_now && *state == Effective::NeedsYou) {
+                // A declaration not seen before is what a notice on a row
+                // already in Needs You says (B17).
+                let declared_now = agent
+                    .human_turns
+                    .iter()
+                    .find(|(id, _)| !declared.contains(*id))
+                    .map(|(_, subject)| subject);
+                if before == *state && !(declared_now.is_some() && *state == Effective::NeedsYou) {
                     continue;
                 }
                 // The row stays in Needs You, or the View's notice already
@@ -1270,7 +1289,13 @@ pub mod push {
                         } else {
                             agent.detail.clone()
                         },
-                        subject: if look { None } else { agent.subject.clone() },
+                        subject: if look {
+                            None
+                        } else if before == *state {
+                            declared_now.cloned()
+                        } else {
+                            agent.subject.clone()
+                        },
                         place: agent
                             .place
                             .as_deref()

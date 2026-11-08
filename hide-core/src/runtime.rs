@@ -1152,6 +1152,9 @@ pub struct Runtime {
     hide_started: crate::coordination::started::HideStarted,
     delivery_client: Option<crate::delivery::worker::Client>,
     delivery_observations: HashMap<String, delivery::Observation>,
+    /// Declarations whose Done is being written on a settle thread, so a
+    /// repeat press starts no second thread (PRD ask-human B18).
+    human_turns_settling: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Counts `observe_delivery` passes; fences each observation's laid turn.
     delivery_observe_generation: u64,
     /// View openers waiting for their document, Sends under way, and the
@@ -2325,6 +2328,7 @@ impl Runtime {
             delivery_ledger,
             delivery_client: None,
             delivery_observations: HashMap::new(),
+            human_turns_settling: Arc::default(),
             delivery_observe_generation: 0,
             view_feedback: view_feedback::FeedbackRuntime::default(),
             view_sessions: view_sessions::ViewSessions::default(),
