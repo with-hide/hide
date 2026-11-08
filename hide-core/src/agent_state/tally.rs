@@ -368,11 +368,16 @@ pub mod phone {
         /// a View to look at stands in Needs You as it does there (PRD
         /// unseen-agent-views D-05; mobile-companion-ui B24).
         pub group: String,
-        /// The group notices follow: where the row would stand with nothing to
-        /// look at, which a View never sends a notice for (D-13, B12). Equal to
-        /// `group` for every row without one.
+        /// Where the row would stand with nothing to look at, which says
+        /// whether it asks something of its own. Equal to `group` for every
+        /// row without a View to look at.
         #[serde(skip)]
         pub notice_group: String,
+        /// The newest View the operator has not looked at, for a row that has
+        /// one: its notice says `볼 것 · <View>` (status-model.md, A View to look at).
+        /// Used only by notice transport.
+        #[serde(skip)]
+        pub look: Option<String>,
         /// In `needs_you` for an ask the operator read and has not answered:
         /// listed there, drawn read, and never announced (needs-you-cleanup
         /// D-10).
@@ -960,9 +965,9 @@ pub mod phone {
                     .get(pane_id)
                     .cloned()
                     .unwrap_or_else(|| pane_id.to_owned()),
-                // The list follows the desktop's group; a View to look at
-                // calls no notification (PRD unseen-agent-views D-13, B12), so
-                // notices follow the group the row would have without it.
+                // The list follows the desktop's group; notices tell a View
+                // to look at from the row's own ask by the group the row would
+                // have without it (status-model.md, A View to look at).
                 group: listed(str_of(agent, "group")),
                 notice_group: listed(
                     agent
@@ -970,6 +975,10 @@ pub mod phone {
                         .and_then(Value::as_str)
                         .unwrap_or_else(|| str_of(agent, "group")),
                 ),
+                look: agent
+                    .pointer("/look/label")
+                    .and_then(Value::as_str)
+                    .and_then(crate::agent_state::first_line_cut),
                 read: read_ask,
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),

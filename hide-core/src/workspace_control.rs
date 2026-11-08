@@ -219,6 +219,27 @@ pub struct BrowserRouteSource {
     pub load: u64,
 }
 
+/// The `hide browser` page commands, as `workspace info` names them. They
+/// are offered where `browser.open` is, to a caller on any machine: hided
+/// relays them to the display's window and strips every `browser.`
+/// capability when no desktop window is attached. `hided`'s
+/// `browser_page::VERBS` is the same list without the prefix.
+pub const BROWSER_PAGE_CAPABILITIES: [&str; 13] = [
+    "browser.snapshot",
+    "browser.click",
+    "browser.fill",
+    "browser.type",
+    "browser.press",
+    "browser.hover",
+    "browser.drag",
+    "browser.scroll",
+    "browser.wait",
+    "browser.screenshot",
+    "browser.eval",
+    "browser.console",
+    "browser.network",
+];
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct QueryResult {
     pub context: Context,

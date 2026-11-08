@@ -322,8 +322,8 @@ mod tests {
     }
 
     /// mobile-companion-ui B24: an agent with a View to look at stands in
-    /// Needs You on the phone as on the desktop, and the group notices follow
-    /// is the one it has with nothing to look at (unseen-agent-views D-13).
+    /// Needs You on the phone as on the desktop; notices keep the group it
+    /// has with nothing to look at and the newest View's name.
     #[test]
     fn a_row_with_a_view_to_look_at_is_listed_in_needs_you_and_notices_follow_the_group_without_it()
     {
@@ -332,7 +332,7 @@ mod tests {
                 "a",
                 "needs_you",
                 10,
-                json!({"mark": "look", "look": {"group": "seen", "count": 1}}),
+                json!({"mark": "look", "look": {"group": "seen", "count": 1, "label": "report.html"}}),
             ),
             agent("b", "seen", 9, json!({})),
         ]);
@@ -342,6 +342,7 @@ mod tests {
             ("needs_you", "seen")
         );
         assert_eq!(row.mark, "look");
+        assert_eq!(row.look.as_deref(), Some("report.html"));
         let plain = top(&projection, "seen", "b");
         assert_eq!(
             (plain.group.as_str(), plain.notice_group.as_str()),

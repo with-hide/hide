@@ -775,7 +775,7 @@ pub(crate) fn native_question_line(
 
 /// The first line of `text`, one line and cut on a character boundary to
 /// the width of an `expected_reply`, ending in `…` when cut.
-fn first_line_cut(text: &str) -> Option<String> {
+pub(crate) fn first_line_cut(text: &str) -> Option<String> {
     use crate::sidebar::MAX_EXPECTED_REPLY_CHARS;
     let line = text
         .lines()
@@ -863,9 +863,8 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     };
     agent.group = group.name().to_owned();
     agent.look = look_of(agent, |agent| {
-        // Where the row would stand with nothing to look at: what a phone or
-        // desktop notification follows, which a View never sends (PRD
-        // unseen-agent-views D-13, B12).
+        // Where the row would stand with nothing to look at, which tells the
+        // notifications a View to look at from the row's own ask.
         if !agent.raised.is_empty() || human {
             return AgentGroup::NeedsYou;
         }
@@ -1074,6 +1073,9 @@ pub mod push {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum Effective {
         NeedsYou,
+        /// In Needs You only for a View to look at, with nothing asked of the
+        /// operator on the row (status-model.md, A View to look at).
+        Look,
         Done,
         Working,
         Seen,
@@ -1084,7 +1086,7 @@ pub mod push {
         /// The state a notification announces for this one, if any.
         fn announced(self) -> Option<NoticeState> {
             match self {
-                Self::NeedsYou => Some(NoticeState::NeedsYou),
+                Self::NeedsYou | Self::Look => Some(NoticeState::NeedsYou),
                 Self::Done => Some(NoticeState::Done),
                 Self::Working | Self::Seen | Self::Other => None,
             }
@@ -1145,9 +1147,9 @@ pub mod push {
     }
 
     /// Root rows use the group notices follow (`notice_group`: their core
-    /// group, which a raised descendant already moved to Needs You, and not
-    /// the Needs You a View to look at puts a row in); a delegated row never
-    /// notifies on its own (PRD B9).
+    /// group, which a raised descendant already moved to Needs You), and a
+    /// View to look at is its own state unless the row asks something itself;
+    /// a delegated row never notifies on its own (PRD B9).
     /// Existing human delivery notices own undelivered-letter and
     /// unconfirmed-watch notifications.
     fn effective(projection: &Projection) -> BTreeMap<AgentKey, (Effective, &PhoneAgent)> {
@@ -1163,6 +1165,11 @@ pub mod push {
                 // A read ask listed in Needs You is read: it clears a notice
                 // and never announces again (needs-you-cleanup D-10, B12).
                 Effective::Seen
+            } else if agent.look.is_some() && agent.notice_group != "needs_you" {
+                // A question, approval or block on the row keeps its own
+                // notice; a finished turn with a View to look at is the View's
+                // one notice, never a Done beside it.
+                Effective::Look
             } else if agent.notification_finalized && agent.notice_group == "needs_you" {
                 // A later judgment updates the row, not a finalized notice.
                 Effective::Done
@@ -1238,23 +1245,44 @@ pub mod push {
                 if before == *state && !(declared_now && *state == Effective::NeedsYou) {
                     continue;
                 }
-                if let Some(announced) = state.announced() {
+                // The row stays in Needs You, or the View's notice already
+                // carried the finished turn: nothing new to say.
+                let absorbed = matches!(
+                    (before, *state),
+                    (Effective::NeedsYou, Effective::Look) | (Effective::Look, Effective::Done)
+                );
+                let announced = state.announced().filter(|_| !absorbed);
+                if let Some(announced) = announced {
+                    let look = *state == Effective::Look;
                     notices.push(Notice {
                         key: key.clone(),
                         title: agent.title.clone(),
                         state: announced,
-                        status_code: Some(agent.status_code.clone()),
-                        detail: agent.detail.clone(),
-                        subject: agent.subject.clone(),
+                        // `look` is the eye's word, `볼 것`, and the newest
+                        // View is the sentence (`볼 것 · report.html · app`).
+                        status_code: Some(if look {
+                            "look".to_owned()
+                        } else {
+                            agent.status_code.clone()
+                        }),
+                        detail: if look {
+                            agent.look.clone()
+                        } else {
+                            agent.detail.clone()
+                        },
+                        subject: if look { None } else { agent.subject.clone() },
                         place: agent
                             .place
                             .as_deref()
                             .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
                             .unwrap_or_default(),
                     });
-                } else if *state == Effective::Seen
-                    && matches!(before, Effective::NeedsYou | Effective::Done)
+                } else if (*state == Effective::Seen
+                    && matches!(before, Effective::NeedsYou | Effective::Done))
+                    || (before == Effective::Look && *state != Effective::NeedsYou)
                 {
+                    // A View looked at takes its notice back, whatever the
+                    // row's own group is then.
                     seen.insert(key.clone());
                 }
             }
@@ -1266,7 +1294,12 @@ pub mod push {
             // An agent gone for good: its notification is closed on the next push.
             self.vanished.retain(|key, ((before, _), since)| {
                 let expired = at.duration_since(*since) >= VANISHED_TTL;
-                if expired && matches!(before, Effective::NeedsYou | Effective::Done) {
+                if expired
+                    && matches!(
+                        before,
+                        Effective::NeedsYou | Effective::Look | Effective::Done
+                    )
+                {
                     seen.insert(key.clone());
                 }
                 !expired

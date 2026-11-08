@@ -6,6 +6,7 @@
 
 import type { ProjectTasksScope, TaskCardScope, TaskState } from "./agentScope";
 import { archivedProject } from "./archive";
+import type { MissionAsk } from "./missions";
 import type { AgentRow, ArchivedSession, TaskView, Workspace } from "./snapshot";
 
 /**
@@ -35,15 +36,25 @@ export type TaskGroup = {
   project: Workspace | null;
   /** The open rows, band by band, each band in the core's order (B9). */
   entries: TaskEntry[];
-  /** The open rows cut by state in `TASK_GROUPS` order; a 상태별 group has one band, a 프로젝트별 group labels each (B32). */
-  bands: { state: TaskGroupState; entries: TaskEntry[] }[];
-  /** Per state, the open rows a project's head counts (B6). */
+  /**
+   * The open rows cut by state in `TASK_GROUPS` order; a 상태별 group has one band, a 프로젝트별 group labels each (B32).
+   * The 내 차례 band's `missions` are the missions that are their own Needs You item, drawn above its rows as the 프로젝트 list draws them.
+   */
+  bands: TaskBand[];
+  /** Per state, the open rows and mission rows a project's head counts (B6). */
   counts: Partial<Record<TaskGroupState, number>>;
   resting: TaskEntry[];
   cleanup: TaskEntry[];
   /** The project's archived roots, newest archived first, folded below 정리할 것 (프로젝트별 only). */
   archived: ArchivedEntry[];
 };
+
+export type TaskBand = { state: TaskGroupState; entries: TaskEntry[]; missions: MissionAsk[] };
+
+/** The rows a band or a group draws: its tasks and its mission rows. */
+export function rowCount(bands: readonly TaskBand[]): number {
+  return bands.reduce((sum, band) => sum + band.entries.length + band.missions.length, 0);
+}
 
 export type TaskList = {
   /** Open tasks, the folded ones not counted. */
@@ -66,11 +77,19 @@ function inGroup(open: readonly TaskEntry[], state: TaskGroupState): TaskEntry[]
   return state === "working" ? [...entries.filter(({ card }) => card.state !== "waiting"), ...entries.filter(({ card }) => card.state === "waiting")] : entries;
 }
 
+/** A band of `state`, holding `missions` only in 내 차례. */
+function band(state: TaskGroupState, entries: TaskEntry[], missions: readonly MissionAsk[]): TaskBand {
+  return { state, entries, missions: state === "needs_you" ? [...missions] : [] };
+}
+
 /**
  * The list for one view. A card whose root row the snapshot no longer holds
- * is left out until it does, rather than drawn without a title.
+ * is left out until it does, rather than drawn without a title. `missions`
+ * are the device's missions that are their own Needs You item
+ * (`useMissionAsks`), counted and drawn in 내 차례 with the tasks, under
+ * their project in 프로젝트별.
  */
-export function taskList(tasks: ProjectTasksScope | null | undefined, rows: ReadonlyMap<string, AgentRow>, projects: readonly Workspace[], view: TaskView, archivedRows: readonly ArchivedSession[] = []): TaskList {
+export function taskList(tasks: ProjectTasksScope | null | undefined, rows: ReadonlyMap<string, AgentRow>, projects: readonly Workspace[], view: TaskView, archivedRows: readonly ArchivedSession[] = [], missions: readonly MissionAsk[] = []): TaskList {
   const byCheckout = new Map(projects.flatMap((project) => project.checkouts.map((checkout) => [checkout.id, project] as const)));
   const entries: TaskEntry[] = [];
   for (const card of tasks?.cards ?? []) {
@@ -92,22 +111,25 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, rows: Read
   if (view === "status") {
     const groups = TASK_GROUPS.map((state) => {
       const entries = inGroup(open, state);
-      return { key: `state:${state}`, state, project: null, entries, bands: [{ state, entries }], counts: {}, resting: [], cleanup: [], archived: [] };
-    }).filter((group) => group.entries.length > 0);
+      return { key: `state:${state}`, state, project: null, entries, bands: [band(state, entries, missions)], counts: {}, resting: [], cleanup: [], archived: [] };
+    }).filter((group) => rowCount(group.bands) > 0);
     return { total: open.length, groups, resting, cleanup, archived };
   }
   // One group per project, the projects that ask first, then in the order their first task stands (B6).
   const order: (Workspace | null)[] = [];
+  const missionProject = (ask: MissionAsk) => projects.find((project) => project.id === ask.mission.workspace_id) ?? null;
   for (const { project } of entries) if (!order.includes(project)) order.push(project);
+  for (const ask of missions) if (!order.includes(missionProject(ask))) order.push(missionProject(ask));
   // A project whose sessions are all archived still stands, after the ones with work.
   for (const { project } of archived) if (!order.includes(project)) order.push(project);
-  const asks = (project: Workspace | null) => open.some((entry) => entry.project === project && groupOf(entry.card.state) === "needs_you");
+  const asks = (project: Workspace | null) => missions.some((ask) => missionProject(ask) === project) || open.some((entry) => entry.project === project && groupOf(entry.card.state) === "needs_you");
   const sorted = [...order.filter(asks), ...order.filter((project) => !asks(project))];
   const groups = sorted.map((project) => {
     const mine = (list: TaskEntry[]) => list.filter((entry) => entry.project === project);
     const shown = mine(open);
-    const bands = TASK_GROUPS.map((state) => ({ state, entries: inGroup(shown, state) })).filter((band) => band.entries.length > 0);
-    const counts: Partial<Record<TaskGroupState, number>> = Object.fromEntries(bands.map((band) => [band.state, band.entries.length]));
+    const asked = missions.filter((ask) => missionProject(ask) === project);
+    const bands = TASK_GROUPS.map((state) => band(state, inGroup(shown, state), asked)).filter((band) => rowCount([band]) > 0);
+    const counts: Partial<Record<TaskGroupState, number>> = Object.fromEntries(bands.map((band) => [band.state, rowCount([band])]));
     return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
   });
   return { total: open.length, groups, resting: [], cleanup: [], archived: [] };
