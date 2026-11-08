@@ -1,15 +1,16 @@
-// Chapter 1's world: the introduction site's hero window (a lead, the agent
+// The first flow's world: the introduction site's hero window (a lead, the agent
 // asking to merge, and the Project tool beside them), which shows all three
 // parts of the screen with work in them. Its snapshot is `../data/tour.json`,
 // kept as the core would send it with each time written as how long before
-// now it was. The only thing it answers is the sidebar's list, so the learner
-// can turn it through its three lenses.
+// now it was. It answers the sidebar's list, so the learner can turn it
+// through its three lenses, and notes that ⌘K was opened.
 
 import { nextSidebarLens, type SidebarLens } from "../../snapshot";
 import tour from "../data/tour.json";
 import type { PracticeWorld, WorldSnapshot } from "../world";
 
-export type TourModel = { lens: SidebarLens; seen: SidebarLens[] };
+/** `searched` is whether ⌘K was opened, which asks the core for sessions. */
+export type TourModel = { lens: SidebarLens; seen: SidebarLens[]; searched: boolean };
 
 /** A time in the data file: milliseconds, seconds or an ISO time that long before now, or a date that many days before today. */
 type Ago = { $msAgo?: number; $sAgo?: number; $isoAgo?: number; $daysAgo?: number };
@@ -95,11 +96,12 @@ const TERMINALS: Record<string, string> = {
 };
 
 export const TOUR_WORLD: PracticeWorld<TourModel> = {
-  initial: () => ({ lens: "projects", seen: ["projects"] }),
+  initial: () => ({ lens: "projects", seen: ["projects"], searched: false }),
   apply(model, event) {
+    if (event.kind === "session_work_search") return model.searched ? null : { ...model, searched: true };
     if (event.kind !== "sidebar_lens_set") return null;
     const lens = (event.payload.lens as SidebarLens | undefined) ?? nextSidebarLens(model.lens);
-    return { lens, seen: model.seen.includes(lens) ? model.seen : [...model.seen, lens] };
+    return { ...model, lens, seen: model.seen.includes(lens) ? model.seen : [...model.seen, lens] };
   },
   snapshot(model, nowMs) {
     const { rest, agents, usage } = dated(tour, nowMs) as Omit<WorldSnapshot, "focused">;
