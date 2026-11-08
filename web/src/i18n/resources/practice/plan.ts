@@ -1,9 +1,9 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 8's words (`practice/chapters/plan.ts`).
+// The step-by-step flow's words (`practice/chapters/plan.ts`).
 const en = {
-  "practice.plan.title": "Plan first",
-  "practice.plan.summary": "Ask for a plan, open its steps from the chip, approve it in the conversation",
+  "practice.plan.title": "Hand a task over in steps",
+  "practice.plan.summary": "Ask an agent for its steps first, open them from the chip, approve in the conversation, and watch the steps tick",
   "practice.plan.intro.kick": "A bigger change is coming",
   "practice.plan.intro.title": "Don't hand it over in one go",
   "practice.plan.intro.text": "Have the agent show its plan first, then fix it before any code changes.",
@@ -25,14 +25,17 @@ const en = {
   "practice.plan.approve.kick": "Review and go",
   "practice.plan.approve.title": "Say what to change, or go",
   "practice.plan.approve.text": "Here any answer approves it. In Hide the agent approves it when you agree, then starts on step 1.",
-  "practice.plan.end.kick": "End of chapter 8",
-  "practice.plan.end.title": "The chip follows the steps",
-  "practice.plan.end.text": "The current step shows under the title. Finished steps stay in the session's record.",
+  "practice.plan.ticking.kick": "It works through them",
+  "practice.plan.ticking.title": "Each step ticks as it is done",
+  "practice.plan.ticking.text": "The agent starts on step 1 and moves down the list by itself. The chip follows the step it is on.",
+  "practice.plan.end.kick": "End of flow 3",
+  "practice.plan.end.title": "Finished steps stay on record",
+  "practice.plan.end.text": "The current step shows under the title. Finished steps stay in the session's record, so you can see later what was done.",
 };
 
 const ko = {
-  "practice.plan.title": "계획 먼저",
-  "practice.plan.summary": "계획 부탁하기, 칩에서 작업 단계 열기, 대화로 승인하기",
+  "practice.plan.title": "단계별로 맡기기",
+  "practice.plan.summary": "에이전트에게 단계부터 받아 보고, 칩에서 열어 보고, 대화로 승인하고, 단계가 하나씩 체크되는 걸 봐요",
   "practice.plan.intro.kick": "조금 큰 일을 맡길 차례",
   "practice.plan.intro.title": "한 번에 다 시키지 않아요",
   "practice.plan.intro.text": "코드를 고치기 전에 계획부터 보고, 고칠 곳을 말해요.",
@@ -54,14 +57,17 @@ const ko = {
   "practice.plan.approve.kick": "검토하고 진행",
   "practice.plan.approve.title": "고칠 곳을 말하거나, 진행하라고 하기",
   "practice.plan.approve.text": "연습에서는 어떤 답이든 승인돼요. Hide에서는 내가 동의하면 에이전트가 직접 승인하고 1단계부터 시작해요.",
-  "practice.plan.end.kick": "8편 끝",
-  "practice.plan.end.title": "칩이 진행을 따라가요",
-  "practice.plan.end.text": "지금 하는 단계가 제목 아래에 보여요. 끝난 작업 단계는 세션 기록에 남아요.",
+  "practice.plan.ticking.kick": "알아서 진행",
+  "practice.plan.ticking.title": "끝날 때마다 체크돼요",
+  "practice.plan.ticking.text": "에이전트가 1단계부터 시작해서 목록을 따라 알아서 내려가요. 칩은 지금 하는 단계를 보여 줘요.",
+  "practice.plan.end.kick": "흐름 3 끝",
+  "practice.plan.end.title": "끝난 단계는 기록에 남아요",
+  "practice.plan.end.text": "지금 하는 단계가 제목 아래에 보여요. 끝난 단계는 세션 기록에 남아서, 나중에 무엇을 했는지 볼 수 있어요.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
-  "practice.plan.title": "先做计划",
-  "practice.plan.summary": "请智能体先做计划，从标记打开任务步骤，在对话中批准",
+  "practice.plan.title": "分步骤交给它",
+  "practice.plan.summary": "请智能体先给出步骤，从标记打开，在对话中批准，看步骤一项项完成",
   "practice.plan.intro.kick": "要交一件较大的事",
   "practice.plan.intro.title": "不要一次全交出去",
   "practice.plan.intro.text": "改代码之前，先看计划，说出要改的地方。",
@@ -83,14 +89,17 @@ const zhCN = {
   "practice.plan.approve.kick": "审查后开始",
   "practice.plan.approve.title": "说要改什么，或让它开始",
   "practice.plan.approve.text": "练习中任何回答都会批准。在 Hide 中，你同意后智能体自己批准，从第 1 步开始。",
-  "practice.plan.end.kick": "第 8 章完",
-  "practice.plan.end.title": "标记跟着进度走",
-  "practice.plan.end.text": "当前步骤显示在标题下方。完成的任务步骤留在会话记录里。",
+  "practice.plan.ticking.kick": "自己推进",
+  "practice.plan.ticking.title": "每完成一步就打勾",
+  "practice.plan.ticking.text": "智能体从第 1 步开始，沿着列表自己往下做。标记显示它正在做的那一步。",
+  "practice.plan.end.kick": "流程 3 完",
+  "practice.plan.end.title": "完成的步骤会留在记录里",
+  "practice.plan.end.text": "当前步骤显示在标题下方。完成的步骤留在会话记录里，之后可以看做了什么。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
-  "practice.plan.title": "まず計画",
-  "practice.plan.summary": "計画を頼む・チップから作業ステップを開く・会話で承認する",
+  "practice.plan.title": "ステップで任せる",
+  "practice.plan.summary": "まずエージェントにステップを出してもらい、チップから開き、会話で承認して、ステップが順に済んでいくのを見ます",
   "practice.plan.intro.kick": "少し大きな仕事を任せます",
   "practice.plan.intro.title": "一度に全部は任せません",
   "practice.plan.intro.text": "コードを変える前に計画を見て、直すところを伝えます。",
@@ -112,9 +121,12 @@ const ja = {
   "practice.plan.approve.kick": "レビューして進める",
   "practice.plan.approve.title": "直すところを言うか、進めてと言う",
   "practice.plan.approve.text": "練習ではどの返事でも承認されます。Hideではあなたが同意するとエージェントが自分で承認し、ステップ1から始めます。",
-  "practice.plan.end.kick": "第 8 章 おわり",
-  "practice.plan.end.title": "チップが進み具合を追います",
-  "practice.plan.end.text": "今のステップはタイトルの下に出ます。終わった作業ステップはセッションの記録に残ります。",
+  "practice.plan.ticking.kick": "自分で進めます",
+  "practice.plan.ticking.title": "終わるたびにチェックが付きます",
+  "practice.plan.ticking.text": "エージェントはステップ1から始め、リストを自分で順に進めます。チップは今のステップを追います。",
+  "practice.plan.end.kick": "フロー3 おわり",
+  "practice.plan.end.title": "終わったステップは記録に残ります",
+  "practice.plan.end.text": "今のステップはタイトルの下に出ます。終わったステップはセッションの記録に残り、あとで何をしたか見られます。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;

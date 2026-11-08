@@ -1,10 +1,12 @@
-// Chapter 8's world: one Claude agent the learner asks for a bigger change,
+// The step-by-step flow's world: one Claude agent the learner asks for a bigger change,
 // plan first. Whatever words the learner sends play the next part of the
 // script, since a practice understands no words: the agent puts up a plan
 // for review (`hide task set --ask`), which the core lays on its row as a
 // question, and the next words are the review's answer, so the agent approves
 // its plan (`hide task approve`) and starts on the first step. Approval is a
-// conversation, as in Hide: no event of the shell's approves a plan.
+// conversation, as in Hide: no event of the shell's approves a plan. Once it
+// is approved the agent works through the steps on its own (`later`), each
+// one ticking as it is done.
 
 import type { AgentRow, AgentState, AskSubject, DetailItem, PaneHeader, PlanStep, PlanView, StatusTone, WorkSession } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
@@ -16,8 +18,11 @@ export const LEAD = "lead";
 const LABEL = "Payment retries";
 const SESSION: WorkSession = { device_id: "local", agent: "claude", session_id: "practice-plan" };
 
-/** 0 before the request, 1 once the plan waits for review, 2 once it is approved and the first step runs. */
-export type PlanStage = 0 | 1 | 2;
+/** 0 before the request, 1 once the plan waits for review, 2 once it is approved and the first step runs, then 3 and 4 as the next steps start. */
+export type PlanStage = 0 | 1 | 2 | 3 | 4;
+
+/** How long the agent works on a step before the next one starts. */
+export const STEP_MS = 3500;
 
 export type PlanModel = {
   desk: DeskModel;
@@ -91,19 +96,22 @@ const STEPS: { key: string; title: string; depends_on: string[]; output: PlanSte
   { key: "pr", title: "Test it and open a PR", depends_on: ["backoff"], output: "pr" },
 ];
 
-const FIRST_LINE = "Reading src/payment/retry.ts";
+/** What the agent is doing on the step it is on, by stage. */
+const LINES = ["Reading src/payment/retry.ts", "Writing the backoff in src/payment/retry.ts", "Running pnpm test payment"];
+const working = (stage: PlanStage) => (stage >= 2 ? stage - 2 : -1);
 
 /** The plan as the core's `PlanView` draws it: all planned while it waits for review, the first step at work once approved. */
 function planView(model: PlanModel): PlanView | null {
   if (model.stage === 0) return null;
-  const running = model.stage === 2;
+  const running = model.stage >= 2;
+  const at = working(model.stage);
   const steps: PlanStep[] = STEPS.map((step, index) => ({
     ...step,
-    status: running && index === 0 ? "working" : "planned",
-    line: running && index === 0 ? FIRST_LINE : null,
+    status: index < at ? "done" : index === at ? "working" : "planned",
+    line: index === at ? LINES[index]! : null,
     changed: false, change: null,
     // A step waits while a step it waits on is neither done nor dropped.
-    waiting: step.depends_on.length > 0,
+    waiting: index > at,
     delegate: false, evidence: null, delegation: null,
   }));
   return {
@@ -112,7 +120,7 @@ function planView(model: PlanModel): PlanView | null {
     steps,
     review: running ? "approved" : "proposed",
     ask: running ? null : "Check where the retry count lives and how long the backoff may grow",
-    progress: { current: "config", next: "backoff", done: 0, total: steps.length, finished: false },
+    progress: { current: STEPS[Math.max(at, 0)]!.key, next: STEPS[at + 1]?.key ?? null, done: Math.max(at, 0), total: steps.length, finished: false },
     created_at_unix_ms: model.createdAt,
     updated_at_unix_ms: model.updatedAt,
   };
@@ -149,9 +157,14 @@ function submit(model: PlanModel): PlanModel {
 
 // --- The events --------------------------------------------------------------------
 
+/** The event the agent's own work plays when a step ends: the stage it moves to. */
+const STEP = "practice_step";
+
 function apply(model: PlanModel, event: CoreEvent): PlanModel | null {
   const p = event.payload;
   switch (event.kind) {
+    case STEP:
+      return p.stage === model.stage + 1 && model.stage >= 2 && model.stage < 4 ? { ...model, stage: model.stage + 1 as PlanStage, updatedAt: Date.now() } : null;
     // Only the agent is talked to here; keys typed into another pane reach no one.
     case "key":
       return p.pane_id === LEAD && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
@@ -179,13 +192,13 @@ function apply(model: PlanModel, event: CoreEvent): PlanModel | null {
 /** The agent pane's head as the core sends it: at rest, asking for the review on its second row, or at work on the request. */
 function header(model: PlanModel): PaneHeader {
   if (model.stage === 1) return { working: false, notice: null, band: { kind: "answer", reason: null, since_unix_ms: model.createdAt, read: false, action: null, more: 0, subject: SUBJECT } };
-  if (model.stage === 2) return { working: true, notice: null, band: null, request: { text: model.said.at(-1)!, images: 0 } };
+  if (model.stage >= 2) return { working: true, notice: null, band: null, request: { text: model.said.at(-1)!, images: 0 } };
   return { working: false, notice: null, band: null };
 }
 
 function snapshot(model: PlanModel, nowMs: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model: model.desk }], PLACE.project, nowMs);
-  const base = model.stage === 2 ? drawn.rest : counted(drawn.rest, model.stage === 1 ? "needs_you" : "seen");
+  const base = model.stage >= 2 ? drawn.rest : counted(drawn.rest, model.stage === 1 ? "needs_you" : "seen");
   const plan = planView(model);
   const shown = model.detailShown && model.detail.length > 0;
   return {
@@ -231,9 +244,13 @@ function leadScreen(model: PlanModel, cols: number): string {
     );
   }
   if (model.stage >= 2) {
-    rows.push(...said(model.said[1]!), ...ran("hide task approve", "Plan approved"), ...ran(`hide task node ${STEPS[0]!.key} --status working`, STEPS[0]!.title));
+    rows.push(...said(model.said[1]!), ...ran("hide task approve", "Plan approved"));
+    for (let index = 0; index <= working(model.stage); index += 1) {
+      if (index > 0) rows.push(...ran(`hide task node ${STEPS[index - 1]!.key} --status done`, STEPS[index - 1]!.title));
+      rows.push(...ran(`hide task node ${STEPS[index]!.key} --status working`, STEPS[index]!.title));
+    }
     for (const later of model.said.slice(2)) rows.push(...said(later), "● Noted. I'll fold that into the plan as I go.");
-    rows.push("", `${CLAUDE}✻ ${FIRST_LINE}… ${DIM}(esc to interrupt)${RESET}`);
+    rows.push("", `${CLAUDE}✻ ${LINES[working(model.stage)]}… ${DIM}(esc to interrupt)${RESET}`);
   }
   rows.push("", rule(cols), `${DIM}>${RESET} ${model.draft}`, rule(cols));
   return rows.join("\r\n");
@@ -243,6 +260,8 @@ export const PLAN_WORLD: PracticeWorld<PlanModel> = {
   initial,
   apply,
   snapshot,
+  // The agent works through the steps by itself once the plan is approved.
+  later: (model) => (model.stage >= 2 && model.stage < 4 ? { at: model.updatedAt + STEP_MS, event: { kind: STEP, payload: { stage: model.stage + 1 } } } : null),
   prompt: (model, paneId) => (paneId === LEAD ? model.draft : ""),
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
