@@ -80,12 +80,17 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
     Ok(place)
 }
 
-/// The word cut at its first `?` or `#` when it carries a path (`/`), whatever
-/// wraps it: what follows can be a one-time token, so it is never kept, only
-/// the punctuation that closes the word (`)`, a quote, a comma).
+/// The word cut at its first `?` or `#` after a path (`/`), whatever wraps
+/// it: what follows can be a one-time token, so it is never kept, only the
+/// punctuation that closes the word (`)`, a quote, a comma). A path that is
+/// no URL loses that tail too (`src/lib.rs#L10` reads `src/lib.rs`), the
+/// price of never telling a token from an anchor.
 fn without_query(word: &str) -> String {
-    match word.find(['?', '#']) {
-        Some(at) if word[..at].contains('/') => {
+    let after_path = word
+        .find('/')
+        .and_then(|slash| word[slash..].find(['?', '#']).map(|at| slash + at));
+    match after_path {
+        Some(at) => {
             let cut = &word[at..];
             let closing = &cut[cut.trim_end_matches(CLOSING).len()..];
             format!("{}{closing}", &word[..at])
@@ -422,6 +427,10 @@ mod tests {
             ("url=github.com/login?t=1", "url=github.com/login"),
             ("at:localhost:3000/cb?t=1#f", "at:localhost:3000/cb"),
             ("https://github.com/login?t=1,", "github.com/login,"),
+            ("[why?](github.com/login?t=1)", "[why?](github.com/login)"),
+            ("a?b/c?t=1", "a?b/c"),
+            // A path that is no URL loses its tail as well.
+            ("src/lib.rs#L10", "src/lib.rs"),
         ] {
             assert_eq!(place_of(raw).unwrap(), kept, "{raw}");
         }
