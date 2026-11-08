@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use hide_agent_adapter::{AgentId, HomeScope, HomeUnresolved};
+use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile, Refusal};
 
 use crate::model::EnvironmentStatusSnapshot;
 
@@ -17,11 +17,9 @@ pub struct EnvironmentVariableSpec {
 pub const HOME_KEY: &str = hide_platform::host::HOME_VARIABLE;
 pub const SSH_AUTH_SOCK_KEY: &str = "SSH_AUTH_SOCK";
 pub const HERDR_SOCKET_PATH_KEY: &str = "HERDR_SOCKET_PATH";
-/// Codex's own folder variable, as its declaration names it.
-pub const CODEX_HOME_KEY: &str = match AgentId::Codex.adapter().home_variable {
-    Some(variable) => variable,
-    None => panic!("Codex declares its folder variable"),
-};
+/// Codex's own folder variable, the one its definition's `[account]` names
+/// (checked by `codex_home_key_is_codexs_account_variable`).
+pub const CODEX_HOME_KEY: &str = "CODEX_HOME";
 
 pub const REGISTRY: [EnvironmentVariableSpec; 4] = [
     EnvironmentVariableSpec {
@@ -67,10 +65,7 @@ impl EnvironmentReport {
         if self.home_path.as_ref() == Some(&home) {
             return self;
         }
-        self.codex_home = AgentId::Codex
-            .adapter()
-            .home(Some(&home), None, HomeScope::Read)
-            .ok();
+        self.codex_home = Some(AgentId::Codex.adapter().place_in(&home, AccountPath::State));
         self.home_path = Some(home);
         self
     }
@@ -132,14 +127,17 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
                 ),
             },
             CODEX_HOME_KEY => {
-                let resolved = AgentId::Codex.adapter().home(
-                    home_path.as_deref(),
-                    value.as_deref(),
-                    HomeScope::Read,
-                );
+                // Codex's default account as this process's variable moves it.
+                let codex = AgentId::Codex.adapter();
+                let resolved = codex
+                    .resolve(
+                        &Profile::builtin_default(codex.id),
+                        &NodeEnv::new(home_path.clone()).with_variable(spec.key, value.clone()),
+                    )
+                    .map(|account| account.path(AccountPath::State).map(Path::to_path_buf));
                 let overridden = value.as_ref().is_some_and(|value| !value.is_empty());
                 let status = match (&resolved, overridden) {
-                    (Err(HomeUnresolved::InvalidOverride { .. }), _) => (
+                    (Err(Refusal::NodeVariable { .. }), _) => (
                         "invalid",
                         "Codex home override is invalid; Codex usage credentials are unavailable",
                     ),
@@ -149,7 +147,7 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
                         "Codex home override is absent; $HOME/.codex is used",
                     ),
                 };
-                codex_home = resolved.ok();
+                codex_home = resolved.ok().flatten();
                 status
             }
             _ => unreachable!("every environment key is declared in REGISTRY"),
@@ -184,6 +182,15 @@ mod tests {
         } else {
             PathBuf::from(path)
         }
+    }
+
+    #[test]
+    fn codex_home_key_is_codexs_account_variable() {
+        let rule = AgentId::Codex.adapter().account_rule().unwrap();
+        assert_eq!(
+            rule.vars.iter().map(|var| var.name.as_str()).collect::<Vec<_>>(),
+            [CODEX_HOME_KEY]
+        );
     }
 
     #[test]

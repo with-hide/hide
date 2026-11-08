@@ -298,10 +298,9 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             id: row.id,
             fake_home: row.fake_home,
             engine_kind: row.engine_kind,
-            home_folder: crate::definition::builtin(row.id)
-                .and_then(|definition| {
-                    crate::default_folder(definition, crate::AccountPath::State)
-                })
+            home_folder: row
+                .account_rule()
+                .and_then(|rule| crate::default_folder(rule, crate::AccountPath::State))
                 .expect("a built-in agent with Hide's features names its own folder"),
             prompt_form: row.start.map(|start| start.prompt_form()),
             model_flag: row.start.map_or(&[], |start| start.options().model),

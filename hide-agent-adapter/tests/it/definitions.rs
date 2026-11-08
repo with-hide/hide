@@ -160,6 +160,8 @@ fn each_agent_with_hides_features_takes_its_identity_from_its_definition() {
         let definition =
             builtin(adapter.id).unwrap_or_else(|| panic!("{}: no definition", adapter.id));
         assert_eq!(definition.hooks, hooks, "{}", adapter.id);
+        // The account read alone is the one the whole file holds.
+        assert_eq!(adapter.account_rule(), definition.account.as_ref(), "{}", adapter.id);
         assert_eq!(definition.name, adapter.label);
         assert_eq!(definition.executables, adapter.executables);
         assert_eq!(definition.aliases, adapter.aliases);
@@ -171,7 +173,9 @@ fn each_agent_with_hides_features_takes_its_identity_from_its_definition() {
         }
         assert_eq!(
             definition.home,
-            hide_agent_adapter::default_folder(definition, hide_agent_adapter::AccountPath::State),
+            definition.account.as_ref().and_then(|rule| {
+                hide_agent_adapter::default_folder(rule, hide_agent_adapter::AccountPath::State)
+            }),
             "{}",
             adapter.id
         );

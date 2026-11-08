@@ -351,6 +351,41 @@ pub fn is_typable_word(word: &str) -> bool {
     !word.contains('\'') && !word.chars().any(char::is_control)
 }
 
+/// The `[account]` of a definition file alone: its `[account]` tables, cut
+/// from the file by [`account_section`], read through the same checks as
+/// [`read`] does. For an asker that cannot wait for the whole file.
+pub fn read_account(name: &str, text: &str) -> Result<Option<AccountRule>, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Only {
+        #[serde(default)]
+        account: Option<AccountFile>,
+    }
+    let only: Only = toml::from_str(&account_section(text)).map_err(|error| {
+        let error = error.to_string();
+        let line = error.lines().next().unwrap_or_default().to_owned();
+        format!("{name}: not a definition file: {line}")
+    })?;
+    only.account.map(|account| account_rule(name, account)).transpose()
+}
+
+/// The lines of a definition file's `[account]` and `[account.*]` tables.
+pub fn account_section(text: &str) -> String {
+    let mut inside = false;
+    let mut section = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            inside = trimmed.starts_with("[account]") || trimmed.starts_with("[account.");
+        }
+        if inside {
+            section.push_str(line);
+            section.push('\n');
+        }
+    }
+    section
+}
+
 /// How an agent tells one account from another: a folder its variables
 /// name, a name of its own (omp's `OMP_PROFILE`), or not at all.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

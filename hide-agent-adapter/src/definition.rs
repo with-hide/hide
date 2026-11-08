@@ -20,7 +20,7 @@
 //! files and the operator's, never from a download (D-19).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 pub use hide_screen_rules::Rules;
 
@@ -160,25 +160,22 @@ pub fn builtins() -> &'static [Definition] {
     &BUILTINS
 }
 
-/// The `[account]` of the built-in definition with this id, read once
-/// without compiling any screen rules: an account's folders are asked on
-/// paths that cannot wait for every agent's rules to compile.
+/// The `[account]` of the built-in definition with this id, read once from
+/// that file's `[account]` tables alone: an account's folders are asked
+/// inside reads with a time budget, which cannot wait for every file to be
+/// read and its screen rules compiled. [`builtins`] reads the same tables
+/// with the whole file (checked by the adapter's definition tests).
 pub fn builtin_account(id: &str) -> Option<&'static AccountRule> {
-    static ACCOUNTS: LazyLock<Vec<(&'static str, Option<AccountRule>)>> = LazyLock::new(|| {
-        builtin::ALL
-            .iter()
-            .map(|builtin| {
-                let name = format!("{}.toml", builtin.id);
-                let fields = file::read(&name, builtin.text, Origin::Builtin)
-                    .unwrap_or_else(|reason| panic!("built-in agent definition: {reason}"));
-                (builtin.id, fields.account)
-            })
-            .collect()
-    });
-    ACCOUNTS
-        .iter()
-        .find(|(each, _)| *each == id)
-        .and_then(|(_, account)| account.as_ref())
+    static ACCOUNTS: [OnceLock<Option<AccountRule>>; builtin::ALL.len()] =
+        [const { OnceLock::new() }; builtin::ALL.len()];
+    let index = builtin::ALL.iter().position(|builtin| builtin.id == id)?;
+    ACCOUNTS[index]
+        .get_or_init(|| {
+            let builtin = &builtin::ALL[index];
+            file::read_account(&format!("{}.toml", builtin.id), builtin.text)
+                .unwrap_or_else(|reason| panic!("built-in agent definition: {reason}"))
+        })
+        .as_ref()
 }
 
 /// The built-in definition with this id.

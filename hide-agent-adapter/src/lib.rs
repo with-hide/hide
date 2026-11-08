@@ -1002,6 +1002,12 @@ impl AgentAdapter {
         definition::builtin_account(self.id)
     }
 
+    /// Where `path` is below the home for the default profile, as `~/…`:
+    /// how an agent's own documents name the place (`~/.codex/AGENTS.md`).
+    pub fn spelled_below_home(&self, path: AccountPath) -> Option<String> {
+        default_folder(self.account_rule()?, path).map(|parts| format!("~/{}", parts.join("/")))
+    }
+
     /// [`resolve`] for this agent's built-in definition.
     pub fn resolve(&self, profile: &Profile, node: &NodeEnv) -> Result<Account, Refusal> {
         resolve_rule(self.id, self.account_rule(), profile, node)

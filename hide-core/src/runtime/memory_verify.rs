@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use hide_agent_adapter::{AgentId, HomeScope};
+use hide_agent_adapter::{AccountPath, AgentId};
 
 use hide_ai::{AiError, AiRequest, AiRouter, CancelToken};
 use hide_memory::{
@@ -402,8 +402,8 @@ pub(super) fn repository_sources(
 
 /// The folders on this machine that hold the operator's own instruction
 /// files: the account's home, and Codex's folder as Codex reads it (the
-/// environment's answer from `hide_agent_adapter::AgentAdapter::home`, read
-/// scope), `None` when its `CODEX_HOME` cannot be placed.
+/// environment's answer: Codex's default account as its `CODEX_HOME` moves
+/// it), `None` when its `CODEX_HOME` cannot be placed.
 #[derive(Clone, Debug)]
 pub(super) struct OperatorHome {
     pub(super) home: PathBuf,
@@ -418,26 +418,31 @@ fn global_sources(node: &dyn NodeLink, home: Option<&OperatorHome>) -> Vec<Sourc
     let Some(OperatorHome { home, codex }) = home else {
         return Vec::new();
     };
-    let claude = AgentId::ClaudeCode
-        .adapter()
-        .home(Some(home), None, HomeScope::Read)
-        .ok();
+    let (claude_code, codex_agent) = (AgentId::ClaudeCode.adapter(), AgentId::Codex.adapter());
+    let claude = Some(claude_code.place_in(home, AccountPath::State));
     // The name an agent knows each by, never the account's folder.
-    let codex_name =
-        if codex.as_deref() == Some(AgentId::Codex.adapter().install_home(home).as_path()) {
-            "~/.codex/AGENTS.md"
-        } else {
-            "$CODEX_HOME/AGENTS.md"
-        };
+    let below_home = |agent: &hide_agent_adapter::AgentAdapter, file: &str| {
+        agent
+            .spelled_below_home(AccountPath::State)
+            .map(|folder| format!("{folder}/{file}"))
+            .expect("the agent keeps its own folder below the home")
+    };
+    let codex_name = if codex.as_deref()
+        == Some(codex_agent.place_in(home, AccountPath::State).as_path())
+    {
+        below_home(codex_agent, "AGENTS.md")
+    } else {
+        "$CODEX_HOME/AGENTS.md".to_owned()
+    };
     let mut documents: Vec<Source> = Vec::new();
     for (folder, name, known_as) in [
-        (claude, "CLAUDE.md", "~/.claude/CLAUDE.md"),
+        (claude, "CLAUDE.md", below_home(claude_code, "CLAUDE.md")),
         (codex.clone(), "AGENTS.md", codex_name),
         // The account's shared agent instructions, no one agent's folder.
         (
             Some(home.join(".config").join("agents")),
             "AGENTS.md",
-            "~/.config/agents/AGENTS.md",
+            "~/.config/agents/AGENTS.md".to_owned(),
         ),
     ] {
         if documents.len() >= GLOBAL_LIMIT {
@@ -453,7 +458,7 @@ fn global_sources(node: &dyn NodeLink, home: Option<&OperatorHome>) -> Vec<Sourc
         if documents.iter().any(|known| known.text == found.text) {
             continue;
         }
-        found.path = known_as.to_owned();
+        found.path = known_as;
         documents.push(found);
     }
     documents

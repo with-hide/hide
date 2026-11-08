@@ -382,8 +382,7 @@ pub fn resolve_rule(
 /// node that honours no variable: what a fake home lays out for the agent
 /// (`journey::JourneyAdapter::home_folder`). `None` when the agent has no
 /// such place of its own.
-pub fn default_folder(definition: &Definition, path: AccountPath) -> Option<Vec<String>> {
-    let rule = definition.account.as_ref()?;
+pub fn default_folder(rule: &AccountRule, path: AccountPath) -> Option<Vec<String>> {
     let template = match rule.path(path) {
         PathRule::Same(template) | PathRule::Split { default: template, .. } => template,
         PathRule::Absent | PathRule::Shared => return None,
