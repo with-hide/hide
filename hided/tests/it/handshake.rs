@@ -2103,6 +2103,73 @@ async fn hide_path_brings_a_registered_home_folder_forward() {
     running.stop();
 }
 
+/// A registered home folder is a root like any other (PRD home-folder-project
+/// B18): a file under it streams its bytes, a file is created in it, and a path
+/// beside it, outside the folder, is still refused.
+#[tokio::test]
+async fn files_under_a_registered_home_folder_are_read_and_created_like_any_project() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    std::fs::create_dir_all(home.join("Documents")).unwrap();
+    std::fs::write(home.join("Documents/note.md"), b"hello").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.txt"), b"x").unwrap();
+    seed_registration(&env.state_dir, "w-home", &home);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+
+    let path = wire(&home.join("Documents/note.md"));
+    socket
+        .send(Message::Text(
+            json!({
+                "schema_version": 2,
+                "kind": "file_bytes",
+                "payload": {"request_id": "r1", "path": path, "offset": 0, "length": Value::Null},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let (header, payload) = recv_binary(&mut socket).await;
+    assert_eq!(
+        (header["type"].as_str(), header["total"].as_u64()),
+        (Some("file_bytes"), Some(5))
+    );
+    assert_eq!(payload, b"hello");
+
+    let root = wire(&home);
+    socket
+        .send(Message::Text(
+            json!({
+                "schema_version": 2,
+                "kind": "file_create",
+                "payload": {"root": root, "parent": root, "name": "written.txt"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !home.join("written.txt").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the file created in the home folder");
+
+    let refused = send_event_expecting(
+        &mut socket,
+        "file_list",
+        json!({"root": root, "path": wire(outside.path())}),
+        never,
+    )
+    .await;
+    assert_eq!(refused["type"], "path_refused");
+    running.stop();
+}
+
 /// `hide <path>` for a project the operator registered outside home: the
 /// registration is the confirmation Add a project asked for, so the
 /// checkout and a folder inside it come forward without asking again, while
