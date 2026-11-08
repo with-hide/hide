@@ -144,33 +144,10 @@ export function contextAgents(rest: SnapshotRest | null, localAgents: AgentRow[]
   return context ? (context.session?.agents ?? NO_AGENTS) : localAgents;
 }
 
-/** Every workspace of the context on screen, the device's Home (`~/hide`) included: what holds a pane. */
-export function contextAllWorkspaces(rest: SnapshotRest | null): Workspace[] {
+/** The projects the sidebar lists: the selected host's engine workspaces, or this machine's projects. */
+export function contextWorkspaces(rest: SnapshotRest | null): Workspace[] {
   const context = remoteContext(rest);
   return context ? (context.session?.workspaces ?? NO_WORKSPACES) : (rest?.navigator?.workspaces ?? NO_WORKSPACES);
-}
-
-const projectLists = new WeakMap<Workspace[], Workspace[]>();
-
-/**
- * `workspaces` without the device's Home, which is drawn as its own row and
- * counted as no project (PRD home-device-rail D-13). The list itself when it
- * holds no Home, and one cached list per source otherwise, so a selector
- * returning it keeps its identity between snapshots.
- */
-export function projectsOf(workspaces: Workspace[]): Workspace[] {
-  if (!workspaces.some((row) => row.is_home)) return workspaces;
-  let listed = projectLists.get(workspaces);
-  if (!listed) {
-    listed = workspaces.filter((row) => !row.is_home);
-    projectLists.set(workspaces, listed);
-  }
-  return listed;
-}
-
-/** The projects the sidebar lists: the selected host's engine workspaces, or this machine's projects, never the Home. */
-export function contextWorkspaces(rest: SnapshotRest | null): Workspace[] {
-  return projectsOf(contextAllWorkspaces(rest));
 }
 
 const NO_AGENTS: AgentRow[] = [];

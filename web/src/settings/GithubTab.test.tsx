@@ -25,7 +25,6 @@ const signedOut = () => ({
         {
           id: "w1",
           is_git: true,
-          is_home: false,
           remote_target_id: null,
           checkouts: [{ id: "c1", github: { failure_category: "not_logged_in", available: false, loading: false, stale: false, last_success_at_unix_ms: null } }],
         },

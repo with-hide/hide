@@ -63,7 +63,7 @@ export function StartSheet() {
                 </option>
               ))
             ) : (
-              <option value="">{t("mobile.start.home")}</option>
+              <option value="">{t("mobile.start.noProject")}</option>
             )}
           </select>
         </Field>

@@ -113,7 +113,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const asks = filter ? ownAsks : everyAsk;
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
   const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
-  const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
+  const noProject = rest !== null && projects.every((project) => project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view}>

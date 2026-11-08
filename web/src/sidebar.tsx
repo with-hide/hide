@@ -56,7 +56,7 @@ import {
 import { editorHost, revealHost } from "./host";
 import { commandLabel } from "./shortcutLabels";
 import type { Digit } from "./shortcuts";
-import { contextAgents, contextAllWorkspaces, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
+import { contextAgents, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
 import { agentReference } from "./agentReference";
 import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, type MenuHost, type MenuItem } from "./workspaceManage";
 import { projectIssueSource, projectRepository, settingsTarget } from "./projectSettings";
@@ -331,7 +331,7 @@ function SidebarEdge({
 function useFocusRowPane(): string | null {
   const workspaceScreen = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
   const focusedPaneId = useShellStore((s) => s.focusedPaneId);
-  const workspaces = useShellStore((s) => contextAllWorkspaces(s.rest));
+  const workspaces = useShellStore((s) => contextWorkspaces(s.rest));
   const agents = useShellStore((s) => contextAgents(s.rest, s.agents));
   const scope = useShellStore((s) => deviceScope(s.rest, frontDeviceId(s.rest)));
   const drawn = useMemo(() => sidebarPanes(workspaces, scope), [workspaces, scope]);

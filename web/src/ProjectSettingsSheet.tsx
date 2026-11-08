@@ -32,7 +32,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const live = useShellStore((state) => state.connection === "live");
-  const current = catalogWorkspaces(rest).find((row) => row.device_id === target.deviceId && row.path === target.root && !row.is_home) ?? null;
+  const current = catalogWorkspaces(rest).find((row) => row.device_id === target.deviceId && row.path === target.root) ?? null;
   const lastWorkspace = useRef(current);
   if (current) lastWorkspace.current = current;
   const workspace = current ?? lastWorkspace.current;

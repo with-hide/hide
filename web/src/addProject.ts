@@ -238,9 +238,8 @@ export function cloneUrlDraft(raw: string): string {
  * worktree folder, a scratch checkout) does not move where the next one goes.
  */
 export function defaultProjectParent(registrations: readonly WorkspaceRegistration[], node: string): string {
-  // The Home (`~/hide`) is no project, so it is not where the next one is expected to live.
   const parents = registrations
-    .filter((row) => row.device_id === node && !row.home)
+    .filter((row) => row.device_id === node)
     .map((row) => {
       const path = trimFolder(row.path);
       const cut = path.lastIndexOf("/");

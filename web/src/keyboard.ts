@@ -28,7 +28,7 @@ import { areaFrame } from "./areaFrames";
 import { adjacentDisplay } from "./areaLayout";
 import { adjacentPane } from "./paneNavigation";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
-import { projectsOf, remoteContext } from "./remote";
+import { remoteContext } from "./remote";
 import { hostChord, hostRegistry, isNumberedCommand, isPaneFocusCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
 import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
@@ -52,11 +52,11 @@ export function panelCycle(rest: SnapshotRest | null): Cycle | null {
   return items.length > 1 ? { kind: "panels", items, index: 0 } : null;
 }
 
-/** The projects of every connected device, this machine's first, none of them a device's Home. */
+/** The projects of every connected device, this machine's first. */
 function allProjects(rest: SnapshotRest | null): Workspace[] {
   return [
-    ...projectsOf(rest?.navigator?.workspaces ?? []),
-    ...(rest?.status?.remote ?? []).filter((status) => status.state === "connected").flatMap((status) => projectsOf(status.session?.workspaces ?? [])),
+    ...(rest?.navigator?.workspaces ?? []),
+    ...(rest?.status?.remote ?? []).filter((status) => status.state === "connected").flatMap((status) => status.session?.workspaces ?? []),
   ];
 }
 

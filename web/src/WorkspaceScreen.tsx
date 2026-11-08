@@ -47,9 +47,6 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // The rail is always there, so nothing the lane does changes Agent Views'
 // width but the pin.
 
-/** Where every device keeps its Home (PRD home-device-rail D-03). */
-const HOME_FOLDER = "~/hide";
-
 export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const checkout = useShellStore((s) => frontCheckout(s.rest));
@@ -325,10 +322,9 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
     if (id === "lane") return actions.toggleLane();
     if (id === "copy_path") return void actions.copyText(checkout.path, "checkout path");
   };
-  const home = project?.is_home === true;
   const [headerElement, setHeaderElement] = useState<HTMLElement | null>(null);
   const headerWidth = useWidth(headerElement);
-  const git = project?.is_git && !home;
+  const git = project?.is_git;
   return (
     <div ref={setHeaderElement} className="flex h-full min-w-0 flex-1 items-center gap-xs pr-sm text-caption" data-workspace-toolbar="true">
       {device ? (
@@ -340,7 +336,7 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
       ) : null}
       <EntryContextMenu label={t("panes.workspace.aria", { name })} items={menuItems} onSelect={select} className={cn("flex min-w-0 shrink self-stretch items-center", !device && "pl-sm")} data-workspace-menu="true">
         <nav aria-label={t("panes.workspace.location")} className="flex min-w-0 items-center gap-xs">
-          {project && !home ? (
+          {project ? (
             <>
               <Hint label={`${project.label} · ${project.path}${deviceName ? ` · ${deviceName}` : ""}`}>
                 <button
@@ -355,11 +351,10 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
               <span aria-hidden="true" className="text-muted-foreground">/</span>
             </>
           ) : null}
-          {/* Home is no project (B16): its path is the folder every device keeps it in (D-03).
-              Not a drag handle: its hint and the path menu need the pointer (B18, B19). */}
-          <Hint label={`${home ? HOME_FOLDER : name} · ${checkout.path}`}>
-            <span className="min-w-0 truncate px-xs text-foreground" aria-current="page" data-workspace-location={home ? "home" : "checkout"} data-window-control="true">
-              {home ? HOME_FOLDER : name}
+          {/* Not a drag handle: its hint and the path menu need the pointer (B18, B19). */}
+          <Hint label={`${name} · ${checkout.path}`}>
+            <span className="min-w-0 truncate px-xs text-foreground" aria-current="page" data-workspace-location="checkout" data-window-control="true">
+              {name}
             </span>
           </Hint>
         </nav>

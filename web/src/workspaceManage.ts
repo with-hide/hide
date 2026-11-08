@@ -155,7 +155,8 @@ export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"
   const editor = folder ? editorItem(workspace, host, t, true) : [];
   const reveal = revealItem(workspace, host, t, editor.length === 0);
   return [
-    ...(!workspace.is_home ? [{ id: "project_settings" as const, label: t("projectSettings.title"), unavailable: null }, { id: "rename_project" as const, label: t("workspace.menu.renameProject"), unavailable: null }] : []),
+    { id: "project_settings" as const, label: t("projectSettings.title"), unavailable: null },
+    { id: "rename_project" as const, label: t("workspace.menu.renameProject"), unavailable: null },
     { id: "new_worktree", label: t("workspace.menu.newWorktree"), unavailable: workspace.is_git === false ? t("workspace.unavailable.notGit") : null },
     {
       id: "new_tab_primary",
@@ -175,11 +176,11 @@ export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"
 /**
  * Where this project's issues live (PRD settings-cleanup D-04): a submenu of
  * Automatic, GitHub (a Git project only) and Local with the one in force
- * checked. A project the issue boards do not draw for (a device's, the Home)
- * offers none.
+ * checked. A project the issue boards do not draw for (a device's) offers
+ * none.
  */
 function issueSourceItem(workspace: Workspace, stored: string | undefined, t: TFunction<"translation">): MenuItem[] {
-  if (workspace.is_home || workspace.tasks?.source == null) return [];
+  if (workspace.tasks?.source == null) return [];
   const { value, options } = issueSourceChoices(workspace, stored, t);
   return [
     {

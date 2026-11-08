@@ -24,7 +24,7 @@ import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Kbd } from "./components/ui/kbd";
-import { accountHome, agentsToUpdate, failedAgents, firstRunStep, type FailedAgent, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
+import { agentsToUpdate, failedAgents, firstRunStep, type FailedAgent, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
 import { FirstRunDevices } from "./FirstRunDevices";
 import { offersImport } from "./herdrImportRules";
 import { firstRunAgent } from "./hideAi";
@@ -40,7 +40,7 @@ import { FIRST_CHAPTER, openPractice } from "./practice/channel";
 import { NotOnSystem } from "./settings/AgentRow";
 import { installDocUrl, machineSystem, supportedAgents } from "./settings/agentRows";
 import { useAgentsDemand } from "./settings/useAgentsDemand";
-import { localDeviceId, type KitAgent, type WorkspaceRegistration } from "./snapshot";
+import { type KitAgent, type WorkspaceRegistration } from "./snapshot";
 import { useStartPanel } from "./startDraft";
 import { useShellStore } from "./store";
 import { fieldLabel } from "./shortcutLabels";
@@ -188,9 +188,7 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
   // The sign-in probe runs only while a page asks for it.
   useAgentsDemand(actions, false);
   const hideAi = firstRunAgent(ai, on);
-  // This Mac's account home, the folder its Hide Home sits in: What changes writes it as `~` (D-26).
-  const home = useShellStore((s) => accountHome(s.rest?.ui_state?.workspace_registrations?.find((row) => row.home && row.device_id === localDeviceId(s.rest))?.path));
-  const changes = whatChanges(agents, on, kit, home);
+  const changes = whatChanges(agents, on, kit);
   const applying = pressed || busy;
   const failures = sent && !applying ? failedAgents(agents, sent) : [];
   // A tile cannot hold a Copy button (it is itself a switch), so each too-old agent's command sits under the grid.
@@ -486,7 +484,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
   const [known] = useState(() => new Set(registrations.map((row) => row.id)));
   // Only on the host the step adds to: a device's own registrations arriving meanwhile are not the operator's pick.
   const [host, setHost] = useState<string | null>(null);
-  const added = registrations.find((row) => !row.home && !known.has(row.id) && row.device_id === host) ?? null;
+  const added = registrations.find((row) => !known.has(row.id) && row.device_id === host) ?? null;
   const [adding, setAdding] = useState(() => !!useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form?.view);
   // The Devices step was skipped because no machine is listed to add: one line says where they go later.
   const noDevices = useShellStore((s) => {

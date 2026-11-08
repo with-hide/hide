@@ -22,13 +22,13 @@ export function ProjectSettingsScene({ params }: { params: URLSearchParams }) {
   const scene = useMemo(() => {
     const fixture = sidebarScene(content, REFERENCE_FOLDS, Date.now(), "one");
     if (content === "long") {
-      const project = fixture.rest.navigator!.workspaces!.find((row) => !row.is_home && row.is_git)!;
+      const project = fixture.rest.navigator!.workspaces!.find((row) => row.is_git)!;
       project.label = "프로젝트 설정과 여러 기기에서 이어지는 아주 긴 한국어 작업 이름";
       project.path = "/fixture/projects/프로젝트-설정-검증을-위한-아주-긴-경로/여러-체크아웃을-함께-사용하는-프로젝트";
     }
     return fixture;
   }, [content]);
-  const workspace = scene.rest.navigator!.workspaces!.find((row) => !row.is_home && row.is_git)!;
+  const workspace = scene.rest.navigator!.workspaces!.find((row) => row.is_git)!;
   const target = settingsTarget(workspace);
   const actions = useMemo(() => createActions((event) => {
     if (event.kind === "project_settings_set") {

@@ -70,10 +70,10 @@ export function relationsOf(rest: SnapshotRest | null, target: RelationTarget, t
       if (!agent) continue;
       const projected = scope.agentScope?.relations[agent.pane_id];
       if (!projected) return null;
-      const places = checkoutPlaces(scope.allWorkspaces);
+      const places = checkoutPlaces(scope.workspaces);
       const byPane = new Map(scope.agents.map((row) => [row.pane_id, row]));
       const groups = projected.map((value) => {
-        const workspace = scope.allWorkspaces.find((p) => p.id === value.project_id);
+        const workspace = scope.workspaces.find((p) => p.id === value.project_id);
         const checkout = workspace?.checkouts.find((c) => c.id === value.checkout_id);
         if (!workspace || !checkout) throw new Error("Missing core relation place");
         const rows = scopeOccurrences(value.rows, scope.agents).map((agent, index) => {
@@ -87,7 +87,7 @@ export function relationsOf(rest: SnapshotRest | null, target: RelationTarget, t
         return group(scope, workspace, checkout, front, rows, t);
       });
       const first = projected[0]!;
-      const workspace = scope.allWorkspaces.find((p) => p.id === first.project_id)!;
+      const workspace = scope.workspaces.find((p) => p.id === first.project_id)!;
       const issues = first.issues.map((key) => {
         const task = workspace.tasks?.tasks.find((task) => task.key === key);
         if (!task) throw new Error(`Missing core relation issue: ${key}`);
@@ -98,7 +98,7 @@ export function relationsOf(rest: SnapshotRest | null, target: RelationTarget, t
     return null;
   }
   for (const scope of scopes) {
-    for (const workspace of scope.allWorkspaces) {
+    for (const workspace of scope.workspaces) {
       const matching = workspace.checkouts.filter((checkout) => {
         if (target.kind === "checkout") return checkout.id === target.checkoutId;
         if (target.kind === "pr") return workspace.id === target.workspaceId && checkout.pull_request?.number === target.number;

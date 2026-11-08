@@ -40,6 +40,8 @@ export function AddProjectDialog({ actions }: { actions: Actions }) {
 function AddProject({ actions }: { actions: Actions }) {
   const close = () => useUiStore.getState().closeOverlay("add_project");
   const [host, setHost] = useState<string | null>(null);
+  // Read once at mount: the surface that opened the dialog may have named the device to add to.
+  const [device] = useState(() => useUiStore.getState().addProjectDevice);
   return (
     <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
       <DialogContent
@@ -49,7 +51,7 @@ function AddProject({ actions }: { actions: Actions }) {
         // The views hand the keyboard to their own primary control once mounted.
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
-        <AddProjectViews actions={actions} title={(t) => t("addProject.title")} onLeave={close} onHost={setHost} />
+        <AddProjectViews actions={actions} title={(t) => t("addProject.title")} onLeave={close} onHost={setHost} draft={device ? { device } : undefined} />
       </DialogContent>
     </Dialog>
   );

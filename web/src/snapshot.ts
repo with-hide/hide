@@ -932,8 +932,6 @@ export type Workspace = {
   registered: boolean;
   temporary: boolean;
   pinned: boolean;
-  /** The device's Hide Home (`~/hide`, PRD home-device-rail D-01): drawn as the Home row, never in the Projects list. */
-  is_home?: boolean;
   last_activity_unix_ms?: number | null;
   /** What `Remove project…` would close, counted by the core (D-10). */
   removal?: { pane_count: number; running_agent_count: number };
@@ -1173,8 +1171,6 @@ export type WorkspaceRegistration = {
   path: string;
   device_id: string;
   pinned: boolean;
-  /** This registration is the device's Home (`~/hide`). */
-  home?: boolean;
 };
 
 export type PaneFind = {
