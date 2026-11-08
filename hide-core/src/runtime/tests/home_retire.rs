@@ -443,7 +443,7 @@ fn an_old_home_of_hides_own_entries_goes_with_its_registration() {
     let home = old_home(&machine);
     let (shared, id) = runtime_with_old_home(&machine, &home, false);
     shared.lock().unwrap().request_home_retirements();
-    wait(&shared, "the retirement's answer", |_| pending(&shared) == 0);
+    wait(&shared, "the retirement's answer", |runtime| runtime.snapshot.ui_state.home_retire.is_empty());
     wait(&shared, "the registration to go", |runtime| {
         !runtime
             .snapshot
@@ -466,7 +466,7 @@ fn an_old_home_with_the_operators_files_stays_as_the_hide_project() {
     std::fs::write(Path::new(&home).join("notes.md"), "mine").unwrap();
     let (shared, id) = runtime_with_old_home(&machine, &home, false);
     shared.lock().unwrap().request_home_retirements();
-    wait(&shared, "the retirement's answer", |_| pending(&shared) == 0);
+    wait(&shared, "the retirement's answer", |runtime| runtime.snapshot.ui_state.home_retire.is_empty());
     assert!(registered(&shared, &id));
     let runtime = shared.lock().unwrap();
     let kept = runtime
@@ -493,7 +493,7 @@ fn an_old_home_with_an_open_pane_stays_as_the_hide_project() {
     let home = old_home(&machine);
     let (shared, id) = runtime_with_old_home(&machine, &home, true);
     shared.lock().unwrap().request_home_retirements();
-    wait(&shared, "the retirement's answer", |_| pending(&shared) == 0);
+    wait(&shared, "the retirement's answer", |runtime| runtime.snapshot.ui_state.home_retire.is_empty());
     assert!(registered(&shared, &id));
     assert!(Path::new(&home).is_dir());
     assert!(!Path::new(&home).join(".hide-home.json").exists());
@@ -594,7 +594,7 @@ fn a_device_without_a_ready_helper_is_asked_once_it_is() {
         };
         runtime.home_helper_ready(DEVICE);
     }
-    wait(&shared, "the retirement's answer", |_| pending(&shared) == 0);
+    wait(&shared, "the retirement's answer", |runtime| runtime.snapshot.ui_state.home_retire.is_empty());
     assert!(!registered(&shared, &id));
     assert!(!Path::new(&home).exists());
 }

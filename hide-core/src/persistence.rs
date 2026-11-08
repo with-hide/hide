@@ -1632,7 +1632,7 @@ mod tests {
     fn an_older_stores_home_flag_becomes_a_pending_retirement_once() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("state.json");
-        let older = r#"{"schema_version":1,"workspace_registrations":[
+        let older = r#"{"schema_version":1,"expanded_paths":[],"workspace_registrations":[
             {"id":"workspace:home","label":"Home","path":"/Users/me/hide","device_id":"test-node","pinned":true,"home":true},
             {"id":"workspace:alpha","label":"Alpha","path":"/repo/alpha","device_id":"test-node"}]}"#;
         fs::write(&path, older).unwrap();

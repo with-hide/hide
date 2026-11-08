@@ -3,7 +3,7 @@
 // home-device-rail B1-B13): the rail is the sidebar's full-height left column,
 // shown with This Mac alone, and has no Inbox or footer device button, its
 // `+` opens Settings > Devices > Add device, and each device's sidebar is its
-// name, shared Overview and Projects | Agents, with Home in Projects. A right-click
+// name, shared Overview and Projects | Agents. A right-click
 // hides the rail, the name on the top line becomes the device menu, and the
 // choice survives a reload. Registering one device that cannot be reached (a
 // Host of the fixture's ssh config that never resolves) adds a dimmed monogram tile with a cross and no
