@@ -1,5 +1,5 @@
-// Copy beside a person's turn's place, in a file of its own so the phone,
-// which has no desktop store, draws the same part.
+// Copy beside a person's turn's place, in a file of its own: `human-turn.tsx`
+// reads the desktop store for Done, and the phone draws this part without it.
 
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -28,7 +28,10 @@ export function HumanTurnCopy({ turn, copy, touch = false, className }: { turn: 
   const { t } = useInterfaceTranslation();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
+  // A write that lands after the line went arms no timer for a part that is gone.
+  const mounted = useRef(true);
   useEffect(() => () => {
+    mounted.current = false;
     if (timer.current !== null) window.clearTimeout(timer.current);
   }, []);
   const label = copied ? t("common.copied") : t("agents.human.copyPlace");
@@ -37,7 +40,7 @@ export function HumanTurnCopy({ turn, copy, touch = false, className }: { turn: 
       type="button"
       variant="row-action"
       size={touch ? "icon" : "icon-xs"}
-      aria-label={label}
+      aria-label={copied ? label : t("agents.human.copyPlaceName", { place: turn.place })}
       data-human-turn-copy={turn.id}
       data-copied={copied ? "true" : undefined}
       className={cn("pointer-events-auto relative z-10 shrink-0 self-center", touch && "size-(--size-touch-target)", className)}
@@ -45,7 +48,7 @@ export function HumanTurnCopy({ turn, copy, touch = false, className }: { turn: 
       onClick={(event) => {
         event.stopPropagation();
         void copy(turn.place, "person's turn place").then((took) => {
-          if (!took) return;
+          if (!took || !mounted.current) return;
           if (timer.current !== null) window.clearTimeout(timer.current);
           setCopied(true);
           timer.current = window.setTimeout(() => setCopied(false), COPIED_MS);

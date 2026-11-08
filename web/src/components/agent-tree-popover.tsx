@@ -355,7 +355,7 @@ function TreeItem({
         </span>
         {ask && !unavailable ? (
           <span className="flex min-w-0 items-center gap-xs">
-            <AskLine ask={{ verb: ask.verb, what: ask.what, more: 0, subject: ask.subject }} copy={actions?.copyText} className="flex-1" />
+            <AskLine ask={{ verb: ask.verb, what: ask.what, more: 0, subject: ask.subject }} copy={human ? actions?.copyText : undefined} className="flex-1" />
             <button
               type="button"
               disabled={pending || askUnavailable}

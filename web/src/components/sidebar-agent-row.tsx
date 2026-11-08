@@ -158,7 +158,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // which may be long over: it draws no mark, and its line says why (status-marks B16).
   const offline = unreachable ? t("agents.line.disconnected", { device: remote.label }) : null;
   // Copy stands beside a person's turn's place wherever Done does (operator decision 2026-11-08).
-  const copy = agent.human_turn && actions && !offline ? actions.copyText : undefined;
+  const humanActions = agent.human_turn && actions && !offline ? actions : null;
+  const copy = humanActions?.copyText;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
@@ -279,7 +280,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             <DeviceChip label={remote.label} />
           </span>
         ) : null}
-        {agent.human_turn && actions && !offline ? <HumanTurnDone turn={agent.human_turn} actions={actions} className="mt-xxs" /> : null}
+        {agent.human_turn && humanActions ? <HumanTurnDone turn={agent.human_turn} actions={humanActions} className="mt-xxs" /> : null}
         {place ? (
           <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}

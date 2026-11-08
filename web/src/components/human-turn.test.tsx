@@ -83,7 +83,7 @@ it("copies the whole place as the agent wrote it, query included, and shows it t
   const { container, unmount } = await render("connected", <HumanTurnLine turn={url} copy={actions.copyText} />);
   try {
     const copy = container.querySelector<HTMLButtonElement>(`[data-human-turn-copy="${turn.id}"]`)!;
-    expect(copy.getAttribute("aria-label")).toBe("장소 복사");
+    expect(copy.getAttribute("aria-label")).toBe("장소 복사: https://github.com/login/device?user_code=TEST-1234");
     await act(async () => copy.click());
     expect(written).toEqual(["https://github.com/login/device?user_code=TEST-1234"]);
     expect(copy.getAttribute("aria-label")).toBe("복사됨");
