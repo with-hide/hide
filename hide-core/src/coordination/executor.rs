@@ -1670,12 +1670,13 @@ fn spawn(
                 form.as_ref()
                     .and_then(|form| crate::engine::StartProgram::of(&program, form)),
             )
-            .inspect_err(|code| {
-                // A pane a start of this spawn was typed into keeps it: the
+            .map_err(|not| {
+                // A pane nothing of this start is left in closes, so the
+                // spawn leaves no shell behind (PRD agent-profiles B22) and
+                // the same intent starts again in a new one. A pane an
+                // earlier start of this spawn was typed into keeps it: the
                 // engine may still hold the agent's name there.
-                if reserved.typed == 0
-                    && super::split_refusal(code).0 == crate::agent_start::SHELL_STARTING
-                {
+                if let Some(why) = not.unused.filter(|_| reserved.typed == 0) {
                     close_unstarted_pane(
                         client,
                         authority,
@@ -1683,8 +1684,10 @@ fn spawn(
                         engine.as_ref(),
                         &reserved,
                         pane,
+                        why,
                     );
                 }
+                not.refusal
             })?;
             reserved = serde_json::from_value(mutate(
                 client,
@@ -2235,11 +2238,11 @@ fn close_unstarted_attempts(
     }
 }
 
-/// Closes the pane `reserved` made, whose shell had not finished starting
-/// when its start's wait ran out, so nothing was typed there (a startup file
-/// stopped at a question or blocked), and takes it off the spawn: the
-/// attempt leaves no tab, and the same intent opens a new pane with a new
-/// shell. A pane that no longer runs the terminal the spawn recorded is left
+/// Closes the pane `reserved` made, which nothing of its start is left in
+/// (`why`: a shell that had not finished starting when the start's wait ran
+/// out, so nothing was typed, or a profile's program that did not start, so
+/// the pane is a shell again), and takes it off the spawn: the attempt
+/// leaves no tab, and the same intent opens a new pane with a new shell. A pane that no longer runs the terminal the spawn recorded is left
 /// alone. Every outcome is logged; the caller's refusal says why either way.
 fn close_unstarted_pane(
     client: &Client,
@@ -2248,6 +2251,7 @@ fn close_unstarted_pane(
     engine: &dyn Engine,
     reserved: &SpawnRecord,
     pane: &str,
+    why: &str,
 ) {
     let closed = same_terminal(engine, reserved, pane)
         .and_then(|()| close_pane(engine, pane))
@@ -2264,8 +2268,8 @@ fn close_unstarted_pane(
             .map(drop)
         });
     crate::diagnostic!(json!({
-        "component": "spawn", "kind": "shell_starting.close", "spawn": reserved.id,
-        "pane_id": pane, "closed": closed.is_ok(), "reason": closed.err(),
+        "component": "spawn", "kind": "unstarted_pane.close", "spawn": reserved.id,
+        "pane_id": pane, "why": why, "closed": closed.is_ok(), "reason": closed.err(),
     }));
 }
 

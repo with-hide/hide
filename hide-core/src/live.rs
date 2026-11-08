@@ -560,7 +560,7 @@ pub(crate) fn start_agent(
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
-) -> Result<Started, String> {
+) -> Result<Started, NotStarted> {
     start_agent_checked(
         engine,
         node,
@@ -575,19 +575,47 @@ pub(crate) fn start_agent(
         program,
         &|| Ok(()),
     )
-    .map_err(|error| match error {
-        crate::agent_start::StartError::ShellStarting { waited, screen } => {
-            crate::coordination::shell_starting_refusal(waited, screen.as_deref())
-        }
-        // The engine refused the pane as busy until the start's deadline: nothing
-        // was typed, and the same intent asks again in the same pane.
-        crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
-            if code == crate::agent_start::PANE_BUSY =>
-        {
-            PANE_BUSY_REFUSAL.to_owned()
-        }
-        other => start_error_message(other),
+    .map_err(|error| {
+        let unused = match &error {
+            crate::agent_start::StartError::ShellStarting { .. } => {
+                Some(crate::agent_start::SHELL_STARTING)
+            }
+            crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
+                if code == crate::launch::PROFILE_REFUSED =>
+            {
+                Some(crate::launch::PROFILE_REFUSED)
+            }
+            _ => None,
+        };
+        let refusal = match error {
+            crate::agent_start::StartError::ShellStarting { waited, screen } => {
+                crate::coordination::shell_starting_refusal(waited, screen.as_deref())
+            }
+            // The engine refused the pane as busy until the start's deadline:
+            // nothing was typed, and the same intent asks again in the same
+            // pane.
+            crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
+                if code == crate::agent_start::PANE_BUSY =>
+            {
+                PANE_BUSY_REFUSAL.to_owned()
+            }
+            other => start_error_message(other),
+        };
+        NotStarted { refusal, unused }
     })
+}
+
+/// A spawn's start that did not take: the refusal the spawn answers, and,
+/// when nothing of the start is left in its pane, why (`unused`): a shell
+/// that never became ready for the line (`agent_start::SHELL_STARTING`), or
+/// a profile's program its executor saw fail to start
+/// (`launch::PROFILE_REFUSED`), whose provisional agent the engine has
+/// already withdrawn. A start whose result is not known
+/// (`launch::PROFILE_UNCONFIRMED`, an unconfirmed answer) may run there.
+#[derive(Debug)]
+pub(crate) struct NotStarted {
+    pub(crate) refusal: String,
+    pub(crate) unused: Option<&'static str>,
 }
 
 /// A spawn's start that engine refused as busy for its whole wait.

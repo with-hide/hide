@@ -1012,7 +1012,7 @@ fn start_or_degrade_agent(
         notices
             .push("Previous conversation could not be resumed; started a new conversation".into());
     }
-    if let Err(message) = start_agent(
+    if let Err(not) = start_agent(
         engine,
         node,
         &format!("hide-core:{key}:agent:{index}:fresh"),
@@ -1027,7 +1027,8 @@ fn start_or_degrade_agent(
     ) && !(pane_was_clear && agent_is_running(engine, pane_id, &agent.kind))
     {
         notices.push(format!(
-            "Agent could not be started; the shell was kept: {message}"
+            "Agent could not be started; the shell was kept: {}",
+            not.refusal
         ));
         return None;
     }
