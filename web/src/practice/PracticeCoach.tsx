@@ -270,7 +270,7 @@ const same = (a: Rect | null, b: Rect | null) => a === b || (!!a && !!b && Math.
 const MODIFIERS = "⇧⌘⌥⌃";
 
 /** A chord label as keycaps: "⇧⌘B" as ⇧ ⌘ B, "Ctrl+Shift+B" as Ctrl Shift B. */
-function keyParts(label: string): string[] {
+export function keyParts(label: string): string[] {
   if (label.includes("+")) return label.split("+");
   return [...label].reduce<string[]>((parts, glyph) => {
     const last = parts[parts.length - 1];
@@ -314,7 +314,8 @@ function wordsIn(selector: string, step: PracticeStep): boolean {
 const ZONES = [
   { selector: "[data-sidebar-box]", key: "view" },
   { selector: "[data-agent-area]", key: "work" },
-  { selector: "[data-lane-slot]", key: "project" },
+  // The lane and the rail beside it that picks its tool, as one part.
+  { selector: "[data-lane-slot], [data-tool-rail]", key: "project" },
 ] as const;
 
 type Props = {

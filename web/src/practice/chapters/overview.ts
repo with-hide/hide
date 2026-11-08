@@ -9,6 +9,7 @@ export default chapter<TourModel>({
   version: 2,
   world: TOUR_WORLD,
   quest: false,
+  preview: "zones",
   steps: [
     { id: "parts", zones: true, side: "center" },
     { id: "left", target: "[data-sidebar-box] [data-sidebar]", side: "right" },

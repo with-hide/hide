@@ -25,6 +25,7 @@ export default chapter<MissionModel>({
   version: 13,
   world: MISSION_WORLD,
   quest: true,
+  preview: "mission",
   steps: [
     // The situation, handed over with `/hide-mission` from the first step: the Conductor plans for a few seconds before the plan stands.
     // The screen is seen alone a moment first, since it is the first a newcomer meets.

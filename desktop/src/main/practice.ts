@@ -28,13 +28,23 @@ export function practiceUrl(origin: string, language: unknown, platform: string,
 const PRACTICE_SHARE = 0.85;
 
 /**
+ * The narrowest practice window whose screen shows every part side by side:
+ * chapter 1's device rail, sidebar, Agent Views at their 480 px and a docked
+ * lane with its tool rail need about 1264 px, and a narrower window draws the
+ * lane over the agents it is meant to sit beside.
+ */
+const PRACTICE_MIN_WIDTH = 1280;
+
+/**
  * Where the practice window opens: smaller than the main window and against its lower right, so the
- * main window's title row and sidebar still show beside it and the learner sees the real Hide is there.
+ * main window's title row and sidebar still show beside it and the learner sees the real Hide is there,
+ * but never narrower than `PRACTICE_MIN_WIDTH` where the screen it opens on (`workArea`) has the room.
  * With no main window it takes the size the main window would have, centred by the system.
  */
-export function practiceBounds(main: Rectangle | undefined): Partial<Rectangle> & { width: number; height: number } {
-  if (!main) return { width: 1280, height: 800 };
-  const width = Math.max(MIN_SIZE.width, Math.round(main.width * PRACTICE_SHARE));
+export function practiceBounds(main: Rectangle | undefined, workArea: Rectangle): Partial<Rectangle> & { width: number; height: number } {
+  if (!main) return { width: Math.min(PRACTICE_MIN_WIDTH, workArea.width), height: Math.min(800, workArea.height) };
+  const width = Math.min(workArea.width, Math.max(MIN_SIZE.width, PRACTICE_MIN_WIDTH, Math.round(main.width * PRACTICE_SHARE)));
   const height = Math.max(MIN_SIZE.height, Math.round(main.height * PRACTICE_SHARE));
-  return { x: main.x + main.width - width, y: main.y + main.height - height, width, height };
+  const right = Math.min(main.x + main.width, workArea.x + workArea.width);
+  return { x: Math.max(workArea.x, right - width), y: main.y + main.height - height, width, height };
 }

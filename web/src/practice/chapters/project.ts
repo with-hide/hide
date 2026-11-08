@@ -10,6 +10,7 @@ export default chapter<ProjectModel>({
   version: 3,
   world: PROJECT_WORLD,
   quest: true,
+  preview: "lane",
   steps: [
     // The Project tool's own icon, not ⌘E: ⌘E brings the lane back on whatever tool the learner last showed.
     { id: "lane", quest: true, target: '[data-lane-tool="project"]', side: "left", command: "toggle_lane_project", done: (model) => showsTool(model, "project") },

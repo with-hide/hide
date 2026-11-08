@@ -13,6 +13,7 @@ export default chapter<FollowModel>({
   version: 2,
   world: FOLLOW_WORLD,
   quest: true,
+  preview: "rows",
   steps: [
     { id: "tasks", target: "[data-task-list]", side: "right" },
     { id: "header", target: `${LEAD} header, ${LEAD} [data-pane-header-band]`, side: "bottom" },

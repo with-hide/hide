@@ -43,7 +43,9 @@ function watchClipboard() {
 function practiceState(page: Page): Promise<string> {
   return page.evaluate(() => {
     const root = document.querySelector("[data-practice-chapter]");
-    if (!root) return document.querySelector("[data-practice-hub]") ? "hub" : "none";
+    // A card pressed on the list opens what its chapter has the learner do, and its start plays it.
+    const detail = document.querySelector("[data-practice-detail]")?.getAttribute("data-practice-detail");
+    if (!root) return document.querySelector("[data-practice-hub]") ? (detail ? `hub~${detail}` : "hub") : "none";
     const layer = document.querySelector("[data-practice-layer]");
     // A step that opens on its scene reads as its own state until the guide comes in, which a press does.
     const step = layer?.hasAttribute("data-practice-ended") ? "ended" : `${layer?.getAttribute("data-practice-step")}${layer?.hasAttribute("data-practice-scene") ? "~scene" : ""}`;
@@ -98,8 +100,8 @@ async function drawn(practice: Page): Promise<void> {
 type GuidePress = (practice: Page) => Promise<void>;
 const pressEnter: GuidePress = (practice) => practice.keyboard.press("Enter");
 /**
- * The bubble's button, as a mouse presses it, on every step that shows one: all but the chapter list, where ⏎ plays
- * the chosen chapter, and an open palette, which hides the bubble's button and keeps ⏎ for itself.
+ * The bubble's button, as a mouse presses it, on every step that shows one: all but the chapter list, where ⏎ opens
+ * the chosen chapter's card and then starts it, and an open palette, which hides the bubble's button and keeps ⏎ for itself.
  */
 const pressButton: GuidePress = async (practice) => {
   const guiding = await practice.locator("[data-practice-layer]").count();
@@ -227,6 +229,15 @@ async function keepStall(practice: Page): Promise<void> {
 /** Every chapter's id, one per file in `src/practice/chapters/`, as the practice lists them; each gets a journey of its own below. */
 const CHAPTER_IDS = fs.readdirSync(path.resolve("src/practice/chapters")).filter((file) => file.endsWith(".ts")).map((file) => file.slice(0, -".ts".length));
 
+/** Opens chapter `id`'s card on the list and presses its start, or its From the start where the card offers one and `fromStart` asks for it. */
+async function playFromList(practice: Page, id: string, fromStart = false): Promise<void> {
+  await practice.locator(`[data-practice-hub-chapter="${id}"]`).click();
+  const detail = practice.locator(`[data-practice-detail="${id}"]`);
+  await expect(detail).toBeVisible();
+  const again = detail.locator("[data-practice-from-start]");
+  await (fromStart && (await again.count()) ? again : detail.locator("[data-practice-play]")).click();
+}
+
 // One test per chapter, so a chapter whose steps grow takes its own time budget and shard rather than every chapter's.
 for (const id of CHAPTER_IDS) {
   test(`chapter ${id} started over from each of its steps plays to its end with Enter alone`, async ({ page }) => {
@@ -237,7 +248,7 @@ for (const id of CHAPTER_IDS) {
       const hurry = () => practice.clock.fastForward(5_000);
       const row = practice.locator(`[data-practice-hub-chapter="${id}"]`);
       const layer = practice.locator(`[data-practice-chapter="${id}"] [data-practice-layer]`);
-      await row.locator("[data-practice-play]").click();
+      await playFromList(practice, id);
       const steps = Number(await layer.getAttribute("data-practice-steps"));
       // Each run goes one step further than the one before, and starts over from the list where the learner would.
       for (let reached = 1; reached < steps; reached += 1) {
@@ -245,8 +256,7 @@ for (const id of CHAPTER_IDS) {
         await practice.locator("[data-practice-hub-open]").click();
         // A run that reached the last step has seen the chapter, and the list then offers it again from the start.
         await expect(row).toHaveAttribute("data-status", /^(paused|done)$/);
-        const fromStart = row.locator("[data-practice-from-start]");
-        await ((await fromStart.count()) ? fromStart : row.locator("[data-practice-play]")).click();
+        await playFromList(practice, id, true);
         await expect(layer).toHaveAttribute("data-practice-index", "0");
       }
       await pressTo(practice, id, null, hurry);
@@ -258,7 +268,7 @@ for (const id of CHAPTER_IDS) {
 
 test("Back over a step that changed the screen plays the chapter again up to that step as it began", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await practice.locator('[data-practice-hub-chapter="screen"] [data-practice-play]').click();
+    await playFromList(practice, "screen");
     const layer = practice.locator('[data-practice-chapter="screen"] [data-practice-layer]');
     const focused = practice.locator('[data-pane-view][data-focused="true"]');
     // Split, then jump back to the agent: two steps that each changed the screen.
@@ -279,7 +289,7 @@ test("Back over a step that changed the screen plays the chapter again up to tha
 
 test("the bubble's Exit closes the practice from any step, keeping where the chapter stopped", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await playFromList(practice, "switch");
     await pressTo(practice, "switch", 1);
     await clickClosingItsPage(practice.locator('[data-practice-chapter="switch"] [data-practice-exit]'));
     // The step reached went to the shell before the window went, so the list opened again offers to continue there.
@@ -293,7 +303,7 @@ test("the bubble's Exit closes the practice from any step, keeping where the cha
 
 test("the first chapter ends by asking what next, and Use Hide now closes the practice", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await practice.locator('[data-practice-hub-chapter="mission"] [data-practice-play]').click();
+    await playFromList(practice, "mission");
     const layer = practice.locator('[data-practice-chapter="mission"] [data-practice-layer]');
     await pressTo(practice, "mission", Number(await layer.getAttribute("data-practice-steps")) - 1);
     await practice.keyboard.press("Enter");
@@ -305,13 +315,13 @@ test("the first chapter ends by asking what next, and Use Hide now closes the pr
 
 test("the chapter list leads back to Hide, and a finished chapter stops on its end card", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await playFromList(practice, "switch");
     await practice.locator('[data-practice-chapter="switch"] [data-practice-hub-open]').click();
     await expect(practice.locator("[data-practice-hub]")).toBeVisible();
     await expect(practice.locator("[data-practice-hub] [data-practice-leave]")).toBeVisible();
     await expect(practice).toHaveTitle(/Practice Hide|Hide 연습/);
     // The last step's button finishes the chapter on its end card, which lists the tasks and leads back to the list.
-    await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await playFromList(practice, "switch");
     await pressTo(practice, "switch", 4);
     await practice.keyboard.press("Enter");
     const end = practice.locator('[data-practice-chapter="switch"] [data-practice-end]');

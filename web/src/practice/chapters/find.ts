@@ -17,6 +17,7 @@ export default chapter<FindModel>({
   version: 2,
   world: FIND_WORLD,
   quest: true,
+  preview: "search",
   steps: [
     { id: "open", quest: true, target: "[data-sidebar-search]", side: "right", command: "search", gesture: { click: true }, done: (model) => model.searched },
     // Any word of yesterday's session finds it, not only the one the bubble suggests.
