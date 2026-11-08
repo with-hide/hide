@@ -441,6 +441,15 @@ impl Pane {
         if !self.terminal.mouse_tracking_enabled()? {
             return Ok(None);
         }
+        // ConPTY's input parser drops a pointer report with a coordinate
+        // below zero, a release too, which would leave the program's button
+        // held, so a Windows pane is told the grid's nearest cell
+        // (docs/INSTALL.md, What each system supports).
+        #[cfg(windows)]
+        let outside: Option<(i32, i32)> = {
+            let _ = outside;
+            None
+        };
         let cols = self.terminal.cols()?;
         let rows = self.terminal.rows()?;
         let cell = (
@@ -999,20 +1008,17 @@ mod tests {
         let said = |pane: &mut Pane, mouse: &Mouse| {
             String::from_utf8(pane.mouse(mouse).unwrap().unwrap()).unwrap()
         };
-        // A cell is 10 by 20 pixels, told at its middle.
+        // A cell is 10 by 20 pixels, told at its middle; past the edge on
+        // Windows, at the grid's nearest cell, since ConPTY drops the rest.
         assert_eq!(said(&mut pane, &press(3, 4)), "\x1b[<0;35;90M");
-        assert_eq!(
-            said(&mut pane, &drag(4, 0, Some((4, -3)))),
-            "\x1b[<32;45;-50M"
-        );
-        assert_eq!(
-            said(&mut pane, &drag(4, 0, Some((4, -4)))),
-            "\x1b[<32;45;-70M"
-        );
-        assert_eq!(
-            said(&mut pane, &drag(79, 23, Some((85, 30)))),
-            "\x1b[<32;855;610M"
-        );
+        let (above, further, below) = if cfg!(windows) {
+            ("\x1b[<32;45;10M", "\x1b[<32;45;10M", "\x1b[<32;795;470M")
+        } else {
+            ("\x1b[<32;45;-50M", "\x1b[<32;45;-70M", "\x1b[<32;855;610M")
+        };
+        assert_eq!(said(&mut pane, &drag(4, 0, Some((4, -3)))), above);
+        assert_eq!(said(&mut pane, &drag(4, 0, Some((4, -4)))), further);
+        assert_eq!(said(&mut pane, &drag(79, 23, Some((85, 30)))), below);
         let release = Mouse {
             action: MouseAction::Release,
             ..press(5, 6)

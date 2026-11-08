@@ -216,7 +216,8 @@ test("a program that tracks the mouse gets the drag, and a drag with shift selec
 
     // A program that asks for pixels (mode 1016), as Claude Code does, hears
     // a drag past the pane's top edge above it, in the holder's 10 by 20
-    // pixel cells, told at a cell's middle.
+    // pixel cells, told at a cell's middle; on Windows at the top row, since
+    // ConPTY drops a report above it (docs/INSTALL.md).
     await withControl(daemon, async (control) => sendKeys(control, pane, "\x1b[?1016hpixels-on"));
     await expect.poll(() => paneText(page, pane), { timeout: 10_000 }).toContain("pixels-on");
     const pixelsFrom = fs.readFileSync(log).length;
@@ -225,7 +226,8 @@ test("a program that tracks the mouse gets the drag, and a drag with shift selec
     await page.mouse.move(cell(2, 1).x, screen.y - 2.5 * (screen.height / grid.rows), { steps: 4 });
     await page.mouse.up();
     const esc = "\u001b";
-    const pixels = new RegExp(`^${esc}\\[<0;25;30M(${esc}\\[<32;25;-?\\d+M)*${esc}\\[<32;25;-50M${esc}\\[<0;25;-50m$`);
+    const top = process.platform === "win32" ? 10 : -50;
+    const pixels = new RegExp(`^${esc}\\[<0;25;30M(${esc}\\[<32;25;-?\\d+M)*${esc}\\[<32;25;${top}M${esc}\\[<0;25;${top}m$`);
     await expect.poll(() => fs.readFileSync(log, "latin1").slice(pixelsFrom), { timeout: 10_000 }).toMatch(pixels);
   } finally {
     daemon?.stop();
