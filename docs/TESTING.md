@@ -467,6 +467,19 @@ A first start that misses its deadline says what it was doing: its pid, the proc
     `scripts/tests/test_ci_verification_entrypoints.py` holds both: a pane's handles, including one added later, never reach cargo, the listed inputs do, and the git settings are the empty file in every test mode.
     A cargo run outside the script (a bare `cargo test` from a pane) has none of this and is not evidence ([VERIFICATION.md](VERIFICATION.md)).
 
+### Upgrading a released state folder
+
+The first start of a new build renames what earlier builds stored (`hide_core::node_migration`: `convert`, then `name_devices`), and a field the renaming misses holds a device unconnected for good.
+Hand-written store fixtures only hold the fields their author thought of: the field that cost 1.2.1 users their SSH device (a View's `openers`) was in no fixture, so `hide-core/tests/fixtures/release-state/<tag>/` holds the state folders published releases actually wrote.
+`scripts/release_state/generate.py <tag>` makes one from the release's own programs, a core and one SSH device it dials in two containers, driven by `scripts/release_state/scenario.py` through the core's `/ws` and the release's CLI; `scripts/release_state/README.md` says how to run it, what to check before committing, and when a folder comes out.
+Every release adds its folder.
+`node_migration::upgrade_tests` runs the start's migrations over a copy of every folder, with the node id its `node.json` names, exactly as `hided` runs them before the core reads the folder, and fails on a refusal, a device held or not named by its machine id, a store a current loader does not use as it was written, a changed count of projects, letters or Memory cards, or a second start that writes anything.
+It is a suite of the `hide-core` library, not of a `tests/it` binary, because the loaders it holds the folder to are the crate's own.
+It copies each folder private to the account, as a core writes its files, because git keeps only the bytes and a loader refuses a store others can read; the `rust workspace` lane runs it on Linux and a step of `windows check` on Windows, where privacy is the file's access list.
+
+A change that stores a device or machine id adds a step to the scenario that makes a release write it, and the release that ships the change adds the first folder that carries it; when released builds already write the field, the change regenerates their folders with the new step.
+A scenario step a release itself refuses is recorded as not done in `<tag>.json` beside the folder, with the release's answer.
+
 ### Agent screen rules
 
 A built-in agent's `[screen]` (`hide-agent-adapter/agents/<id>.toml`) reaches the operator only in a release, so a change to it is gated twice.

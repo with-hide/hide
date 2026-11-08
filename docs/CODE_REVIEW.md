@@ -52,6 +52,7 @@ So every review covers the perspectives below, and names the perspective of each
 
 - A test asserts what a caller observes, with the expected answer taken from outside the implementation.
 - A test that costs more to keep than it returns, or that would still pass with the fix reverted, is a finding.
+- A change that stores a device or machine id adds a step to the release-state scenario (`scripts/release_state/scenario.py`) and regenerates the folders it applies to ([TESTING.md, Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)); without one, the first start after an upgrade can hold the device unconnected and no test sees it, which is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at and how to keep a test deterministic.
 
 ## Writing a finding

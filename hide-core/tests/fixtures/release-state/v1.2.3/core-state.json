@@ -1,0 +1,290 @@
+{
+  "resolved_sessions": {},
+  "revisit_sessions": {},
+  "stray_dismissals": {},
+  "session_resolution_inputs": {},
+  "session_collapsed_checkout_ids": [],
+  "session_open_folds": [],
+  "schema_version": 1,
+  "left_sidebar_visible": true,
+  "device_rail_visible": true,
+  "right_panel_visible": true,
+  "right_panel_section": "overview",
+  "expanded_paths": [],
+  "device_expanded_paths": {},
+  "collapsed_workspace_ids": [],
+  "collapsed_checkout_ids": [],
+  "expanded_checkout_ids": [],
+  "expanded_inactive_checkout_project_paths": [],
+  "expanded_inactive_project_device_ids": [],
+  "project_base_branches": {},
+  "project_settings": {},
+  "expanded_agent_pane_ids": [],
+  "sessions_expanded_agent_pane_ids": [],
+  "sidebar_lens": "projects",
+  "task_view": "status",
+  "practice": {},
+  "practice_invite_closed": false,
+  "detail": {
+    "items": [
+      {
+        "kind": "remains",
+        "workspace_id": "remote:de510000000000000000000000000002:project:db70b1859bf6ba7c8418518401f2d34b5dd18940ea2e6177c8b7c898df341791",
+        "checkout_id": "remote:de510000000000000000000000000002:checkout:897417db50259158"
+      }
+    ],
+    "shown": true
+  },
+  "overview_graph": {
+    "focus": "all",
+    "include_resting": false,
+    "hidden_projects": [],
+    "folded_projects": [],
+    "team_folds": [],
+    "project_places": [],
+    "session_places": []
+  },
+  "selected_path": "/home/remote/dev-proj/notes.md",
+  "selected_pane_id": "h1:p1",
+  "shortcut_bindings": {},
+  "shortcut_bindings_imported": false,
+  "browser_shortcut_bindings": {},
+  "focused_device_id": "de510000000000000000000000000002",
+  "focused_checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+  "workspace_registrations": [
+    {
+      "primary_checkout_id": null,
+      "id": "workspace:0c6e30f59b7ca56a",
+      "label": "core-proj",
+      "path": "/home/me/core-proj",
+      "device_id": "c0de0000000000000000000000000001",
+      "pinned": false
+    },
+    {
+      "primary_checkout_id": null,
+      "id": "remote:de510000000000000000000000000002:project:db70b1859bf6ba7c8418518401f2d34b5dd18940ea2e6177c8b7c898df341791",
+      "label": "dev-proj",
+      "path": "/home/remote/dev-proj",
+      "device_id": "de510000000000000000000000000002",
+      "pinned": false
+    }
+  ],
+  "device_registrations": [
+    {
+      "id": "de510000000000000000000000000002",
+      "label": "mini",
+      "ssh_alias": "mini",
+      "host_consent": {
+        "contract": 4,
+        "helper_root": "~/.hide/host-helper",
+        "cli_dir": "~/.local/bin",
+        "granted_at_unix_ms": 1794122616958,
+        "identity": {
+          "user": "remote",
+          "hostname": "device",
+          "port": 22,
+          "machine_id": "de510000000000000000000000000002",
+          "host_key_sha256": ""
+        }
+      },
+      "naming": "named"
+    }
+  ],
+  "accent_hex": "#B9FF66",
+  "theme": "dark",
+  "agent_logo_mode": "hidden",
+  "pane_turn_row_mode": "one_line",
+  "color_theme": "hide",
+  "interface_language": null,
+  "usage": {
+    "pinned": [
+      {
+        "agent": "claude",
+        "window": "weekly"
+      },
+      {
+        "agent": "codex",
+        "window": "weekly"
+      }
+    ],
+    "hidden": []
+  },
+  "agent_onboarding": null,
+  "agent_onboarding_agents": [],
+  "first_run": null,
+  "first_run_choices": {
+    "agents": null,
+    "devices": null,
+    "project_device": null,
+    "project_form": {
+      "view": "",
+      "url": "",
+      "parent": "",
+      "name": ""
+    },
+    "notifications_answered": false
+  },
+  "desktop_notifications": false,
+  "product_analytics_enabled": true,
+  "desktop_notifications_done": false,
+  "screen_intros_seen": [],
+  "sidebar_width": 292,
+  "font_size": 13.0,
+  "terminal_font_size": 14.0,
+  "terminal_font_family": "",
+  "pane_text_scales": {},
+  "editor_text_scale": 1.0,
+  "pane_read_records": {
+    "h1:p1": {
+      "state_change_seq": 1,
+      "session_id": "43020e8a-226f-437e-b974-5a86c5162b1c",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1ba0a8ed4-22-1",
+      "unread": false
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p1": {
+      "state_change_seq": 1,
+      "session_id": "45e6dd6f-fca5-4aa2-82cf-3861979cd889",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1ba0a9c2c-22-2",
+      "unread": false
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p2": {
+      "state_change_seq": 2,
+      "session_id": "2273da03-5461-44aa-b207-9d38db39a8ee",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1ba0a9c2c-22-2",
+      "unread": false
+    }
+  },
+  "pane_completions": {
+    "h1:p1": {
+      "session": "a24cdd0c6ef518eb9cd6a7dad7caf26b60347c0de60461828f2de1d8df20840a",
+      "server": "1a1ba0a8ed4-22-1",
+      "state_change_seq": 1
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p1": {
+      "session": "96081a49c90d0068245a1d9927eca18da58ece6d87b4a72a76894df05b1b6ccf",
+      "server": "1a1ba0a9c2c-22-2",
+      "state_change_seq": 1
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p2": {
+      "session": "80074e988fe199cd473f2c99f647261a6e74304fa38652bc3d2027eea3ee81a0",
+      "server": "1a1ba0b4024-22-3",
+      "state_change_seq": 2
+    }
+  },
+  "pane_launches": {},
+  "request_verbs": {
+    "h1:p1": {
+      "verb": "idle",
+      "since_unix_ms": 1794122699776
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p1": {
+      "verb": "idle",
+      "since_unix_ms": 1794122693529
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794122692581
+    }
+  },
+  "pane_terminal_sizes": {},
+  "agent_sleep_after_hours": 24,
+  "project_issue_sources": {},
+  "issue_settings": {
+    "ai_worktree_name": true,
+    "closes_instruction": true
+  },
+  "conductor_settings": {
+    "concurrency": 4,
+    "default_scope": "pr",
+    "candidates": [],
+    "default_strength": "normal",
+    "clean_merged": true
+  },
+  "agent_start": {
+    "kind": null,
+    "models": {}
+  },
+  "agent_sleep": {
+    "stamps": {
+      "h1:p1": {
+        "changed_at_unix_ms": 1794122683494,
+        "seen_at_unix_ms": 1794122676839,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h1:p1": {
+        "changed_at_unix_ms": 1794122693529,
+        "seen_at_unix_ms": 1794122682146,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h1:p2": {
+        "changed_at_unix_ms": 1794122661924,
+        "seen_at_unix_ms": 1794122661931,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      }
+    },
+    "records": {
+      "remote:de510000000000000000000000000002:pane:h1:p2": {
+        "phase": "sleeping",
+        "kind": "claude",
+        "session_id": "2273da03-5461-44aa-b207-9d38db39a8ee",
+        "agent_name": null,
+        "identity_label": "Claude",
+        "label_owner": "v1:f1271a177352e0902f24b9bce5ab6f62a6ccb7d7adcd428661d3db926eaba88e",
+        "progress": null,
+        "last_activity": "1794122653333",
+        "state_change_seq": 2,
+        "completed": true,
+        "parent_pane_id": null,
+        "parent_session": null,
+        "fork_source": null,
+        "workspace_label": "dev-proj",
+        "cwd": "/home/remote/dev-proj",
+        "since_unix_ms": 1794122692580,
+        "reason": null,
+        "pending_wake": null
+      }
+    },
+    "dormant": {}
+  },
+  "session_archive": {},
+  "recent_checkouts": [
+    {
+      "device_id": "de510000000000000000000000000002",
+      "checkout_id": "remote:de510000000000000000000000000002:checkout:897417db50259158",
+      "project_name": "dev-proj",
+      "branch": "main"
+    },
+    {
+      "device_id": "c0de0000000000000000000000000001",
+      "checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+      "project_name": "core-proj",
+      "branch": "main"
+    }
+  ],
+  "recent_pane_ids": [],
+  "operator_tab_names": {}
+}
