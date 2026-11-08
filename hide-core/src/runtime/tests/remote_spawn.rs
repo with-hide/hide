@@ -142,7 +142,9 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 /// passed, `refused` makes the engine refuse the next start before typing
 /// anything, `list_fails` is how many agent lists after the start the
 /// engine fails to answer, and while `full` the device's node holds the
-/// most pane holders it keeps, so no pane starts there.
+/// most pane holders it keeps, so no pane starts there. `screen` is what the
+/// started agent shows when asked whether it takes input, and a prompt typed
+/// to it is taken.
 #[allow(clippy::too_many_arguments)] // each the test's own control of the engine
 fn device_engine(
     started: Arc<AtomicBool>,
@@ -153,6 +155,7 @@ fn device_engine(
     refused: Arc<AtomicBool>,
     list_fails: Arc<AtomicUsize>,
     full: Arc<AtomicBool>,
+    screen: Arc<AtomicUsize>,
 ) -> Fake {
     FakeEngine::start(move |method, _| match method {
         "worktree_path" => reply(None::<String>),
@@ -219,6 +222,24 @@ fn device_engine(
             };
             reply(fake::session(json!({"agents": agents})))
         }
+        "delivery_agent" if screen.load(Ordering::SeqCst) == SCREEN_ENDED => {
+            self::refused("agent_not_found", "agent target worker not found")
+        }
+        "delivery_agent"
+            if started.load(Ordering::SeqCst)
+                && shows.load(Ordering::SeqCst)
+                && screen.load(Ordering::SeqCst) != SCREEN_STARTING =>
+        {
+            let mut row = agent_row(session.lock().unwrap().as_deref(), true);
+            if screen.load(Ordering::SeqCst) == SCREEN_ASKING {
+                // A screen that asks keeps the start pending past its
+                // deadline (`PaneAgent::launch_pending`).
+                row["agent_status"] = json!("blocked");
+                row["launch_pending"] = json!(true);
+            }
+            reply(fake::delivery_agent(&row))
+        }
+        "prompt_agent" => reply(()),
         "delivery_agent" if !held.load(Ordering::SeqCst) => {
             self::refused("agent_not_found", "agent target worker not found")
         }
@@ -252,11 +273,21 @@ struct Spawner {
     list_fails: Arc<AtomicUsize>,
     /// Whether the device's node holds the most pane holders it keeps.
     full: Arc<AtomicBool>,
+    /// What the started agent's screen shows when its input is asked about
+    /// (`delivery_agent`): `SCREEN_STARTING` as the start left it,
+    /// `SCREEN_ASKING` a question of its own, `SCREEN_READY` its composer.
+    screen: Arc<AtomicUsize>,
     fake: Fake,
     path: PathBuf,
     _worker: Worker,
     client: crate::delivery::worker::Client,
 }
+
+const SCREEN_STARTING: usize = 0;
+const SCREEN_ASKING: usize = 1;
+const SCREEN_READY: usize = 2;
+/// The agent ended: the engine no longer lists it.
+const SCREEN_ENDED: usize = 3;
 
 /// A caller registered on this machine and a connected device `mini`; a
 /// second registered device, `studio`, is not connected.
@@ -286,6 +317,7 @@ fn spawner() -> Spawner {
     let refused = Arc::new(AtomicBool::new(false));
     let list_fails = Arc::new(AtomicUsize::new(0));
     let full = Arc::new(AtomicBool::new(false));
+    let screen = Arc::new(AtomicUsize::new(SCREEN_STARTING));
     let fake = device_engine(
         started,
         session.clone(),
@@ -295,6 +327,7 @@ fn spawner() -> Spawner {
         refused.clone(),
         list_fails.clone(),
         full.clone(),
+        screen.clone(),
     );
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
@@ -415,6 +448,7 @@ fn spawner() -> Spawner {
         refused,
         list_fails,
         full,
+        screen,
         fake,
         path,
         _worker: worker,
@@ -474,6 +508,33 @@ impl Spawner {
                 launch,
                 task: None,
                 brief: None,
+                beside: false,
+            },
+        )
+    }
+
+    /// A Codex spawn on the device with `brief` as its first prompt.
+    fn spawn_briefed(&self, intent: &str, brief: &str) -> Result<Value, String> {
+        crate::coordination::run(
+            self.client.clone(),
+            authority(&self.actor),
+            self.actor.clone(),
+            Command::Spawn {
+                mission: None,
+                plan_node: None,
+                plan: None,
+                parent: Some("here".into()),
+                machine: Some(DEVICE.into()),
+                name: "worker".into(),
+                intent: intent.into(),
+                kind: "codex".into(),
+                repo: "/srv/repo".into(),
+                branch: "topic".into(),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: Some(brief.into()),
                 beside: false,
             },
         )
@@ -2126,4 +2187,297 @@ fn a_spawn_takes_its_devices_permission_and_codex_overrides_go_beside_its_own_fl
             .1;
         assert_eq!(start["args"], json!(expected), "{device_choice:?}");
     }
+}
+
+/// The cause a refused spawn's answer gives for its untyped brief.
+fn brief_cause(refusal: &str) -> (String, Value) {
+    let (code, detail) = split_refusal(refusal);
+    let detail: Value = serde_json::from_str(detail.expect("the spawn is named")).unwrap();
+    (code.to_owned(), detail["cause"].clone())
+}
+
+/// with-hide/hide-private#717: an agent whose screen asks a question when
+/// its brief is due (Codex's sandbox menu) has nothing typed into it, and
+/// the spawn says the screen asks. The core watches the agent as the
+/// spawn's, so when the operator gives it a turn first it is bound, yet the
+/// spawn stays open: the same intent types the brief exactly once, and a
+/// later one types nothing.
+#[test]
+fn a_brief_a_question_held_is_typed_once_by_the_same_intent_even_after_the_agent_was_bound() {
+    let spawner = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *spawner.session.lock().unwrap() = None;
+    spawner.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    let ask = || spawner.spawn_briefed("menu", "reply JOURNEY-1");
+    assert_eq!(
+        brief_cause(&ask().expect_err("the screen asks")),
+        ("brief_not_submitted".to_owned(), json!("question"))
+    );
+    assert_eq!(spawner.count("prompt_agent"), 0);
+    let ledger = spawner.published();
+    assert_eq!(ledger.identity_waits.len(), 1, "the core watches the agent");
+    assert!(!ledger.spawns[0].briefed);
+
+    // The operator answers the menu and types a line of their own, which
+    // gives the agent its session before the brief is asked for again.
+    let mut writer = spawner.writer();
+    spawner.refresh(&mut writer);
+    wait_for("the writer's worker takes the at-rest batch", || {
+        writer.taken()
+    });
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    spawner.refresh(&mut writer);
+    wait_for("the core binds the agent", || {
+        spawner.published().spawns[0].child.is_some()
+    });
+    let bound = spawner.published();
+    assert!(bound.identity_waits.is_empty());
+    assert!(!bound.spawns[0].completed, "its brief is still to be typed");
+
+    spawner.screen.store(SCREEN_READY, Ordering::SeqCst);
+    let child = ask().expect("the same intent types the brief");
+    assert_eq!(child["id"].as_str(), bound.spawns[0].child.as_deref());
+    assert_eq!(spawner.count("prompt_agent"), 1);
+    let done = spawner.published();
+    assert!(done.spawns[0].briefed && done.spawns[0].completed);
+
+    let letters = intent_letters(&spawner, "menu");
+    assert_eq!(letters.len(), 1, "the brief is the intent's first letter");
+    assert_eq!(letters[0].body, "reply JOURNEY-1");
+    assert_eq!(letters[0].state, ledger::State::Delivered);
+
+    assert_eq!(ask().unwrap()["id"], child["id"]);
+    assert_eq!(
+        spawner.count("prompt_agent"),
+        1,
+        "a completed spawn types nothing"
+    );
+    assert_eq!(spawner.count("start_agent"), 1);
+    assert_eq!(intent_letters(&spawner, "menu"), letters);
+}
+
+fn intent_letters(spawner: &Spawner, intent: &str) -> Vec<ledger::Letter> {
+    spawner
+        .published()
+        .letters
+        .iter()
+        .filter(|letter| letter.intent == intent)
+        .cloned()
+        .collect()
+}
+
+/// #717 review: a brief the agent recorded before its send's outcome was
+/// saved (the spawn's answer was cut off after the typing) is confirmed, so
+/// the same intent types nothing more and completes the spawn, with the one
+/// first letter under its intent.
+#[test]
+fn a_brief_confirmed_before_its_send_was_saved_completes_the_same_intent_without_typing() {
+    let spawner = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *spawner.session.lock().unwrap() = None;
+    spawner.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    let ask = || spawner.spawn_briefed("cut", "reply JOURNEY-3");
+    ask().expect_err("the screen asks");
+    let mut writer = spawner.writer();
+    spawner.refresh(&mut writer);
+    wait_for("the writer's worker takes the at-rest batch", || {
+        writer.taken()
+    });
+    *spawner.session.lock().unwrap() = Some("device-child-session".into());
+    spawner.refresh(&mut writer);
+    wait_for("the core binds the agent", || {
+        spawner.published().spawns[0].child.is_some()
+    });
+    // The typing was reserved and the agent's record of it arrived; the
+    // answer that would have saved the send never did.
+    let spawn = spawner.published().spawns[0].id.clone();
+    crate::coordination::executor::mutate(
+        &spawner.client,
+        &authority(&spawner.actor),
+        &spawner.actor,
+        crate::coordination::Mutation::BriefTyping { id: spawn.clone() },
+    )
+    .unwrap();
+    spawner
+        .runtime
+        .lock()
+        .unwrap()
+        .post_brief_confirmed(&spawn, "hook");
+    wait_for("the agent's record of the brief is kept", || {
+        spawner.published().spawns[0]
+            .brief_input
+            .as_ref()
+            .is_some_and(|input| input.confirmed_at_unix_ms.is_some())
+    });
+    let held = spawner.published();
+    assert!(!held.spawns[0].briefed && !held.spawns[0].completed);
+
+    spawner.screen.store(SCREEN_READY, Ordering::SeqCst);
+    let child = ask().expect("the same intent completes the spawn");
+    assert_eq!(child["id"].as_str(), held.spawns[0].child.as_deref());
+    assert_eq!(spawner.count("prompt_agent"), 0, "nothing is typed again");
+    assert!(spawner.published().spawns[0].completed);
+    assert_eq!(intent_letters(&spawner, "cut").len(), 1);
+    assert_eq!(ask().unwrap()["id"], child["id"]);
+    assert_eq!(spawner.count("prompt_agent"), 0);
+}
+
+/// #717 review R3, through the store's own transaction: Hide's record of a
+/// brief that arrives after the parent ended is kept. A completed spawn's
+/// first letter stays as it was, however often the record comes; a spawn
+/// bound before its brief went in gets no letter from the ended parent and
+/// no answer wait.
+#[test]
+fn a_briefs_record_after_its_parent_ended_is_kept_by_the_store() {
+    let confirmed = |spawner: &Spawner| {
+        spawner.published().spawns[0]
+            .brief_input
+            .as_ref()
+            .and_then(|input| input.confirmed_at_unix_ms)
+    };
+    let confirm = |spawner: &Spawner| {
+        let spawn = spawner.published().spawns[0].id.clone();
+        spawner
+            .runtime
+            .lock()
+            .unwrap()
+            .post_brief_confirmed(&spawn, "hook");
+        wait_for("the agent's record of the brief is kept", || {
+            confirmed(spawner).is_some()
+        });
+    };
+
+    let done = spawner();
+    done.screen.store(SCREEN_READY, Ordering::SeqCst);
+    done.spawn_briefed("done", "reply JOURNEY-4")
+        .expect("the spawn completes");
+    assert_eq!(intent_letters(&done, "done").len(), 1);
+    assert_eq!(confirmed(&done), None);
+    // Hide's input identity posts through the client the session sync
+    // installs.
+    let _writer = done.writer();
+    end_parent(&done);
+    let letters = intent_letters(&done, "done");
+    assert_eq!(letters[0].body, "reply JOURNEY-4");
+    confirm(&done);
+    confirm(&done);
+    assert_eq!(intent_letters(&done, "done"), letters);
+    drop(done);
+
+    let early = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *early.session.lock().unwrap() = None;
+    early.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    early
+        .spawn_briefed("early", "reply JOURNEY-5")
+        .expect_err("the screen asks");
+    let mut writer = early.writer();
+    early.refresh(&mut writer);
+    wait_for("the writer's worker takes the at-rest batch", || {
+        writer.taken()
+    });
+    *early.session.lock().unwrap() = Some("device-child-session".into());
+    early.refresh(&mut writer);
+    wait_for("the core binds the agent", || {
+        early.published().spawns[0].child.is_some()
+    });
+    crate::coordination::executor::mutate(
+        &early.client,
+        &authority(&early.actor),
+        &early.actor,
+        crate::coordination::Mutation::BriefTyping {
+            id: early.published().spawns[0].id.clone(),
+        },
+    )
+    .unwrap();
+    end_parent(&early);
+    confirm(&early);
+    assert!(intent_letters(&early, "early").is_empty());
+    assert!(
+        early
+            .published()
+            .letters
+            .iter()
+            .all(|letter| !letter.waiting_answer)
+    );
+}
+
+/// Ends the spawn's parent, as `hide agent end` from its own pane does.
+fn end_parent(spawner: &Spawner) {
+    let id = spawner.published().spawns[0].parent.clone();
+    crate::coordination::executor::mutate(
+        &spawner.client,
+        &authority(&spawner.actor),
+        &spawner.actor,
+        crate::coordination::Mutation::End { id, actor: None },
+    )
+    .unwrap();
+}
+
+/// An agent that ends before it takes its brief is said to have ended, not
+/// to be late; nothing was typed, and no wait is left for an agent that is
+/// gone.
+#[test]
+fn a_spawn_whose_agent_ended_before_its_brief_says_so_and_types_nothing() {
+    let spawner = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *spawner.session.lock().unwrap() = None;
+    spawner.screen.store(SCREEN_ENDED, Ordering::SeqCst);
+    let (answer, logged) =
+        crate::diagnostics::capture(|| spawner.spawn_briefed("quit", "reply JOURNEY-2"));
+    assert_eq!(
+        brief_cause(&answer.expect_err("the agent ended")),
+        ("brief_not_submitted".to_owned(), json!("agent_ended"))
+    );
+    assert!(logged.iter().any(|record| record["kind"] == "brief.agent_ended"
+        && record["cause"] == "agent_ended"));
+    assert_eq!(spawner.count("prompt_agent"), 0);
+    assert!(spawner.published().identity_waits.is_empty());
+}
+
+/// The wait for a spawn's agent says, when the agent ends, what became of
+/// the brief: never typed (it ended at the question that held it, #717's
+/// Quit), or typed with no record of it yet; never "undelivered" for a
+/// brief that may have arrived. A wait that ends for another reason says
+/// the same, and a confirmed brief says so.
+#[test]
+fn an_ended_wait_says_what_became_of_the_spawns_brief() {
+    let ended = |spawner: &Spawner| {
+        let mut ledger = (*spawner.published()).clone();
+        let wait = ledger.identity_waits[0].id.clone();
+        crate::coordination::identity_wait::apply(
+            &mut ledger,
+            &wait,
+            &crate::coordination::identity_wait::Settle::End(
+                crate::coordination::identity_wait::AGENT_ENDED.to_owned(),
+            ),
+            1,
+        )
+        .unwrap()
+    };
+
+    let asked = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    *asked.session.lock().unwrap() = None;
+    asked.screen.store(SCREEN_ASKING, Ordering::SeqCst);
+    asked.spawn_briefed("menu", "reply").unwrap_err();
+    let spawn = asked.published().spawns[0].id.clone();
+    assert_eq!(
+        ended(&asked),
+        json!({"ended": "agent_ended", "spawn": spawn, "brief": "not_typed"})
+    );
+    drop(asked);
+
+    let typed = spawner();
+    *typed.session.lock().unwrap() = None;
+    typed.screen.store(SCREEN_READY, Ordering::SeqCst);
+    assert_eq!(
+        split_refusal(&typed.spawn_briefed("rest", "reply").unwrap_err()).0,
+        "native_identity_unavailable"
+    );
+    assert_eq!(typed.count("prompt_agent"), 1);
+    assert_eq!(ended(&typed)["brief"], "typed_unconfirmed");
+    let mut confirmed = typed.published().spawns[0].clone();
+    confirmed.brief_input.as_mut().unwrap().confirmed_at_unix_ms = Some(1);
+    assert_eq!(confirmed.brief_phase().word(), "confirmed");
 }

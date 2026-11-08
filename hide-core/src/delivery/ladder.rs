@@ -34,6 +34,37 @@ pub(crate) enum NotReady {
     Unread(String),
     /// The agent did not take input within the wait; nothing was typed.
     Late(String),
+    /// The wait ran out while the agent's screen asked a question of its own
+    /// (a folder's trust, a numbered menu): what is typed there answers it,
+    /// so nothing was typed.
+    Asking(String),
+    /// The engine no longer lists the agent: it ended before it took input,
+    /// and nothing was typed.
+    Ended(String),
+}
+
+impl NotReady {
+    /// The one word a spawn's answer and log give for why its brief was not
+    /// typed; `None` for a request the engine could not take.
+    pub(crate) fn cause(&self) -> Option<&'static str> {
+        match self {
+            Self::Request(_) => None,
+            Self::Unread(_) => Some("unread"),
+            Self::Late(_) => Some("not_ready"),
+            Self::Asking(_) => Some("question"),
+            Self::Ended(_) => Some("agent_ended"),
+        }
+    }
+
+    pub(crate) fn detail(self) -> String {
+        match self {
+            Self::Request(detail)
+            | Self::Unread(detail)
+            | Self::Late(detail)
+            | Self::Asking(detail)
+            | Self::Ended(detail) => detail,
+        }
+    }
 }
 
 /// Waits until the engine reports the agent `name` in `pane` ready for input,
@@ -51,16 +82,25 @@ pub(crate) fn ready(
         let agent = match engine.delivery_agent(Wait::Each(Duration::from_secs(5)), pane) {
             Ok(agent) => agent,
             Err(EngineError::Request(message)) => return Err(NotReady::Request(message)),
+            // The engine lists an agent until it ends (`Topology::agent`).
+            Err(EngineError::Refused { code, message }) if code == "agent_not_found" => {
+                return Err(NotReady::Ended(message));
+            }
             Err(error) => return Err(NotReady::Unread(error.to_string())),
         };
         if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(NotReady::Late(format!(
-                "readiness {:?} after {wait:?}",
-                agent.readiness
-            )));
+            let detail = format!(
+                "readiness {:?}, status {} after {wait:?}",
+                agent.readiness, agent.status
+            );
+            return Err(if agent.status == "blocked" {
+                NotReady::Asking(detail)
+            } else {
+                NotReady::Late(detail)
+            });
         }
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -255,6 +295,37 @@ mod tests {
             deliver(uncertain.engine().as_ref(), &target, "letter"),
             Delivered::Lost("herdr_call_failed"),
         );
+    }
+
+    /// The wait tells why nothing was typed: an agent the engine no longer
+    /// lists ended, and one whose screen asks a question when the wait runs
+    /// out is asking, not merely late (with-hide/hide-private#717).
+    #[test]
+    fn an_ended_agent_and_one_that_asks_are_told_from_a_late_one() {
+        let ended = FakeEngine::start(|_, _| refused("agent_not_found", "agent worker not found"));
+        let answer = ready(ended.engine().as_ref(), "w1:p2", "worker", Duration::ZERO);
+        assert_eq!(answer.unwrap_err().cause(), Some("agent_ended"));
+
+        for (status, cause) in [("blocked", "question"), ("idle", "not_ready")] {
+            let fake = FakeEngine::start(move |_, _| {
+                reply(DeliveryAgent {
+                    pane_id: "w1:p2".into(),
+                    name: "worker".into(),
+                    kind: Some("codex".into()),
+                    session: None,
+                    status: status.into(),
+                    state_change_seq: 1,
+                    readiness: Readiness::Launching,
+                })
+            });
+            let answer = ready(fake.engine().as_ref(), "w1:p2", "worker", Duration::ZERO);
+            assert_eq!(answer.unwrap_err().cause(), Some(cause), "{status}");
+            assert!(
+                fake.methods()
+                    .iter()
+                    .all(|method| *method == "delivery_agent")
+            );
+        }
     }
 
     /// An agent that never takes input within the wait is `Late`, with

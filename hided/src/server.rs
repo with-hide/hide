@@ -1403,7 +1403,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "invalid_brief" => "The brief must be text of at most 16 KiB that is not blank",
         "brief_not_submitted" => {
-            "The agent started but did not take its brief within 30 seconds; look at its pane, then run the same command again with the same intent, which submits the brief without starting the agent again"
+            "The agent started but did not take its brief within 30 seconds, and nothing was typed; error.spawn.cause says why: question (its screen asks a question; answer it in its pane), not_ready, unread, or agent_ended. Then run the same command again with the same intent, which submits the brief, starting the agent once more only if it ended"
         }
         "mission_not_started" => {
             "The operator has not approved the mission's plan; show it to them and run hide mission start once they approve"

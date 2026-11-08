@@ -40,7 +40,7 @@ impl Runtime {
         ledger
             .spawns
             .iter()
-            .find(|spawn| spawn.briefed && spawn.child.as_deref() == Some(agent))
+            .find(|spawn| spawn.brief_phase().went_in() && spawn.child.as_deref() == Some(agent))
             .and_then(|spawn| spawn.brief.clone())
     }
 
