@@ -8,8 +8,8 @@
       "documents": true,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794152532284,
-      "made_unix_ms": 1794152416351,
+      "last_used_unix_ms": 1794162987083,
+      "made_unix_ms": 1794162870454,
       "view_layout": {
         "root": {
           "area": {
@@ -22,12 +22,12 @@
                 "kind": "file",
                 "committed": null,
                 "preview": false,
-                "last_focused_unix_ms": 1794152433247,
+                "last_focused_unix_ms": 1794162887828,
                 "opener": {
                   "device_id": "c0de0000000000000000000000000001",
                   "terminal_id": "h1:p1",
-                  "session": "9df386d050db94af4bbf6f020b6a80a2671980dee218bafca50de70c50c97d13",
-                  "resume": "600320ec-6bba-4a52-a472-f9831bebe5ce",
+                  "session": "723234bf95189937f10740823109495843a774b2cb15fcb033781a5e4424c6ac",
+                  "resume": "29ef368d-a8b2-414e-afea-500948945937",
                   "provider": "claude",
                   "name": "Claude"
                 },
@@ -35,14 +35,14 @@
                   {
                     "device_id": "c0de0000000000000000000000000001",
                     "terminal_id": "h1:p1",
-                    "session": "9df386d050db94af4bbf6f020b6a80a2671980dee218bafca50de70c50c97d13",
-                    "resume": "600320ec-6bba-4a52-a472-f9831bebe5ce",
+                    "session": "723234bf95189937f10740823109495843a774b2cb15fcb033781a5e4424c6ac",
+                    "resume": "29ef368d-a8b2-414e-afea-500948945937",
                     "provider": "claude",
                     "name": "Claude"
                   }
                 ],
                 "unseen": {
-                  "opened_unix_ms": 1794152433247
+                  "opened_unix_ms": 1794162887828
                 }
               }
             ]
@@ -63,7 +63,7 @@
               },
               {
                 "id": "h1:t2",
-                "focused": 1794152538298
+                "focused": 1794162993106
               }
             ]
           }
@@ -90,7 +90,7 @@
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794152531830,
+          "recorded_at": 1794162986633,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -108,8 +108,8 @@
               "pane_id": "h1:p2",
               "identity": {
                 "terminal_id": "h1:p2",
-                "shell_pid": 1857,
-                "shell_started": 107473
+                "shell_pid": 1847,
+                "shell_started": 109283
               }
             }
           }
@@ -125,7 +125,7 @@
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794152532138,
+          "recorded_at": 1794162986936,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -143,8 +143,8 @@
               "pane_id": "h1:p3",
               "identity": {
                 "terminal_id": "h1:p3",
-                "shell_pid": 2009,
-                "shell_started": 107503
+                "shell_pid": 1996,
+                "shell_started": 109313
               }
             }
           }
@@ -158,8 +158,8 @@
       "documents": true,
       "tool": null,
       "pinned": false,
-      "last_used_unix_ms": 1794152459654,
-      "made_unix_ms": 1794152420115,
+      "last_used_unix_ms": 1794162914230,
+      "made_unix_ms": 1794162873547,
       "view_layout": {
         "root": {
           "area": {
@@ -172,12 +172,12 @@
                 "kind": "file",
                 "committed": null,
                 "preview": false,
-                "last_focused_unix_ms": 1794152430857,
+                "last_focused_unix_ms": 1794162884239,
                 "opener": {
                   "device_id": "de510000000000000000000000000002",
                   "terminal_id": "h1:p2",
-                  "session": "3eabc47bbcac9d83acc32f73b6c2d8e13e7e4d508ccf7c0d723fa459a43dd5e4",
-                  "resume": "1b682dfe-0d47-4ea6-a71d-47ed365914c4",
+                  "session": "27d5b3ead7e4dda2c239ef19e6f015b1340f0c538169908def8de189907b728d",
+                  "resume": "5910e1b8-e8fa-40c0-9a54-dae1b3b65df4",
                   "provider": "claude",
                   "name": "Claude"
                 },
@@ -185,22 +185,22 @@
                   {
                     "device_id": "de510000000000000000000000000002",
                     "terminal_id": "h1:p1",
-                    "session": "3a89ee18ff9f7e45bdc0059ca1242aacf7cc15d128116f86a4cc0f9e4d2d2f1e",
-                    "resume": "3d78bef6-34cd-4e55-886d-545a6d19690e",
+                    "session": "cc5f4da4a53813fcb5e2016bcf206e5bcb5728f6a6be914cbbc41c4f806b7205",
+                    "resume": "754a494e-267a-4781-816e-6a7f09c859c2",
                     "provider": "claude",
                     "name": "Claude"
                   },
                   {
                     "device_id": "de510000000000000000000000000002",
                     "terminal_id": "h1:p2",
-                    "session": "3eabc47bbcac9d83acc32f73b6c2d8e13e7e4d508ccf7c0d723fa459a43dd5e4",
-                    "resume": "1b682dfe-0d47-4ea6-a71d-47ed365914c4",
+                    "session": "27d5b3ead7e4dda2c239ef19e6f015b1340f0c538169908def8de189907b728d",
+                    "resume": "5910e1b8-e8fa-40c0-9a54-dae1b3b65df4",
                     "provider": "claude",
                     "name": "Claude"
                   }
                 ],
                 "unseen": {
-                  "opened_unix_ms": 1794152432029
+                  "opened_unix_ms": 1794162885958
                 }
               }
             ]
@@ -217,11 +217,11 @@
             "displays": [
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t1",
-                "focused": 1794152437252
+                "focused": 1794162891827
               },
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t2",
-                "focused": 1794152437232
+                "focused": 1794162891807
               },
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t3",
@@ -229,7 +229,7 @@
               },
               {
                 "id": "remote:de510000000000000000000000000002:tab:h1:t4",
-                "focused": 1794152532018
+                "focused": 1794162986821
               }
             ]
           }
@@ -268,7 +268,7 @@
           "terminal_id": "h1:p3",
           "workspace_id": "h1",
           "phase": "completed",
-          "started_at": 1794152437223,
+          "started_at": 1794162891801,
           "message": null,
           "target_terminal": "h1:p2",
           "new_tab_slot": false,
@@ -288,7 +288,7 @@
           "state": "ready",
           "agent_kind": "claude",
           "agent_phase": "started",
-          "recorded_at": 1794152531988,
+          "recorded_at": 1794162986792,
           "seen_in_topology": true,
           "effect": {
             "workspace_id": "h1",
@@ -306,8 +306,8 @@
               "pane_id": "h1:p5",
               "identity": {
                 "terminal_id": "h1:p5",
-                "shell_pid": 2035,
-                "shell_started": 107488
+                "shell_pid": 2059,
+                "shell_started": 109299
               }
             }
           }
@@ -322,7 +322,7 @@
       "tool": null,
       "pinned": false,
       "last_used_unix_ms": 0,
-      "made_unix_ms": 1794152462019,
+      "made_unix_ms": 1794162916612,
       "view_layout": {
         "root": {
           "area": {
@@ -343,6 +343,96 @@
               {
                 "id": "remote:de510000000000000000000000000002:tab:h2:t2",
                 "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {}
+    },
+    {
+      "device_id": "c0de0000000000000000000000000001",
+      "path": "/home/me/hide",
+      "open": false,
+      "documents": false,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 0,
+      "made_unix_ms": 1794162993131,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": null,
+            "displays": []
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "h2:t2",
+            "displays": [
+              {
+                "id": "h2:t2",
+                "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {}
+    },
+    {
+      "device_id": "de510000000000000000000000000002",
+      "path": "/home/remote/hide",
+      "open": false,
+      "documents": false,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794162998224,
+      "made_unix_ms": 1794162998151,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": null,
+            "displays": []
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "remote:de510000000000000000000000000002:tab:h3:t2",
+            "displays": [
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h3:t2",
+                "focused": 1794162998224
               }
             ]
           }

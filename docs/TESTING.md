@@ -480,6 +480,7 @@ It copies each folder private to the account, as a core writes its files, becaus
 
 A change that stores a device or machine id, or changes how an agent's launch, sleep or archive record, the project settings or the kit's record are read, adds a step to the scenario that makes a release write it, and the release that ships the change adds the first folder that carries it; when released builds already write the field, the change regenerates their folders with the new step.
 A scenario step a release itself refuses is recorded as not done in `<tag>.json` beside the folder, with the release's answer.
+The step `a Home started on the core and the device` makes each release write the old Home registration (flagged `home`) on both machines, and the upgrade test holds that this build loads it as the registration it was, with one pending retirement per device that follows the device's renaming (PRD retire-hide-home).
 
 ### Agent screen rules
 

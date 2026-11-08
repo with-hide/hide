@@ -71,11 +71,11 @@
     "session_places": []
   },
   "selected_path": "/home/me/core-proj/README.md",
-  "selected_pane_id": "h1:p2",
+  "selected_pane_id": null,
   "shortcut_bindings": {},
   "shortcut_bindings_imported": false,
   "browser_shortcut_bindings": {},
-  "focused_device_id": "c0de0000000000000000000000000001",
+  "focused_device_id": "mini",
   "focused_checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
   "workspace_registrations": [
     {
@@ -93,6 +93,24 @@
       "path": "/home/remote/dev-proj",
       "device_id": "mini",
       "pinned": false
+    },
+    {
+      "primary_checkout_id": null,
+      "id": "workspace:3d884a4df35c7595",
+      "label": "Home",
+      "path": "/home/me/hide",
+      "device_id": "c0de0000000000000000000000000001",
+      "pinned": true,
+      "home": true
+    },
+    {
+      "primary_checkout_id": null,
+      "id": "remote:mini:project:f202aea872714ebdddfd5863218a9bdceede1e34db5d697572d1cf95880eced5",
+      "label": "Home",
+      "path": "/home/remote/hide",
+      "device_id": "mini",
+      "pinned": true,
+      "home": true
     }
   ],
   "device_registrations": [
@@ -104,7 +122,7 @@
         "contract": 4,
         "helper_root": "~/.hide/host-helper",
         "cli_dir": "~/.local/bin",
-        "granted_at_unix_ms": 1794152709020,
+        "granted_at_unix_ms": 1794163183045,
         "identity": {
           "user": "remote",
           "hostname": "device",
@@ -163,69 +181,79 @@
   "pane_read_records": {
     "h1:p1": {
       "state_change_seq": 1,
-      "session_id": "12610a5d-895e-4a87-ad94-e159b7b4d435",
+      "session_id": "b0281313-909a-45a4-a493-78373e2aee3a",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd5b9f0-24-1",
+      "server": "1a1bc758bed-24-1",
       "unread": false
     },
     "h1:p2": {
       "state_change_seq": 2,
-      "session_id": "29bc9d12-6d79-444a-ba0a-0803ffe8cc0d",
+      "session_id": "a6494045-40e8-4683-a590-256eefa94e10",
       "demand": "none",
       "activity": "stopped",
       "completed": false,
       "descendant_signals": [],
-      "server": "1a1bbd5b9f0-24-1",
+      "server": "1a1bc758bed-24-1",
       "unread": false
     },
     "remote:mini:pane:h1:p1": {
       "state_change_seq": 1,
-      "session_id": "4b5cbdfa-036e-438c-a713-9302963dc049",
+      "session_id": "b8c236a2-8b7d-4789-9e21-e27157803ef2",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd5bf0c-24-2",
+      "server": "1a1bc759109-24-2",
       "unread": false
     },
     "remote:mini:pane:h1:p2": {
       "state_change_seq": 2,
-      "session_id": "16d21c1c-bdc9-4871-9e09-54268f92fee4",
+      "session_id": "94a93d66-2273-4708-9cf4-a75df2d08eef",
       "demand": "none",
       "activity": "stopped",
       "completed": true,
       "descendant_signals": [],
-      "server": "1a1bbd5bf0c-24-2",
+      "server": "1a1bc759109-24-2",
       "unread": false
     },
     "remote:mini:pane:h1:p5": {
       "state_change_seq": 5,
-      "session_id": "8615404c-13e1-4026-8448-92b5c02816cd",
+      "session_id": "04cbb9b3-c7cf-4248-90cb-f456af0d008c",
       "demand": "none",
       "activity": "stopped",
       "completed": false,
       "descendant_signals": [],
-      "server": "1a1bbd60636-24-3",
+      "server": "1a1bc75d3fd-24-3",
+      "unread": false
+    },
+    "remote:mini:pane:h3:p2": {
+      "state_change_seq": 6,
+      "session_id": "b8eb004e-b49d-4f13-b3b2-ac2c71cb83f6",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": false,
+      "descendant_signals": [],
+      "server": "1a1bc75d3fd-24-3",
       "unread": false
     }
   },
   "pane_completions": {
     "h1:p1": {
-      "session": "670b7b7057de39592a12eb9e6a4589fb5b4fb51e4abbc4b4c53e3b03830d0ab5",
-      "server": "1a1bbd5b9f0-24-1",
+      "session": "3ae795dcc38cce7e80f22ce4a6e2fed6fd1a027e22d0c0461e44c38058ff57a3",
+      "server": "1a1bc758bed-24-1",
       "state_change_seq": 1
     },
     "remote:mini:pane:h1:p1": {
-      "session": "067f3e9ee08e5efb427112bb8a7019b9f909368a8e9df6fff76dc55ca4f161b0",
-      "server": "1a1bbd5bf0c-24-2",
+      "session": "9abe7fcb58d66dd79932e1754d606d011098e560c318e59affe61528f32afbd9",
+      "server": "1a1bc759109-24-2",
       "state_change_seq": 1
     },
     "remote:mini:pane:h1:p2": {
-      "session": "86ae0a16ffd86cd81927cfea73c35673567a79bd62d2664c76933b330e10566f",
-      "server": "1a1bbd5bf0c-24-2",
+      "session": "ad3b9b83f392429f0a3b27bbfc270f8c92ba30c80e8d3b379c200399b89e5d5a",
+      "server": "1a1bc759109-24-2",
       "state_change_seq": 2
     }
   },
@@ -236,7 +264,7 @@
       "choice": {
         "model": "sonnet"
       },
-      "session": "29bc9d12-6d79-444a-ba0a-0803ffe8cc0d"
+      "session": "a6494045-40e8-4683-a590-256eefa94e10"
     },
     "remote:mini:pane:h1:p5": {
       "kind": "claude",
@@ -244,37 +272,45 @@
       "choice": {
         "model": "sonnet"
       },
-      "session": "8615404c-13e1-4026-8448-92b5c02816cd"
+      "session": "04cbb9b3-c7cf-4248-90cb-f456af0d008c"
     }
   },
   "request_verbs": {
     "h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794152847173
+      "since_unix_ms": 1794163325208
     },
     "h1:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152834314
+      "since_unix_ms": 1794163306765
+    },
+    "h2:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794163313193
     },
     "remote:mini:pane:h1:p1": {
       "verb": "idle",
-      "since_unix_ms": 1794152833005
+      "since_unix_ms": 1794163305447
     },
     "remote:mini:pane:h1:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152721841
+      "since_unix_ms": 1794163195791
     },
     "remote:mini:pane:h1:p4": {
       "verb": "idle",
-      "since_unix_ms": 1794152794821
+      "since_unix_ms": 1794163267448
     },
     "remote:mini:pane:h1:p5": {
       "verb": "idle",
-      "since_unix_ms": 1794152834483
+      "since_unix_ms": 1794163306921
     },
     "remote:mini:pane:h2:p2": {
       "verb": "idle",
-      "since_unix_ms": 1794152752936
+      "since_unix_ms": 1794163225812
+    },
+    "remote:mini:pane:h3:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794163318232
     }
   },
   "pane_terminal_sizes": {},
@@ -296,14 +332,12 @@
   },
   "agent_start": {
     "kind": "claude",
-    "models": {
-      "claude": "sonnet"
-    }
+    "models": {}
   },
   "agent_sleep": {
     "stamps": {
       "h1:p1": {
-        "changed_at_unix_ms": 1794152749688,
+        "changed_at_unix_ms": 1794163222603,
         "seen_at_unix_ms": 0,
         "state": {
           "demand": "none",
@@ -312,8 +346,17 @@
         }
       },
       "h1:p2": {
-        "changed_at_unix_ms": 1794152834330,
-        "seen_at_unix_ms": 1794152840697,
+        "changed_at_unix_ms": 1794163306782,
+        "seen_at_unix_ms": 1794163313112,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
+        }
+      },
+      "h2:p2": {
+        "changed_at_unix_ms": 1794163313212,
+        "seen_at_unix_ms": 0,
         "state": {
           "demand": "none",
           "activity": "stopped",
@@ -325,10 +368,10 @@
     "dormant": {}
   },
   "session_archive": {
-    "archive-18e61c80b54c2acf-1": {
+    "archive-18e62607023a1bd1-1": {
       "phase": "archived",
       "revision": 2,
-      "archived_at_unix_ms": 1794152840676,
+      "archived_at_unix_ms": 1794163313097,
       "project_root": "/home/me/core-proj",
       "project_label": "Core project",
       "members": [
@@ -336,10 +379,10 @@
           "machine": "c0de0000000000000000000000000001",
           "pane_id": "h1:p3",
           "kind": "claude",
-          "native_session_id": "ea6dc887-d451-476b-813c-12cc4f34a9f0",
+          "native_session_id": "9f7e9081-29b3-4d1c-a8d5-7213d42b6151",
           "source_reference": {
             "kind": "id",
-            "value": "ea6dc887-d451-476b-813c-12cc4f34a9f0"
+            "value": "9f7e9081-29b3-4d1c-a8d5-7213d42b6151"
           },
           "cwd": "/home/me/core-proj",
           "checkout_path": "/home/me/core-proj",

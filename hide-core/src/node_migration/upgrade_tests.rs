@@ -366,13 +366,9 @@ fn released_facts(
             .into_iter()
             .flatten()
             .filter(|row| row["home"] == true)
-            .map(|row| {
-                format!(
-                    "{}|{}",
-                    row["id"].as_str().unwrap_or_default(),
-                    row["label"].as_str().unwrap_or_default()
-                )
-            })
+            // By its name: a device's registration id is renamed with the
+            // device, and the loaded retirement must follow it.
+            .map(|row| row["label"].as_str().unwrap_or_default().to_owned())
             .collect(),
     );
     facts.insert(
@@ -488,7 +484,7 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
                 ui.workspace_registrations
                     .iter()
                     .find(|registration| registration.id == retirement.registration_id)
-                    .map(|registration| format!("{}|{}", registration.id, registration.label))
+                    .map(|registration| registration.label.clone())
             })
             .collect(),
     );
