@@ -13,6 +13,7 @@ import { PlanChecklist } from "../components/plan-checklist";
 import { PrMark } from "../components/pr-mark";
 import { MilestoneMark, SessionRow, SessionRowBody } from "../components/session-row";
 import { LookButton, StatusMark } from "../components/status-mark";
+import { HumanTurnDone, HumanTurnLine } from "../components/human-turn";
 import { RowButton } from "../components/ui/row-button";
 import { UpdateReadyCardBody } from "../components/update-ready";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -36,6 +37,8 @@ function missions(): Mission[] {
 }
 
 const conductor = (state: (typeof MISSION_STATES)[number]) => ({ session: { device_id: "local", session_id: `conductor-${state}` } });
+/** A person's turn on this machine (PRD ask-human). */
+const HUMAN_TURN = { id: "gallery.1", kind: "auth", place: "github.com/login" } as const;
 const time = (text: string) => <span className="font-mono text-caption text-muted-foreground">{text}</span>;
 const marks = (mark: Parameters<typeof StatusMark>[0]["mark"], kind = "claude") => <><StatusMark mark={mark} /><AgentMark kind={kind} /></>;
 
@@ -94,6 +97,12 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
         </Part>
         <Part name="To look at · LookButton">
           <State name="Pane header"><span className="flex min-w-0 items-center gap-sm text-caption"><LookButton label="볼 것 · boundary-final.html" onLook={open} /><AgentMark kind="claude" /><span className="truncate">미션 상태 단순화 경계 목업</span></span></State>
+        </Part>
+        <Part name="A person's turn · StatusMark human, HumanTurnLine, HumanTurnDone">
+          <State name="Marks: key, read key, plain turn"><span className="flex items-center gap-sm"><StatusMark mark="turn" human label="사람 차례 · 인증 · github.com/login" /><StatusMark mark="turn" human read /><StatusMark mark="turn" /></span></State>
+          <State name="Needs You row"><ol><SessionRow mark={<><StatusMark mark="turn" human /><AgentMark kind="claude" /></>} title="배포 스크립트 정리" right={time("4m")} /></ol><div className="flex flex-col gap-xxs pl-(--size-agent-mark)"><HumanTurnLine turn={HUMAN_TURN} /><HumanTurnDone turn={HUMAN_TURN} actions={{ finishHumanTurn: open }} /></div></State>
+          <State name="Long place, permission"><div className="flex flex-col gap-xxs"><HumanTurnLine turn={{ ...HUMAN_TURN, id: "long", kind: "permission", place: "System Settings > Privacy & Security > Screen & System Audio Recording > Terminal" }} /><HumanTurnDone turn={{ ...HUMAN_TURN, id: "long" }} actions={{ finishHumanTurn: open }} /></div></State>
+          <State name="Device not connected"><HumanTurnDone turn={{ ...HUMAN_TURN, id: "away", device_id: "mini" }} actions={{ finishHumanTurn: open }} /></State>
         </Part>
         <Part name="Ready update · UpdateReadyCardBody">
           <State name="Card beside the ↑ button"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>
