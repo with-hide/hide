@@ -115,6 +115,20 @@ const DRAWINGS: Record<PracticePreviewKind, () => ReactElement> = {
       </div>
     </>
   ),
+  // The device rail's second tile picked, and the sidebar and screen answering with that computer's own.
+  devices: () => (
+    <>
+      <div className="pv-rail"><i className="pv-tile" /><i className="pv-tile" /><i className="pv-pick" /></div>
+      <div className="pv-side pv-railed">
+        <div className="pv-set one"><Row width={80} mark="work" /><Row width={60} mark="work" /></div>
+        <div className="pv-set two"><Row width={70} mark="ask" /><Row width={84} mark="work" /><Row width={56} mark="work" /></div>
+      </div>
+      <div className="pv-main pv-railed">
+        <i className="pv-band" />
+        <div className="pv-pane pv-full pv-below"><Line width={55} /><Line width={35} /></div>
+      </div>
+    </>
+  ),
   // A plan's steps ticked one by one.
   checklist: () => (
     <>
@@ -218,6 +232,20 @@ export const PREVIEW_CSS = `
 .pv-bars{display:flex;align-items:flex-end;gap:var(--spacing-xxs);height:45%;margin-top:var(--spacing-sm)}
 .pv-bars i{flex:1;border-radius:var(--radius-xs) var(--radius-xs) 0 0;background:var(--practice-accent-strong);transform-origin:bottom;animation-name:pv-bar}
 @keyframes pv-bar{0%,28%{transform:scaleY(0)}40%,86%{transform:scaleY(1)}96%,100%{transform:scaleY(0)}}
+
+.pv-rail{position:absolute;inset:0 auto 0 0;width:10%;padding:var(--spacing-sm) var(--spacing-xxs);border-right:var(--size-hairline) solid var(--border);background:var(--sidebar)}
+.pv-tile{width:100%;aspect-ratio:1;border-radius:var(--radius-xs);background:color-mix(in srgb,var(--foreground) 14%,transparent);margin-bottom:var(--spacing-xs)}
+.pv-pick{position:absolute;left:var(--spacing-xxs);right:var(--spacing-xxs);top:var(--spacing-sm);aspect-ratio:1;border-radius:var(--radius-xs);box-shadow:0 0 0 var(--size-hairline) var(--practice-accent),0 0 0 var(--spacing-xxs) color-mix(in srgb,var(--practice-accent) 35%,transparent);animation-name:pv-pick}
+@keyframes pv-pick{0%,30%{transform:none}42%,90%{transform:translateY(calc(100% + var(--spacing-xs)))}100%{transform:none}}
+.pv-side.pv-railed{left:10%;width:24%}
+.pv-main.pv-railed{left:34%}
+.pv-set{position:absolute;inset:var(--spacing-sm) var(--spacing-xs) 0}
+.pv-set.one{animation-name:pv-from}
+.pv-set.two{opacity:0;animation-name:pv-to}
+@keyframes pv-from{0%,32%{opacity:1}44%,90%{opacity:0}100%{opacity:1}}
+@keyframes pv-to{0%,32%{opacity:0}44%,90%{opacity:1}100%{opacity:0}}
+.pv-band{position:absolute;inset:0 0 auto 0;height:var(--spacing-xs);background:var(--practice-zone-view);opacity:0;animation-name:pv-to}
+.pv-below{top:calc(var(--spacing-xs) * 2)}
 
 .pv-list{padding:var(--spacing-sm)}
 .pv-item{display:flex;align-items:center;gap:var(--spacing-xs);margin-bottom:var(--spacing-sm)}

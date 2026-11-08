@@ -58,7 +58,7 @@ export type PracticeStep<M = unknown> = {
 };
 
 /** The move a chapter's card plays on the practice list (`PracticePreview.tsx`). */
-export type PracticePreviewKind = "mission" | "zones" | "split" | "switch" | "rows" | "children" | "search" | "lane" | "checklist";
+export type PracticePreviewKind = "mission" | "zones" | "split" | "switch" | "rows" | "children" | "search" | "lane" | "checklist" | "devices";
 
 export type PracticeChapter<M = unknown> = {
   /** The catalog prefix (`practice.<id>.title`, `practice.<id>.<step>.title`) and the chapter's file name. */
