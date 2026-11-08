@@ -56,7 +56,7 @@ export function projectCounts(tasks: TaskList, prs: PrListModel): Map<string, Pr
 
 function deviceCounts(rest: SnapshotRest | null, localAgents: AgentRow[], deviceId: string): Map<string, ProjectCount> {
   const byPane = agentsByPane(allAgents(localAgents, rest?.status?.remote));
-  const tasks = taskList(deviceScope(rest, deviceId)?.tasks, byPane, catalogWorkspaces(rest), "status", [], deviceMissionAsks(rest, deviceId));
+  const tasks = taskList(deviceScope(rest, deviceId)?.tasks, deviceId, byPane, catalogWorkspaces(rest), "status", [], deviceMissionAsks(rest, deviceId));
   return projectCounts(tasks, prListModel(boardProjects(rest, localAgents, deviceId), null, Date.now()));
 }
 

@@ -267,12 +267,13 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
   expect(container.querySelector('[data-mission-ask] [data-kind-icon="mission"]')).not.toBeNull();
   if (view === "status") {
     expect(heads(container)).toEqual(["내 차례2", "작업 중1"]);
-    // The mission row stands first in 내 차례, and the arrow keys reach it as a row.
+    // The ask has waited longer than the mission's node, so it stands first, and the arrow keys reach the mission as a row.
     const needsYou = container.querySelector('[data-task-group="needs_you"]')!;
-    expect(needsYou.querySelector("li")?.hasAttribute("data-mission-ask")).toBe(true);
+    expect(needsYouOrder(container)).toEqual(["ask", "mission:mission-1"]);
     const head = needsYou.querySelector<HTMLElement>('[data-task-focus="group"]')!;
     head.focus();
     await act(async () => head.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
     expect(document.activeElement?.getAttribute("data-mission-ask-open")).toBe("mission-1");
   } else {
     // The mission's project asks, so it stands with the other asking project, under its own 내 차례 band.
@@ -283,6 +284,21 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
   await act(async () => mission.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
   await act(async () => mission.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
   expect(sent.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toMatchObject([{ mission: "mission-1", action: "done" }]);
+});
+
+/** 내 차례's rows top to bottom in 상태별, a task by its root pane and a mission as `mission:<id>`. */
+const needsYouOrder = (container: HTMLElement) => [...container.querySelectorAll('[data-task-group="needs_you"] [data-task-row], [data-task-group="needs_you"] li[data-mission-ask]')]
+  .map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
+
+it.each(["status", "project"] as const)("in %s stands a mission among the unread asks by how long it has waited, and above every read ask (operator decision 2026-11-08)", async (view) => {
+  const now = Date.UTC(2026, 10, 1);
+  // The fixture's mission node has waited six minutes; the core lists the unread asks oldest first, then the read one.
+  const since = (row: AgentRow, at: number): AgentRow => ({ ...row, state: { ...row.state, request_since: at } });
+  const agents = [since(row("older", {}, { group: "needs_you" }), now - 10 * 60_000), since(row("newer", {}, { group: "needs_you" }), now - 60_000), row("seen", {}, { group: "needs_you" })];
+  const cards = [card("older", "needs_you", "hide-main"), card("newer", "needs_you", "hide-main"), { ...card("seen", "needs_you", "hide-main"), read: true as const }];
+  const { container } = await render(withMissionAsk(snapshot(agents, cards, view), "local", now), agents);
+  const order = [...container.querySelectorAll("[data-task-row], li[data-mission-ask]")].map((element) => element.getAttribute("data-task-row") ?? `mission:${element.getAttribute("data-mission-ask")}`);
+  expect(order).toEqual(["older", "mission:mission-1", "newer", "seen"]);
 });
 
 it("in 프로젝트별 puts a project whose only turn is a block first, as a block is the operator's turn (status-marks B32)", async () => {
