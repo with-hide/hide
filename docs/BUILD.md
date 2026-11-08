@@ -81,6 +81,12 @@ hakari cannot unify a member's own features, so no member has a feature only a t
 The git call log is now a recorder the core's tests turn on at run time (`hide_host::worktrees::record_git_calls`), which records nothing in a running daemon, and `RemoteHost::detached` is always compiled.
 `test_debug_build_size.py` refuses a dev-dependency that sets a member's features.
 
+### The url crate's Unicode back end
+
+`hide-core` reads a person's turn place with the `url` crate, whose `idna` dependency picks its Unicode back end by the version of `idna_adapter` that `Cargo.lock` holds.
+The lock holds `idna_adapter` 1.1.0, the unicode-rs back end, which adds a handful of crates; the newest 1.x, which any `cargo update` touching `url` or `idna` would pick, is ICU4X and adds about twenty-five.
+Keep it with `cargo update -p idna_adapter --precise 1.1.0` after such an update; hakari leaves lock versions alone, so nothing else restores it.
+
 ### One integration test binary per crate
 
 Cargo builds every `tests/*.rs` file as a binary of its own, and each one links the crate and all its dependencies: there were 56, and each of hided's thirteen took up to 177 MB.

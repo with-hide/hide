@@ -485,3 +485,18 @@ fn an_own_question_answered_while_a_persons_turn_stood_does_not_come_back_after_
     );
     assert_ne!(after.demand, "question");
 }
+
+/// A ledger the core cannot read settles nothing and keeps the turn laid as
+/// it was, never reading as no declaration.
+#[test]
+fn done_while_the_ledger_cannot_be_read_settles_nothing_and_keeps_the_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _worker, sender, id) = with_store(root.path());
+    let mut guard = runtime.lock().unwrap();
+    assert!(guard.human_turns_laid.contains_key(&sender.pane_id));
+    guard.invalidate_delivery();
+    guard.human_turn_done(&id);
+    guard.human_turn_spoke(&sender.pane_id);
+    assert!(!guard.settling(&id), "no settle started");
+    assert!(guard.human_turns_laid.contains_key(&sender.pane_id));
+}

@@ -181,7 +181,7 @@ impl Runtime {
     }
 
     /// Whether declaration `id` already has a settle under way.
-    fn settling(&self, id: &str) -> bool {
+    pub(super) fn settling(&self, id: &str) -> bool {
         self.human_turns_settling
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

@@ -571,6 +571,27 @@ mod tests {
         vec![root, middle, raised]
     }
 
+    /// Lays `subject`, a person's turn, on `row` as the core does: in its
+    /// own field, the row's own ask left as it is.
+    fn declare(row: &mut SidebarAgentSnapshot, subject: crate::model::AskSubject, since: u64) {
+        let crate::model::AskSubject::HumanTurn {
+            id,
+            kind,
+            place,
+            device,
+        } = subject
+        else {
+            panic!("a person's turn");
+        };
+        row.declared_human_turn = Some(crate::model::DeclaredHumanTurn {
+            id,
+            kind,
+            place,
+            device,
+            since_unix_ms: since,
+        });
+    }
+
     fn human_turn(id: &str) -> crate::model::AskSubject {
         crate::model::AskSubject::HumanTurn {
             id: id.into(),
@@ -586,8 +607,7 @@ mod tests {
     #[test]
     fn a_childs_persons_turn_rises_while_it_works_or_is_blocked() {
         let mut row = child();
-        row.ask_subject = Some(human_turn("agent-3.1"));
-        row.laid_since_unix_ms = Some(42);
+        declare(&mut row, human_turn("agent-3.1"), 42);
         for (activity, blocked) in [("working", false), ("stopped", true), ("stopped", false)] {
             row.activity = activity.into();
             row.blocked = blocked;
@@ -616,13 +636,11 @@ mod tests {
         declared.identity_label = "Login check".into();
         declared.blocked = false;
         declared.activity = "working".into();
-        declared.ask_subject = Some(human_turn("agent-4.10"));
-        declared.laid_since_unix_ms = Some(10);
+        declare(&mut declared, human_turn("agent-4.10"), 10);
         declared.escalation = of(&declared, None, &BTreeMap::new());
         let mut later = declared.clone();
         later.pane_id = "later".into();
-        later.ask_subject = Some(human_turn("agent-5.20"));
-        later.laid_since_unix_ms = Some(20);
+        declare(&mut later, human_turn("agent-5.20"), 20);
         later.escalation = of(&later, None, &BTreeMap::new());
         rows.extend([declared, later]);
         lift(&mut rows, |_| None);
@@ -708,8 +726,7 @@ mod tests {
                 row.pane_id = (*pane).into();
                 row.lineage_parent_pane_id = Some("root".into());
                 row.activity = "working".into();
-                row.ask_subject = Some(subject.clone());
-                row.laid_since_unix_ms = Some(*at);
+                declare(&mut row, subject.clone(), *at);
                 row.escalation = of(&row, None, &BTreeMap::new());
                 rows.push(row);
             }

@@ -67,6 +67,7 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
     let place = raw
         .split_whitespace()
         .map(|word| url_word(word).unwrap_or_else(|| word.to_owned()))
+        .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
     if place.is_empty() {
@@ -80,20 +81,25 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
 
 /// A word as its URL is kept, or None to keep the word as written. A word
 /// with no scheme is read as `https://<word>` only when that names a dotted
-/// host or an address (`github.com/login?…`), and is kept as written when
-/// it carries nothing to remove.
+/// host or an address followed by a path, query or fragment
+/// (`github.com/login?…`), so an email address or a bare host stays as
+/// written, and any word is kept as written when it carries nothing to
+/// remove.
 fn url_word(word: &str) -> Option<String> {
-    let (mut url, given) = match url::Url::parse(word) {
-        Ok(url) => (url, true),
-        Err(_) => {
-            let url = url::Url::parse(&format!("https://{word}")).ok()?;
-            match url.host()? {
-                url::Host::Domain(domain) if domain.contains('.') => {}
-                url::Host::Ipv4(_) | url::Host::Ipv6(_) => {}
-                url::Host::Domain(_) => return None,
-            }
-            (url, false)
-        }
+    // A word read with no host (`user:pass@host.com/x` as the scheme `user`)
+    // is read as a bare host first, which finds its user and password.
+    let direct = match url::Url::parse(word) {
+        // A URL with no host keeps nothing a person could go to.
+        Err(url::ParseError::EmptyHost) => return Some(String::new()),
+        parsed => parsed.ok(),
+    };
+    let (mut url, given) = match direct {
+        Some(url) if url.has_host() => (url, true),
+        direct => match (bare_url(word), direct) {
+            (Some(url), _) => (url, false),
+            (None, Some(url)) => (url, true),
+            (None, None) => return None,
+        },
     };
     let http = matches!(url.scheme(), "http" | "https");
     let secret = !url.username().is_empty()
@@ -115,6 +121,20 @@ fn url_word(word: &str) -> Option<String> {
         kept
     };
     Some(kept.trim_end_matches('/').to_owned())
+}
+
+/// `word` read as `https://<word>`, when that names a dotted host or an
+/// address followed by a path, query or fragment.
+fn bare_url(word: &str) -> Option<url::Url> {
+    let url = url::Url::parse(&format!("https://{word}")).ok()?;
+    if url.path() == "/" && url.query().is_none() && url.fragment().is_none() {
+        return None;
+    }
+    match url.host()? {
+        url::Host::Domain(domain) if domain.contains('.') => Some(url),
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => Some(url),
+        url::Host::Domain(_) => None,
+    }
 }
 
 /// What a declaration did (B1, B5, B6).
@@ -363,9 +383,14 @@ mod tests {
             ("my_host.internal:9000/cb?t=1", "my_host.internal:9000/cb"),
             ("url=github.com/login?t=1", "url=github.com/login"),
             ("at:localhost:3000/cb?t=1#f", "at:localhost:3000/cb"),
+            ("me@example.com/x?t=1", "example.com/x"),
+            ("user:pass@host.example/x", "host.example/x"),
+            ("mailto:me@example.com", "mailto:me@example.com"),
             // Words that are no URL are kept as written.
             ("Privacy & Security > Camera", "Privacy & Security > Camera"),
             ("src/lib.rs#L10 README.md", "src/lib.rs#L10 README.md"),
+            ("Sign in as me@example.com", "Sign in as me@example.com"),
+            ("example.com:8443", "example.com:8443"),
         ] {
             assert_eq!(place_of(raw).unwrap(), kept, "{raw}");
         }
