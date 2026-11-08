@@ -25,7 +25,7 @@ import { cn } from "./lib/utils";
 import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
-import { SidebarMissionRow, useMissionAsks } from "./components/sidebar-mission-row";
+import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
 import { TreeRails } from "./components/agent-tree";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
@@ -34,7 +34,7 @@ import { tabSurface } from "./recent";
 import { SleepingSessionRow } from "./components/sleeping-session-row";
 import { StatusBadge } from "./components/status-badge";
 import { Usage } from "./components/usage";
-import { agentGroupTitle, agentPlaces, allAgents, type ListedAgent } from "./navigation";
+import { agentGroupTitle, agentPlaces, allAgents, elsewhereNeedsYou, type ListedAgent } from "./navigation";
 import { allAgents as everyPaneAgent } from "./paneAgents";
 import {
   activeCheckouts,
@@ -442,10 +442,13 @@ function ProjectList({ actions }: { actions: Actions }) {
   const catalogText = useShellStore((s) => catalogLineOf(s.rest, t)?.text ?? null);
   const catalogLine = catalogState && catalogText ? { state: catalogState, text: catalogText } : null;
   const raisedOpen = useUiStore((s) => s.raisedOpen);
-  const asks = useMissionAsks(frontId);
+  // Needs You lists every device's rows, the front device's first; the rest of the list is the front device's.
+  const asks = useEveryDeviceMissionAsks(frontId);
+  // It reads the devices and their connections alone, so it is read again only when those move.
+  const elsewhere = useMemo(() => elsewhereNeedsYou(useShellStore.getState().rest, localAgents, frontId), [devices, remoteStatuses, localAgents, frontId]);
   const rows = useMemo(
-    () => projectRows(workspaces, { inactive_projects: inactiveFold, no_agent_projects: noAgentsFold }, listedAgents, frontScope, raisedOpen, asks),
-    [workspaces, inactiveFold, noAgentsFold, listedAgents, frontScope, raisedOpen, asks],
+    () => projectRows(workspaces, { inactive_projects: inactiveFold, no_agent_projects: noAgentsFold }, listedAgents, frontScope, raisedOpen, asks, elsewhere),
+    [workspaces, inactiveFold, noAgentsFold, listedAgents, frontScope, raisedOpen, asks, elsewhere],
   );
   // The device's Needs You and Done come first, then the projects in their sections; Working and Seen are the Agents tab's.
   const raised = useMemo(() => rows.filter((row) => row.kind === "raised"), [rows]);
@@ -708,12 +711,12 @@ function RaisedSection({ row, context }: { row: Extract<ProjectRow, { kind: "rai
   );
 }
 
-function RaisedAgentRow({ listed: { agent, device }, context }: { listed: ListedAgent; context: ListContext }) {
+function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: ListedAgent; context: ListContext }) {
   return (
     <SidebarAgentRow
       agent={agent}
-      // The device in front is the whole list, so no row names it (PRD home-device-rail B2).
-      device={null}
+      // The device in front is the whole list, so no row of its own names it (PRD home-device-rail B2); another device's Needs You row does.
+      device={chip ?? null}
       place={context.placeOf(device, agent.pane_id)}
       depth={0}
       ask={agent.state.needs_you}

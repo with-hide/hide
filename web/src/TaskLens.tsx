@@ -15,7 +15,8 @@ import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark } from "./components/pr-mark";
 import { MissionChip } from "./components/mission-chip";
-import { SidebarMissionRow, useMissionAsks } from "./components/sidebar-mission-row";
+import { SidebarMissionRow, useEveryDeviceMissionAsks, useMissionAsks } from "./components/sidebar-mission-row";
+import { DeviceChip } from "./components/device-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
@@ -43,7 +44,7 @@ import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
 import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, RAISED_TASK_GROUPS, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, elsewhereTasks, RAISED_TASK_GROUPS, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import type { TaskState } from "./agentScope";
 
@@ -105,8 +106,12 @@ export function TaskLens({ actions }: { actions: Actions }) {
     return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.workspace_id) : rows;
   }, [rest, deviceId, filter]);
   // A mission that is its own Needs You item stands in 내 차례 as it does in the 프로젝트 list, counted with the tasks.
-  const asks = useMissionAsks(deviceId, filter?.workspace_id ?? null);
-  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived, asks), [scope?.tasks, byPane, projects, view, archived, asks]);
+  // 내 차례 lists every connected device's tasks and missions, each other device's named on its row, unless a project narrows the list.
+  const ownAsks = useMissionAsks(deviceId, filter?.workspace_id ?? null);
+  const everyAsk = useEveryDeviceMissionAsks(deviceId);
+  const asks = filter ? ownAsks : everyAsk;
+  const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
+  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, byPane, projects, view, archived, asks, elsewhere]);
   const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
@@ -424,7 +429,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : read ? t("agents.mark.turn") : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
-  const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
+  const name = [agent.identity_label, entry.device, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
@@ -443,6 +448,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
+          {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
           <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
