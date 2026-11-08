@@ -141,6 +141,8 @@ export type AgentRow = {
   identity_label?: string | null;
   /** The pane of the agent's responsibility parent, when it is a delegated child. */
   lineage_parent_pane_id?: string | null;
+  /** On a lineage root: the asks its raised descendants make, lead first; `what` is the line the row's second line says. */
+  raised?: { raised_pane_id: string; what: string | null }[];
 };
 
 /** The agent row the snapshot lists for `pane`, once an agent runs there. */
@@ -233,7 +235,28 @@ export async function splitPane(control: HidedControl, tab: string, cwd: string,
     return current && panes.includes(current) ? panes : undefined;
   }, `the core's current pane in ${tab}`);
   control.send("create_pane", { tab_id: tab, cwd, command, direction, request_id: `e2e-${crypto.randomUUID()}` });
-  return control.until((rest) => tabPanes(rest, tab).find((pane) => !before.includes(pane)), `a new pane in ${tab}`, 30_000);
+  const created = await control.until((rest) => tabPanes(rest, tab).find((pane) => !before.includes(pane)), `a new pane in ${tab}`, 30_000);
+  // The new pane is drawn before the engine confirms the split, and a close sent in
+  // between meets a tab the core still holds as one pane: it starts at once, beside the
+  // split, instead of waiting behind it, and the engine never answers it
+  // (with-hide/hide-private#537, "timed out waiting for the close of w1:p3"). A fixture
+  // hands the pane on only once its tab's line is empty.
+  await control.until((rest) => tabGeometrySettled(rest, tab) || undefined, `the engine's confirmation of the split in ${tab}`, 30_000);
+  return created;
+}
+
+/**
+ * The phases of an operation on a tab's geometry line that the engine has not yet settled.
+ * This pairs with `geometry_tab_busy` and `geometry_in_flight` in `hide-core/src/runtime/operations.rs`
+ * (queued; transmitting, awaiting_topology), whose phase names are the wire's `phase`; a phase added or
+ * renamed there is added or renamed here, or `splitPane` stops waiting for it.
+ */
+const GEOMETRY_PENDING = new Set(["queued", "preparing", "transmitting", "awaiting_topology"]);
+
+/** Whether the core's geometry line of `tab` is empty: each split, close or move asked of it is confirmed, refused or given up. */
+export function tabGeometrySettled(rest: Rest, tab: string): boolean {
+  const operations = (rest.status as { async_operations?: { scope_id: string; phase: string }[] } | undefined)?.async_operations ?? [];
+  return !operations.some((operation) => operation.scope_id === tab && GEOMETRY_PENDING.has(operation.phase));
 }
 
 /** Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it. */

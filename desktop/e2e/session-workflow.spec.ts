@@ -4,12 +4,14 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { setAgentState } from "../../web/e2e/fixture-agents";
-import { showTabOf, withControl } from "../../web/e2e/daemon-actions";
+import { agentIn, showTabOf, withControl } from "../../web/e2e/daemon-actions";
+import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { startWork } from "../../web/e2e/session-work-fixture";
 import { enterWorkspace, showTasks } from "../../web/e2e/wire";
 import { fitWindow, launchShell, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
+import { finishNative } from "./native-teardown";
 
 test("the 태스크 list and raised-child pane bands preserve native terminal geometry in both themes", async () => {
   // The child is the parent's delegated child, spawned by the parent agent itself (family).
@@ -24,6 +26,16 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       { task: "자식의 긴 한국어 검증 요청과 회귀 결과 확인", progress: "검증 명령 실행 권한이 필요합니다" });
     const parent = started.pane, child = started.child!.pane, parentSession = started.session;
     await setAgentState(daemon, child, "blocked");
+    // The parent's row says what its blocked child asks in the child's label line, which the core
+    // lays on the parent's raised ask once the label proves the child's session. The page draws
+    // only what the snapshot carries, so wait for the snapshot, not for the page's own timeout:
+    // a row drawn before the label reached the ask reads the verb's fallback, "Stopped at a
+    // permission request" (with-hide/hide-private#515).
+    await dumpOnFailure("the parent's and the child's agent rows",
+      () => withControl(daemon, (control) => control.until((rest) => ({ parent: agentIn(rest, parent), child: agentIn(rest, child) }), "the two agent rows", 2_000)),
+      () => withControl(daemon, (control) => control.until(
+        (rest) => agentIn(rest, parent)?.raised?.find((ask) => ask.raised_pane_id === child)?.what || undefined,
+        `${parent}'s raised ask from ${child} carrying the child's label line`, 30_000)));
     // Drawing the child's prompt types into its pane. Inspect the parent's
     // header with the parent's tab selected, as the scenario requires.
     await withControl(daemon, (control) => showTabOf(control, parent));
@@ -92,9 +104,5 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(page.locator(`nav[data-sidebar] [data-pane="${child}"]`)).toHaveCount(0);
     await captureNativeWindow(app, "session-working-restored", { ...facts, terminal });
   } catch (error) { failures.push(error); }
-  finally {
-    try { await app?.close(); } catch (error) { failures.push(error); }
-    try { stack.stop(); } catch (error) { failures.push(error); }
-  }
-  if (failures.length) throw new AggregateError(failures, "native task list fixture or teardown failed");
+  await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
 });
