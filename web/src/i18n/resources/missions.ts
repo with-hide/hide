@@ -908,7 +908,7 @@ const zh: Catalog<typeof missionsEnglish> = {
   "mission.operator.done": "标记完成",
   "mission.operator.drop": "移除此步骤",
   "mission.operator.attach": "关联到节点",
-  "mission.operator.leave": "交给指挥代理",
+  "mission.operator.leave": "交给指挥智能体",
   "mission.operator.dropConfirm": "确认移除",
   "mission.operator.closeDone": "按完成关闭",
   "mission.operator.closeDoneConfirm": "确认关闭",
