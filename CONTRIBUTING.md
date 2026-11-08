@@ -302,7 +302,7 @@ It starts only private daemons, pane holders and a loopback SSH account, with no
 
 A Linux job gets the packages it needs from the Ubuntu archive (the shells, the virtual display, `rpm`, `openssh-server`) from `.github/actions/apt-install`, never from a bare `apt-get install` step: a slow Ubuntu mirror once held 5 MB of zsh for minutes and the job's timeout killed it.
 The two installs that stay bare are tests of an install and not setup: `package.yml` installs the `.deb` it just built, and `relay-deploy-check.yml` installs from a third-party repository it adds.
-The action caches the `.deb` files under the runner image's version, so a usual run does not reach the mirror.
+The action caches the `.deb` files under a key of the runner's architecture, the image OS, the image version and the package list, so a usual run does not reach the mirror.
 On a miss, `scripts/ci-apt-install.sh` fetches with `--download-only` inside one budget (`minutes`), refreshes the lists between tries, installs once offline, and fails by naming the packages.
 The step's own `timeout-minutes` is only a backstop a few minutes above that budget (the cache restore may spend 2 of them), and a job's limit has to hold its usual time plus the backstop; `scripts/tests/test_ci_apt_install.py` holds the script to its budget.
 
