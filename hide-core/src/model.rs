@@ -3283,7 +3283,6 @@ pub struct FirstRunChoices {
     /// checked (PRD wsl-device B1) and keep it unchecked once they say so.
     pub devices: Option<Vec<String>>,
     pub project_device: Option<String>,
-    pub project_path: String,
     pub project_form: FirstRunProjectForm,
     pub notifications_answered: bool,
 }
@@ -3768,6 +3767,9 @@ pub enum MemoryStartFailureCode {
     ShellStarting,
     /// The agent's start ended at the shell without the agent, twice.
     AgentNotStarted,
+    /// Hide's hook for the agent is not in place where it would run; that
+    /// machine's row in Settings says why.
+    AgentHookNotReady,
     CardNotProcessed,
     /// Any other answer: the device, the lock, the engine's refusal.
     Other,
@@ -3795,6 +3797,8 @@ impl MemoryStartFailure {
             (code, _) => Self {
                 code: if code == "agent_not_started" {
                     MemoryStartFailureCode::AgentNotStarted
+                } else if crate::runtime::start_hook::HookRefusal::is_code(code) {
+                    MemoryStartFailureCode::AgentHookNotReady
                 } else {
                     MemoryStartFailureCode::Other
                 },
@@ -4337,6 +4341,15 @@ pub struct UiStateSnapshot {
     /// own device, so two devices' same path never share a row (S5.5 B2).
     #[serde(default)]
     pub device_expanded_paths: BTreeMap<String, Vec<String>>,
+    /// The folder Add a project's folder list last showed on this machine,
+    /// as its node answered it; the next list here starts in it (PRD
+    /// device-add-project D-04).
+    #[serde(default)]
+    pub add_project_folder: Option<String>,
+    /// The same for each device, by device id; a device's folder means
+    /// something only on that device.
+    #[serde(default)]
+    pub device_add_project_folders: BTreeMap<String, String>,
     #[serde(default)]
     pub collapsed_workspace_ids: Vec<String>,
     /// Sidebar workspaces (checkout paths) whose agent rows the removed
@@ -4572,9 +4585,9 @@ pub struct UiStateSnapshot {
     #[serde(default, skip_serializing)]
     pub request_verbs: BTreeMap<String, crate::request_view::VerbRecord>,
     /// How long an agent may go untouched before Hide ends its process and
-    /// keeps its conversation to resume: 12, 24 or 72 hours, or `None` for
-    /// never, the default (PRD D-10).
-    #[serde(default)]
+    /// keeps its conversation to resume: 12, 24 (the default), 48 or 72
+    /// hours, or `None` for Off (PRD D-10).
+    #[serde(default = "default_sleep_after_hours")]
     pub agent_sleep_after_hours: Option<u32>,
     /// Each local project's chosen issue source, `github` or `local`, by the
     /// project's path; a project without an entry reads its default source
@@ -5333,6 +5346,10 @@ pub struct WorktreeNameSnapshot {
     pub message: Option<String>,
 }
 
+fn default_sleep_after_hours() -> Option<u32> {
+    Some(crate::agent_sleep::DEFAULT_SLEEP_AFTER_HOURS)
+}
+
 impl Default for UiStateSnapshot {
     fn default() -> Self {
         Self {
@@ -5348,6 +5365,8 @@ impl Default for UiStateSnapshot {
             right_panel_section: RightPanelSection::default(),
             expanded_paths: Vec::new(),
             device_expanded_paths: BTreeMap::new(),
+            add_project_folder: None,
+            device_add_project_folders: BTreeMap::new(),
             collapsed_workspace_ids: Vec::new(),
             collapsed_checkout_ids: Vec::new(),
             expanded_checkout_ids: Vec::new(),
@@ -5402,7 +5421,7 @@ impl Default for UiStateSnapshot {
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
             request_verbs: BTreeMap::new(),
-            agent_sleep_after_hours: None,
+            agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
             issue_settings: IssueSettingsSnapshot::default(),
             conductor_settings: crate::missions::ConductorSettings::default(),
@@ -5460,8 +5479,13 @@ pub struct DeviceRegistration {
 /// it (PRD core-host-node-remote-core D-04, D-10).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LinkOrigin {
-    /// The core dials the machine over SSH under this alias.
-    Dialed { ssh_alias: String },
+    /// The core dials the machine over SSH under this alias. The alias is the
+    /// machine's label for the operator; its id is the machine's own once
+    /// `naming` is `Named` (with-hide/hide-private#671).
+    Dialed {
+        ssh_alias: String,
+        naming: DeviceNaming,
+    },
     /// The machine's own node dials this core over the operator's SSH
     /// login; its id is its node id.
     Inbound,
@@ -5470,10 +5494,59 @@ pub enum LinkOrigin {
     Wsl { distro: String },
 }
 
+/// Whether a device the core dials over SSH is named by its machine's own id
+/// (`hide_platform::host::machine_id`, the id that machine's core names
+/// itself by), so one machine has one id whichever machine runs the core
+/// (with-hide/hide-private#671). Stored on the registration itself and never
+/// read from its consent, which the operator revokes and grants again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceNaming {
+    /// Registered before machine ids named devices, under an id its alias
+    /// made, and so possibly with records under that id: the start's one-time
+    /// conversion names it (`node_migration::devices`), and until then the
+    /// core opens nothing on it.
+    Legacy,
+    /// Registered by this build and never connected, under an id its alias
+    /// made: nothing names it yet, so its first connection renames it to the
+    /// id its node reports (`runtime::device_names`).
+    Pending,
+    /// Its id is its machine's own, which every connection's node confirms.
+    Named,
+}
+
+impl DeviceNaming {
+    pub(crate) fn stored(self) -> Option<&'static str> {
+        match self {
+            Self::Legacy => None,
+            Self::Pending => Some("pending"),
+            Self::Named => Some("named"),
+        }
+    }
+
+    fn from_stored(stored: Option<&str>) -> Result<Self, String> {
+        match stored {
+            None => Ok(Self::Legacy),
+            Some("pending") => Ok(Self::Pending),
+            Some("named") => Ok(Self::Named),
+            Some(other) => Err(format!("{other:?} is not a device naming")),
+        }
+    }
+}
+
 impl LinkOrigin {
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
-            Self::Dialed { ssh_alias } => Some(ssh_alias),
+            Self::Dialed { ssh_alias, .. } => Some(ssh_alias),
+            Self::Inbound | Self::Wsl { .. } => None,
+        }
+    }
+
+    /// How a device dialed over SSH is named; `None` for a node that dials in
+    /// (named by its node id) and a WSL distribution (named by the PC and its
+    /// distribution, `docs/INSTALL.md`, What each system supports).
+    pub fn naming(&self) -> Option<DeviceNaming> {
+        match self {
+            Self::Dialed { naming, .. } => Some(*naming),
             Self::Inbound | Self::Wsl { .. } => None,
         }
     }
@@ -5531,14 +5604,27 @@ struct StoredDeviceRegistration {
     inbound: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wsl_distro: Option<String>,
+    /// A dialed device's `DeviceNaming`; absent is `Legacy`, which every
+    /// registration an earlier build wrote reads as. An earlier build reads
+    /// past it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    naming: Option<String>,
 }
 
 impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
     type Error = String;
 
     fn try_from(stored: StoredDeviceRegistration) -> Result<Self, String> {
+        let naming = DeviceNaming::from_stored(stored.naming.as_deref())
+            .map_err(|error| format!("device {}: {error}", stored.id))?;
+        if naming != DeviceNaming::Legacy && stored.ssh_alias.is_none() {
+            return Err(format!(
+                "device {} is named as a dialed device but names no SSH alias",
+                stored.id
+            ));
+        }
         let origin = match (stored.ssh_alias, stored.inbound, stored.wsl_distro) {
-            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias },
+            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias, naming },
             (None, true, None) => LinkOrigin::Inbound,
             (None, false, Some(distro)) => LinkOrigin::Wsl { distro },
             (None, false, None) => {
@@ -5573,6 +5659,11 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             host_consent: registration.host_consent,
             inbound,
             wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
+            naming: registration
+                .origin
+                .naming()
+                .and_then(DeviceNaming::stored)
+                .map(str::to_owned),
         }
     }
 }
@@ -6641,6 +6732,8 @@ pub struct TaskOperationSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RepositoryCloneSnapshot {
     pub id: u64,
+    /// The machine the clone runs on and its project is registered on.
+    pub device_id: String,
     pub host: String,
     /// The new folder's full path, `parent` and the name the URL gives.
     pub path: String,
@@ -6847,6 +6940,10 @@ pub struct StatusSnapshot {
     /// The latest 마무리 맡기기 presses, oldest first and bounded, so a 흘린
     /// 것 row reads its own (PRD project-panel-results B12, B13).
     pub stray_hand_offs: Vec<StrayHandOffSnapshot>,
+    /// The adds that named a request id (Add a project's importable list),
+    /// oldest first and bounded, each with its own outcome, so a row reads
+    /// its answer whatever event came after it (PRD device-add-project B25).
+    pub project_adds: Vec<ProjectAddReceiptSnapshot>,
     /// The operator's agent definition files that were left out, each with
     /// why (PRD engine-bundle-3-core-owns D-17, B24): Settings › Agents draws
     /// one dimmed line for each. `None` until the core has read them.
@@ -7011,6 +7108,30 @@ pub struct StrayHandOffSnapshot {
     pub request_id: String,
     pub checkout_id: String,
     pub state: &'static str,
+}
+
+/// One add's receipt: the folder it named on its machine and where it stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProjectAddReceiptSnapshot {
+    pub request_id: String,
+    pub device_id: String,
+    pub path: String,
+    #[serde(flatten)]
+    pub outcome: ProjectAddOutcome,
+}
+
+/// Where one add stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProjectAddOutcome {
+    Pending,
+    /// The folder's project is registered on its machine.
+    Added,
+    /// The registration was refused: the core's error kind and message.
+    Refused {
+        kind: String,
+        message: String,
+    },
 }
 
 /// One `browser_open` request's outcome: where the page opened, or why not.
@@ -7556,6 +7677,7 @@ impl Snapshot {
                 pane_focus_request: None,
                 browser_opens: Vec::new(),
                 stray_hand_offs: Vec::new(),
+                project_adds: Vec::new(),
                 agent_definitions: None,
                 server_discovery: ServerDiscoverySnapshot {
                     loading: true,
@@ -8463,6 +8585,7 @@ mod wire_enum_tests {
         let start_failures = [
             MemoryStartFailureCode::ShellStarting,
             MemoryStartFailureCode::AgentNotStarted,
+            MemoryStartFailureCode::AgentHookNotReady,
             MemoryStartFailureCode::CardNotProcessed,
             MemoryStartFailureCode::Other,
         ];
@@ -8471,6 +8594,7 @@ mod wire_enum_tests {
                 MemoryStartFailureCode::ShellStarting
                 | MemoryStartFailureCode::CardNotProcessed
                 | MemoryStartFailureCode::AgentNotStarted
+                | MemoryStartFailureCode::AgentHookNotReady
                 | MemoryStartFailureCode::Other => {}
             }
         }
@@ -9482,6 +9606,49 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
+            use crate::delivery::held::HeldFor;
+            let held = [
+                HeldFor::Unreachable,
+                HeldFor::Undelivered,
+                HeldFor::Approval,
+                HeldFor::Draft,
+                HeldFor::Unanswered,
+            ];
+            for variant in held {
+                match variant {
+                    HeldFor::Unreachable
+                    | HeldFor::Undelivered
+                    | HeldFor::Approval
+                    | HeldFor::Draft
+                    | HeldFor::Unanswered => {}
+                }
+            }
+            assert_wire(&contract, "mission_letters_held_for", &held);
+            checked.insert("mission_letters_held_for");
+            use crate::runtime::missions::NodeWork;
+            let work = [
+                NodeWork::Working,
+                NodeWork::Waiting {
+                    on: crate::missions::WaitingOn::Review,
+                },
+                NodeWork::NoWorker,
+            ];
+            for variant in &work {
+                match variant {
+                    NodeWork::Working | NodeWork::Waiting { .. } | NodeWork::NoWorker => {}
+                }
+            }
+            let states: Vec<String> = work
+                .iter()
+                .map(|variant| {
+                    serde_json::to_value(variant).unwrap()["state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+            assert_wire(&contract, "mission_node_work", &states);
+            checked.insert("mission_node_work");
         }
 
         {
@@ -10161,6 +10328,7 @@ mod wire_enum_tests {
             &[
                 DeskJobFailure::DeviceUnavailable,
                 DeskJobFailure::AgentNotInstalled,
+                DeskJobFailure::AgentHookNotReady,
                 DeskJobFailure::BranchInUse,
                 DeskJobFailure::ProjectUnavailable,
                 DeskJobFailure::AlreadyStarted,

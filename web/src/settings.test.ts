@@ -8,7 +8,6 @@ import {
   ACCENT_CHOICES,
   canRetryDevice,
   deviceSubtitle as deviceSubtitleIn,
-  deviceIdFor,
   deviceAwayLine as deviceAwayLineIn,
   deviceProblemLine as deviceProblemLineIn,
   retryCanHelp,
@@ -188,13 +187,6 @@ describe("settings rules", () => {
     expect(usableTerminalFontFamily(undefined)).toBe("");
   });
 
-  it("names a device after its alias without colliding", () => {
-    expect(deviceIdFor("Studio.Mac", ["local"])).toBe("studio-mac");
-    expect(deviceIdFor("studio", ["local", "studio"])).toBe("studio-2");
-    expect(deviceIdFor("local", ["local"])).toBe("local-2");
-    expect(deviceIdFor("***", [])).toBe("device");
-  });
-
   it("tells pending, failed and connected devices apart and offers Retry only when it is a new attempt", () => {
     expect(deviceLine(device({ state: "ready" }), undefined).tone).toBe("ok");
     const waiting = { target_id: "studio", state: "not_connected", message: null };
@@ -344,7 +336,7 @@ describe("in Korean", () => {
       "여기서 프로젝트 1개의 등록을 지우고, 열린 파일 탭 1개도 닫아요.",
       "저장하지 않은 초안 2개는 이 브라우저에 남아요. 저장하지 않은 초안 목록에서 내보내거나 버릴 수 있어요.",
     ]);
-    expect(SLEEP_AFTER_CHOICES.map((choice) => sleepAfterLabel(choice, korean))).toEqual(["잠들지 않음", "12시간", "24시간", "3일"]);
+    expect(SLEEP_AFTER_CHOICES.map((choice) => sleepAfterLabel(choice, korean))).toEqual(["잠들지 않음", "12시간", "24시간", "2일", "3일"]);
     expect(shownIn(undefined, korean)).toBe("사용할 수 없음");
     expect(shownIn("/state", korean)).toBe("/state");
     expect(kitPartLineIn({ state: "installed" }, korean).text).toBe("설치됨");

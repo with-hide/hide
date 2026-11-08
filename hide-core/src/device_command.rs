@@ -49,9 +49,9 @@ impl DeviceCommand {
     }
 }
 
-/// The id a device added under `alias` gets: the alias in lowercase letters,
-/// digits, `_` and `-`, numbered past the ids already taken. Settings' Add
-/// (`deviceIdFor` in the web shell) names a device the same way.
+/// The id a device added under `alias` goes by until its first connection
+/// names it by its machine (`runtime::device_names`): the alias in lowercase
+/// letters, digits, `_` and `-`, numbered past the ids already taken.
 pub(crate) fn device_id_for<'a>(
     alias: &str,
     taken: impl Iterator<Item = &'a str> + Clone,

@@ -157,13 +157,24 @@ pub(super) struct CreateWorkspacePayload {
     /// device's helper judges its own with it (`Call::Registrable`).
     #[serde(default)]
     pub(super) confirmed_outside_home: Option<String>,
+    /// The id the sender reads this add's refusal by
+    /// (`LastErrorSnapshot::request_id`): Add a project's importable list
+    /// adds row after row and tells each row's answer from the others'.
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CloneRepositoryPayload {
     pub(super) url: String,
-    /// The canonical folder hided's `$HOME` line checked.
+    /// The machine the clone runs on; absent or the core's own node is this
+    /// machine, whose parent hided's `$HOME` line checked. A device judges
+    /// its own parent against its own home (`Call::NewFolderTarget`).
+    #[serde(default)]
+    pub(super) device_id: Option<String>,
+    /// The canonical folder hided's `$HOME` line checked, or the folder a
+    /// device's own home line will judge.
     pub(super) parent: String,
     /// The folder the URL names, which hided found free under `parent`.
     pub(super) name: String,
@@ -306,9 +317,10 @@ pub(super) struct WorkspacePinSetPayload {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RegisterDevicePayload {
-    /// Empty for a WSL distribution, whose id and name the core gives it.
-    #[serde(default)]
-    pub(super) id: String,
+    /// The core gives the id: an SSH device is named by its machine's own
+    /// id once its first connection reports it (`DeviceNaming`), a WSL
+    /// distribution by the PC and its name. An `id` an earlier shell sends is
+    /// read past.
     #[serde(default)]
     pub(super) label: String,
     #[serde(default)]
@@ -393,6 +405,14 @@ pub(super) struct CheckCloseStatusPayload {
 #[derive(Debug, Deserialize)]
 pub(super) struct PaneTargetPayload {
     pub(super) pane_id: String,
+}
+
+/// Every agent the phones have open now, by the core's pane id; hided sends
+/// the whole list each time it changes, so a repeat converges.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PhoneViewingPayload {
+    pub(super) pane_ids: Vec<String>,
 }
 
 /// Fork agent from the pane menu: where the fork goes, chosen at the press,
@@ -1469,7 +1489,6 @@ pub(super) struct FirstRunDraftPayload {
     pub(super) agents: Option<Vec<String>>,
     pub(super) devices: Option<Vec<String>>,
     pub(super) project_device: Option<String>,
-    pub(super) project_path: Option<String>,
     pub(super) project_form: Option<crate::model::FirstRunProjectForm>,
 }
 
@@ -1645,6 +1664,7 @@ pub(super) enum Event {
     AgentTreeToggle(PaneTargetPayload),
     SessionTreeToggle(PaneTargetPayload),
     SidebarLensSet(super::detail::SidebarLensPayload),
+    AddProjectFolderSet(super::add_project::AddProjectFolderPayload),
     TaskViewSet(super::detail::TaskViewPayload),
     SidebarProjectSet(super::detail::SidebarProjectPayload),
     PracticeProgressSet(super::detail::PracticeProgressPayload),
@@ -1789,6 +1809,7 @@ pub(super) enum Event {
     FetchLook,
     OverviewRefresh(OverviewRefreshPayload),
     OverviewOpenResult(PaneTargetPayload),
+    PhoneViewing(PhoneViewingPayload),
     RequestView(RequestViewPayload),
     WindowFocus(WindowFocusPayload),
     /// The card's refresh button, opening the delete confirmation, and a
@@ -1942,6 +1963,12 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "agent_tree_toggle" => decode!(PaneTargetPayload, AgentTreeToggle),
         "session_tree_toggle" => decode!(PaneTargetPayload, SessionTreeToggle),
         "sidebar_lens_set" => decode!(super::detail::SidebarLensPayload, SidebarLensSet),
+        "add_project_folder_set" => {
+            decode!(
+                super::add_project::AddProjectFolderPayload,
+                AddProjectFolderSet
+            )
+        }
         "task_view_set" => decode!(super::detail::TaskViewPayload, TaskViewSet),
         "sidebar_project_set" => decode!(super::detail::SidebarProjectPayload, SidebarProjectSet),
         "practice_progress_set" => {
@@ -2137,6 +2164,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "fetch_look" => Ok(Event::FetchLook),
         "overview_refresh" => decode!(OverviewRefreshPayload, OverviewRefresh),
         "overview_open_result" => decode!(PaneTargetPayload, OverviewOpenResult),
+        "phone_viewing" => decode!(PhoneViewingPayload, PhoneViewing),
         "request_view" => decode!(RequestViewPayload, RequestView),
         "window_focus" => decode!(WindowFocusPayload, WindowFocus),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
@@ -2449,23 +2477,30 @@ impl Runtime {
             }
             Event::AiSettings(payload) => self.apply_ai_settings(payload),
             Event::RetryConnect(payload) => self.retry_remote_device(&payload.target_id),
-            Event::CloneRepository(payload) => {
-                self.clone_repository(&payload.url, &payload.parent, &payload.name)
-            }
+            Event::CloneRepository(payload) => self.clone_repository(
+                payload.device_id.as_deref(),
+                &payload.url,
+                &payload.parent,
+                &payload.name,
+            ),
             Event::CancelRepositoryClone(payload) => self.cancel_repository_clone(payload.id),
             Event::CreateWorkspace(payload) => {
+                if let Some(request_id) = payload.request_id.as_deref() {
+                    let device = payload
+                        .device_id
+                        .clone()
+                        .unwrap_or_else(|| self.node.as_str().to_owned());
+                    if !self.await_add(request_id, &device, &payload.path) {
+                        return true;
+                    }
+                }
                 if let Some(device) = payload
                     .device_id
                     .clone()
                     .filter(|device| device != self.node.as_str())
                 {
                     if payload.new_folder {
-                        self.set_error(
-                            "workspace.create_local_only",
-                            "A new project can be created on the core's own machine only",
-                            false,
-                        );
-                        return true;
+                        return self.create_device_project(&device, payload.path, payload.label);
                     }
                     return self.create_device_registration(
                         &device,
@@ -2867,11 +2902,11 @@ impl Runtime {
                 self.select_terminal_pane(next_pane_id.clone());
                 self.sync_active_tab_projection();
                 // The operator chose this tab, so its pane now holds Hide's
-                // keyboard and the read record follows it. Leaving the record
-                // on the pane of the tab just left kept marking that pane read
-                // while nobody was looking at it.
-                self.operator_focused_pane_id = next_pane_id;
-                self.refresh_pane_read_state();
+                // keyboard and the read record follows it once the event is
+                // done (`follow_operator_look`). Leaving the record on the
+                // pane of the tab just left kept marking that pane read while
+                // nobody was looking at it.
+                self.set_operator_focus(next_pane_id);
                 self.yield_surface_to_terminal();
                 self.persist_current_ui_state();
                 if payload.focus_device && !self.device_in_front(self.node.as_str()) {
@@ -2987,17 +3022,21 @@ impl Runtime {
                 true
             }
             Event::InactiveCheckoutsToggle(payload) => {
-                // The fold is this machine's projects' and those of a node
-                // that dials the core (D-29), keyed by the project's folder.
-                let nodes = self
-                    .node_sessions()
-                    .flat_map(|(_, session)| &session.workspaces);
+                // The fold is this machine's projects' and every device's,
+                // keyed by the project's folder.
+                let devices = self
+                    .snapshot
+                    .status
+                    .remote
+                    .iter()
+                    .filter_map(|status| status.session.as_ref())
+                    .flat_map(|session| &session.workspaces);
                 let folds: Vec<bool> = self
                     .snapshot
                     .navigator
                     .workspaces
                     .iter()
-                    .chain(nodes)
+                    .chain(devices)
                     .filter(|workspace| workspace.path == payload.project_path)
                     .map(|workspace| !workspace.inactive_checkouts.checkout_ids.is_empty())
                     .collect();
@@ -3129,10 +3168,8 @@ impl Runtime {
                 // landing on this machine (PRD S5 B19). A shell that routes
                 // remote splits sends `remote_control` instead.
                 if let Some(device_id) = self
-                    .snapshot
-                    .navigator
-                    .focused_device_id
-                    .as_deref()
+                    .look
+                    .front()
                     .filter(|device_id| *device_id != self.node.as_str())
                 {
                     self.set_error(
@@ -3548,8 +3585,7 @@ impl Runtime {
                 self.snapshot.navigator.root_path = Some(checkout.path);
                 self.sync_changes_root_path();
                 self.select_terminal_pane(pane_id);
-                self.operator_focused_pane_id = None;
-                self.refresh_pane_read_state();
+                self.set_operator_focus(None);
                 self.persist_current_ui_state();
                 true
             }
@@ -3957,6 +3993,7 @@ impl Runtime {
                 changed || payload.refresh
             }
             Event::OverviewOpenResult(payload) => self.open_result(&payload.pane_id),
+            Event::PhoneViewing(payload) => self.set_phone_viewing(payload.pane_ids),
             Event::RequestView(payload) => {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false
@@ -4303,6 +4340,7 @@ impl Runtime {
             Event::AgentTreeToggle(payload) => self.toggle_agent_tree(payload.pane_id, false),
             Event::SessionTreeToggle(payload) => self.toggle_agent_tree(payload.pane_id, true),
             Event::SidebarLensSet(payload) => self.set_sidebar_lens(payload),
+            Event::AddProjectFolderSet(payload) => self.set_add_project_folder(payload),
             Event::TaskViewSet(payload) => self.set_task_view(payload),
             Event::SidebarProjectSet(payload) => self.set_sidebar_project(payload),
             Event::PracticeProgressSet(payload) => self.set_practice_progress(payload),
@@ -4363,6 +4401,9 @@ impl Runtime {
                     device_expanded_paths: payload
                         .device_expanded_paths
                         .unwrap_or(current.device_expanded_paths),
+                    // Its own event (`add_project_folder_set`).
+                    add_project_folder: current.add_project_folder,
+                    device_add_project_folders: current.device_add_project_folders,
                     collapsed_workspace_ids: current.collapsed_workspace_ids,
                     collapsed_checkout_ids: payload
                         .collapsed_checkout_ids

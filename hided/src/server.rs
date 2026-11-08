@@ -1043,6 +1043,18 @@ async fn screen_loop(
                 {
                     break;
                 }
+                // Only a window writes a program's copy to its clipboard.
+                let copies = terminals.take_clipboard();
+                let mut gone = false;
+                for copied in copies.iter().filter(|_| renderer) {
+                    if socket.send(Message::Text(copied.as_ref().into())).await.is_err() {
+                        gone = true;
+                        break;
+                    }
+                }
+                if gone {
+                    break;
+                }
             }
             changed = directory_changes.recv() => {
                 match changed {
@@ -1244,6 +1256,16 @@ async fn screen_loop(
                                 }
                                 spawn_device_listing(&state, event, device_frames_tx.clone(), slot.flatten());
                             }
+                            Ok(ClientAction::NodeAsk(event)) => {
+                                let slot = relay.as_ref().map(RelayScreen::slot);
+                                if matches!(slot, Some(None)) {
+                                    if socket.send(relay_busy()).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -1319,6 +1341,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "holder_cap" => {
+            "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
+        }
+        "pane_close_failed" => {
+            "The registration ended, but the engine did not close its pane; run the same command again to close it"
+        }
         "composer_not_empty" => {
             "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
         }
@@ -1347,7 +1375,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "The agent's start ended in its pane without the agent and was not typed again; check that pane for why, then spawn with a new intent"
         }
         "shell_starting" => {
-            "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
+            "The new pane's shell had not finished starting while the spawn could wait, so nothing was typed and Hide closed the tab it opened; find what the account's shell startup files wait on (start a login shell in a terminal of your own), then run the same command again with the same intent"
         }
         "pane_busy" => {
             "The new pane's shell kept another program running for the start's 30 s wait, so nothing was typed; let that program finish or end it in that pane, then run the same command again with the same intent"
@@ -1395,6 +1423,27 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "mission_candidate_refused" => {
             "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"
         }
+        // A spawn whose agent would start without Hide's hook on its
+        // machine (`runtime::start_hook`): nothing was made or typed, and the
+        // same command continues once the operator has done this.
+        "agent_hook_off" => {
+            "The agent is switched off for that machine; ask the operator to switch it on in Settings > Agents for that machine, then run the same command again with the same intent"
+        }
+        "agent_not_set_up" => {
+            "The agent has not made its own folder on that machine yet, so Hide cannot put its hook in; ask the operator to start the agent there once and sign in, then run the same command again with the same intent"
+        }
+        "agent_hook_untrusted" => {
+            "Codex on that machine has not trusted Hide's hooks; ask the operator to start codex there once and choose Trust all and continue on its Hooks need review screen, then run the same command again with the same intent"
+        }
+        "agent_hook_missing" => {
+            "Hide's hook for the agent is not in place on that machine; ask the operator to press Reinstall for that machine in Settings > Devices (This Mac for this machine), then run the same command again with the same intent"
+        }
+        "agent_hook_unconfirmed" => {
+            "Hide's check of the agent's hook on that machine did not finish in time; run the same command again with the same intent"
+        }
+        "agent_hook_unchecked" => {
+            "Hide could not check the agent's hook on that machine; ask the operator to open Settings > Devices for that machine (This Mac for this machine), which says what stopped the check and offers Try again or Check again, then run the same command again with the same intent"
+        }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
         }
@@ -1438,11 +1487,17 @@ pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
 /// reason stays the code.
 fn refusal_answer(reason: String, next_action: &'static str) -> (String, String) {
     match hide_core::coordination::split_refusal(&reason) {
-        (code @ "shell_starting", Some(screen)) if !screen.is_empty() => (
-            code.to_owned(),
-            format!("{next_action}. Its screen ends with: {screen}"),
-        ),
-        (code @ "shell_starting", _) => (code.to_owned(), next_action.to_owned()),
+        (code @ "shell_starting", detail) => {
+            let (seconds, screen) =
+                hide_core::coordination::shell_starting_detail(detail.unwrap_or_default());
+            let waited = seconds.map_or_else(String::new, |seconds| {
+                format!(". The shell was waited for {seconds} s")
+            });
+            let screen = screen.map_or_else(String::new, |screen| {
+                format!(". Its screen ends with: {screen}")
+            });
+            (code.to_owned(), format!("{next_action}{waited}{screen}"))
+        }
         (code @ "mission_cap_reached", Some(cap)) => (
             code.to_owned(),
             format!("{next_action}; the mission runs at most {cap} workers at once"),
@@ -2260,6 +2315,11 @@ enum ClientAction {
     CoreMove(Value),
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
+    /// Add a project's question for a machine's node: a folder under its
+    /// home (`home_folder_list`), the projects worth adding there
+    /// (`importable_projects`), or where a clone or a new project would
+    /// land on a device (`clone_target`, `project_target`).
+    NodeAsk(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2274,8 +2334,9 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 11] = [
+const DEVICE_FILE_EVENTS: [&str; 12] = [
     "create_workspace",
+    "clone_repository",
     "file_list",
     "file_open",
     "reveal_path",
@@ -2320,6 +2381,14 @@ fn handle_client_text(
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
     match event.get("kind").and_then(Value::as_str) {
+        Some("home_folder_list" | "importable_projects") => {
+            return Ok(ClientAction::NodeAsk(event));
+        }
+        Some("project_target" | "clone_target")
+            if event_device(&state.boundary, &event).is_some() =>
+        {
+            return Ok(ClientAction::NodeAsk(event));
+        }
         Some("project_target") => {
             return Ok(ClientAction::Replies(vec![Message::Text(
                 project_target(&state.boundary, &event).to_string().into(),
@@ -2775,6 +2844,191 @@ fn device_listing(
         Err(LinkError::Unknown(message)) => unavailable("unknown", None, message),
         Err(LinkError::Refused(error)) => {
             unavailable("refused", Some(error.code.as_str()), error.message)
+        }
+    }
+}
+
+/// The reason a node ask's frame carries for a refusal: the node's own code
+/// for a path it judged, `busy` for a link already full, and `disconnected`
+/// for a machine that cannot be reached (`contracts/hided-ws.schema.json`,
+/// `nodeAskReason`).
+fn node_ask_reason(error: &hide_node_link::LinkError) -> &'static str {
+    match error {
+        hide_node_link::LinkError::Refused(refused) => match refused.code {
+            hide_node_link::ErrorCode::OutsideRoot => "outside_home",
+            hide_node_link::ErrorCode::NotFound => "not_found",
+            hide_node_link::ErrorCode::NotADirectory => "not_a_directory",
+            hide_node_link::ErrorCode::InvalidPath => "invalid_path",
+            hide_node_link::ErrorCode::AlreadyExists => "already_exists",
+            _ => "unreadable",
+        },
+        hide_node_link::LinkError::Busy => "busy",
+        _ => "disconnected",
+    }
+}
+
+/// Asks a machine's node Add a project's question on a blocking task and
+/// hands the answer to the client's socket loop; a client gone by then drops
+/// it. The answer is never forwarded to the core and changes nothing on disk.
+fn spawn_node_ask(
+    state: &AppState,
+    event: Value,
+    frames: tokio::sync::mpsc::Sender<String>,
+    slot: Option<crate::relay::RelaySlot>,
+) {
+    let core = Arc::clone(&state.core);
+    let boundary = Arc::clone(&state.boundary);
+    tokio::spawn(async move {
+        let _slot = slot;
+        let frame = tokio::task::spawn_blocking(move || node_ask(&core, &boundary, &event))
+            .await
+            .unwrap_or_else(|error| {
+                json!({"type": "error", "payload": {}, "message": format!("node ask failed: {error}")})
+            });
+        let _ = frames.send(frame.to_string()).await;
+    });
+}
+
+/// How long a node may take to list a folder or judge a new folder's place.
+const NODE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How long a node may take to find the projects worth adding: it walks up
+/// to `SESSION_DISCOVERY_LIMIT` session entries and judges up to
+/// `JUDGED_FOLDER_CAP` folders, and answers by `IMPORTABLE_SEARCH_BUDGET`,
+/// which this leaves room above for the link.
+const IMPORTABLE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Add a project's question for a machine's node, answered as the frame the
+/// dialog reads (PRD device-add-project D-03, D-07, D-08):
+///
+/// - `home_folder_list` {device_id, path}: one folder under that machine's
+///   home (`Call::HomeList`), this machine's included, answered as a
+///   `home_folder_list` frame carrying `listing` or `reason`;
+/// - `importable_projects` {device_id}: the projects worth adding on that
+///   machine (`Call::ImportableProjects`), its registrations left out,
+///   answered as an `importable_projects` frame carrying `projects` or
+///   `reason`, each source the node could not read logged as
+///   `add_project.import_source_dropped`;
+/// - a device's `clone_target` and `project_target`: where the clone or new
+///   project would land under that device's home (`Call::NewFolderTarget`),
+///   answered in the same frames this machine's `$HOME` line answers with.
+///
+/// `reason` is a code the dialog words: the node's refusal (`outside_home`,
+/// `not_found`, `not_a_directory`, `invalid_path`, `already_exists`,
+/// `unreadable`), or `disconnected` when the machine cannot be asked; the
+/// node's sentence goes to the log.
+fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
+    use hide_core::node_access::LinkError;
+    let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
+    let device = Some(payload_str(event, "device_id"))
+        .filter(|device| !boundary.names_this_node(Some(device)))
+        .unwrap_or_else(|| boundary.node().as_str().to_owned());
+    let reason = |error: LinkError| -> &'static str {
+        let (code, message) = match &error {
+            LinkError::Refused(refused) => (Some(refused.code), refused.message.clone()),
+            other => (None, other.to_string()),
+        };
+        eprintln!(
+            "{}",
+            json!({
+                "component": "hided", "kind": "add_project.node_refused", "event": kind,
+                "device": device, "code": code.map(|code| code.as_str()), "message": message,
+            })
+        );
+        node_ask_reason(&error)
+    };
+    let link = core.node_link(&device);
+    match kind {
+        "home_folder_list" => {
+            let request = payload_str(event, "path");
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                hide_core::node_access::call_as::<hide_node_link::browse::HomeListing>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::HomeList {
+                        path: request.clone(),
+                    },
+                    NODE_ASK_TIMEOUT,
+                )
+            });
+            let (listing, refused) = match answer {
+                Ok(listing) => (Some(listing), None),
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "home_folder_list", "payload": {
+                "device_id": device, "request": request, "listing": listing, "reason": refused,
+            }})
+        }
+        "importable_projects" => {
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                // The core's registrations there are left out before the
+                // node keeps its newest twenty.
+                let exclude = core
+                    .registered_paths(&device)
+                    .map_err(LinkError::NotConnected)?;
+                hide_core::node_access::call_as::<hide_node_link::importable::ImportableProjects>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::ImportableProjects { exclude },
+                    IMPORTABLE_ASK_TIMEOUT,
+                )
+            });
+            let (projects, refused) = match answer {
+                Ok(found) => {
+                    // A source the node could not read is the log's, never
+                    // the screen's (PRD device-add-project D-12, B27).
+                    for dropped in &found.dropped {
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "component": "hided", "kind": "add_project.import_source_dropped",
+                                "device": device, "source": dropped.source, "reason": dropped.reason,
+                            })
+                        );
+                    }
+                    (Some(found.projects), None)
+                }
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "importable_projects", "payload": {
+                "device_id": device, "projects": projects, "reason": refused,
+            }})
+        }
+        _ => {
+            let parent = payload_str(event, "parent");
+            let name = payload_str(event, "name");
+            let project = kind == "project_target";
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                hide_core::node_access::call_as::<hide_node_link::browse::NewFolderTarget>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::NewFolderTarget {
+                        parent: parent.clone(),
+                        name: name.clone(),
+                        kind: if project {
+                            hide_node_link::browse::NewFolderKind::Project
+                        } else {
+                            hide_node_link::browse::NewFolderKind::Clone
+                        },
+                    },
+                    NODE_ASK_TIMEOUT,
+                )
+            });
+            let (target, refused) = match answer {
+                Ok(target) => (Some(target), None),
+                Err(error) => (None, Some(reason(error))),
+            };
+            let path = target.as_ref().and_then(|target| target.path.clone());
+            if project {
+                json!({"type": "project_target", "payload": {
+                    "device_id": device, "parent": parent, "name": name,
+                    "parent_path": target.as_ref().map(|target| target.parent.clone()),
+                    "parent_label": target.as_ref().map(|target| target.parent_label.clone()),
+                    "path": path, "leftover": target.as_ref().is_some_and(|target| target.leftover),
+                    "reason": refused,
+                }})
+            } else {
+                json!({"type": "clone_target", "payload": {
+                    "device_id": device, "parent": parent, "name": name, "path": path, "reason": refused,
+                }})
+            }
         }
     }
 }
@@ -3968,7 +4222,17 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "create_workspace" if event.pointer("/payload/new_folder") == Some(&Value::Bool(true)) => {
             new_project(boundary, event, &kind)
         }
-        "create_workspace" => register(boundary, event, &kind),
+        "create_workspace" => register(boundary, event, &kind).map(|mut frame| {
+            // An add sent by request id reads its refusal by that id, as it
+            // reads the core's (`create_workspace.request_id`).
+            if let (Some(id), Some(payload)) = (
+                event.pointer("/payload/request_id").and_then(Value::as_str),
+                frame.get_mut("payload").and_then(Value::as_object_mut),
+            ) {
+                payload.insert("request_id".to_owned(), Value::from(id));
+            }
+            frame
+        }),
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
@@ -4276,6 +4540,7 @@ fn clone_target(boundary: &Boundary, event: &Value) -> Value {
     json!({
         "type": "clone_target",
         "payload": {
+            "device_id": boundary.node().as_str(),
             "parent": parent,
             "name": name,
             "path": answer.as_ref().ok().map(|real| hide_platform::path::to_wire_lossy(&real.join(&name))),
@@ -4307,7 +4572,7 @@ fn project_target(boundary: &Boundary, event: &Value) -> Value {
     let parent = payload_str(event, "parent");
     let name = payload_str(event, "name");
     let mut payload = json!({
-        "parent": parent, "name": name,
+        "device_id": boundary.node().as_str(), "parent": parent, "name": name,
         "parent_path": null, "parent_label": null, "path": null, "leftover": false, "reason": null,
     });
     let real_parent = match boundary.resolve_dir(&parent) {
@@ -5042,14 +5307,22 @@ mod tests {
         );
         assert!(none.contains("No other device is connected"), "{none}");
         let (code, next) = refusal_answer(
-            "shell_starting\u{1f}[oh-my-zsh] Would you like to update? [Y/n]".to_owned(),
+            "shell_starting\u{1f}30\u{1f}[oh-my-zsh] Would you like to update? [Y/n]".to_owned(),
             delivery_next_action("shell_starting"),
         );
         assert_eq!(code, "shell_starting");
         assert!(
-            next.ends_with("[oh-my-zsh] Would you like to update? [Y/n]"),
+            next.ends_with(
+                "The shell was waited for 30 s. Its screen ends with: [oh-my-zsh] Would you like to update? [Y/n]"
+            ),
             "{next}"
         );
+        // A shell that showed nothing still says how long it was waited for.
+        let (_, blank) = refusal_answer(
+            "shell_starting\u{1f}30\u{1f}".to_owned(),
+            delivery_next_action("shell_starting"),
+        );
+        assert!(blank.ends_with("The shell was waited for 30 s"), "{blank}");
         for code in [
             "spawn_busy",
             "machine_not_permitted",
@@ -5067,6 +5340,12 @@ mod tests {
             "target_ambiguous",
             "target_unavailable",
             "codex_capability_unknown",
+            "agent_hook_off",
+            "agent_not_set_up",
+            "agent_hook_untrusted",
+            "agent_hook_missing",
+            "agent_hook_unconfirmed",
+            "agent_hook_unchecked",
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
@@ -5736,6 +6015,25 @@ mod tests {
         );
     }
 
+    /// PRD device-add-project B25: a refused add that named a request id
+    /// carries it back, so the importable list reads the refusal as that
+    /// row's own; one that named none carries none.
+    #[test]
+    fn a_refused_add_carries_the_request_id_it_was_sent_with() {
+        let home = tempfile::tempdir().unwrap();
+        let boundary = Boundary::new(home.path()).unwrap();
+        let gone = home.path().join("gone").display().to_string();
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false, "request_id": "import:7"}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["type"], "path_refused", "{answer}");
+        assert_eq!(answer["payload"]["request_id"], "import:7");
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["payload"].get("request_id"), None);
+    }
+
     /// PRD wsl-device B15, B18: a folder outside home reaches the core only
     /// when the event carries the operator's confirmation of that path; the
     /// refusal before it says so and reads nothing there.
@@ -5795,6 +6093,31 @@ mod tests {
             hide_platform::path::to_wire_lossy(
                 &hide_platform::fs::identity::canonical(&app).unwrap()
             )
+        );
+    }
+
+    /// Add a project's folder list words a node's refusal by the code the
+    /// node judged with, and a machine it cannot reach as disconnected, so a
+    /// device's `outside_home` reads as this machine's does (PRD
+    /// device-add-project B12, B31).
+    #[test]
+    fn a_node_ask_refusal_carries_the_reason_the_dialog_reads() {
+        use hide_node_link::{ErrorCode, HostError, LinkError};
+        let refused = |code| node_ask_reason(&LinkError::Refused(HostError::new(code, "refused")));
+        assert_eq!(refused(ErrorCode::OutsideRoot), "outside_home");
+        assert_eq!(refused(ErrorCode::NotFound), "not_found");
+        assert_eq!(refused(ErrorCode::NotADirectory), "not_a_directory");
+        assert_eq!(refused(ErrorCode::InvalidPath), "invalid_path");
+        assert_eq!(refused(ErrorCode::AlreadyExists), "already_exists");
+        assert_eq!(refused(ErrorCode::Io), "unreadable");
+        assert_eq!(node_ask_reason(&LinkError::Busy), "busy");
+        assert_eq!(
+            node_ask_reason(&LinkError::NotConnected("gone".into())),
+            "disconnected"
+        );
+        assert_eq!(
+            node_ask_reason(&LinkError::Unknown("lost".into())),
+            "disconnected"
         );
     }
 }

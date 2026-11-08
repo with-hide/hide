@@ -30,8 +30,8 @@ use super::store::{
 };
 
 /// The newest session format Herdr v0.9.5 writes and reads
-/// (`SNAPSHOT_VERSION`); a newer one is a Herdr this build does not know.
-pub(crate) const NEWEST_FORMAT: u32 = 3;
+/// (`hide_node_link::herdr_save::NEWEST_FORMAT`).
+pub(crate) const NEWEST_FORMAT: u32 = hide_node_link::herdr_save::NEWEST_FORMAT;
 
 /// The narrowest and widest split a tab keeps, as the own engine's layout
 /// keeps them.

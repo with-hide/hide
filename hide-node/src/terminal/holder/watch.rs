@@ -51,6 +51,10 @@ pub(super) struct Watches {
     /// in the order they were read. [`Watches::set_rules`] never takes it,
     /// so a sink may give rules from inside its call.
     order: Mutex<()>,
+    /// The last generation given a watch, of any pane: one is never given
+    /// twice, so a watch of a pane forgotten and watched again, or retired
+    /// for a renewal, changes nothing when it ends after the next one began.
+    generations: Mutex<u64>,
 }
 
 /// One pane as its watch knows it.
@@ -63,8 +67,9 @@ struct Watched {
     following: bool,
     /// The watch open now, if one is.
     open: Option<Open>,
-    /// One more for each watch opened for the pane, so the thread of an
-    /// earlier one changes nothing.
+    /// The generation of the pane's latest watch, never one given before
+    /// ([`Watches::generations`]), so the thread of an earlier one changes
+    /// nothing.
     generation: u64,
     /// The facts the holder last sent, as it sent them, which a sink set
     /// later is told again.
@@ -118,15 +123,8 @@ impl Watches {
     /// Follows `pane`'s holder at `socket` on a thread of its own, unless a
     /// thread already follows it.
     pub(super) fn watch(self: &Arc<Self>, pane: &str, socket: PathBuf) {
-        let generation = {
-            let mut panes = locked(&self.panes);
-            let watched = panes.entry(pane.to_owned()).or_default();
-            if watched.following {
-                return;
-            }
-            watched.following = true;
-            watched.generation += 1;
-            watched.generation
+        let Some(generation) = self.begin(pane) else {
+            return;
         };
         let watches = Arc::clone(self);
         let spawned = thread::Builder::new()
@@ -170,6 +168,43 @@ impl Watches {
             watched.last = Some(unsupported());
             watched.told()
         });
+    }
+
+    /// A thread is to follow `pane`: the generation of its watch, or `None`
+    /// when a thread follows it already.
+    fn begin(&self, pane: &str) -> Option<u64> {
+        let mut panes = locked(&self.panes);
+        let watched = panes.entry(pane.to_owned()).or_default();
+        if watched.following {
+            return None;
+        }
+        watched.following = true;
+        watched.generation = self.next_generation();
+        Some(watched.generation)
+    }
+
+    fn next_generation(&self) -> u64 {
+        let mut last = locked(&self.generations);
+        *last += 1;
+        *last
+    }
+
+    /// The pane's holder is ended to be replaced (a renewal): its watch
+    /// ends, what that watch's end says changes nothing of the pane, and its
+    /// rules and last facts are kept for the next watch of it.
+    pub(super) fn retire(&self, pane: &str) {
+        let open = {
+            let mut panes = locked(&self.panes);
+            let Some(watched) = panes.get_mut(pane) else {
+                return;
+            };
+            watched.following = false;
+            watched.generation = self.next_generation();
+            watched.open.take()
+        };
+        if let Some(open) = open {
+            open.shutdown.shutdown();
+        }
     }
 
     /// The pane ended or was forgotten: its watch ends and nothing of it is
@@ -220,7 +255,18 @@ impl Watches {
     /// its end means for the pane.
     fn follow(&self, pane: &str, socket: &Path, generation: u64) {
         let ended = self.read_watch(pane, socket, generation);
-        if let Ended::Lost(why) = &ended {
+        self.ended(pane, generation, ended);
+    }
+
+    /// What the end of the pane's watch of `generation` means for the pane;
+    /// nothing, when a later watch of it began since.
+    fn ended(&self, pane: &str, generation: u64, ended: Ended) {
+        let current = locked(&self.panes)
+            .get(pane)
+            .is_some_and(|watched| watched.generation == generation);
+        if let Ended::Lost(why) = &ended
+            && current
+        {
             crate::diagnostic!(json!({
                 "component": "pane_holder",
                 "kind": "pane_holder.watch_lost",
@@ -513,6 +559,56 @@ mod tests {
             min_engine_version,
             manifest: manifest.to_owned(),
         }
+    }
+
+    /// A renewal retires a pane's watch and its next watch begins before the
+    /// earlier watch's thread hears its holder end; a pane forgotten and
+    /// watched again is the same. That late end leaves the pane known, with
+    /// its rules, and tells the sink nothing.
+    #[test]
+    fn an_earlier_watch_that_ends_late_leaves_the_next_watch_of_its_pane_alone() {
+        let watches = Watches::default();
+        let told = Arc::new(Mutex::new(Vec::<String>::new()));
+        watches.set_sink(Arc::new({
+            let told = Arc::clone(&told);
+            move |pane: &str, _: &PaneFacts| locked(&told).push(pane.to_owned())
+        }));
+        let rules = ScreenRules {
+            agent: "claude".to_owned(),
+            sets: vec![set(1, "rules")],
+        };
+
+        let earlier = watches.begin("w1:p1").expect("a first watch begins");
+        watches
+            .set_rules("w1:p1", Some(rules.clone()))
+            .expect("a watched pane takes rules");
+        watches.retire("w1:p1");
+        let next = watches
+            .begin("w1:p1")
+            .expect("a renewed pane is watched again");
+        watches.ended("w1:p1", earlier, Ended::Gone);
+        {
+            let panes = locked(&watches.panes);
+            let watched = panes.get("w1:p1").expect("the pane is still known");
+            assert!(watched.following);
+            assert_eq!(watched.generation, next);
+            assert_eq!(watched.rules, Some(Some(rules)));
+        }
+
+        watches.forget("w1:p1");
+        let again = watches
+            .begin("w1:p1")
+            .expect("a forgotten pane is watched again");
+        watches.ended("w1:p1", next, Ended::Gone);
+        assert!(
+            locked(&watches.panes)
+                .get("w1:p1")
+                .is_some_and(|watched| watched.generation == again)
+        );
+        assert!(locked(&told).is_empty());
+
+        watches.ended("w1:p1", again, Ended::Gone);
+        assert!(locked(&watches.panes).get("w1:p1").is_none());
     }
 
     #[test]

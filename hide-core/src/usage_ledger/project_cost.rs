@@ -1,5 +1,5 @@
 //! A project's last seven days of cost (PRD lane-two-columns D-19, B31),
-//! prepared on the ledger worker from the 45-day `events` table: the calls
+//! prepared on the ledger worker from the 45-day `calls` table: the calls
 //! whose session ran inside one of the project's checkouts, priced the way a
 //! day is (`prices::cost`). The daily totals and the Overview's Usage are
 //! untouched; a call outside every checkout counts for no project.

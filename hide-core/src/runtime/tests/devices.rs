@@ -1,10 +1,12 @@
 use super::*;
 
-fn register_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
+/// Registers the SSH alias `alias` as Add device does: the core gives the
+/// id, which is the alias's until a connection names the device.
+fn register_device(runtime: &mut Runtime, alias: &str) -> bool {
     let event = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": { "id": id, "label": id, "ssh_alias": alias }
+        "payload": { "label": alias, "ssh_alias": alias }
     }))
     .expect("register device event");
     runtime.dispatch_json(&event)
@@ -12,11 +14,11 @@ fn register_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
 
 /// A device registered as Add device registers one, with the helper
 /// allowed: its engine rides the helper's link, so nothing else dials it.
-fn register_allowed_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
+fn register_allowed_device(runtime: &mut Runtime, alias: &str) -> bool {
     let event = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
-        "payload": { "id": id, "label": id, "ssh_alias": alias, "host_consent": true }
+        "payload": { "label": alias, "ssh_alias": alias, "host_consent": true }
     }))
     .expect("register device event");
     runtime.dispatch_json(&event)
@@ -47,7 +49,7 @@ fn device<'a>(runtime: &'a Runtime, id: &str) -> &'a DeviceSnapshot {
 #[test]
 fn removing_a_device_forgets_its_expanded_paths() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     runtime
         .snapshot
         .ui_state
@@ -67,7 +69,7 @@ fn registering_a_device_opens_its_remote_status_and_removing_it_closes_it() {
     let mut runtime = runtime();
     assert!(runtime.snapshot().status.remote.is_empty());
 
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
 
     let status = &runtime.snapshot().status.remote;
     assert_eq!(status.len(), 1);
@@ -76,7 +78,7 @@ fn registering_a_device_opens_its_remote_status_and_removing_it_closes_it() {
     let row = device(&runtime, "studio");
     assert_eq!(row.kind, "remote");
     assert_eq!(row.state, "unavailable");
-    assert_eq!(row.ssh_alias.as_deref(), Some("studio-host"));
+    assert_eq!(row.ssh_alias.as_deref(), Some("studio"));
     assert_eq!(
         row.message.as_deref(),
         Some("HOME is unavailable, so the SSH config cannot be resolved")
@@ -124,7 +126,7 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
     let empty: SessionSnapshotPayload =
         serde_json::from_value(serde_json::json!({"agents": []})).unwrap();
     runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("local-scope"), None);
-    assert!(register_device(&mut runtime, "remaining", "remaining-host"));
+    assert!(register_device(&mut runtime, "remaining"));
     runtime.begin_delivery_pane_read("remaining");
     runtime.observe_delivery_laid("remaining", &payload, Some("remaining-scope"), None);
     let reads = |runtime: &Runtime| {
@@ -150,7 +152,7 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
     };
     for index in 0..8 {
         let id = format!("device-{index}");
-        assert!(register_device(&mut runtime, &id, "fixture-host"));
+        assert!(register_device(&mut runtime, &id));
         let child = Actor {
             pane_id: format!("remote:{id}:pane:child"),
             name: format!("child-{index}"),
@@ -208,15 +210,16 @@ fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
     let mut runtime = shared.lock().unwrap();
     assert!(register_allowed_device(
         &mut runtime,
-        "nowhere",
         "hide-test-alias-that-does-not-exist"
     ));
     drop(runtime);
     wait(&shared, "SSH configuration failure", |runtime| {
-        device(runtime, "nowhere").problem.is_some()
+        device(runtime, "hide-test-alias-that-does-not-exist")
+            .problem
+            .is_some()
     });
     let runtime = shared.lock().unwrap();
-    let row = device(&runtime, "nowhere");
+    let row = device(&runtime, "hide-test-alias-that-does-not-exist");
     assert_eq!(row.state, "unavailable");
     assert_eq!(row.problem.as_deref(), Some("cannot_connect"));
     let message = row.message.clone().expect("failure reason");
@@ -232,7 +235,7 @@ fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
 #[test]
 fn testing_an_unconnected_device_reports_the_way_out() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     assert!(dispatch_device(&mut runtime, "test_device", "studio"));
     let error = runtime
         .snapshot()
@@ -316,11 +319,7 @@ fn a_pending_core_dials_no_device_until_its_link_commits() {
     let shared = remote_runtime_with_unreadable_config();
     let mut runtime = shared.lock().unwrap();
     runtime.hold_effects();
-    assert!(register_allowed_device(
-        &mut runtime,
-        "studio",
-        "studio-host"
-    ));
+    assert!(register_allowed_device(&mut runtime, "studio"));
     assert_eq!(runtime.snapshot().ui_state.device_registrations.len(), 1);
     assert!(
         runtime.snapshot().status.remote.is_empty(),
@@ -342,11 +341,7 @@ fn a_pending_core_dials_no_device_until_its_link_commits() {
 fn retrying_a_device_makes_a_new_connection_attempt() {
     let shared = remote_runtime_with_unreadable_config();
     let mut runtime = shared.lock().unwrap();
-    assert!(register_allowed_device(
-        &mut runtime,
-        "studio",
-        "studio-host"
-    ));
+    assert!(register_allowed_device(&mut runtime, "studio"));
     drop(runtime);
     wait(&shared, "first configuration failure", |runtime| {
         device(runtime, "studio").problem.is_some()
@@ -408,7 +403,7 @@ fn retrying_an_unregistered_device_is_refused() {
 #[test]
 fn a_split_with_a_remote_device_selected_is_refused_not_run_locally() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     assert!(dispatch_device(&mut runtime, "focus_device", "studio"));
     runtime.snapshot.terminal.pane_id = Some("w1:p1".to_owned());
     let split = serde_json::to_vec(&serde_json::json!({
@@ -435,7 +430,7 @@ fn a_split_with_a_remote_device_selected_is_refused_not_run_locally() {
 #[test]
 fn retrying_a_connected_device_is_refused() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     runtime.snapshot.status.remote[0].state = "connected".to_owned();
     let retry = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
@@ -462,7 +457,7 @@ fn retrying_a_connected_device_is_refused() {
 #[test]
 fn an_input_report_for_a_pane_the_core_does_not_project_moves_nothing() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     runtime.snapshot.pane_layouts = vec![PaneLayoutSnapshot {
         workspace_id: "w1".to_owned(),
         tab_id: "w1:t1".to_owned(),
@@ -499,7 +494,7 @@ fn an_input_report_for_a_pane_the_core_does_not_project_moves_nothing() {
 #[test]
 fn returning_to_this_machine_gives_the_keyboard_back_to_the_local_pane() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     runtime.snapshot.pane_layouts = vec![PaneLayoutSnapshot {
         workspace_id: "w1".to_owned(),
         tab_id: "w1:t1".to_owned(),
@@ -564,7 +559,7 @@ fn removing_the_selected_device_keeps_the_local_tabs_and_keyboard() {
         },
     }];
     runtime.snapshot.ui_state.selected_pane_id = Some("w1:p1".to_owned());
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_device(&mut runtime, "studio"));
     assert!(dispatch_device(&mut runtime, "focus_device", "studio"));
     runtime.snapshot.terminal.pane_id = Some("remote:studio:pane:w9:p1".to_owned());
     // The rows as a session publish draws them, derived state and strips included.
@@ -640,7 +635,7 @@ fn a_device_project_at_this_machines_path_does_not_hold_up_its_add_or_removal() 
 #[test]
 fn a_consent_from_before_the_hide_command_asks_again() {
     let mut runtime = runtime();
-    register_device(&mut runtime, "studio", "studio");
+    register_device(&mut runtime, "studio");
     runtime
         .snapshot
         .ui_state
@@ -682,38 +677,52 @@ fn a_consent_from_before_the_hide_command_asks_again() {
 #[test]
 fn a_refused_device_registration_is_logged_with_its_reason() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
     let (_, records) = crate::diagnostics::capture(|| {
-        assert!(register_device(&mut runtime, "studio", "studio-host"));
+        assert!(register_device(&mut runtime, "studio host"));
     });
     let refusal = records
         .iter()
         .find(|record| record["kind"] == "error.reported")
         .expect("refusal logged");
-    assert_eq!(refusal["error_kind"], "device.duplicate");
-    assert_eq!(refusal["message"], "Device studio is already registered");
+    assert_eq!(refusal["error_kind"], "device.invalid");
+    assert_eq!(
+        refusal["message"],
+        "The SSH alias must be one Host name from ~/.ssh/config"
+    );
+    assert!(runtime.snapshot().ui_state.device_registrations.is_empty());
+}
+
+/// Adding an alias that is already registered adds a second device under
+/// an id of its own: the two are told apart when their connections name
+/// their machines, and the second is held if it reaches the same machine.
+#[test]
+fn an_alias_added_twice_gets_an_id_of_its_own() {
+    let mut runtime = runtime();
+    assert!(register_device(&mut runtime, "studio"));
+    assert!(register_device(&mut runtime, "studio"));
+    let ids: Vec<_> = runtime
+        .snapshot()
+        .ui_state
+        .device_registrations
+        .iter()
+        .map(|registration| registration.id.clone())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], "studio");
+    assert_ne!(ids[1], ids[0]);
 }
 
 /// A device id holding `:` could hold `:pane:` or end in `:pane`, and one
 /// device's pane ids would read as another's (`remote:x:pane:pane:w1` as
-/// `x`'s): registering one is refused with `device.invalid`, and one already
-/// in the UI state is never connected, logged with its id and reason and
+/// `x`'s): an alias holding one is registered under an id without it, and
+/// one already in the UI state is never connected, logged with its id and reason and
 /// shown as unavailable, while the devices beside it still connect.
 #[test]
 fn a_device_id_holding_a_colon_is_refused_and_never_connected() {
     let mut runtime = runtime();
-    assert!(register_device(&mut runtime, "x", "x-host"));
-    for id in ["x:pane", "x:pane:b"] {
-        let (_, records) = crate::diagnostics::capture(|| {
-            assert!(register_device(&mut runtime, id, "b-host"));
-        });
-        assert!(
-            records
-                .iter()
-                .any(|record| record["kind"] == "error.reported"
-                    && record["error_kind"] == "device.invalid"),
-            "{id}"
-        );
+    assert!(register_device(&mut runtime, "x"));
+    for alias in ["x:pane", "x:pane:b"] {
+        assert!(register_device(&mut runtime, alias));
     }
     assert!(
         runtime
@@ -734,6 +743,7 @@ fn a_device_id_holding_a_colon_is_refused_and_never_connected() {
                 label: id.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: alias.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });

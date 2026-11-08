@@ -70,7 +70,7 @@ fn fixture(child: bool) -> (tempfile::TempDir, Arc<Mutex<Runtime>>) {
 /// it before the next frame.
 fn keyboard(runtime: &mut Runtime, pane: Option<&str>) {
     runtime.snapshot.terminal.pane_id = pane.map(str::to_owned);
-    runtime.operator_focused_pane_id = pane.map(str::to_owned);
+    runtime.set_operator_focus(pane.map(str::to_owned));
     runtime.refresh_pane_read_state();
     runtime.sync_workspace_view();
 }

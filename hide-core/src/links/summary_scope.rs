@@ -7,12 +7,15 @@
 //! those sessions can reach its summary, judged by
 //! [`LinkStore::session_reach`] against what the project's last pass read;
 //! every other project keeps the summary it has, which is what a pass over it
-//! would compute again.
+//! would compute again. Within a project it reads again only the pull
+//! requests those sessions reach, and keeps what it read of the others
+//! ([`PrCache`]).
 
 use super::ProjectLinkSummary;
 use super::SUMMARY_SESSION_LIMIT;
 use super::ledger::SessionIdentity;
-use super::store::{DevicePath, LinkStore, ProjectPass};
+use super::pr_cache::PrCache;
+use super::store::{DevicePath, LinkStore, ProjectPass, SessionReach};
 use super::within;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,18 +50,39 @@ impl Dirty {
     }
 }
 
-/// The projects one pass recomputes.
+/// What one pass recomputes: the projects a change can move, and the pull
+/// requests of them it can reach.
+#[derive(Debug)]
+pub(super) struct Scope {
+    projects: Projects,
+    reach: Reach,
+}
+
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Scope {
+enum Projects {
     All,
-    Projects(BTreeSet<String>),
+    Some(BTreeSet<String>),
+}
+
+#[derive(Debug)]
+enum Reach {
+    /// A change no session can place: every pull request is read again.
+    Everything,
+    Sessions(SessionReach),
 }
 
 impl Scope {
+    fn every() -> Self {
+        Self {
+            projects: Projects::All,
+            reach: Reach::Everything,
+        }
+    }
+
     pub(super) fn includes(&self, key: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Projects(keys) => keys.contains(key),
+        match &self.projects {
+            Projects::All => true,
+            Projects::Some(keys) => keys.contains(key),
         }
     }
 }
@@ -78,22 +102,29 @@ struct Placed {
 
 /// What each project's last computed summary read, by project key.
 #[derive(Debug, Default)]
-pub(super) struct Placement(BTreeMap<String, Placed>);
+pub(super) struct Placement {
+    placed: BTreeMap<String, Placed>,
+    /// What each project's summary read of its pull requests' sessions.
+    prs: BTreeMap<String, PrCache>,
+}
 
 impl Placement {
     /// The projects `dirty` can move, or all when its sessions cannot be
     /// placed.
     pub(super) fn scope(&self, store: &LinkStore, dirty: Dirty) -> Scope {
         if dirty.all {
-            return Scope::All;
+            return Scope::every();
         }
         let always = self
-            .0
+            .placed
             .iter()
             .filter(|(_, placed)| placed.always)
             .map(|(key, _)| key.clone());
         if dirty.sessions.is_empty() {
-            return Scope::Projects(always.collect());
+            return Scope {
+                projects: Projects::Some(always.collect()),
+                reach: Reach::Sessions(SessionReach::default()),
+            };
         }
         let reach = match store.session_reach(&dirty.sessions) {
             Ok(reach) => reach,
@@ -102,11 +133,11 @@ impl Placement {
                     "component": "links", "kind": "summary.reach_failed", "code": code,
                     "sessions": dirty.sessions.len(),
                 }));
-                return Scope::All;
+                return Scope::every();
             }
         };
         let mut keys: BTreeSet<String> = always.collect();
-        for (key, placed) in &self.0 {
+        for (key, placed) in &self.placed {
             let reached = !placed.sessions.is_disjoint(&reach.ids)
                 || reach.owners.contains(key)
                 || placed
@@ -123,7 +154,27 @@ impl Placement {
                 keys.insert(key.clone());
             }
         }
-        Scope::Projects(keys)
+        Scope {
+            projects: Projects::Some(keys),
+            reach: Reach::Sessions(reach),
+        }
+    }
+
+    /// Drops what the projects' pull request caches hold of the pull requests
+    /// `scope` reaches. Every cache is checked, not only the recomputed
+    /// projects': an entry a later pass reads must not predate a change.
+    pub(super) fn stale(&mut self, scope: &Scope) {
+        for cache in self.prs.values_mut() {
+            match &scope.reach {
+                Reach::Everything => cache.clear(),
+                Reach::Sessions(reach) => cache.invalidate(reach),
+            }
+        }
+    }
+
+    /// What `key`'s summary holds of its pull requests.
+    pub(super) fn cache(&mut self, key: &str) -> &mut PrCache {
+        self.prs.entry(key.to_owned()).or_default()
     }
 
     /// Records what a project's pass read (`None` when the store does not
@@ -149,7 +200,7 @@ impl Placement {
                 .iter()
                 .map(|creator| creator.source.session_id.clone()),
         );
-        self.0.insert(
+        self.placed.insert(
             key.to_owned(),
             Placed {
                 paths: pass.map(|pass| pass.paths().to_vec()).unwrap_or_default(),
@@ -162,6 +213,7 @@ impl Placement {
 
     /// Forgets the projects the runtime no longer hands in.
     pub(super) fn keep(&mut self, current: &BTreeSet<&str>) {
-        self.0.retain(|key, _| current.contains(key.as_str()));
+        self.placed.retain(|key, _| current.contains(key.as_str()));
+        self.prs.retain(|key, _| current.contains(key.as_str()));
     }
 }

@@ -3,7 +3,7 @@
 use crate::env::Env;
 use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
@@ -62,6 +62,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
     let mut flags = BTreeMap::new();
     let mut check = false;
     let mut beside = false;
+    let mut keep_pane = false;
     let mut id = None;
     let mut native = Vec::new();
     while let Some(arg) = args.next() {
@@ -73,6 +74,12 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                     return Err("--beside is given twice".into());
                 }
                 beside = true;
+            }
+            "--keep-pane" if verb == "end" => {
+                if keep_pane {
+                    return Err("--keep-pane is given twice".into());
+                }
+                keep_pane = true;
             }
             "--" if verb == "spawn" => {
                 native.extend(args.cloned());
@@ -224,6 +231,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
         "end" => Command::End {
             id: id.ok_or(USAGE)?,
             actor: flags.remove("--actor"),
+            keep_pane,
         },
         _ => return Err(USAGE.into()),
     };
@@ -725,5 +733,15 @@ mod tests {
         assert_eq!(register(&["--machine", "mini"]).as_deref(), Some("mini"));
         assert!(line(&["list", "unexpected"]).is_err());
         assert!(line(&["end", "agent-1", "--actor", "agent-2"]).is_ok());
+        let ends = |args: &[&str]| match line(args) {
+            Ok(Delivery::Agents {
+                command: Command::End { keep_pane, .. },
+            }) => Ok(keep_pane),
+            other => Err(format!("{other:?}")),
+        };
+        assert_eq!(ends(&["end", "agent-1"]), Ok(false));
+        assert_eq!(ends(&["end", "agent-1", "--keep-pane"]), Ok(true));
+        assert_eq!(ends(&["end", "--keep-pane", "agent-1", "--json"]), Ok(true));
+        assert!(line(&["end", "agent-1", "--keep-pane", "--keep-pane"]).is_err());
     }
 }

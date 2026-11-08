@@ -28,6 +28,15 @@ describe("a read put back from its chunks", () => {
     expect(finishAssembly(addChunk(beginAssembly(page())!, 0, b64([1, 2, 3, 4]))!)).toBeNull();
   });
 
+  it("puts an HTML file back as one document under the image cap, never as text", () => {
+    const html = '<p>안녕</p><img src="data:image/png;base64,AAAA">';
+    const size = new TextEncoder().encode(html).length;
+    expect(beginAssembly(head({ mode: "html", size: LOOK_IMAGE_CAP + 1, chunks: 103 }))).toBeNull();
+    expect(beginAssembly(head({ mode: "html", size: LOOK_TEXT_CAP + 1, chunks: 11 }))).not.toBeNull();
+    const done = finishAssembly(addChunk(beginAssembly(head({ mode: "html", size, chunks: 1 }))!, 0, utf8(html))!);
+    expect(done).toEqual({ state: "html", document: html, size });
+  });
+
   it("takes chunks in order only, and never more bytes than the head said", () => {
     const start = beginAssembly(head({ size: 6, chunks: 2 }))!;
     expect(addChunk(start, 1, utf8("abc"))).toBeNull();

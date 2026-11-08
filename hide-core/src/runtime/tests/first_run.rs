@@ -805,7 +805,7 @@ fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications()
         "first_run_advance",
         serde_json::json!({"from": "notifications", "notifications": false}),
     ));
-    runtime.dispatch_json(&event("first_run_draft", serde_json::json!({"project_device": "studio", "project_path": "~/my-project", "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "my-project"}})));
+    runtime.dispatch_json(&event("first_run_draft", serde_json::json!({"project_device": "studio", "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "my-project"}})));
     assert!(runtime.dispatch_json(&event(
         "first_run_back",
         serde_json::json!({"from": "project"})
@@ -833,7 +833,6 @@ fn back_preserves_choices_and_never_queues_an_install_or_changes_notifications()
         Some(["claude-code".to_owned()].as_slice())
     );
     assert_eq!(choices.project_device.as_deref(), Some("studio"));
-    assert_eq!(choices.project_path, "~/my-project");
     assert_eq!(choices.project_form.view, "clone");
     assert_eq!(choices.project_form.url, "https://example.test/repo.git");
     assert!(choices.notifications_answered);
@@ -916,7 +915,7 @@ fn finishing_setup_clears_the_project_draft_before_saving() {
         step: FirstRunStep::Project,
     });
     runtime.dispatch_json(&event("first_run_draft", serde_json::json!({
-        "project_device": "build", "project_path": "~/work/repo",
+        "project_device": "build",
         "project_form": {"view": "clone", "url": "https://example.test/repo.git", "parent": "~/work", "name": "repo"}
     })));
     runtime.dispatch_json(&event(
@@ -928,7 +927,6 @@ fn finishing_setup_clears_the_project_draft_before_saving() {
     let choices = &restarted.snapshot.ui_state.first_run_choices;
     assert_eq!(step(&restarted), Some(FirstRunStep::Done));
     assert_eq!(choices.project_device, None);
-    assert!(choices.project_path.is_empty());
     assert_eq!(
         choices.project_form,
         crate::model::FirstRunProjectForm::default()

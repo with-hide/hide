@@ -118,6 +118,16 @@ impl hide_node::ssh::PaneEvents for Events {
                     issued_new: true,
                     answer: json!({"ok":true,"request_id":hook.request_id,"result":{"context":{"device_id":"fixture"},"capabilities":["workspace.info"]}}),
                 }
+            } else if let Some(hook) = hook
+                && matches!(
+                    hook.command,
+                    hide_node_link::panes::HookCommand::LetterConfirm { .. }
+                )
+            {
+                // The core's answer to a pane that is not the letter's recipient.
+                ProofAnswer::Hook {
+                    answer: json!({"ok":false,"request_id":hook.request_id,"reason":"recipient_required","next_action":"Confirm only letters sent to this agent"}),
+                }
             } else if let Some(hook) = hook {
                 ProofAnswer::Hook {
                     answer: json!({"ok":true,"request_id":hook.request_id,"result":{"context":null,"outcome":"empty"}}),
@@ -1239,6 +1249,8 @@ struct HeardTerminals {
 impl hide_node::terminal::device::DeviceSink for HeardTerminals {
     fn output(&self, _device: &str, _pane: &str, _bytes: &[u8], _full: bool) {}
 
+    fn clipboard(&self, _device: &str, _pane: &str, _text: &[u8]) {}
+
     fn report(&self, _device: &str, report: hide_node_link::terminal::TerminalReport) {
         self.reports.lock().unwrap().push(report);
         self.arrived.notify_all();
@@ -1896,14 +1908,20 @@ fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
             .any(|event| matches!(event, NodeEvent::PaneProof { hook: Some(_), .. }))
     });
     assert!(proofs.iter().any(|event| matches!(event, NodeEvent::PaneProof { pane_id, identity, one_shot: true, hook: Some(_), .. } if pane_id == PROVED_PANE && identity.terminal_id == PROVED_PANE)));
-    for invalid in [
-        json!({"kind":"workspace_action","command":{"type":"close_pane"}}),
-        json!({"kind":"letter_confirm","ids":["letter-1"]}),
-    ] {
-        let mut request = request.clone();
-        request["hook"]["command"] = invalid;
-        assert_eq!(caller.ask(socket, &request)["reason"], "invalid_request");
-    }
+    let mut invalid = request.clone();
+    invalid["hook"]["command"] = json!({"kind":"workspace_action","command":{"type":"close_pane"}});
+    assert_eq!(caller.ask(socket, &invalid)["reason"], "invalid_request");
+    // A letter's confirmation goes to the core with the proved pane, and
+    // what the core answers, here that the pane is not the letter's
+    // recipient, comes back as it is (with-hide/hide-private#663); its
+    // persistent form is refused as a mismatched lifetime
+    // (`workspace_guidance_gets_one_reusable_reference_and_rejects_writes`).
+    let mut confirm = request.clone();
+    confirm["hook"]["request_id"] = json!("confirm-1");
+    confirm["hook"]["command"] = json!({"kind":"letter_confirm","ids":["letter-1"]});
+    let refused = caller.ask(socket, &confirm);
+    assert_eq!(refused["reason"], "recipient_required", "{refused}");
+    assert!(device.events.heard.lock().unwrap().iter().any(|event| matches!(event, NodeEvent::PaneProof { pane_id, one_shot: true, hook: Some(hook), .. } if pane_id == PROVED_PANE && hook.request_id == "confirm-1")));
     let mut other_pane = request.clone();
     other_pane["pane_id"] = json!("w1:p999");
     assert_eq!(caller.ask(socket, &other_pane)["ok"], false);

@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::record::{self, End, EndReason, Identity, PaneRecord, Phase, Unreadable};
 use hide_holder_protocol::{
-    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, Size, Theme,
-    read_holder, write_client,
+    ClientMessage, FrameError, HolderMessage, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION,
+    Size, Theme, read_holder, write_client,
 };
 use hide_platform::process::{ResidentCommand, start_resident};
 use serde_json::json;
@@ -52,7 +52,7 @@ pub use ownership::Owner;
 mod requests;
 mod reservation;
 #[cfg(test)]
-use hide_holder_protocol::{PROTOCOL_VERSION, record::RECORD_FORMAT};
+use hide_holder_protocol::record::RECORD_FORMAT;
 pub use requests::Request;
 
 /// The most holders a state folder keeps: every record that is not ended
@@ -451,6 +451,23 @@ impl Panes {
     /// The pane's record as it is now.
     pub fn record(&self, pane: &str) -> Result<Option<PaneRecord>, Unreadable> {
         record::read(&layout::pane_record(&self.state_dir, pane))
+    }
+
+    /// The version folder `source`'s holder runs from, by name: what a
+    /// record's `version_folder` is compared with to tell a pane that runs
+    /// another build's holder (with-hide/hide-private#646). The name is the
+    /// folder's content hash, so a different name is a different build,
+    /// never an older or newer one.
+    pub fn folder_of(&self, source: &holders::Source) -> Result<String, String> {
+        self.names
+            .name(PROTOCOL_VERSION, source)
+            .map_err(|error| format!("the holder's files could not be read: {error}"))
+    }
+
+    /// Makes or finds `source`'s version folder and holds it as used until
+    /// the answer is dropped, as a start does ([`holders::prepare`]).
+    pub fn prepare_folder(&self, source: &holders::Source) -> Result<holders::Reservation, String> {
+        holders::prepare(&self.home, PROTOCOL_VERSION, source, &self.names)
     }
 
     fn emit(&self, event: &str, fields: serde_json::Value) {
@@ -1952,7 +1969,7 @@ mod tests {
 
     #[test]
     fn a_holder_that_wrote_itself_running_after_the_bound_is_taken_as_started() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::short_tempdir();
         let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         let stand_in = StandIn::start();
         let holder = stand_in.identity();
@@ -1976,7 +1993,7 @@ mod tests {
     #[test]
     fn cancellation_from_another_boot_never_ends_a_current_process() {
         for close_directly in [false, true] {
-            let home = tempfile::tempdir().unwrap();
+            let home = crate::short_tempdir();
             let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
             panes.boot = Some("current-boot".to_owned());
             let owner = panes.acquire(Duration::ZERO).unwrap();
@@ -2017,7 +2034,7 @@ mod tests {
     /// and a process of this boot that reuses its pid is left alone.
     #[test]
     fn a_record_of_an_earlier_boot_is_settled_here_whatever_owner_it_names() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::short_tempdir();
         let mut panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         panes.boot = Some("current-boot".to_owned());
         let owner = panes.acquire(Duration::ZERO).unwrap();
@@ -2048,7 +2065,7 @@ mod tests {
     /// a restart run a second shell beside them.
     #[test]
     fn an_ended_record_whose_pane_left_processes_running_is_neither_dropped_nor_forgotten() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::short_tempdir();
         let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         let owner = panes.acquire(Duration::ZERO).unwrap();
         let stand_in = StandIn::start();
@@ -2097,7 +2114,7 @@ mod tests {
     #[test]
     fn cancellation_never_records_completion_before_the_live_holder_leaves() {
         for cleanup_refused in [false, true] {
-            let home = tempfile::tempdir().unwrap();
+            let home = crate::short_tempdir();
             let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
             let owner = panes.acquire(Duration::ZERO).unwrap();
             let stand_in = StandIn::start();
@@ -2152,7 +2169,7 @@ mod tests {
 
     #[test]
     fn a_start_given_up_on_is_recorded_and_its_holder_ended() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::short_tempdir();
         let panes = Panes::open(home.path(), &home.path().join("s"), quiet).unwrap();
         let mut stand_in = StandIn::start();
         let holder = stand_in.identity();

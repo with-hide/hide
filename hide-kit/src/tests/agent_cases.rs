@@ -694,6 +694,46 @@ fn an_agent_found_only_by_its_program_reports_its_folder_as_not_made_yet() {
 }
 
 #[test]
+fn a_claude_folder_made_after_a_pass_gets_its_hook_and_skill_on_the_next_pass() {
+    // with-hide/hide-private#662: a device joined before Claude Code was
+    // first started there.
+    let fixture = Fixture::new();
+    std::fs::remove_dir_all(fixture.home().join(".claude")).unwrap();
+    executable(&fixture.home().join(".local/bin/claude"), "#!/bin/sh\n");
+
+    let report = apply(&fixture.target, &Scope::automatic());
+    let claude = agent(&report, "claude-code");
+    let hook = claude.hook.as_ref().unwrap();
+    assert_eq!(hook.state, ComponentState::Absent, "{report:?}");
+    assert_eq!(hook.why.as_ref().unwrap().cause, PartCause::AgentAbsent);
+
+    // Claude Code's first start makes its folder; a read sees the hook
+    // waiting to go in, and the next pass puts it in.
+    std::fs::create_dir_all(fixture.home().join(".claude")).unwrap();
+    let read = status(&fixture.target);
+    let claude = agent(&read, "claude-code");
+    assert_eq!(
+        claude.hook.as_ref().unwrap().state,
+        ComponentState::NotInstalled
+    );
+    assert!(claude.needs_attention());
+
+    let report = apply(&fixture.target, &Scope::automatic());
+    let claude = agent(&report, "claude-code");
+    assert_eq!(
+        claude.hook.as_ref().unwrap().state,
+        ComponentState::Installed,
+        "{report:?}"
+    );
+    assert_eq!(claude.skill.state, ComponentState::Installed);
+    assert_eq!(
+        state(&report, ComponentId::ClaudeCodeHook),
+        ComponentState::Installed
+    );
+    assert!(fixture.settings().contains("hide-agent-hooks"));
+}
+
+#[test]
 fn a_file_that_only_mentions_the_marker_is_not_hides_stub() {
     let fixture = Fixture::new();
     install(&fixture, "grok", ".grok");

@@ -8,6 +8,7 @@ mod clone;
 mod copy;
 mod document;
 mod git;
+mod importable;
 mod item_identity;
 mod mutate;
 mod project;

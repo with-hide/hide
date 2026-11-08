@@ -328,7 +328,27 @@ use crate::error::HostError;
 /// (`TerminalControl::Mouse`), which the holder encodes for the program's
 /// mouse mode, in place of the core's own bytes (`Write`); a helper on 77
 /// would refuse it, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 78;
+/// 79: a device's terminals send what a pane's program wrote to the
+/// clipboard (`TerminalUp::Clipboard`), once, for the core's window in
+/// front; a core on 78 cannot read the line and would drop every copy, so
+/// the helper upgrades.
+/// 80: `home_list` lists one folder under the node's home for Add a
+/// project's folder list and `new_folder_target` says where a clone or a new
+/// project would land under that home, so both run on any device (PRD
+/// device-add-project D-01, D-07); a helper on 79 would refuse both, so it
+/// upgrades.
+/// 82: `importable_projects` answers the projects worth adding on the node,
+/// from its agents' sessions and Paseo's and Herdr's lists, for Add a
+/// project on any device (PRD device-add-project D-09); a helper on 81
+/// would refuse it, so it upgrades (81 is taken by an open change).
+/// 83 (81 was held for this change while 82 landed first): a node renews a
+/// pane's holder from this build's version folder
+/// (`holders::PaneCall::Renew`, with-hide/hide-private#646), which the core
+/// asks before it wakes an agent in the pane, and takes only the sleep's own
+/// input (`holders::PaneCall::SleeperInput`) into a pane whose agent is
+/// asleep; a helper on an earlier protocol would refuse both calls, so it
+/// upgrades.
+pub const PROTOCOL_VERSION: u32 = 83;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -608,6 +628,33 @@ pub enum Call {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         confirmed_outside_home: Option<String>,
+    },
+    /// One folder under this host's home as Add a project lists it
+    /// (`browse::HomeListing`): `path` is `~`, `~/...` or an absolute path
+    /// in either spelling, and has to lead to home or a folder under it
+    /// without leaving it through a link. Hidden names are left out, and a
+    /// repository carries its branch and a folder its repository count.
+    HomeList {
+        path: String,
+    },
+    /// The projects worth adding on this host (`importable::ImportableProjects`):
+    /// the folders its agents worked in and the projects Paseo and Herdr keep,
+    /// each as the root a registration would add under home, newest within
+    /// thirty days first, at most twenty, leaving out every root `exclude`
+    /// names (the core's registrations here, at most
+    /// `importable::EXCLUDE_CAP`). It only reads.
+    ImportableProjects {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<String>,
+    },
+    /// Where a clone (`kind` `clone`) or a new project (`project`) named
+    /// `name` would land in `parent`, home or a folder under it, judged
+    /// against this host's home (`browse::NewFolderTarget`); nothing is
+    /// made.
+    NewFolderTarget {
+        parent: String,
+        name: String,
+        kind: crate::browse::NewFolderKind,
     },
     /// Makes this host's Hide Home folder (`~/hide`) hold one link per
     /// project in `projects` and nothing Hide did not make
@@ -1273,6 +1320,9 @@ impl Call {
             | Self::Directory { .. }
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
+            | Self::HomeList { .. }
+            | Self::ImportableProjects { .. }
+            | Self::NewFolderTarget { .. }
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
             | Self::BranchMergePush { .. }

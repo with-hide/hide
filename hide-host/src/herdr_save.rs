@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub use hide_node_link::herdr_save::{Fetched, Found, READ_CAP, Server};
+pub use hide_node_link::herdr_save::{Fetched, Found, NEWEST_FORMAT, READ_CAP, Server};
 
 /// How long Hide's Herdr has to end on each way of asking it (D-6).
 pub const STOP_WITHIN: Duration = Duration::from_secs(10);
@@ -40,16 +40,22 @@ impl Place {
 }
 
 /// Reads the save at `path`, at most [`READ_CAP`] bytes.
+///
+/// The save is opened without waiting and only as a regular file
+/// (`hide_platform::fs::open_regular`, a link to it followed), so a pipe or
+/// a device at the path is unreadable at once rather than holding the
+/// reader.
 pub fn fetch(path: &Path) -> Fetched {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Fetched::Missing,
-        Err(error) => {
-            return Fetched::Unreadable {
-                reason: format!("it could not be opened: {error}"),
-            };
-        }
-    };
+    let file =
+        match std::fs::canonicalize(path).and_then(|real| hide_platform::fs::open_regular(&real)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Fetched::Missing,
+            Err(error) => {
+                return Fetched::Unreadable {
+                    reason: format!("it could not be opened: {error}"),
+                };
+            }
+        };
     // The last change tells a save Herdr wrote again (D-9), so a save whose
     // change the system will not say is not read as one never changed.
     let modified_ns = match file

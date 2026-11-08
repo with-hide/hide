@@ -229,10 +229,13 @@ pub(crate) enum StartError {
     /// surface words (`agent_start.shell_*`, or a session check's own code);
     /// `detail` the sentence the log, a wake's record and the CLI keep.
     NotStarted { reason: String, detail: String },
-    /// Nothing was typed into the pane: its shell held the terminal but had
-    /// not marked its first prompt within the wait, stopped in its startup
-    /// files (a question waiting for a key). Carries the screen's last line.
-    ShellStarting(Option<String>),
+    /// Nothing was typed into the pane: its shell had not finished starting
+    /// within the wait (`waited`), stopped in its startup files (a question
+    /// waiting for a key). Carries the screen's last line, if any.
+    ShellStarting {
+        waited: Duration,
+        screen: Option<String>,
+    },
     /// The engine's own answer to `agent.start`: a refusal, no answer at all, or
     /// an answer in a shape the start does not promise (`Answer`).
     Engine(EngineError),
@@ -351,19 +354,23 @@ fn shell_unreadable(message: String) -> StartError {
 /// starting by; the screen's last line goes beside it, never into a sentence.
 pub(crate) const SHELL_STARTING_REASON: &str = "agent_start.shell_starting";
 
-/// What an operator reads for a start whose shell had not finished starting,
-/// with the screen's last line when there was one.
-pub(crate) fn shell_starting_message(screen: Option<&str>) -> String {
+/// What an operator reads for a start whose shell had not finished starting
+/// after `waited`, with the screen's last line when there was one.
+pub(crate) fn shell_starting_message(waited: Duration, screen: Option<&str>) -> String {
+    let seconds = whole_seconds(waited);
     match screen {
         Some(line) => format!(
-            "The pane's shell had not finished starting after {} s, so the agent was not started. Its screen ends with \"{line}\": answer what it asks in that pane, then retry.",
-            SHELL_WAIT.as_secs()
+            "The pane's shell had not finished starting after {seconds} s, so the agent was not started. Its screen ends with \"{line}\": answer what it asks in that pane, then retry."
         ),
         None => format!(
-            "The pane's shell had not finished starting after {} s, so the agent was not started. Check what its startup files wait for in that pane, then retry.",
-            SHELL_WAIT.as_secs()
+            "The pane's shell had not finished starting after {seconds} s, so the agent was not started. Check what its startup files wait for in that pane, then retry."
         ),
     }
+}
+
+/// `wait` in whole seconds, as an operator reads it.
+pub(crate) fn whole_seconds(wait: Duration) -> u64 {
+    (wait.as_millis() as u64).div_ceil(1000)
 }
 
 /// Action proof after shell readiness, repeated before every actual start
@@ -381,7 +388,7 @@ pub(crate) fn start_at_shell_checked(
     answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
-    start_within(
+    start_at_shell_within(
         engine,
         node,
         correlation_id,
@@ -389,6 +396,34 @@ pub(crate) fn start_at_shell_checked(
         start,
         answer_timeout,
         SHELL_WAIT,
+        check,
+    )
+}
+
+/// [`start_at_shell_checked`] whose shell gets `shell_wait`, at most
+/// [`SHELL_WAIT`], to finish starting: a spawn's start ends its wait inside
+/// the time the spawn has to answer its caller
+/// (`coordination::SPAWN_ANSWER_WAIT`), so the caller hears why rather than
+/// a timeout.
+#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
+pub(crate) fn start_at_shell_within(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    shell: ShellStart,
+    start: &PreparedStart,
+    answer_timeout: Duration,
+    shell_wait: Duration,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<StartedAgent, StartError> {
+    start_within(
+        engine,
+        node,
+        correlation_id,
+        shell,
+        start,
+        answer_timeout,
+        shell_wait.min(SHELL_WAIT),
         Duration::ZERO,
         check,
     )
@@ -422,9 +457,12 @@ pub(crate) fn start_at_shell_reusing_name(
     )
 }
 
+/// [`start_at_shell_reusing_name`] with its waits named: `wait` for the
+/// pane's shell and the engine's restore before it, `name_release_wait` for
+/// a name an ended agent still holds.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 #[allow(clippy::too_many_arguments)] // one bounded start with shell/name waits and effect admission
-fn start_within(
+pub(crate) fn start_within(
     engine: &dyn Engine,
     node: Option<&dyn NodeLink>,
     correlation_id: &str,
@@ -447,6 +485,14 @@ fn start_within(
         start.line(),
         shell_start,
     );
+    // A pane drawn from the saved session before the engine has taken its
+    // holder back (a start right after the daemon or a device link started)
+    // would be refused as unreadable (`pane_owner_unavailable`): the start
+    // waits for that restore inside its shell's wait, as a call that makes a
+    // pane does.
+    engine
+        .wait_restored(deadline.saturating_duration_since(Instant::now()))
+        .map_err(StartError::Engine)?;
     let mut settled = false;
     let mut busy = 0_u32;
     loop {
@@ -606,25 +652,12 @@ impl Shell<'_> {
                     "line_limit": held,
                     "prompt_unmarked": matches!(waiting, Waiting::Prompt),
                 }));
-                if matches!(waiting, Waiting::Prompt) {
-                    return Err(StartError::ShellStarting(self.last_screen_line()));
-                }
-                return Err(match held {
-                    Some(limit) => StartError::NotStarted {
-                        reason: "agent_start.shell_not_reading".into(),
-                        detail: format!(
-                            "The pane's shell did not start reading its command line within {} s, so the agent was not started: until it does, its terminal keeps only {limit} bytes of a typed line, and this start's line is up to {} bytes. Check what the shell's startup files wait on, then retry.",
-                            SHELL_WAIT.as_secs(),
-                            self.line,
-                        ),
-                    },
-                    None => StartError::NotStarted {
-                        reason: "agent_start.shell_no_prompt".into(),
-                        detail: format!(
-                            "The pane's shell did not reach its prompt within {} s, so the agent was not started.",
-                            SHELL_WAIT.as_secs()
-                        ),
-                    },
+                // Whichever of the three it waited on (its first prompt, the
+                // terminal, a line editor that would cut the line), the shell
+                // had not finished starting; the diagnostic above keeps which.
+                return Err(StartError::ShellStarting {
+                    waited: started.elapsed(),
+                    screen: self.last_screen_line(),
                 });
             }
             thread::sleep(POLL_INTERVAL);
@@ -1124,15 +1157,19 @@ mod tests {
     fn a_shell_that_never_reaches_its_prompt_types_nothing_and_says_so() {
         let fake = FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(4200, &[4200]),
+            "read_pane" => reply(PaneText {
+                text: "Last login: today\n".into(),
+                truncated: false,
+            }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::NotStarted { reason, detail }) =
+        let Err(StartError::ShellStarting { waited, screen }) =
             start(&fake, Duration::from_millis(300))
         else {
             panic!("a shell that never holds the terminal is not a start");
         };
-        assert_eq!(reason, "agent_start.shell_no_prompt");
-        assert!(detail.contains("did not reach its prompt"), "{detail}");
+        assert_eq!(screen.as_deref(), Some("Last login: today"));
+        assert!(waited >= Duration::from_millis(300), "{waited:?}");
         assert!(!fake.methods().contains(&"start_agent"));
     }
 
@@ -1315,6 +1352,10 @@ mod tests {
     fn shell_alone(_name: &str) -> Fake {
         FakeEngine::start(|method, _| match method {
             "pane_processes" => process_info(SHELL, &[SHELL]),
+            "read_pane" => reply(PaneText {
+                text: String::new(),
+                truncated: false,
+            }),
             "start_agent" => started(),
             other => panic!("unexpected {other}"),
         })
@@ -1399,13 +1440,18 @@ mod tests {
     fn a_terminal_that_never_leaves_line_mode_gets_nothing_typed() {
         let fake = shell_alone("agent-start-canonical");
         let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
-        let Err(StartError::NotStarted { reason, detail }) =
+        let (refused, records) = crate::diagnostics::capture(|| {
             start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_millis(300))
-        else {
+        });
+        let Err(StartError::ShellStarting { .. }) = refused else {
             panic!("a line the terminal would cut is not typed");
         };
-        assert_eq!(reason, "agent_start.shell_not_reading");
-        assert!(detail.contains("1024 bytes"), "{detail}");
+        assert!(
+            records.iter().any(
+                |record| record["kind"] == "shell_wait.timeout" && record["line_limit"] == 1024
+            ),
+            "{records:?}"
+        );
         assert_eq!(typed(&fake), 0);
     }
 
@@ -1489,7 +1535,7 @@ mod tests {
                 }),
                 other => panic!("unexpected {other}"),
             });
-            let Err(StartError::ShellStarting(line)) =
+            let Err(StartError::ShellStarting { screen: line, .. }) =
                 start_integrated(&fake, Duration::from_millis(300))
             else {
                 panic!("an unmarked shell is not a start");
@@ -1517,8 +1563,9 @@ mod tests {
             }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::ShellStarting(Some(line))) =
-            start_integrated(&fake, Duration::from_millis(300))
+        let Err(StartError::ShellStarting {
+            screen: Some(line), ..
+        }) = start_integrated(&fake, Duration::from_millis(300))
         else {
             panic!("an unmarked shell is not a start");
         };
@@ -1539,8 +1586,9 @@ mod tests {
             }),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::ShellStarting(Some(line))) =
-            start_integrated(&fake, Duration::from_millis(300))
+        let Err(StartError::ShellStarting {
+            screen: Some(line), ..
+        }) = start_integrated(&fake, Duration::from_millis(300))
         else {
             panic!("an unmarked shell is not a start");
         };
@@ -1580,7 +1628,7 @@ mod tests {
             &|| Ok(()),
         );
         assert!(
-            matches!(answer, Err(StartError::ShellStarting(_))),
+            matches!(answer, Err(StartError::ShellStarting { .. })),
             "{answer:?}"
         );
         assert!(!fake.methods().contains(&"start_agent"));

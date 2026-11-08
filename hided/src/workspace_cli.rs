@@ -28,12 +28,6 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// Longer than the daemon's own Factory answer limit, so the daemon's reason
 /// arrives rather than a local timeout.
 const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
-/// A spawn on this machine: a Codex start with its brief commonly takes
-/// 10 to 15 seconds, past the 10 every other command gets.
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
-/// A spawn on another device: its checks, worktree, tab and agent start are
-/// each a round trip over SSH.
-const REMOTE_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// The catalog's own wait for a model-list read is 10 seconds; the exchange
 /// outlives it.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
@@ -749,16 +743,26 @@ pub fn request_delivery(
     // which takes longer than a local command, and one on another device
     // makes several calls over SSH besides; running it again after a timeout
     // returns the same agent either way.
+    // The spawn answers within its own answer wait, which starts after the
+    // wait for a kit pass on the child's machine and ends its new shell's
+    // wait too, so the CLI waits both and an ordinary command's wait for the
+    // answer to come back.
     let timeout = match &command {
         hide_core::delivery::Command::Agents {
             command: hide_core::coordination::Command::Spawn { machine, .. },
         } => {
-            if machine.is_some() {
-                REMOTE_SPAWN_TIMEOUT
-            } else {
-                SPAWN_TIMEOUT
-            }
+            TIMEOUT
+                + if machine.is_some() {
+                    hide_core::coordination::DEVICE_SPAWN_ANSWER_WAIT
+                } else {
+                    hide_core::coordination::SPAWN_ANSWER_WAIT
+                }
+                + hide_core::coordination::HOOK_PASS_WAIT
         }
+        // An end closes its agent's pane after its record ended.
+        hide_core::delivery::Command::Agents {
+            command: hide_core::coordination::Command::End { .. },
+        } => TIMEOUT + hide_core::coordination::END_ANSWER_WAIT,
         _ => TIMEOUT,
     };
     credential.run(|path, after| {

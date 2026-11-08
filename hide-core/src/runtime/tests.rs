@@ -7,11 +7,15 @@ use crate::engine::fake::{self, FakeEngine, Reply, refused, reply, unanswered};
 /// The stand-in engine a runtime test answers for.
 type Fake = Arc<FakeEngine<'static>>;
 
+#[path = "tests/add_project.rs"]
+mod add_project;
 mod agent_areas;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
 #[path = "tests/agent_definitions.rs"]
 mod agent_definitions;
+#[path = "tests/agent_end.rs"]
+mod agent_end;
 #[path = "tests/agent_features.rs"]
 mod agent_features;
 #[path = "tests/agent_scopes.rs"]
@@ -40,6 +44,10 @@ mod detail;
 mod device_catalog;
 #[path = "tests/device_kit.rs"]
 mod device_kit;
+#[path = "tests/device_names.rs"]
+mod device_names;
+#[path = "tests/device_reconnect.rs"]
+mod device_reconnect;
 #[path = "tests/device_sleep.rs"]
 mod device_sleep;
 #[path = "tests/device_worktrees.rs"]
@@ -88,6 +96,8 @@ mod lineage;
 mod links;
 #[path = "tests/memory.rs"]
 mod memory;
+#[path = "tests/mission_letters.rs"]
+mod mission_letters;
 #[path = "tests/mission_worker_sleep.rs"]
 mod mission_worker_sleep;
 #[path = "tests/missions.rs"]
@@ -105,6 +115,8 @@ mod overview_graph;
 mod own_devices;
 mod pane_geometry;
 pub(super) mod pane_move;
+#[path = "tests/phone_viewing.rs"]
+mod phone_viewing;
 mod plans;
 #[path = "tests/project_open.rs"]
 mod project_open;
@@ -115,6 +127,8 @@ mod projects;
 mod ps;
 #[path = "tests/pull_requests.rs"]
 mod pull_requests;
+#[path = "tests/read_on_look.rs"]
+mod read_on_look;
 #[path = "tests/recent_checkouts.rs"]
 mod recent_checkouts;
 #[path = "tests/recent_panes.rs"]
@@ -305,6 +319,17 @@ impl RecordedTerminals {
             .into_iter()
             .filter_map(|control| match control {
                 TerminalControl::Attach { pane, manual, .. } => Some((pane, manual)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The panes released since the last take.
+    pub(super) fn releases(&self) -> Vec<String> {
+        self.take()
+            .into_iter()
+            .filter_map(|control| match control {
+                TerminalControl::Release { pane, .. } => Some(pane),
                 _ => None,
             })
             .collect()

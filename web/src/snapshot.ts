@@ -1270,6 +1270,11 @@ export type TaskView = "status" | "project";
 export type SidebarProject = { device_id: string; workspace_id: string };
 
 /** One 마무리 맡기기 and where it stands (`status.stray_hand_offs`). */
+/** One add's receipt: `refused` carries the core's error kind and message. */
+export type ProjectAddReceipt = { request_id: string; device_id: string; path: string } & (
+  | { state: "pending" | "added" }
+  | { state: "refused"; kind: string; message: string }
+);
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
@@ -1365,7 +1370,7 @@ export type MissionCheckRule = "all" | "majority";
 
 /** One agent of a review or verification: what the plan asked, the registration bound to it and its own answer. */
 /** One checker of a review or verify line; `pane_id` and `machine` are the bound checker's pane now, as the core resolves it from `agent_id` (B29). */
-export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; summary?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
+export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; summary?: string; at_unix_ms?: number; commit?: string; pane_id?: string; machine?: string };
 
 /** One finish line of a node (`Criterion`): only the fields its kind carries are present. */
 export type MissionCriterion = {
@@ -1387,6 +1392,8 @@ export type MissionCriterion = {
   skip?: { reason: string; decision?: number };
   rule?: MissionCheckRule;
   checkers?: MissionChecker[];
+  /** Of the checkers that decide the line, how many passed, as the core counts them; absent while one or none decides (`Tally`). */
+  tally?: { passed: number; total: number };
   /** The node whose work found a defect. */
   found_by?: string;
 };
@@ -1522,7 +1529,17 @@ export type MissionNode = {
   asks_push?: boolean;
   /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
   waiting_on?: MissionWaitingOn | null;
+  /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
+  work?: MissionNodeWork | null;
 };
+
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
+export type MissionNodeWork = { state: "working" } | { state: "waiting"; on: MissionWaitingOn } | { state: "no_worker" };
+
+/** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
+export type MissionLettersHeldFor = "unreachable" | "undelivered" | "approval" | "draft" | "unanswered";
+/** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
+export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
 /** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
 export type MissionWaitingOn =
@@ -1566,6 +1583,8 @@ export type Mission = {
   answer: MissionAnswer | null;
   /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
   end_asked?: boolean;
+  /** Letters to the Conductor only the operator can let through, while the mission runs; absent from an older core. */
+  conductor_letters?: MissionHeldLetters | null;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
   report: string | null;
@@ -1586,7 +1605,7 @@ export type Mission = {
  */
 export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "attention" | "landing" | "agent_runtime">;
 /** What those rules read of a mission, and so what the phone receives of one. */
-export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms"> & {
+export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters"> & {
   conductor: Pick<Mission["conductor"], "present">;
   nodes: N[];
 };
@@ -1974,7 +1993,7 @@ export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | 
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
-export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
 export type MachineProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
 
 /** A machine the first-run Devices step offers: an ssh config Host, or this PC's WSL. */
@@ -2363,6 +2382,8 @@ export type TaskOperation = {
  */
 export type RepositoryClone = {
   id: number;
+  /** The machine the clone runs on and registers its project on; absent from an older daemon, whose clones ran on the core's machine. */
+  device_id?: string;
   host: string;
   /** The folder the clone creates, canonical; the registration carries the same path. */
   path: string;
@@ -2486,7 +2507,7 @@ export type MemoryQuestion =
  * Why a failed promotion's agent never started (`memory_start_failure_code`):
  * `detail` is the line its new pane's shell stopped at, for `shell_starting`.
  */
-export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "card_not_processed" | "other"; detail: string | null };
+export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "agent_hook_not_ready" | "card_not_processed" | "other"; detail: string | null };
 
 export type MemoryDocument = {
   authority: "outdated" | "card_newer" | "ask";
@@ -2790,7 +2811,7 @@ export type DeskSteps = { sessions: number; files: number; letters: number; star
 /** `desk_job_reason`. */
 export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
 /** `desk_job_failure`: why a start failed, grouped by what the operator can do (`desk.jobFailure.*`). */
-export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
+export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "agent_hook_not_ready" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
 /** `desk_output_kind`. */
 export type DeskOutputKind = "image" | "page" | "doc" | "pr";
 /**
@@ -3195,6 +3216,10 @@ export type SnapshotRest = {
     expanded_paths?: string[];
     /** Each SSH device's expanded Explorer folders; this machine's are `expanded_paths`. */
     device_expanded_paths?: Record<string, string[]>;
+    /** The folder Add a project's folder list last showed on the core's machine (PRD device-add-project D-04). */
+    add_project_folder?: string | null;
+    /** The same for each device, by device id. */
+    device_add_project_folders?: Record<string, string>;
     /** Projects whose checkouts the sidebar folds. */
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */
@@ -3301,6 +3326,8 @@ export type SnapshotRest = {
     browser_opens?: import("./viewLayout").BrowserOpenReceipt[];
     /** The latest 마무리 맡기기 presses, oldest first and bounded (PRD project-panel-results B12, B13). */
     stray_hand_offs?: StrayHandOff[];
+    /** The adds that named a request id (Add a project's importable list), oldest first and bounded, each with its own outcome (PRD device-add-project B25). */
+    project_adds?: ProjectAddReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
     last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
   };

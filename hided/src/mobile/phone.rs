@@ -851,6 +851,8 @@ async fn handle(
                 lines: pane::FIRST_LINES,
             });
             let (older, older_asks) = mpsc::channel(1);
+            // Opening it is a look: the core reads it as the desktop's focus
+            // would while it stays open, and wakes nothing.
             mobile.set_viewing(connection, Some(key.clone()));
             open.look = None;
             let task = spawn_detail(Arc::clone(mobile), key, frames.clone(), asks, older_asks);
@@ -2589,6 +2591,53 @@ mod tests {
             (refused["ok"].as_bool(), reason(&refused)),
             (Some(false), Some("unknown_kind"))
         );
+    }
+
+    /// Opening an agent's detail tells the core the phone looks at it, so it
+    /// is read on both surfaces as the desktop's focus reads it; it stays
+    /// looked at while any phone has it open, and a phone that closes the
+    /// detail or goes away stops looking (`docs/status-model.md`).
+    #[tokio::test]
+    async fn an_agent_a_phone_opens_is_looked_at_until_every_phone_lets_it_go() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let (frames, _received) = mpsc::channel::<Value>(64);
+        let projection = Arc::new(sleeping_projection(None));
+        let (mut first, mut second) = (Open::default(), Open::default());
+        let send = async |connection: u64, open: &mut Open, message: Value| {
+            handle(
+                &mobile,
+                connection,
+                "phone",
+                &message,
+                open,
+                &frames,
+                &projection,
+            )
+            .await
+        };
+        let _ = mobile.register(1, "phone-1");
+        let _ = mobile.register(2, "phone-2");
+        let open = json!({"type": "open", "device_id": "test-node", "pane_id": "w1:p1", "view": "conversation"});
+        let looked_at = std::collections::BTreeSet::from(["w1:p1".to_owned()]);
+
+        let gone = json!({"type": "open", "device_id": "test-node", "pane_id": "w1:p9", "view": "conversation"});
+        send(1, &mut first, gone).await;
+        assert!(mobile.viewing_announced().is_empty(), "no agent, no look");
+
+        send(1, &mut first, open.clone()).await;
+        assert_eq!(mobile.viewing_announced(), looked_at);
+        send(2, &mut second, open).await;
+        send(1, &mut first, json!({"type": "close"})).await;
+        assert_eq!(
+            mobile.viewing_announced(),
+            looked_at,
+            "the other phone still has it open"
+        );
+        mobile.unregister(2);
+        assert!(mobile.viewing_announced().is_empty());
+        mobile.shutdown().await;
     }
 
     /// A newer bundle under the same phone protocol may send a request this

@@ -739,6 +739,7 @@ fn a_registered_device_project_keeps_its_memory_scope_while_the_link_is_down() {
             label: "mini".into(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "mini-host".into(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });

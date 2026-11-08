@@ -161,6 +161,96 @@ fn machine_identity_resolves_lineage_in_both_directions_and_restores_after_recon
     assert!(runtime.unresolved_machine_lineage.is_empty());
 }
 
+/// with-hide/hide-private#664 through the whole chain: parents declared
+/// across machines resolve in the lineage, and each parent's tree draws the
+/// child that works on the other machine, while that child's own worktree
+/// stays folded away (`child_only`) because the parent's tree is where it
+/// shows.
+#[test]
+fn a_parent_on_either_machine_draws_its_child_from_the_other_and_the_childs_worktree_folds_away() {
+    let mut runtime = cross_machine_runtime();
+    let local_id = runtime.snapshot.navigator.devices[0].id.clone();
+    let mut here = workspace(
+        "here",
+        "here",
+        "/fixture/here",
+        vec![checkout(
+            "here",
+            "main",
+            "/fixture/here",
+            Some(pane("local-parent", "/fixture/here")),
+        )],
+    );
+    here.checkouts[0].tabs[0]
+        .panes
+        .push(pane("local-child", "/fixture/here"));
+    here.device_id.clone_from(&local_id);
+    runtime.snapshot.navigator.workspaces = vec![here];
+    let mut main = checkout(
+        "there",
+        "main",
+        "/there/main",
+        Some(pane("remote:mini:pane:remote-parent", "/there/main")),
+    );
+    main.is_primary = true;
+    let mut worker = checkout(
+        "there",
+        "worker",
+        "/there/worker",
+        Some(pane("remote:mini:pane:remote-child", "/there/worker")),
+    );
+    worker.is_primary = false;
+    worker.is_worktree = true;
+    let mut there = workspace("there", "there", "/there/main", vec![main, worker]);
+    there.device_id = "mini".to_owned();
+    runtime.snapshot.status.remote[0]
+        .session
+        .as_mut()
+        .unwrap()
+        .workspaces = vec![there];
+    runtime.snapshot.ui_state.expanded_agent_pane_ids = vec![
+        "local-parent".to_owned(),
+        "remote:mini:pane:remote-parent".to_owned(),
+    ];
+
+    runtime.refresh_agent_lineage();
+    runtime.refresh_agent_scopes();
+    runtime.refresh_inactive_groups();
+
+    let drawn = |scope: &crate::agent_state::Scope| {
+        scope
+            .sidebar_tree
+            .visible_rows
+            .iter()
+            .map(|row| (row.pane_id.as_str().to_owned(), row.depth))
+            .collect::<Vec<_>>()
+    };
+    let here = &runtime.snapshot.navigator.workspaces[0];
+    assert_eq!(
+        drawn(&here.checkouts[0].agent_scope),
+        [
+            ("local-parent".to_owned(), 0),
+            ("remote:mini:pane:remote-child".to_owned(), 1),
+        ],
+        "the parent here draws the child on the device, and not its own delegated child, which hangs from the parent on the device"
+    );
+    let session = runtime.snapshot.status.remote[0].session.as_ref().unwrap();
+    let there = &session.workspaces[0];
+    assert_eq!(
+        drawn(&there.checkouts[0].agent_scope),
+        [
+            ("remote:mini:pane:remote-parent".to_owned(), 0),
+            ("local-child".to_owned(), 1),
+        ],
+        "the parent on the device draws the child here"
+    );
+    assert_eq!(
+        there.session_folds.child_only,
+        [there.checkouts[1].id.clone()],
+        "the device's worktree of the delegated child folds away, the parent's tree draws it"
+    );
+}
+
 /// The local child declared its remote parent for `s-remote-parent`, and the
 /// remote child its local parent for `s-local-parent`; each pane runs the
 /// session the relationship was written for.
@@ -282,7 +372,7 @@ fn lineage_cross_checkout_tree_and_orphan_keep_the_canonical_rows_and_axes() {
         Default::default(),
         &mut records,
         &mut crate::agent_state::ReadConnection::new("server".to_owned()),
-        Some("child"),
+        &["child"],
     );
     let original = rows
         .iter()
@@ -438,7 +528,7 @@ fn lineage_expansion_persists_without_attention_opening_it_and_prunes_on_disappe
         Default::default(),
         &mut runtime.snapshot.ui_state.pane_read_records,
         &mut crate::agent_state::ReadConnection::new("server".to_owned()),
-        None,
+        &[],
     );
     assert!(
         attention
@@ -733,10 +823,10 @@ fn a_pane_with_children_lists_them_and_names_the_one_that_speaks_for_them() {
         "Resolve hook failure"
     );
     // The question is the parent's to answer, so the child draws none of
-    // the operator's marks (status-marks B24).
+    // the operator's marks, only the ring of a wait (status-marks B24).
     assert_eq!(
         children.representative.as_ref().unwrap().mark,
-        crate::agent_state::tally::RowMark::Quiet
+        crate::agent_state::tally::RowMark::Waiting
     );
 
     // In-process subagents are summarised separately and never folded into
@@ -1120,7 +1210,10 @@ fn a_delegated_childs_demand_and_completion_stay_off_the_operators_groups() {
     // The axes themselves are untouched, so the parent's badge can still read
     // the question off the row it points at.
     assert_eq!(row("child").demand, "question");
-    assert_eq!(row("child").mark, crate::agent_state::tally::RowMark::Quiet);
+    assert_eq!(
+        row("child").mark,
+        crate::agent_state::tally::RowMark::Waiting
+    );
     // The operator's own root keeps its group and its brightness.
     assert_eq!(row("parent").group, "working");
     assert!(!row("parent").delegated);
@@ -1188,9 +1281,9 @@ fn agent_row<'a>(runtime: &'a Runtime, pane: &str) -> &'a SidebarAgentSnapshot {
 
 /// The operator looks at one pane: the same path a sidebar click takes.
 fn look_at(runtime: &mut Runtime, pane: &str) {
-    runtime.operator_focused_pane_id = Some(pane.to_owned());
+    runtime.set_operator_focus(Some(pane.to_owned()));
     runtime.refresh_pane_read_state();
-    runtime.operator_focused_pane_id = None;
+    runtime.set_operator_focus(None);
 }
 
 // PRD B5, B6, B8, D-03: a descendant asking, changing its ask, or finishing
@@ -3195,9 +3288,9 @@ fn a_parent_read_with_its_device_child_stays_read_on_every_pass_until_the_child_
 
     // The operator looks at the parent while the engine updates, then
     // moves to another pane.
-    runtime.operator_focused_pane_id = Some("w1:p1".to_owned());
+    runtime.set_operator_focus(Some("w1:p1".to_owned()));
     ingest_lineage(&mut runtime, &local);
-    runtime.operator_focused_pane_id = Some("w1:p3".to_owned());
+    runtime.set_operator_focus(Some("w1:p3".to_owned()));
     runtime.refresh_pane_read_state();
     assert!(!agent_row(&runtime, "w1:p1").unread, "read after the move");
     ingest_lineage(&mut runtime, &local);

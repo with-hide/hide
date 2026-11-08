@@ -2,8 +2,8 @@
 // into not seen and seen, and one View opened full screen as a change list, a document, an image or the words that say why
 // there is nothing to draw. The phone holds no path: a row is a View id, and hided finds the file (D-16).
 
-import { FileDiffIcon, FileIcon, FileTextIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
-import { useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { AppWindowIcon, FileDiffIcon, FileIcon, FileTextIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Elapsed, useElapsed } from "../components/elapsed";
 import { Button } from "../components/ui/button";
 import { RowButton } from "../components/ui/row-button";
@@ -16,7 +16,7 @@ import { renderMarkdown } from "./markdown";
 import { deviceNameOf, splitLooks, type LookFile, type LookKind, type LookRow } from "./protocol";
 import { usePhone, type Looks } from "./store";
 
-const KIND_ICON: Record<LookKind, typeof FileIcon> = { changes: FileDiffIcon, doc: FileTextIcon, image: ImageIcon, page: GlobeIcon, other: FileIcon };
+const KIND_ICON: Record<LookKind, typeof FileIcon> = { changes: FileDiffIcon, doc: FileTextIcon, image: ImageIcon, page: GlobeIcon, html: AppWindowIcon, other: FileIcon };
 
 /** The kind's word, as the list and the viewer's head say it (B12). */
 export function useKindWord() {
@@ -118,6 +118,8 @@ export function LookViewer({ row, content, refreshing }: { row: LookRow; content
       return <ChangesBody content={content} />;
     case "shot":
       return <ShotBody name={row.name} content={content} refreshing={refreshing} />;
+    case "html":
+      return <HtmlBody name={row.name} content={content} />;
     case "page":
       // The address and the one sentence, with the refresh still there (B21): why it cannot be taken is the desktop's log.
       return (
@@ -143,7 +145,7 @@ export function LookViewer({ row, content, refreshing }: { row: LookRow; content
       return (
         <Centered state="too_large">
           <p className="max-w-full break-all text-title font-medium text-foreground">{row.name}</p>
-          <p className="text-body text-muted-foreground">{t("mobile.look.imageTooLarge")}</p>
+          <p className="text-body text-muted-foreground">{t(row.kind === "html" ? "mobile.look.htmlTooLarge" : "mobile.look.imageTooLarge")}</p>
         </Centered>
       );
     case "closed":
@@ -216,6 +218,44 @@ function ShotBody({ name, content, refreshing }: { name: string; content: Extrac
       <p className="shrink-0 pt-sm text-body text-muted-foreground" data-phone-look-taken={content.takenBy}>
         {t("mobile.look.shotTaken", { device: deviceNameOf(devices, content.takenBy, macName), elapsed: elapsed ?? "" })}
       </p>
+    </div>
+  );
+}
+
+/** The page the frame announces itself with, and the message that hands it its document. */
+export const LOOK_FRAME_READY = "hide-look-ready";
+export const LOOK_FRAME_DOCUMENT = "hide-look-document";
+
+/**
+ * An HTML file drawn as a page, in a frame of its own (look-frame.html): sandboxed without `allow-same-origin`, so its
+ * scripts run in an origin of their own and reach none of this app's storage, credentials or connection, under the
+ * frame's own content policy rather than this page's. The frame says it is ready, and only then is it handed the document.
+ */
+function HtmlBody({ name, content }: { name: string; content: Extract<LookContent, { state: "html" }> }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  useEffect(() => {
+    const hand = (event: MessageEvent) => {
+      const target = frame.current?.contentWindow;
+      if (!target || event.source !== target || event.data !== LOOK_FRAME_READY) return;
+      // The frame's origin is opaque, so no narrower target than "*" can name it; the document is only ever sent to it.
+      target.postMessage({ type: LOOK_FRAME_DOCUMENT, html: content.document }, "*");
+    };
+    window.addEventListener("message", hand);
+    return () => window.removeEventListener("message", hand);
+  }, [content]);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-background" data-phone-look-state="html">
+      <iframe
+        ref={frame}
+        // A new document is a new frame, so nothing of the last one stays.
+        key={content.document.length + ":" + content.size}
+        src="look-frame.html"
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        title={name}
+        className="min-h-0 w-full flex-1 border-none bg-(--page-canvas)"
+        data-phone-look-html="true"
+      />
     </div>
   );
 }

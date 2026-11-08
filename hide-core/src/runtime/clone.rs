@@ -1,10 +1,14 @@
-//! Add a project's Clone from URL: one repository clone at a time, run by a
-//! worker off the lock, reported in the `repository_clone` slot, and handed to
-//! the ordinary local registration once the folder is in place.
+//! Add a project's Clone from URL: one repository clone at a time, whichever
+//! machine it runs on, run by a worker off the lock, reported in the
+//! `repository_clone` slot, and handed to the ordinary registration on that
+//! machine once the folder is in place.
 //!
-//! The worker is the clone's only owner. It asks the core's own node for the
-//! clone (`hide_host::clone` on the node), which stops Git's whole process
-//! group and removes the staging folder on every exit path; the node reports
+//! The worker is the clone's only owner. It asks the chosen machine's node
+//! for the clone (`hide_host::clone` on the node): a device's node first
+//! judges the parent against that device's own home (`Call::NewFolderTarget`),
+//! as hided's `$HOME` line judged it for the core's machine before the event
+//! arrived (PRD device-add-project D-07). The node stops Git's whole process
+//! group and removes the clone's folder on every exit path but success; the node reports
 //! at least once a second, the worker answers each report with the runtime's
 //! cancel flag, and a runtime that has gone away answers as a cancel, so the
 //! clone ends with its owner.
@@ -30,10 +34,22 @@ pub(super) struct CloneJob {
 }
 
 impl Runtime {
-    /// Starts a clone of `url` into `parent/name`, or joins the one already
-    /// running for the same URL and folder. `parent` is the canonical folder
-    /// hided's `$HOME` line checked, and `name` the one it found free.
-    pub(super) fn clone_repository(&mut self, url: &str, parent: &str, name: &str) -> bool {
+    /// Starts a clone of `url` into `parent/name` on `device` (the core's own
+    /// machine when absent), or joins the one already running for the same
+    /// URL, machine and folder. On the core's machine `parent` is the
+    /// canonical folder hided's `$HOME` line checked and `name` the one it
+    /// found free; a device's node judges both again itself.
+    pub(super) fn clone_repository(
+        &mut self,
+        device: Option<&str>,
+        url: &str,
+        parent: &str,
+        name: &str,
+    ) -> bool {
+        let device = device
+            .filter(|device| !device.is_empty())
+            .unwrap_or(self.node.as_str())
+            .to_owned();
         let source = match CloneSource::parse(url) {
             Ok(source) => source,
             Err(message) => {
@@ -59,6 +75,7 @@ impl Runtime {
             // The same clone sent again joins the one running: one clone,
             // one registration.
             if running.path == path
+                && running.device_id == device
                 && self
                     .repository_clone_job
                     .as_ref()
@@ -87,11 +104,26 @@ impl Runtime {
             );
             return true;
         };
+        // The core's own machine was judged by hided; a device judges the
+        // parent on its own node before Git runs there.
+        let on_device = device != self.node.as_str();
+        let node = match self.node_link(&device) {
+            Ok(node) => node,
+            Err(message) => {
+                self.set_error(
+                    "repository.clone_unavailable",
+                    format!("Cloning on this device needs its connection: {message}"),
+                    true,
+                );
+                return true;
+            }
+        };
         self.next_repository_clone_id = self.next_repository_clone_id.wrapping_add(1).max(1);
         let id = self.next_repository_clone_id;
         let cancel = Arc::new(AtomicBool::new(false));
         self.snapshot.repository_clone = Some(crate::model::RepositoryCloneSnapshot {
             id,
+            device_id: device.clone(),
             host: source.host().to_owned(),
             path: path.clone(),
             phase: "cloning".to_owned(),
@@ -110,15 +142,21 @@ impl Runtime {
             "kind": "started",
             "id": id,
             "host": source.host(),
+            "device": device,
         }));
-        if let Err(message) = spawn_clone(context, id, source, PathBuf::from(parent), cancel) {
+        let place = ClonePlace {
+            node,
+            parent: parent.to_owned(),
+            judge: on_device.then(|| name.to_owned()),
+        };
+        if let Err(message) = spawn_clone(context, id, source, place, cancel) {
             self.settle_repository_clone(id, Err(CloneFailure::Io(message)));
         }
         true
     }
 
     /// Asks the running clone to stop; the worker settles it as `cancelled`
-    /// once Git has ended and the staging folder is gone.
+    /// once Git has ended and the clone's folder is gone.
     pub(super) fn cancel_repository_clone(&mut self, id: u64) -> bool {
         let Some(clone) = self
             .snapshot
@@ -203,21 +241,37 @@ impl Runtime {
             return true;
         };
         let path = path.display().to_string();
-        let label = path.rsplit('/').next().unwrap_or_default().to_owned();
+        let label = path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let device = clone.device_id.clone();
         // The same event Browse folder sends, so a cloned folder is
-        // registered, refused or deduplicated exactly as a picked one.
+        // registered, refused or deduplicated exactly as a picked one, on the
+        // machine it was cloned on.
         self.apply(Event::CreateWorkspace(CreateWorkspacePayload {
-            device_id: None,
+            device_id: Some(device),
             path,
             label,
             initialize_git: false,
             // The clone made the folder; the registration only adds it.
             new_folder: false,
-            // hided judged the clone's parent inside home.
+            // The clone's parent was judged inside that machine's home.
             confirmed_outside_home: None,
+            request_id: None,
         }));
         true
     }
+}
+
+/// Where a clone runs: the machine's node, the parent as the event named it,
+/// and, on a device, the folder name its node judges under that parent
+/// against its own home before Git runs.
+struct ClonePlace {
+    node: Arc<dyn crate::node_access::NodeLink>,
+    parent: String,
+    judge: Option<String>,
 }
 
 /// Runs the clone on its own thread. Progress and the result each take the
@@ -226,7 +280,7 @@ fn spawn_clone(
     context: live::LiveContext,
     id: u64,
     source: CloneSource,
-    parent: PathBuf,
+    place: ClonePlace,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
     thread::Builder::new()
@@ -248,14 +302,15 @@ fn spawn_clone(
             };
             // A panic still settles the slot, which is the only one: a clone
             // left `cloning` would refuse every later clone. Git's group and
-            // the staging folder are released by their guards on unwinding.
+            // the clone's folder are released by their guards on unwinding.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let call = hide_node_link::protocol::Call::RepositoryClone {
-                    source,
-                    parent: parent.to_string_lossy().into_owned(),
+                let parent = match &place.judge {
+                    None => place.parent.clone(),
+                    Some(name) => judge_device_parent(place.node.as_ref(), &place.parent, name)?,
                 };
+                let call = hide_node_link::protocol::Call::RepositoryClone { source, parent };
                 let answer = crate::node_access::call_as_with_progress::<CloneAnswer, CloneReport>(
-                    context.node.as_ref(),
+                    place.node.as_ref(),
                     call,
                     CLONE_TIMEOUT,
                     |report| {
@@ -290,4 +345,41 @@ fn spawn_clone(
         })
         .map(|_| ())
         .map_err(|error| format!("The clone could not be started: {error}"))
+}
+
+/// How long a device's node may take to judge a clone's parent.
+const CLONE_TARGET_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A device's parent for `name`, judged against that device's own home: its
+/// real path, or why the clone cannot land there (a taken name, a parent
+/// outside home), which ends the clone before Git starts.
+fn judge_device_parent(
+    node: &dyn crate::node_access::NodeLink,
+    parent: &str,
+    name: &str,
+) -> Result<String, CloneFailure> {
+    use crate::node_access::LinkError;
+    let call = hide_node_link::protocol::Call::NewFolderTarget {
+        parent: parent.to_owned(),
+        name: name.to_owned(),
+        kind: hide_node_link::browse::NewFolderKind::Clone,
+    };
+    match crate::node_access::call_as::<hide_node_link::browse::NewFolderTarget>(
+        node,
+        call,
+        CLONE_TARGET_TIMEOUT,
+    ) {
+        Ok(target) => Ok(target.parent),
+        Err(LinkError::Refused(refused))
+            if refused.code == hide_node_link::ErrorCode::AlreadyExists =>
+        {
+            Err(CloneFailure::TargetExists(PathBuf::from(format!(
+                "{}/{name}",
+                parent.trim_end_matches('/')
+            ))))
+        }
+        Err(error) => Err(CloneFailure::Io(format!(
+            "The clone's folder could not be judged on its device: {error}"
+        ))),
+    }
 }

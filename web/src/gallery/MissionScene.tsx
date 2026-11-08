@@ -154,7 +154,7 @@ function plan(state: string, now: number): MissionNode[] {
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, pr_url: "https://github.com/with-hide/hide/pull/1505", stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
       ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const, landing: MERGE_LEFT } : decision ? { status: "working" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2", hide: { action: "woke" as const, pr: 1505, why: "ci_failed" as const, at_unix_ms: ago(3) } } : { ...review(30), pr_state: "pending" as const }),
-      ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
+      ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", tally: { passed: stack ? 2 : 1, total: 2 }, checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", landing: stack && state !== "no-conductor" ? MERGE_LEFT : MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")),
       // Merged with a line left unrecorded and no Conductor to ask: it waits on the operator (PRD mission-node-simple B13, B14).
@@ -170,7 +170,7 @@ function plan(state: string, now: number): MissionNode[] {
     decision
       ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "working", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
       : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), agent_id: "agent-screen", launched: { agent_id: "agent-screen", agent: "codex", model: "Sol", effort: null }, pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
-    node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "majority", checkers: [checker(sonnet, stack ? "pass" : "open"), checker(astra("medium"), stack ? "pass" : "open"), checker(opus("high"), stack ? "pass" : "open")] })) }),
+    node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "majority", tally: { passed: stack ? 3 : 0, total: 3 }, checkers: [checker(sonnet, stack ? "pass" : "open"), checker(astra("medium"), stack ? "pass" : "open"), checker(opus("high"), stack ? "pass" : "open")] })) }),
   ];
 }
 
@@ -202,6 +202,27 @@ function warned(one: MissionNode, now: number): MissionNode {
   if (one.key === "fix-1490") return { ...one, review_fails: 2, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
   if (one.key === "fix-1487") return { ...one, pushed_at_unix_ms: now - 95 * MINUTE, warnings: [{ kind: "no_push", from_unix_ms: now - 95 * MINUTE, since_unix_ms: now - 5 * MINUTE, told_unix_ms: now - 5 * MINUTE }] };
   return one;
+}
+
+/**
+ * The stalled state (hide-private issues 678-680): eleven letters wait for
+ * the Conductor behind a draft in its input, the search fix's worker rests
+ * while its review is open, the screen's worker on the Mac mini rests on its
+ * CI, the API change has no worker left, and the reopen fix's worker works.
+ */
+function stalled(one: MissionNode): MissionNode {
+  switch (one.key) {
+    case "fix-1490":
+      return { ...one, work: { state: "waiting", on: { kind: "review" } } };
+    case "screen":
+      return { ...one, pane_id: "remote:mini:pane:h15:p3", work: { state: "waiting", on: { kind: "ci" } } };
+    case "fix-1487":
+      return { ...one, work: { state: "working" } };
+    case "api":
+      return { ...one, status: "working", finished_at_unix_ms: null, landing: null, work: { state: "no_worker" } };
+    default:
+      return one;
+  }
 }
 
 /**
@@ -276,11 +297,12 @@ const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필�
 export function missionFixture(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
   const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
-  const remote = shown === "remote" || shown === "remote-long";
+  // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
+  const remote = shown === "remote" || shown === "remote-long" || shown === "stalled";
   const state = answered ? "decision" : shown === "exempt" ? "done" : shown === "rejected" || shown === "warned" || remote ? "running" : shown;
   // A mission from before finish lines keeps each node's one old sentence (B23); a rejected one has a reviewer say no.
   const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : shown === "rejected" ? plan(state, now).map(rejectedReview) : shown === "warned" ? plan(state, now).map((one) => warned(rejectedReview(one), now)) : plan(state, now);
-  nodes.splice(0, nodes.length, ...withSteps(nodes));
+  nodes.splice(0, nodes.length, ...withSteps(nodes).map((one) => (shown === "stalled" ? stalled(one) : one)));
   if (remote) {
     for (const one of nodes) {
       one.machine = one.key === "screen" || (shown === "remote-long" && one.key === "fix-1487") ? "mini" : one.pane_id ? "local" : null;
@@ -313,6 +335,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
     running: state === "decision" ? 1 : state === "running" || state === "wide" ? 4 : 0,
     // A device that disconnected leaves its last values, dimmed (B20).
     stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
+    conductor_letters: shown === "stalled" ? { count: 11, reason: "draft", since_unix_ms: now - 40 * MINUTE } : null,
   });
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },

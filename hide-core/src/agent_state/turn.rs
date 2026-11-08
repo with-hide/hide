@@ -214,14 +214,14 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
     let waiting = agent.wait.is_some() && agent.raised.is_empty();
     // The mark's colour is the mark's own; a chip, a search hit and a
     // request line take the same one. A delegated child's request draws no
-    // mark of the operator's (B24) but its line keeps the warning colour,
-    // dimmed like a read one.
+    // mark of the operator's (B24), only the waiting ring, but its line keeps
+    // the warning colour, dimmed like a read one.
     let chip_kind = match agent.mark {
         RowMark::Turn | RowMark::Look => "warning",
+        RowMark::Waiting if asking => "warning",
         RowMark::Going | RowMark::Waiting => "working",
         RowMark::Done => "success",
         RowMark::Unread => "news",
-        RowMark::Quiet if asking => "warning",
         RowMark::Quiet | RowMark::Unknown | RowMark::Asleep => "subtle",
     };
     let bright = needs_you || agent.escalation.is_some();
@@ -230,13 +230,10 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         read: asking && !bright && !agent.emphasized,
     };
     let mark_tone = Tone {
-        kind: if matches!(
-            agent.mark,
-            RowMark::Quiet | RowMark::Unknown | RowMark::Asleep
-        ) {
-            "subtle"
-        } else {
-            chip_kind
+        kind: match agent.mark {
+            RowMark::Quiet | RowMark::Unknown | RowMark::Asleep => "subtle",
+            RowMark::Going | RowMark::Waiting => "working",
+            _ => chip_kind,
         },
         read: agent.mark == RowMark::Turn && chip_tone.read,
     };
@@ -1381,17 +1378,18 @@ mod row_tests {
             }
         );
         // A delegated child's question is its parent's to answer: no mark of
-        // the operator's, but its request keeps the warning hue, dimmed (B24).
+        // the operator's but the waiting ring, while its request keeps the
+        // warning hue, dimmed (B24).
         agent.delegated = true;
         agent.lineage_depth = 1;
         agent.lineage_worktree_badge = Some("  feature  ".into());
         derive_from_axes(&mut agent);
-        assert_eq!(agent.mark, RowMark::Quiet);
+        assert_eq!(agent.mark, RowMark::Waiting);
         let child = row_state(&agent);
         assert!(!child.root);
         assert!(!child.selection_emphasizes_title);
         assert_eq!(child.branch_badge.as_deref(), Some("feature"));
-        assert_eq!(child.mark_tone.kind, "subtle");
+        assert_eq!(child.mark_tone.kind, "working");
         assert_eq!(child.chip_tone, state.chip_tone);
     }
 

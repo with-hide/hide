@@ -9,7 +9,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, launchSession, nodeTimes, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { machineName, windowDeviceId } from "./screenMachine";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
@@ -88,9 +88,15 @@ export function lookWord(look: NodeLook, t: TFunction<"translation">): string {
   return t(`mission.look.${look}`);
 }
 
-/** A node mark's hover and accessible name (PRD mission-node-simple B1): its look's word, and a sleeping worker's sleep beside it, since the mark itself has no fourth shape. */
+/**
+ * A node mark's hover and accessible name (PRD mission-node-simple B1): its
+ * look's word, for a node in progress what its worker does now as the core
+ * reads it (`work`: 작업 중, 기다리는 중 · <what>, 일꾼 없음), and a sleeping
+ * worker's sleep beside it, since the mark itself has no fourth shape.
+ */
 export function markWord(node: MissionNode, look: NodeLook, t: TFunction<"translation">): string {
-  return look === "working" && workerAsleep(node) ? `${lookWord(look, t)} · ${t("mission.worker.asleep")}` : lookWord(look, t);
+  const word = look === "working" && node.work ? nodeWorkWords(node.work, t) : lookWord(look, t);
+  return look === "working" && workerAsleep(node) ? `${word} · ${t("mission.worker.asleep")}` : word;
 }
 
 /** How long a node took, from its events (B28); nothing moves while its device does not answer (B35). */
@@ -174,4 +180,10 @@ export function RunText({ run, className, wordsClassName, children }: { run: Run
       {children}
     </span>
   );
+}
+
+/** A mission's short number (`M39`) in muted monospace before its title; nothing for an id that carries none. */
+export function MissionNumber({ mission, className }: { mission: Pick<Mission, "id">; className?: string }) {
+  const number = missionNumber(mission.id);
+  return number ? <span className={cn("shrink-0 font-mono tabular-nums text-muted-foreground", className)} data-mission-number={number}>{number}</span> : null;
 }

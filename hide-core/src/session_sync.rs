@@ -364,7 +364,7 @@ mod pulled;
 
 pub(crate) use coordinator::spawn;
 pub(crate) use projection::{
-    ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
+    NotResumed, ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
     ProjectionState,
 };
 

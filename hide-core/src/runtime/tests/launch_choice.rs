@@ -151,6 +151,8 @@ fn starting_engine() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Va
                 terminal_id: Some("term".into()),
             })
         }
+        // A wake's pane already runs this build's holder.
+        "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
         // What the fork's registration asks after its start is no part of
         // the start; refusing it leaves a working fork.
         other => refused("unsupported", &format!("fixture answers no {other}")),
@@ -565,6 +567,7 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
             label: device.to_owned(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: device.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });

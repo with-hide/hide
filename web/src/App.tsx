@@ -37,10 +37,11 @@ import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
+import { takeProgramCopy } from "./clipboard";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
 import { applyEditorTheme } from "./editor/theme";
-import { applyTerminalFontFamily, applyTerminalFontSize, applyTerminalTheme, attachedPaneIds, feedChunks, liveTerminalIds, resetAllTerminals, retainTerminals, terminalFor, terminalSelectionText } from "./terminals";
+import { applyTerminalFontFamily, applyTerminalFontSize, applyTerminalTheme, attachedPaneIds, feedChunks, liveTerminalIds, resetAllTerminals, retainTerminals, terminalFor, terminalSelectionText, terminalShown } from "./terminals";
 import { PALETTE_HIDE_CLASS, primaryValue, readColorTheme, readTheme, resolveTheme } from "./theme";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useUsageWindowHint } from "./components/usage";
@@ -68,6 +69,7 @@ export function App() {
         if (full) resetAllTerminals();
         feedChunks(chunks);
       },
+      onCopy: (copy) => void takeProgramCopy(copy, { inFront: document.hasFocus(), shows: terminalShown }, actions.copyText, (message) => useShellStore.getState().noteDiagnostic(message)),
     });
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);

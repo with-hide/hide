@@ -509,7 +509,10 @@ impl LabelWorker {
         wake: Wake,
     ) -> Result<Self, String> {
         let (sender, results) = channel();
-        let records = store.target(&config.target);
+        let mut records = store.target(&config.target);
+        for record in records.values_mut() {
+            record.forget_engine_state();
+        }
         let reader = Reader::spawn(
             source,
             sender.clone(),
@@ -581,10 +584,13 @@ impl LabelWorker {
                 self.dirty = true;
                 changed = true;
             }
-            let seq_moved = record.state_change_seq != observed.state_change_seq;
+            // A count from an earlier engine is taken, not compared: the
+            // difference says nothing about what ran (`forget_engine_state`).
+            let recount = std::mem::take(&mut record.seq_of_earlier_engine);
+            let seq_moved = !recount && record.state_change_seq != observed.state_change_seq;
             let was_stopped = matches!(record.agent_status.as_deref(), Some("idle" | "done"));
             let was_working = record.agent_status.as_deref() == Some("working");
-            if seq_moved {
+            if record.state_change_seq != observed.state_change_seq {
                 record.state_change_seq = observed.state_change_seq;
                 record.changed_unix_ms = now_unix_ms;
                 self.dirty = true;

@@ -1047,6 +1047,61 @@ fn check_again_shows_a_read_under_way_and_a_failed_one_as_a_code_beside_the_last
     assert!(kit(&shared).check_failed.is_none());
 }
 
+/// with-hide/hide-private#661: Codex on the device had not trusted Hide's
+/// hook. Only a pass asks Codex again, so once the operator has approved
+/// the hooks in Codex, Check again runs one and the Codex hook row leaves
+/// Failed; a trusted hook is only read again.
+#[test]
+fn check_again_after_codex_trusts_the_hook_clears_its_failure() {
+    // The Codex hook part and Codex's row, as a pass reports them.
+    let codex_report = |state, cause: Option<hide_kit::PartCause>| {
+        let why = cause.map(|cause| hide_kit::PartWhy { cause, value: None });
+        let mut report = report(&[(ComponentId::CodexHook, state)]);
+        report.components[0].why = why.clone();
+        let mut codex = agent_report(
+            "codex",
+            hide_kit::Availability::Available,
+            true,
+            ComponentState::Installed,
+        );
+        codex.hook = Some(hide_kit::PieceReport {
+            state,
+            reason: None,
+            why,
+            location: None,
+        });
+        report.agents = vec![codex];
+        report
+    };
+    let helper = KitDevice::answering(Ok(codex_report(
+        ComponentState::Failed,
+        Some(hide_kit::PartCause::CodexUntrusted),
+    )));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    let codex = |kit: &crate::model::KitSnapshot| {
+        kit.components
+            .iter()
+            .find(|part| part.id == ComponentId::CodexHook)
+            .map(|part| part.state)
+    };
+    assert_eq!(codex(&kit(&shared)), Some(ComponentState::Failed));
+
+    // The operator chose Trust all in Codex there.
+    *helper.answer.lock().unwrap() = Ok(codex_report(ComponentState::Installed, None));
+    let before = helper.calls().len();
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    assert_eq!(helper.calls()[before].0, KitAction::Apply);
+    assert_eq!(codex(&kit(&shared)), Some(ComponentState::Installed));
+
+    let before = helper.calls().len();
+    dispatch(&shared, "kit_check", serde_json::json!({}));
+    settle(&shared);
+    assert_eq!(helper.calls()[before].0, KitAction::Status);
+}
+
 fn registered(shared: &Mutex<Runtime>) -> bool {
     shared
         .lock()
@@ -1138,6 +1193,7 @@ fn removing_one_keeps_the_kit_for(
         twin.id = "studio-second-herdr".to_owned();
         twin.origin = crate::model::LinkOrigin::Dialed {
             ssh_alias: "studio-by-address".to_owned(),
+            naming: crate::model::DeviceNaming::Named,
         };
         twin.host_consent.as_mut().unwrap().identity = Some(twin_identity);
         twin.label = "Studio, second Herdr".to_owned();
@@ -2145,19 +2201,33 @@ fn established_with_terminals() -> hide_node_link::device::Established {
     )
 }
 
-/// A device's connection over `host`, with `terminals` when its node runs a
+/// `DEVICE`'s connection over `host`, with `terminals` when its node runs a
 /// terminal service.
 pub(super) fn established(
     host: Arc<dyn crate::node_access::NodeLink>,
     terminals: Option<Arc<dyn hide_node_link::terminal::TerminalNode>>,
 ) -> hide_node_link::device::Established {
+    established_on(DEVICE, host, terminals)
+}
+
+/// A connection over `host` to the machine whose id is `machine`, as its
+/// probe and its node both read it: the device registered as `machine`.
+pub(super) fn established_on(
+    machine: &str,
+    host: Arc<dyn crate::node_access::NodeLink>,
+    terminals: Option<Arc<dyn hide_node_link::terminal::TerminalNode>>,
+) -> hide_node_link::device::Established {
+    let mut node = node_ready(host, terminals);
+    node.hello.machine_identity = hide_node_link::protocol::MachineIdentity::Available {
+        id: machine.to_owned(),
+    };
     hide_node_link::device::Established {
-        node: node_ready(host, terminals),
+        node,
         identity: hide_node_link::device::HostIdentity {
             user: "me".to_owned(),
             hostname: "studio.local".to_owned(),
             port: 22,
-            machine_id: None,
+            machine_id: Some(machine.to_owned()),
             host_key_sha256: "key".to_owned(),
         },
         installed: false,
@@ -2242,7 +2312,7 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
     let terminals = record_terminals(&mut runtime);
     let pane_id = PANE;
     let session = session_with_pane();
-    runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+    runtime.set_front_device(Some(DEVICE.to_owned()));
     let attaches = |terminals: &RecordedTerminals| {
         terminals
             .take()
@@ -2409,7 +2479,7 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
         ))),
     );
     runtime.ingest_remote_session(DEVICE, Ok(session_with_pane()));
-    runtime.snapshot.navigator.focused_device_id = Some(DEVICE.to_owned());
+    runtime.set_front_device(Some(DEVICE.to_owned()));
     report_terminal(&mut runtime, PANE, terminal_state("controlling", 1));
     let notice = |runtime: &Runtime| {
         runtime.snapshot.terminal.headers[PANE]
@@ -2798,7 +2868,7 @@ fn device_connect_statistics_include_early_install_failure() {
     runtime.dispatch_json(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version": SCHEMA_VERSION, "kind": "register_device",
-            "payload": { "id": DEVICE, "label": "private label", "ssh_alias": "private-host" },
+            "payload": { "label": "private label", "ssh_alias": "private-host" },
         }))
         .unwrap(),
     );

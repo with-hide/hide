@@ -572,6 +572,7 @@ fn publish_session(
 ) -> bool {
     let mut payload = session.project();
     let resting = session.published_state().resting_payloads();
+    let not_resumed = &session.published_state().not_resumed;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -593,7 +594,10 @@ fn publish_session(
                 if !guard.remote_coordinator_is_current(target_id, &context.engine) {
                     return false;
                 }
-                guard.observe_device_session(target_id, &mut payload, overlay.as_ref())
+                let tokens =
+                    guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
+                guard.end_unresumed(target_id, None, &payload, not_resumed);
+                tokens
             }
             Err(_) => return false,
         };
@@ -821,6 +825,10 @@ fn publish_session(
             // A restore's resting agents become sleeping records first, so
             // this ingest draws their rows as sleeping.
             let kept = guard.adopt_resting(resting, overlay.as_ref());
+            // So is an agent a restore did not resume ended, with the engine
+            // still naming it until an agent shows in its pane.
+            let device = guard.node().to_string();
+            guard.end_unresumed(&device, host_scope, &payload, not_resumed);
             // The ingest observes this payload for delivery and lays the
             // turns its observations wait on, with this pass's overlay.
             let (changed, readback) =

@@ -44,6 +44,10 @@ struct StoredUiState {
     expanded_paths: Vec<String>,
     #[serde(default)]
     device_expanded_paths: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    add_project_folder: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    device_add_project_folders: BTreeMap<String, String>,
     #[serde(default)]
     collapsed_workspace_ids: Vec<String>,
     #[serde(default)]
@@ -215,8 +219,10 @@ struct StoredUiState {
     /// build for the size, as a first launch always does.
     #[serde(default)]
     pane_terminal_sizes: BTreeMap<String, (u16, u16)>,
-    /// Absent in a store written before agent sleep existed, which loads as
-    /// Never; a value that is not one of the choices loads as Never too.
+    /// The hours, or 0 for an Off the operator chose
+    /// (`agent_sleep::stored_after_hours`). Absent or null in a store written
+    /// before the 24-hour default, when null was both the default and Off,
+    /// and loads as the default, as a value that is not a choice does.
     #[serde(default)]
     agent_sleep_after_hours: Option<u32>,
     /// Absent in a store written before issue sources could be chosen, which
@@ -632,6 +638,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             right_panel_section: stored.right_panel_section,
             expanded_paths: stored.expanded_paths,
             device_expanded_paths: stored.device_expanded_paths,
+            add_project_folder: stored.add_project_folder,
+            device_add_project_folders: stored.device_add_project_folders,
             collapsed_workspace_ids: stored.collapsed_workspace_ids,
             collapsed_checkout_ids: stored.collapsed_checkout_ids,
             expanded_checkout_ids: stored.expanded_checkout_ids,
@@ -689,9 +697,9 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             pane_completions: stored.pane_completions,
             pane_launches: stored.pane_launches,
             request_verbs: stored.request_verbs,
-            agent_sleep_after_hours: stored
-                .agent_sleep_after_hours
-                .filter(|hours| crate::agent_sleep::valid_after_hours(Some(*hours))),
+            agent_sleep_after_hours: crate::agent_sleep::loaded_after_hours(
+                stored.agent_sleep_after_hours,
+            ),
             project_issue_sources: stored
                 .project_issue_sources
                 .into_iter()
@@ -811,6 +819,8 @@ pub fn save(
         right_panel_section: state.right_panel_section,
         expanded_paths: state.expanded_paths.clone(),
         device_expanded_paths: state.device_expanded_paths.clone(),
+        add_project_folder: state.add_project_folder.clone(),
+        device_add_project_folders: state.device_add_project_folders.clone(),
         collapsed_workspace_ids: state.collapsed_workspace_ids.clone(),
         collapsed_checkout_ids: state.collapsed_checkout_ids.clone(),
         expanded_checkout_ids: state.expanded_checkout_ids.clone(),
@@ -874,7 +884,9 @@ pub fn save(
         pane_launches: state.pane_launches.clone(),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
-        agent_sleep_after_hours: state.agent_sleep_after_hours,
+        agent_sleep_after_hours: Some(crate::agent_sleep::stored_after_hours(
+            state.agent_sleep_after_hours,
+        )),
         project_issue_sources: state.project_issue_sources.clone(),
         issue_settings: StoredIssueSettings {
             settings: state.issue_settings.clone(),
@@ -1019,7 +1031,8 @@ mod tests {
     }
 
     /// A registration keeps the shape stores were written in: a dialed
-    /// device by its alias, a node that dials in by its flag, a WSL
+    /// device by its alias and how far it is named (none for one an earlier
+    /// build added under its alias's id), a node that dials in by its flag, a WSL
     /// distribution by its name. One that names more than one or none is
     /// dropped alone and the rest of the store loads, which is also how a
     /// build from before WSL devices reads a WSL record (it knows neither
@@ -1036,13 +1049,19 @@ mod tests {
         .unwrap();
         let mut persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "host_consent": null});
+        let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "host_consent": null, "naming": "named"});
+        // A device added by this build, not yet connected.
+        let pending = serde_json::json!({"id": "new-host", "label": "new", "ssh_alias": "new-host", "host_consent": null, "naming": "pending"});
+        // One an earlier build added under its alias's id: no naming field.
+        let legacy = serde_json::json!({"id": "old-host", "label": "old", "ssh_alias": "old-host", "host_consent": null});
         let inbound = serde_json::json!({"id": "laptop", "label": "MacBook", "ssh_alias": null, "host_consent": null, "inbound": true});
         let wsl = serde_json::json!({"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null, "wsl_distro": "Ubuntu"});
         // What a build from before WSL devices reads of the same record.
         let wsl_as_an_older_build_reads_it = serde_json::json!({"id": "wsl-old", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null});
         persisted["device_registrations"] = serde_json::json!([
             dialed,
+            pending,
+            legacy,
             inbound,
             wsl,
             {"id": "both", "label": "both", "ssh_alias": "both-host", "inbound": true},
@@ -1067,7 +1086,22 @@ mod tests {
                 (
                     "studio",
                     crate::model::LinkOrigin::Dialed {
-                        ssh_alias: "studio-host".to_owned()
+                        ssh_alias: "studio-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Named
+                    }
+                ),
+                (
+                    "new-host",
+                    crate::model::LinkOrigin::Dialed {
+                        ssh_alias: "new-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Pending
+                    }
+                ),
+                (
+                    "old-host",
+                    crate::model::LinkOrigin::Dialed {
+                        ssh_alias: "old-host".to_owned(),
+                        naming: crate::model::DeviceNaming::Legacy
                     }
                 ),
                 ("laptop", crate::model::LinkOrigin::Inbound),
@@ -1081,7 +1115,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(&state.device_registrations).unwrap(),
-            serde_json::json!([dialed, inbound, wsl])
+            serde_json::json!([dialed, pending, legacy, inbound, wsl])
         );
     }
 

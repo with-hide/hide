@@ -92,6 +92,12 @@ pub fn state_dir_choice_from_process(home: &Path) -> (PathBuf, Option<StateVaria
 /// sit above.
 pub use hide_agent_hooks::hook_request::workspace_bridges;
 
+/// The letter confirmations a pane's hook could not send in time, kept for
+/// its next turn end, one record per pane, at most 64 and none past a
+/// letter's deadline; named beside the hooks that keep them, which the kit's
+/// crates sit above (`docs/delivery.md`, A confirmation that missed its hook).
+pub use hide_agent_hooks::owed::folder as owed_confirmations;
+
 /// The daemon's lifetime lock, shared with the account kit's route ownership check.
 pub fn daemon_lock(state_dir: &Path) -> PathBuf {
     state_dir.join("hided.lock")

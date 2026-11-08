@@ -741,7 +741,7 @@ impl Fixture {
         // The device reports a checkout by its real path, which the journey
         // compares with the one it made, and `/tmp` is a link on macOS.
         let device_root = ipc.path().canonicalize()?.join("r");
-        let remote_env = Environment::new(&device_root, Some(&device_state))?;
+        let mut remote_env = Environment::new(&device_root, Some(&device_state))?;
         // The device installs shipped executables, which carry no debug
         // data. Stage this candidate's code with the same property: hashing
         // and uploading a CI debug image can exhaust helper setup's bound.
@@ -781,6 +781,11 @@ impl Fixture {
             successful(command)?;
         }
         fs::create_dir_all(local_env.home.join(".ssh"))?;
+        // The device is another machine than the core's: its node and the
+        // probe read this as its machine id, which names the device once it
+        // first connects, so it is added by its alias and connects as
+        // `DEVICE`.
+        remote_env.set(hide_platform::host::MACHINE_ID_VARIABLE, DEVICE);
         let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
         fs::write(
             local_env.home.join(".ssh/config"),
@@ -963,7 +968,10 @@ impl Fixture {
             ),
             Err(error) => format!("snapshot unreadable: {error:#}"),
         };
-        screen.event("register_device", json!({"id":DEVICE,"label":"Remote fixture","ssh_alias":"delivery-fixture","host_consent":true}))?;
+        screen.event(
+            "register_device",
+            json!({"label":"Remote fixture","ssh_alias":"delivery-fixture","host_consent":true}),
+        )?;
         wait_for("connected private SSH device", || {
             let snapshot = screen.snapshot()?;
             Ok(snapshot
@@ -1062,6 +1070,31 @@ impl Fixture {
 
     fn event(&self, kind: &str, payload: Value) -> Result<()> {
         self.screen.event(kind, payload)
+    }
+
+    /// Sets `agent` up on the device as an operator's would be before a
+    /// spawn there: it has run, so its folder (`folder`, below the device
+    /// account's home) is there, and it is switched on, so the device's kit
+    /// puts Hide's hook in. A spawn refuses an agent whose hook is not in
+    /// place (docs/delivery.md).
+    pub fn agent_ready_on_device(&self, agent: &str, folder: &str) -> Result<()> {
+        fs::create_dir_all(self.remote.environment.home.join(folder))?;
+        self.event(
+            "kit_agent_set",
+            json!({"device_id": DEVICE, "agent": agent, "enabled": true}),
+        )?;
+        wait_for("the agent's hook on the device", || {
+            let snapshot = self.snapshot()?;
+            Ok(snapshot
+                .pointer("/navigator/devices")
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.iter().find(|row| row["id"] == DEVICE))
+                .and_then(|row| row.pointer("/kit/agents"))
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.iter().find(|row| row["id"] == agent))
+                .is_some_and(|row| row.pointer("/hook/state") == Some(&json!("installed")))
+                .then_some(()))
+        })
     }
 
     pub fn reconnect_device(&self) -> Result<()> {

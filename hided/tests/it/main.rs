@@ -3,6 +3,7 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+mod arguments;
 mod browser_control;
 mod closed_stdout;
 mod connect_build;
@@ -14,6 +15,7 @@ mod held_letter_notice;
 mod mobile;
 mod mobile_relay;
 mod node_contract;
+#[cfg(unix)]
 mod node_home;
 mod node_link_facts;
 mod node_owner;

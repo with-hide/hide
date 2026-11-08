@@ -2,6 +2,10 @@
 //! registered project, converging on reruns, and never removing anything Hide
 //! did not make. Every test works in a temporary directory passed as the
 //! account's home; nothing reads the real one.
+//!
+//! Windows' Home holds no link (`hide_host::home::LINKS`), so these run on
+//! Unix; Windows' listing form is `hide_host::home`'s own tests, which the
+//! Windows lane runs.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

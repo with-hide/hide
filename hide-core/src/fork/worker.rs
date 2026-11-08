@@ -262,11 +262,12 @@ fn run_agent_fork_with_registration(
             &format!("hide-core:fork:{}:start", request.name),
             &child_pane_id,
             shell,
+            crate::agent_start::SHELL_WAIT,
             &request.name,
             request.agent.kind(),
             args,
             request.codex_daemon,
-            crate::start_prompt::start_program(node, request.agent.kind()),
+            crate::start_prompt::start_program_of(mutation_engine, node, request.agent.kind()),
             &check,
         )
         .map_err(start_error_message);

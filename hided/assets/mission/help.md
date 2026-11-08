@@ -100,6 +100,9 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   It adds no review and no screenshot by default.
 - A review or a verify is a checker on the node, not a node of its own: `checks` lists at most one `review` and one `verify`, each with one to five agents in `by` (worker objects) and, for several, `rule` `all` (the default) or `majority` (`mission_checkers_invalid` otherwise).
   Each adds the line `review` or `verify`, which passes only when the checker recorded it, never the node's worker; a checker the node's worker is refused (`mission_checker_is_worker`).
+  Only the checkers bound to the line decide it: a slot of `by` that no agent took holds nothing open, and a line with none bound stays open.
+  A checker's answer is for the head it reviewed, which it names with `--commit <sha>` (`git rev-parse HEAD` in the worktree it read); a node with a pull request refuses an answer without one (`mission_commit_required`), since Hide would otherwise put the review on whatever head the pull request has when it is recorded.
+  When answers stand on different heads, the newest answer's head decides, so a review of the next head replaces the failure of the head before; a checker bound after the line passed opens it again until it answers.
   Which nodes get one, and how many, follows the mission's verification strength (below).
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.
@@ -160,7 +163,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 
 - the contract and the exact scope (the behaviours or decisions by number), and what is explicitly another node's;
 - for a node that changes existing behaviour, the places in the existing implementation's source that do the same thing;
-- the node's finish lines, each with its key from `hide mission show <node>` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line> --summary <one line for the operator>`, with `--commit <sha>` for the `check` line;
+- the node's finish lines, each with its key from `hide mission show <node>` (`c1`…, `check`, `ci`), and how to record them: `hide mission record <node> <line> --pass|--fail --evidence <one line> --summary <one line for the operator>`, with `--commit <sha>` for the `check` line and for a checker's `review` or `verify` on a node with a pull request (the commit it read);
 - the branch and worktree the spawn made, and that commits go on that branch only;
 - the checks the diff touches, by the repository's own commands;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
@@ -187,7 +190,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
   Start every reviewer and verifier yourself, as a worker of the mission, so the cap counts it; tell a worker not to start agents of its own.
   Then bind it to its line: `hide mission node <key> --reviewer <agent-N>` (or `--verifier`), which Hide refuses for the node's own worker (`mission_checker_is_worker`) or an agent it does not know (`mission_checker_unknown`).
-  End a finished worker with `hide agent end <id>` to free its place, and start the next node then.
+  End a finished worker or checker with `hide agent end <id>` to free its place, and start the next node then: its pane closes with every program in it, which also gives back the pane holder it held, and its conversation waits under 보관됨, where 이어가기 resumes it.
 - When a node is done or dropped, every pull request it holds merges or closes, or the mission closes, Hide puts that node's worker and checkers to sleep once they rest and are off the operator's screen (never you); a sleeping worker still counts against the cap until you end it, and `hide agent list` and `hide ps` show it `asleep` until it wakes.
   A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
@@ -328,6 +331,6 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   Add `--summary` on a failed or rejected result: one line of at most 160 characters, in the operator's language, saying what the result means for them ("검색어를 지우면 고른 줄이 사라져요"), while the details stay in `--evidence`.
   The map shows the summary first and folds the evidence under it, so a long report in another language never stands in the operator's way (`mission_summary_invalid` for a longer or multi-line one).
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
-- A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`).
+- A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
 - Recording the same result on the same commit again changes nothing.
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.

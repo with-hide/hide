@@ -141,12 +141,12 @@
       }
     },
     "serverFrame": {
-      "description": "snapshot/delta carry the core state; terminal carries pane output beside them, never through the core (see terminalFrame); error answers a malformed client event; directory_list answers a `file_list`, and path_refused answers any event whose path failed its boundary - the $HOME line for `create_workspace` and `clone_repository`, the checkout-root line for `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import`, `path_trash` and `file_bytes` (see directoryList and pathRefused). A `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import` or `path_trash` that names an SSH device in `device_id` never meets this machine's checkout roots: the core accepts it only for the checkout in front on that device and the device's helper confines every path to that checkout's opened root. file_bytes_error answers a `file_bytes` read the daemon could not serve as bytes (see fileBytes). directory_unavailable answers a `file_list` for a checkout on an SSH device that its helper could not list (see directoryUnavailable). directory_changed announces that a watched folder changed, so the client re-reads that one folder (see directoryChanged). attachment_refused answers an `attachment_stage` or `attachment_commit` that could not be staged (see attachments). file_index_result answers a `file_index` query with the ranked checkout paths (see fileIndex). project_target answers a `project_target` probe (see projectTarget and projectTargetResult). clone_target answers a `clone_target` question about where a clone would land (see cloneTarget). daemon is the first frame after a valid handshake and describes the daemon itself (see daemonInfo). agent_notice reaches only a desktop window, and only while one has asked for it with `desktop_notices` (see agentNotice and desktopNoticesPayload). core_move is the core move as the process's supervisor holds it, which every role of the process sends its screens, a node holding its screen from the moment a move is under way, and the only frame a screen gets while a move holds it (`hided/src/core_move/control.rs` `MoveView`); once the move is under way it carries `alias`, the SSH alias the move reaches its other machine by, which a screen that has not drawn the core names that machine by; while the checks the operator asked for sign in to the other machine it carries `sign_in`, what ssh asks there in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to and answered by the screen whose request started the checks only, with a `core_move` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`} (another's is refused as `move_not_asker`); a `cancel` of what is shown, a `cancel` naming no question (the dialog closing), that screen's end, or five minutes on a browser check or a key touch ends the checks' sign-in, whether or not a question showed yet, and a connection check that stopped on ssh carries `ssh_problem`, that failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `hide_updated`, `cannot_connect`, `ssh_missing`, `openssh_old`, `unsupported`). core_link is where a node's link to its core stands, sent to a screen the node holds while the core cannot draw it: `phase` `connecting`, `updating`, `waiting`, `stopped` or `disconnected`, `machine`, the core machine's name when its hello gave it, else null, `alias`, the SSH alias the node dials its core by, which a screen that has not drawn the core names instead of an empty machine, `problem`, the ssh failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `cannot_connect`, ...) while `stopped`, else null, and `sign_in`, what ssh asks the dial a held screen's Retry started, in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to that screen only, else null; that screen answers it with a `core_link` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`}, another screen's answer reaches nothing, and a `cancel`, that screen's end, or five minutes on a browser check or a key touch ends the attempt, whether or not a question showed yet; a connect no screen made (`hide connect`, a launch) asks nobody; one press asks at most one sign-in. `stopped` is a failure only the operator can fix: nothing dials again until a window connects (`hide connect`) or a screen's `core_link` event {action: `retry`}. `disconnected` is the operator's own end of the link: a screen's `core_link` event {action: `disconnect`} ends it from that machine's node daemon, which records it so a restart keeps it, and {action: `reconnect`} restores it; the node takes that event, and a `core_move` event, even while it holds the screen, and answers a change it could not make with an error frame whose payload is {kind: `core_link`, reason: `not_changed`}. browser_comment answers a window's `browser_comment` event, which turns Comment mode on a browser View on or off: {workspace, display_id, on, reason} names the View in its checkout, since display ids repeat across checkouts, and on: false says the mode ended, with `reason` null when the operator ended it, or why it could not start or went on (`display_busy`, `comment_limit`, `comment_unavailable_here`, or the page's lease failure); while it is on, a frame with `pick` {id, anchor, at} is a place the operator picked in the page, whose screenshot hided holds, one with `open` {id, at} a pin they pressed, `at` being where it shows as fractions of the page's viewport, and one with `dropped` true says the page navigated, to another document or within the same one, and the held pick is gone; the window writes the note itself and adds it with a `browser_comment` event carrying `add` {pick, note}; only an operator's screen (a desktop or web window whose connection its token proved, never a pane's scoped connection) may send it or `view_comment` and `view_feedback_send`. A `file_bytes` read that succeeds is answered with one or more binary frames on the same socket, not a text frame (see fileBytes). window_call reaches every window of the core's machine after a `hide <path>` brought a project in front (see projectOpen), its payload {device_id, path, checkout_id} naming that project's checkout, `checkout_id` null while a device's new project is not listed yet: a desktop window comes forward, and every window shows that project once the core has it in front.",
+      "description": "snapshot/delta carry the core state; terminal carries pane output beside them, never through the core (see terminalFrame); clipboard {pane_id, text_base64} is what a pane's program wrote to the clipboard (OSC 52), at most 192 KiB of text, sent once to each desktop or web window connected when it was written and kept for none that connects, resumes or redraws later, so a window in front writes it to its clipboard once; error answers a malformed client event; directory_list answers a `file_list`, and path_refused answers any event whose path failed its boundary - the $HOME line for `create_workspace` and `clone_repository`, the checkout-root line for `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import`, `path_trash` and `file_bytes` (see directoryList and pathRefused). A `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import` or `path_trash` that names an SSH device in `device_id` never meets this machine's checkout roots: the core accepts it only for the checkout in front on that device and the device's helper confines every path to that checkout's opened root. file_bytes_error answers a `file_bytes` read the daemon could not serve as bytes (see fileBytes). directory_unavailable answers a `file_list` for a checkout on an SSH device that its helper could not list (see directoryUnavailable). directory_changed announces that a watched folder changed, so the client re-reads that one folder (see directoryChanged). attachment_refused answers an `attachment_stage` or `attachment_commit` that could not be staged (see attachments). file_index_result answers a `file_index` query with the ranked checkout paths (see fileIndex). project_target answers a `project_target` probe (see projectTarget and projectTargetResult). clone_target answers a `clone_target` question about where a clone would land (see cloneTarget). daemon is the first frame after a valid handshake and describes the daemon itself (see daemonInfo). agent_notice reaches only a desktop window, and only while one has asked for it with `desktop_notices` (see agentNotice and desktopNoticesPayload). core_move is the core move as the process's supervisor holds it, which every role of the process sends its screens, a node holding its screen from the moment a move is under way, and the only frame a screen gets while a move holds it (`hided/src/core_move/control.rs` `MoveView`); once the move is under way it carries `alias`, the SSH alias the move reaches its other machine by, which a screen that has not drawn the core names that machine by; while the checks the operator asked for sign in to the other machine it carries `sign_in`, what ssh asks there in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to and answered by the screen whose request started the checks only, with a `core_move` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`} (another's is refused as `move_not_asker`); a `cancel` of what is shown, a `cancel` naming no question (the dialog closing), that screen's end, or five minutes on a browser check or a key touch ends the checks' sign-in, whether or not a question showed yet, and a connection check that stopped on ssh carries `ssh_problem`, that failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `hide_updated`, `cannot_connect`, `ssh_missing`, `openssh_old`, `unsupported`). core_link is where a node's link to its core stands, sent to a screen the node holds while the core cannot draw it: `phase` `connecting`, `updating`, `waiting`, `stopped` or `disconnected`, `machine`, the core machine's name when its hello gave it, else null, `alias`, the SSH alias the node dials its core by, which a screen that has not drawn the core names instead of an empty machine, `problem`, the ssh failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `cannot_connect`, ...) while `stopped`, else null, and `sign_in`, what ssh asks the dial a held screen's Retry started, in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to that screen only, else null; that screen answers it with a `core_link` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`}, another screen's answer reaches nothing, and a `cancel`, that screen's end, or five minutes on a browser check or a key touch ends the attempt, whether or not a question showed yet; a connect no screen made (`hide connect`, a launch) asks nobody; one press asks at most one sign-in. `stopped` is a failure only the operator can fix: nothing dials again until a window connects (`hide connect`) or a screen's `core_link` event {action: `retry`}. `disconnected` is the operator's own end of the link: a screen's `core_link` event {action: `disconnect`} ends it from that machine's node daemon, which records it so a restart keeps it, and {action: `reconnect`} restores it; the node takes that event, and a `core_move` event, even while it holds the screen, and answers a change it could not make with an error frame whose payload is {kind: `core_link`, reason: `not_changed`}. browser_comment answers a window's `browser_comment` event, which turns Comment mode on a browser View on or off: {workspace, display_id, on, reason} names the View in its checkout, since display ids repeat across checkouts, and on: false says the mode ended, with `reason` null when the operator ended it, or why it could not start or went on (`display_busy`, `comment_limit`, `comment_unavailable_here`, or the page's lease failure); while it is on, a frame with `pick` {id, anchor, at} is a place the operator picked in the page, whose screenshot hided holds, one with `open` {id, at} a pin they pressed, `at` being where it shows as fractions of the page's viewport, and one with `dropped` true says the page navigated, to another document or within the same one, and the held pick is gone; the window writes the note itself and adds it with a `browser_comment` event carrying `add` {pick, note}; only an operator's screen (a desktop or web window whose connection its token proved, never a pane's scoped connection) may send it or `view_comment` and `view_feedback_send`. A `file_bytes` read that succeeds is answered with one or more binary frames on the same socket, not a text frame (see fileBytes). window_call reaches every window of the core's machine after a `hide <path>` brought a project in front (see projectOpen), its payload {device_id, path, checkout_id} naming that project's checkout, `checkout_id` null while a device's new project is not listed yet: a desktop window comes forward, and every window shows that project once the core has it in front.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "payload"],
       "properties": {
-        "type": { "type": "string", "enum": ["daemon", "snapshot", "delta", "terminal", "error", "directory_list", "directory_unavailable", "path_refused", "project_target", "file_bytes_error", "directory_changed", "file_index_result", "attachment_refused", "open_external_result", "clone_target", "core_move", "core_link", "agent_notice", "browser_comment", "window_call"] },
+        "type": { "type": "string", "enum": ["daemon", "snapshot", "delta", "terminal", "error", "directory_list", "directory_unavailable", "path_refused", "project_target", "file_bytes_error", "directory_changed", "file_index_result", "attachment_refused", "open_external_result", "clone_target", "home_folder_list", "importable_projects", "core_move", "core_link", "agent_notice", "browser_comment", "window_call", "clipboard"] },
         "payload": {
           "type": "object",
           "properties": {
@@ -1033,6 +1033,7 @@
         },
         "path": { "type": "string" },
         "reason": { "$ref": "#/$defs/pathRefusalReason" },
+        "request_id": { "type": "string", "description": "Only on a `create_workspace` that named a `request_id` (Add a project's importable list): that id, so the add that was refused reads the refusal as its own." },
         "confirm": { "type": "string", "description": "Only on a `create_workspace` answered `needs_confirmation` whose folder belongs to a project outside home that is not that folder (inside a repository there, or a linked worktree of one): that project's root, the folder the operator is asked about and confirms instead, because a registration adds the project." }
       }
     },
@@ -1042,10 +1043,106 @@
       "additionalProperties": false,
       "required": ["parent", "name", "path", "reason"],
       "properties": {
+        "device_id": { "type": "string", "description": "The machine asked about: this machine's node id for the $HOME line, or the device whose node answered." },
         "parent": { "type": "string" },
         "name": { "type": "string" },
         "path": { "type": ["string", "null"] },
-        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "type": "null" }] }
+        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
+      }
+    },
+    "nodeAskReason": {
+      "description": "Why a machine's node could not answer Add a project's question (`home_folder_list`, or a device's `clone_target` or `project_target`) beyond a path refusal: unreadable when the folder exists but could not be read, disconnected when the machine cannot be asked now, busy when its node is at its request limit; the node's sentence goes to the log as `add_project.node_refused`.",
+      "type": "string",
+      "enum": ["unreadable", "disconnected", "busy"]
+    },
+    "homeFolderList": {
+      "description": "A client `home_folder_list` event {device_id, path} asks for one folder under a machine's home for Add a project's folder list (PRD device-add-project D-03, D-08). device_id empty or this machine's node id asks this machine; any other id asks that device. path is `~`, `~/...` or an absolute path in either spelling (a Windows device takes `C:\\Users\\me\\work` and `C:/Users/me/work`). hided asks that machine's node (`Call::HomeList`) on a blocking task and answers a home_folder_list frame; it never forwards the event, and nothing changes on disk. The node opens the folder from a handle on its own home, so a path that is not home or below it, or leads out of it through a link, is refused as outside_home, and a link out of home is not a row. A device's `clone_target` and `project_target` {device_id, parent, name} are answered the same way by that device's node (`Call::NewFolderTarget`), in the clone_target and project_target frames this machine's $HOME line answers with, and a `clone_repository` {url, device_id, parent, name} naming a device reaches the core untouched, whose clone worker has that device's node judge the parent again before Git runs there. A `create_workspace` with `new_folder` naming a device reaches the core untouched too, which has that device's node judge and make the folder and its repository and registers it there.",
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "importableProjects": {
+      "description": "A client `importable_projects` event {device_id} asks for the projects worth adding on a machine, for Add a project's importable list (PRD device-add-project D-09 to D-14). device_id empty or this machine's node id asks this machine; any other id asks that device. hided takes the paths of the core's registrations on that machine (`Core::registered_paths`) and asks that machine's node (`Call::ImportableProjects` with them as `exclude`) on a blocking task with a 30 s bound, and answers an importable_projects frame; it never forwards the event, and nothing changes on disk. The node gathers the folders every agent with a session reader worked in (`hide_session::SessionCatalog::worked_folders`), Paseo's projects (`$PASEO_HOME` or `~/.paseo`, `projects/projects.json`, at most 4 MiB, archived ones left out) and Herdr's workspaces (its config folder's `session.json`, at most 4 MiB, format 3 or older), judges each folder as a registration would be judged without confirmation (`hide_host::register::judge`), so home, a folder outside home, the home dotfiles repository and a folder that is gone are left out, merges folders into the root a registration adds, keeps the roots active in the last 30 days that `exclude` does not name, newest first, at most 20, and only reads. A source it cannot read drops out alone and is logged as `add_project.import_source_dropped` with the source and the reason.",
+      "type": "object",
+      "properties": {
+        "device_id": { "type": "string" }
+      }
+    },
+    "importableProjectsResult": {
+      "description": "Payload of an importable_projects frame: the machine asked (device_id), and either the projects or the reason (`nodeAskReason`, `disconnected` when the machine cannot be asked). Each project names the root a registration adds in the wire spelling (path), the same root as `~` spells it (label), its folder name (name), every source that named it (an agent's session format such as `claude`, `codex` or `opencode`, or `paseo`, `herdr`), and its newest activity in Unix milliseconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "projects", "reason"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "projects": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "label", "name", "sources", "active_at_unix_ms"],
+                "properties": {
+                  "path": { "type": "string" },
+                  "label": { "type": "string" },
+                  "name": { "type": "string" },
+                  "sources": { "type": "array", "items": { "type": "string" } },
+                  "active_at_unix_ms": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          ]
+        },
+        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
+      }
+    },
+    "homeFolderListResult": {
+      "description": "Payload of a home_folder_list frame: the machine and the path as asked (request), and either the listing or the reason. A listing names the folder's real path in the wire spelling (path), the same folder as `~` spells it (label), the machine's home (home), at most 500 children with hidden names (a leading dot, macOS's hidden flag, Windows' hidden or system attribute) left out, folders first and then the Explorer's natural order, and truncated when there were more. A child folder that is a Git repository's root carries repository true and its branch (absent when HEAD is detached); any other child folder carries repositories, how many of its own children are repositories, when there are any and it has at most 200 children and the answer has read fewer than 4000 children for these counts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "request", "listing", "reason"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "request": { "type": "string" },
+        "listing": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "label", "home", "entries", "truncated"],
+              "properties": {
+                "path": { "type": "string" },
+                "label": { "type": "string" },
+                "home": { "type": "string" },
+                "truncated": { "type": "boolean" },
+                "entries": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "is_directory"],
+                    "properties": {
+                      "name": { "type": "string" },
+                      "is_directory": { "type": "boolean" },
+                      "repository": { "type": "boolean" },
+                      "branch": { "type": "string" },
+                      "repositories": { "type": "integer", "minimum": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "reason": { "anyOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
       }
     },
     "openExternal": {
@@ -1103,7 +1200,7 @@
       }
     },
     "projectTarget": {
-      "description": "A client `project_target` event asks where Add a project's Create new project would make a folder: {parent, name}. hided answers it on the $HOME line with a project_target frame and never forwards it; it reads the parent and the one name under it and changes nothing on disk. The create itself is a `create_workspace` with `new_folder: true` and `initialize_git: true` whose `path` is the parent and the name joined by `/`: hided checks the parent on the $HOME line (home itself is allowed, since the new folder is under it) and the name as one folder name, refuses anything already standing at the target except an empty folder or one holding only `.git` and `.DS_Store` (what an earlier attempt that failed after making its folder leaves, so a retry continues into it) as already_exists, and forwards the canonical target; the core makes the folder at that literal path before canonicalizing it, so a symlink planted at the name is refused rather than followed, runs `git init` in it, and registers it. A `new_folder` create that names an SSH device is refused by the core.",
+      "description": "A client `project_target` event asks where Add a project's Create new project would make a folder: {parent, name}. hided answers it on the $HOME line with a project_target frame and never forwards it; it reads the parent and the one name under it and changes nothing on disk. With `device_id` naming a device it is that device's node's question instead (see homeFolderList). The create itself is a `create_workspace` with `new_folder: true` and `initialize_git: true` whose `path` is the parent and the name joined by `/`: hided checks the parent on the $HOME line (home itself is allowed, since the new folder is under it) and the name as one folder name, refuses anything already standing at the target except an empty folder or one holding only `.git` and `.DS_Store` (what an earlier attempt that failed after making its folder leaves, so a retry continues into it) as already_exists, and forwards the canonical target; the core makes the folder at that literal path before canonicalizing it, so a symlink planted at the name is refused rather than followed, runs `git init` in it, and registers it. A `new_folder` create that names a device is judged and made by that device's node against its own home, and registered there (see homeFolderList).",
       "type": "object",
       "required": ["parent", "name"],
       "properties": {
@@ -1117,13 +1214,14 @@
       "additionalProperties": false,
       "required": ["parent", "name", "parent_path", "parent_label", "path", "leftover", "reason"],
       "properties": {
+        "device_id": { "type": "string" },
         "parent": { "type": "string" },
         "name": { "type": "string" },
         "parent_path": { "type": ["string", "null"] },
         "parent_label": { "type": ["string", "null"] },
         "path": { "type": ["string", "null"] },
         "leftover": { "type": "boolean" },
-        "reason": { "oneOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "type": "null" }] }
+        "reason": { "oneOf": [{ "$ref": "#/$defs/pathRefusalReason" }, { "$ref": "#/$defs/nodeAskReason" }, { "type": "null" }] }
       }
     },
     "fileIndex": {

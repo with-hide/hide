@@ -1635,11 +1635,11 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     let _state = hold_dirs(&mut runtime);
     assert!(runtime.dispatch_json(&event(
         "agent_sleep_set",
-        serde_json::json!({"after_hours": 24})
+        serde_json::json!({"after_hours": 48})
     )));
     assert_eq!(
         serde_json::to_value(runtime.snapshot()).unwrap()["ui_state"]["agent_sleep_after_hours"],
-        24
+        48
     );
     assert!(runtime.dispatch_json(&event(
         "ui_state_update",
@@ -1647,7 +1647,7 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     )));
     assert_eq!(
         runtime.snapshot().ui_state.agent_sleep_after_hours,
-        Some(24)
+        Some(48)
     );
 
     runtime.dispatch_json(&event(
@@ -1665,11 +1665,72 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
     );
     assert_eq!(
         runtime.snapshot().ui_state.agent_sleep_after_hours,
-        Some(24)
+        Some(48)
     );
     drop(runtime);
 
-    let mut restarted = Runtime::new(
+    let mut restarted = restarted_on(&path);
+    assert_eq!(
+        restarted.snapshot().ui_state.agent_sleep_after_hours,
+        Some(48)
+    );
+    assert!(restarted.dispatch_json(&event(
+        "agent_sleep_set",
+        serde_json::json!({"after_hours": null})
+    )));
+    assert_eq!(restarted.snapshot().ui_state.agent_sleep_after_hours, None);
+    drop(restarted);
+    // An Off the operator chose is kept as Off across a restart.
+    assert_eq!(
+        restarted_on(&path)
+            .snapshot()
+            .ui_state
+            .agent_sleep_after_hours,
+        None
+    );
+}
+
+/// A new store sleeps idle agents after 24 hours, and so does one written
+/// while Off was the default, whose null could not tell that default from
+/// an Off the operator chose; an Off chosen since is written as 0, which a
+/// build from before the default reads as Off too (it loads a value that is
+/// not one of its choices as Off).
+#[test]
+fn sleep_defaults_to_24_hours_and_a_chosen_off_is_written_as_zero() {
+    let mut runtime = runtime();
+    let path = runtime.state_path.clone();
+    let _state = hold_dirs(&mut runtime);
+    assert_eq!(
+        runtime.snapshot().ui_state.agent_sleep_after_hours,
+        Some(24)
+    );
+    let stored = |path: &std::path::Path| -> serde_json::Value {
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        state["agent_sleep_after_hours"].clone()
+    };
+    assert!(runtime.dispatch_json(&event(
+        "agent_sleep_set",
+        serde_json::json!({"after_hours": null})
+    )));
+    drop(runtime);
+    assert_eq!(stored(&path), 0);
+
+    // The store an earlier build wrote with its default.
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    state["agent_sleep_after_hours"] = serde_json::Value::Null;
+    std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let restarted = restarted_on(&path);
+    assert_eq!(
+        restarted.snapshot().ui_state.agent_sleep_after_hours,
+        Some(24)
+    );
+}
+
+/// A runtime started again on the state file at `path`, as a relaunch does.
+fn restarted_on(path: &std::path::Path) -> Runtime {
+    Runtime::new(
         CoreOptions {
             schema_version: SCHEMA_VERSION,
             home: None,
@@ -1691,16 +1752,7 @@ fn the_sleep_setting_survives_a_restart_and_a_ui_state_update() {
         },
         std::sync::Arc::new(hide_node::Local::of_process()),
         crate::node::test_devices(),
-    );
-    assert_eq!(
-        restarted.snapshot().ui_state.agent_sleep_after_hours,
-        Some(24)
-    );
-    assert!(restarted.dispatch_json(&event(
-        "agent_sleep_set",
-        serde_json::json!({"after_hours": null})
-    )));
-    assert_eq!(restarted.snapshot().ui_state.agent_sleep_after_hours, None);
+    )
 }
 
 /// B10, B20: a sleeping agent keeps its row, name and place, with its moon

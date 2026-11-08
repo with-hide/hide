@@ -243,6 +243,8 @@ pub(crate) fn send(
         bell_route: Default::default(),
         input_noticed: 0,
         input_noticed_at_unix_ms: 0,
+        bell_failure: None,
+        bell_ended: Some(0),
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
         intake_from: ledger
@@ -268,10 +270,13 @@ pub fn apply(
         command,
         now,
         InterfaceLanguage::English,
+        &[],
     )
 }
 
-/// [`apply`], with what a handover shows worded in `language`.
+/// [`apply`], with what a handover shows worded in `language` and `also_reads`
+/// the senders whose letters `Show` answers beside the caller's own
+/// (`Authority::also_reads`).
 pub fn apply_in(
     ledger: &mut Ledger,
     actor: &Actor,
@@ -279,6 +284,7 @@ pub fn apply_in(
     command: &Command,
     now: u64,
     language: InterfaceLanguage,
+    also_reads: &[Exchange],
 ) -> Result<Value, String> {
     actor.require_native_identity()?;
     if let Command::Send { intent, .. } | Command::Reply { intent, .. } = command
@@ -415,7 +421,7 @@ pub fn apply_in(
                 acknowledged,
             }))
         }
-        Command::Show { id } => Ok(json!(authorized(ledger, actor, id)?)),
+        Command::Show { id } => Ok(json!(show(ledger, actor, also_reads, id)?)),
         Command::Inbox { bundle: true } => Ok(json!(inbox(ledger, actor))),
         Command::Inbox { bundle: false } => Ok(legacy_inbox(ledger, actor)),
         // A tool event's ask is answered by the worker with the pane's own
@@ -576,14 +582,47 @@ fn end_report_watches(ledger: &mut Ledger, report: Option<(Actor, Actor)>) {
     }
 }
 
-fn authorized<'a>(ledger: &'a Ledger, actor: &Actor, id: &str) -> Result<&'a Letter, String> {
+/// Letters from one agent to another that a third may read.
+#[derive(Clone, Debug)]
+pub struct Exchange {
+    pub from: Actor,
+    pub to: Actor,
+}
+
+/// The letter `id` for `actor` to read: one it sent or received, or one
+/// in `also_reads`, the exchanges the caller may read beside those
+/// (`Authority::also_reads`). This is the one place that decides who reads a
+/// letter; taking one in, cancelling and answering it stay with
+/// [`authorized`].
+fn show<'a>(
+    ledger: &'a Ledger,
+    actor: &Actor,
+    also_reads: &[Exchange],
+    id: &str,
+) -> Result<&'a Letter, String> {
     ledger
         .letters
         .iter()
         .find(|letter| {
             letter.id == id
-                && (letter.sender.same_identity(actor) || letter.recipient.same_identity(actor))
+                && (is_party(letter, actor)
+                    || also_reads.iter().any(|read| {
+                        letter.sender.same_identity(&read.from)
+                            && letter.recipient.same_identity(&read.to)
+                    }))
         })
+        .ok_or_else(|| "letter_unavailable".into())
+}
+
+fn is_party(letter: &Letter, actor: &Actor) -> bool {
+    letter.sender.same_identity(actor) || letter.recipient.same_identity(actor)
+}
+
+fn authorized<'a>(ledger: &'a Ledger, actor: &Actor, id: &str) -> Result<&'a Letter, String> {
+    ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == id && is_party(letter, actor))
         .ok_or_else(|| "letter_unavailable".into())
 }
 
@@ -633,7 +672,7 @@ fn bell_pending(ledger: &Ledger, letter: &Letter, now: u64) -> bool {
     letter.state == State::Pending
         && !letter.handed
         && letter.within_deadline(&ledger.node_clocks, now)
-        && letter.attempts() < 3
+        && letter.attempts() < super::ledger::BELLS
         && super::doorbell::bell_target(&letter.recipient.kind)
 }
 
@@ -1066,15 +1105,21 @@ fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
     let letters = shares
         .into_iter()
         .flat_map(|share| share.shown)
-        .chain(ledger.letters.iter().filter(|letter| {
+        .cloned()
+        .collect();
+    let returned = ledger
+        .letters
+        .iter()
+        .filter(|letter| {
             letter.sender.same_identity(actor)
                 && !letter.recipient.same_identity(actor)
                 && letter.state == State::Undelivered
-        }))
+        })
         .cloned()
         .collect();
     Inbox {
         letters,
+        returned,
         folded,
         ack_command,
     }
@@ -1346,8 +1391,12 @@ mod tests {
             "capacity"
         );
         assert_eq!(ledger.letters[0].id, letter.id);
+        // Its sender gets it back apart from the letters it received.
         let inbox = apply(&mut ledger, &a, None, &Command::Inbox { bundle: true }, 20).unwrap();
-        assert_eq!(inbox["letters"][0]["state"], "undelivered");
+        assert_eq!(inbox["letters"], json!([]));
+        assert_eq!(inbox["returned"][0]["id"], letter.id.as_str());
+        assert_eq!(inbox["returned"][0]["state"], "undelivered");
+        assert_eq!(inbox["returned"][0]["recipient"]["pane_id"], "b");
     }
 
     #[test]
@@ -1872,7 +1921,7 @@ mod tests {
         pull_for(&mut ledger, &recipient, LINE);
         assert!(ledger.letters[0].handed);
         let failed = std::collections::BTreeMap::from([(id, "wake_failed".to_owned())]);
-        assert!(ledger.fail_woken(&failed, 100));
+        assert!(ledger.fail_undeliverable(&failed, 100));
         assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 
@@ -3739,5 +3788,58 @@ mod tests {
                 format!("hide request ack {}", entry["id"].as_str().unwrap())
             );
         }
+    }
+
+    /// A hook's confirmation reaches the ledger as `hide inbox --confirm`'s
+    /// does, whether its hook sent it over the hook's own request or a `hide`
+    /// it started (with-hide/hide-private#663): only the recipient's own pane
+    /// and session take its letters as received. The sender, a pane that is
+    /// no party to the letter and a later session in the recipient's pane
+    /// change nothing.
+    #[test]
+    fn a_confirmation_is_taken_only_from_the_recipients_own_pane_and_session() {
+        let mut ledger = Ledger::default();
+        let sender = actor("sender");
+        let recipient = actor("recipient");
+        let letter = send(
+            &mut ledger,
+            &sender,
+            &recipient,
+            "intent",
+            "body",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            pull(&ledger, &recipient).unwrap().ids,
+            vec![letter.id.clone()]
+        );
+        let confirm = Command::Confirm {
+            ids: vec![letter.id.clone()],
+        };
+        let mut later = recipient.clone();
+        later.session = Some("session-later".into());
+        let before = ledger.clone();
+        for (caller, refusal) in [
+            (sender, "recipient_required"),
+            (actor("bystander"), "letter_unavailable"),
+            (later, "letter_unavailable"),
+        ] {
+            assert_eq!(
+                apply(&mut ledger, &caller, None, &confirm, 2).unwrap_err(),
+                refusal,
+                "{}",
+                caller.pane_id
+            );
+            assert_eq!(ledger, before);
+        }
+        assert_eq!(
+            pull(&ledger, &recipient).unwrap().ids,
+            vec![letter.id.clone()]
+        );
+        apply(&mut ledger, &recipient, None, &confirm, 2).unwrap();
+        assert!(pull(&ledger, &recipient).unwrap().ids.is_empty());
     }
 }

@@ -30,12 +30,14 @@ export const SETTINGS_GROUPS: readonly { id: "app" | "machine"; tabs: readonly S
 
 /**
  * The Sleep idle agents choices (PRD agent-sleep D-10), in the hours the core
- * accepts; Never is the default and sends null. `unit` is how the choice reads.
+ * accepts; 24 hours is the default, and Never sends null. `unit` is how the
+ * choice reads.
  */
 export const SLEEP_AFTER_CHOICES: readonly { id: string; hours: number | null; unit: "hours" | "days" }[] = [
   { id: "never", hours: null, unit: "hours" },
   { id: "12", hours: 12, unit: "hours" },
   { id: "24", hours: 24, unit: "hours" },
+  { id: "48", hours: 48, unit: "days" },
   { id: "72", hours: 72, unit: "days" },
 ];
 
@@ -453,27 +455,6 @@ export function kitRefusalLine(refusal: KitRefusal, t: Translate): string {
  */
 export function canRetryDevice(device: Device, remote: RemoteStatus | undefined): boolean {
   return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && retryCanHelp(device.problem) && deviceState(device, remote).tone !== "pending";
-}
-
-/**
- * The id a new device registers under: the alias folded to the core's id
- * shape, with a numeric suffix when an existing device already holds it.
- * `local`, the id the core's own machine had before it was named by its
- * node id, is refused by the core and never offered.
- */
-export function deviceIdFor(alias: string, existing: readonly string[]): string {
-  const base =
-    alias
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "device";
-  const taken = new Set(existing);
-  if (!taken.has(base) && base !== "local") return base;
-  for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!taken.has(candidate)) return candidate;
-  }
 }
 
 /**

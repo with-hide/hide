@@ -757,3 +757,183 @@ fn a_windows_guard_with_an_empty_module_cache_answers_inside_its_hook_timeout() 
         "PowerShell honors PSModuleAnalysisCachePath"
     );
 }
+
+/// with-hide/hide-private#663: Codex runs Hide's hooks through PowerShell
+/// and keeps a hook's answer only if its output ends inside the entry's
+/// timeout. A hook that started `hide`, to confirm the letters it had handed
+/// over or for the opener guard to ask whether the pane is registered,
+/// waited for that start, which on Windows took a second warm and 18 to 25
+/// seconds the first time a new copy ran, and Codex dropped the whole
+/// answer. No `hide` sits beside this helper, so every answer here came from
+/// the helper's own requests, and each run, timed as Codex times it, from
+/// the shell's start to the end of the hook's output, ends inside its
+/// entry's timeout.
+#[test]
+fn codexs_prompt_and_guard_hooks_ask_the_daemon_themselves_inside_their_timeout() {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use hide_platform::process::OwnedChild;
+    use serde_json::json;
+
+    use crate::stand_in_daemon::StandInDaemon;
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::write(project.join(".git").join("HEAD"), "ref: refs/heads/topic\n").unwrap();
+    // The guardrails policy the core writes at its start: no protection on.
+    let policy = home
+        .join(".hide")
+        .join("agent-hooks")
+        .join("guardrails.json");
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(&policy, r#"{"version":1,"projects":[]}"#).unwrap();
+    let helper = root.path().join("kit [1] $x").join(HELPER_BINARY_NAME);
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
+    assert_eq!(
+        std::fs::read_dir(helper.parent().unwrap()).unwrap().count(),
+        1,
+        "no `hide` beside the helper"
+    );
+    // The new file's first start, which Windows holds while it scans it, is
+    // paid before anything is timed (`stand_ins`).
+    crate::stand_ins::ready(&helper);
+    std::fs::create_dir_all(AgentRuntime::Codex.home_directory(&home)).unwrap();
+    hide_agent_hooks::install(AgentRuntime::Codex, &home, crate::hook_target(&helper)).unwrap();
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(AgentRuntime::Codex.config_path(&home)).unwrap(),
+    )
+    .unwrap();
+    let entry = |event: &str| -> Value {
+        document["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| &group["hooks"][0])
+            .find(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|command| command.contains(&format!("--event {event}")))
+            })
+            .unwrap_or_else(|| panic!("no {event} entry: {document}"))
+            .clone()
+    };
+
+    // The daemon hands one letter over until it is confirmed.
+    let asked = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let confirmed = Arc::new(Mutex::new(false));
+    let (record, taken) = (Arc::clone(&asked), Arc::clone(&confirmed));
+    let daemon = StandInDaemon::serve_table(move |command| {
+        record.lock().unwrap().push(command.clone());
+        Some(match command["kind"].as_str()? {
+            "letter_pull" if *taken.lock().unwrap() => {
+                json!({"ok":true,"result":{"context":"","ids":[],"remaining":0}})
+            }
+            "letter_pull" => {
+                json!({"ok":true,"result":{"context":"LETTER-BODY","ids":["letter-1"],"remaining":0}})
+            }
+            "letter_confirm" => {
+                *taken.lock().unwrap() = true;
+                json!({"ok":true,"result":{"confirmed":command["ids"]}})
+            }
+            "registration" => json!({"ok":true,"result":{}}),
+            "status" => json!({"ok":true,"result":{"recorded":true}}),
+            _ => json!({"ok":false,"reason":"memory_unavailable"}),
+        })
+    });
+    let run = |shell: &str, event: &str, payload: Value| -> String {
+        let hook = entry(event);
+        let timeout = Duration::from_secs(hook["timeout"].as_u64().unwrap());
+        let mut command = Command::new(shell);
+        command.args(["-NoProfile", "-Command", hook["command"].as_str().unwrap()]);
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy();
+            if ["HERDR_", "HIDE_", "HCOORD_", "CODEX_"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            {
+                command.env_remove(key);
+            }
+        }
+        command
+            .env(hide_platform::host::HOME_VARIABLE, &home)
+            .env("HIDE_PANE_ID", "w1:p2")
+            .current_dir(&project)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        daemon.route(&mut command);
+        let started = Instant::now();
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        child
+            .take_stdin()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child
+            .capture_until(started + timeout, 64 * 1024)
+            .unwrap_or_else(|failure| {
+                panic!("{event} under {shell}: past its {timeout:?} timeout: {failure:?}")
+            });
+        let elapsed = started.elapsed();
+        eprintln!("{event} under {shell}: {elapsed:?} of {timeout:?}");
+        assert!(
+            output.status.success(),
+            "{event} under {shell}: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(elapsed < timeout, "{event} under {shell}: {elapsed:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let kinds = |asked: &Mutex<Vec<Value>>| -> Vec<String> {
+        std::mem::take(&mut *asked.lock().unwrap())
+            .iter()
+            .map(|command| command["kind"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+
+    for shell in codex_shells() {
+        *confirmed.lock().unwrap() = false;
+        let stdout = run(
+            shell,
+            "UserPromptSubmit",
+            json!({"session_id":"codex-session","turn_id":"t1","cwd":project,
+                "hook_event_name":"UserPromptSubmit","prompt":"bell"}),
+        );
+        assert!(stdout.contains("LETTER-BODY"), "{shell}: {stdout}");
+        let prompt = kinds(&asked);
+        assert!(
+            prompt.contains(&"letter_pull".to_owned())
+                && prompt.contains(&"letter_confirm".to_owned()),
+            "{shell}: the letter it handed over is confirmed: {prompt:?}"
+        );
+
+        let stdout = run(
+            shell,
+            "PreToolUse",
+            json!({"session_id":"codex-session","cwd":project,"hook_event_name":"PreToolUse",
+                "tool_name":"Bash","tool_input":{"command":"Start-Process http://localhost:5173"}}),
+        );
+        let answer: Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|error| panic!("{shell}: {error}: {stdout}"));
+        assert_eq!(
+            answer["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{shell}: {stdout}"
+        );
+        assert!(
+            answer["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("browser open http://localhost:5173"),
+            "{shell}: {stdout}"
+        );
+        let guard = kinds(&asked);
+        assert!(
+            guard.contains(&"registration".to_owned()),
+            "{shell}: {guard:?}"
+        );
+    }
+}

@@ -32,6 +32,10 @@ impl OutputSink for OwnPanes {
     fn forget(&self, pane: &str) {
         self.hub.forget(&scoped_pane_id(&self.node, pane));
     }
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.hub.clipboard(&scoped_pane_id(&self.node, pane), text);
+    }
 }
 
 /// Where a screen's keys and redraws go: this machine's panes to
@@ -544,6 +548,25 @@ fn ingest(hub: &TerminalHub, own_node: &str, text: &str) {
             }) => {
                 if !is_pane_of(&pane, own_node) {
                     hub.forget(&pane);
+                }
+                continue;
+            }
+            // A program of a core's pane wrote to the clipboard, for this
+            // machine's window in front.
+            Ok(TerminalLine {
+                terminal: TerminalUp::Clipboard(clipboard),
+            }) => {
+                if is_pane_of(&clipboard.pane, own_node) || clipboard.pane.len() > MAX_PANE_ID_BYTES
+                {
+                    continue;
+                }
+                match clipboard.text() {
+                    Ok(text) => hub.clipboard(&clipboard.pane, &text),
+                    Err(message) => hide_core::diagnostic!(json!({
+                        "component": "node_daemon",
+                        "kind": "terminals.clipboard_unreadable",
+                        "message": message,
+                    })),
                 }
                 continue;
             }

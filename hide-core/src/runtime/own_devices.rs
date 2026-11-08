@@ -264,6 +264,12 @@ impl Runtime {
         if !on_own {
             return false;
         }
+        // The next link's engine counts its agents' states from the start
+        // again; what the hooks said under this one is older than all of it.
+        self.hook_facts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .engine_ended(|pane| crate::address::is_pane_of(pane, device_id));
         self.remote_controls.remove(device_id);
         let import_changed = self.retire_device_herdr_import(device_id);
         if let Some(sync) = self

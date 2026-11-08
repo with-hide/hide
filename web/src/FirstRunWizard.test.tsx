@@ -82,7 +82,7 @@ it("opens a remote project's first agent from that device's kit, regardless of l
   const next = state(false, AGENTS, [provider("claude", "Claude Code", "claude-code", true)]);
   Object.assign(next.rest.ui_state, { first_run: { version: 1, step: "project" }, first_run_choices: { project_device: "build" }, workspace_registrations: [] });
   Object.assign(next.rest.navigator, { focused_device_id: "build" });
-  next.rest.navigator.devices.push({ id: "build", kind: "remote", label: "Build server", kit: { agents: [agent("opencode", "OpenCode", "available"), agent("claude-code", "Claude Code", "not_installed")].map((row) => ({ ...row, enabled: true })), components: [], busy: false } } as never);
+  next.rest.navigator.devices.push({ id: "build", kind: "remote", state: "ready", label: "Build server", kit: { agents: [agent("opencode", "OpenCode", "available"), agent("claude-code", "Claude Code", "not_installed")].map((row) => ({ ...row, enabled: true })), components: [], busy: false } } as never);
   const { events, unmount } = await mount(next);
   await act(async () => way("project").click());
   await act(async () => useShellStore.setState((current) => ({ revision: current.revision + 1, rest: { ...current.rest, ui_state: { ...current.rest?.ui_state, workspace_registrations: [{ id: "remote-project", label: "project", path: "~/project", device_id: "build" }] } } }) as never));
@@ -162,7 +162,7 @@ it("keeps a credentialed clone URL in the open form and sends it only for explic
     first_run: { version: 1, step: "project" },
     first_run_choices: { project_form: { view: "clone", url: "https://example.test/repo.git", parent: "~/work" } },
   });
-  Object.assign(next, { cloneTarget: { parent: "~/work", name: "repo", path: "~/work/repo", reason: null } });
+  Object.assign(next, { cloneTarget: { device_id: next.rest.navigator.devices[0]!.id, parent: "~/work", name: "repo", path: "~/work/repo", reason: null } });
   const { events, unmount } = await mount(next);
   const input = document.querySelector<HTMLInputElement>("[data-clone-url]")!;
   const raw = "https://alice:private-token@example.test/repo.git";

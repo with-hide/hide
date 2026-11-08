@@ -27,6 +27,9 @@ pub(in crate::runtime) struct NoteKind {
     pub(in crate::runtime) intent: &'static str,
     pub(in crate::runtime) component: &'static str,
     pub(in crate::runtime) unsent: &'static str,
+    /// Delivered at the sender's next safe gap while it works (`--now`),
+    /// for a note it must act on at once.
+    pub(in crate::runtime) now: bool,
 }
 
 impl Runtime {
@@ -75,6 +78,7 @@ impl Runtime {
                         crate::delivery::worker::Authority {
                             caller: authority.caller.clone(),
                             context: authority.context.clone(),
+                            also_reads: Vec::new(),
                         },
                         actor.clone(),
                         Some(note.target.clone()),
@@ -84,7 +88,7 @@ impl Runtime {
                             body: note.body,
                             // Hide reads no answer, and the note wakes no one.
                             kind: "progress".into(),
-                            now: false,
+                            now: kind.now,
                             force: false,
                         },
                     );

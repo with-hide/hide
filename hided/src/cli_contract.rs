@@ -285,12 +285,30 @@ pub const COMMANDS: &[Spec] = &[
             "ambiguous_participant",
         ],
     },
-    spec(
-        &["agent", "end"],
-        AGENT_ID,
-        &[optional("--actor", Text), switch("--json")],
-        &["agent"],
-    ),
+    // The answer is the registration as it ended with what became of its
+    // pane (`closed`, `kept`, `gone`, `other_agent`, `left`) and of its
+    // conversation (`archived`, `archive_full`, `none`); `--keep-pane` ends
+    // only the registration, as every end did before.
+    Spec {
+        words: &["agent", "end"],
+        arguments: AGENT_ID,
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            optional("--actor", Text),
+            switch("--keep-pane"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["agent_end"],
+        refusals: &[
+            "agent_unavailable",
+            "parent_authority_required",
+            "actor_identity_conflict",
+            "machine_unavailable",
+            "pane_close_failed",
+        ],
+    },
     // The answer is `{id, state}`, state `ending` or `asleep`; asking again
     // answers the same (PRD mission-worker-sleep D-20).
     Spec {
@@ -384,9 +402,16 @@ pub const COMMANDS: &[Spec] = &[
             "machine_unavailable",
             "repository_unavailable",
             "agent_not_installed",
+            "agent_hook_off",
+            "agent_not_set_up",
+            "agent_hook_untrusted",
+            "agent_hook_missing",
+            "agent_hook_unconfirmed",
+            "agent_hook_unchecked",
             "intent_conflict",
             "invalid_launch_choice",
             "shell_starting",
+            "holder_cap",
             "pane_busy",
             "agent_not_started",
             "worktree_unconfirmed",

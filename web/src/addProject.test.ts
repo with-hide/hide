@@ -1,27 +1,36 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { addProjectHosts, alreadyRegistered, cloneUrlDraft, defaultProjectParent, hostWays, initialHost, onCDrive, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder, wslDrivePath } from "./addProject";
+import { addProjectHosts, alreadyRegistered, childPath, cloneUrlDraft, defaultProjectParent, filterEntries, folderCrumbs, hostWays, initialHost, onCDrive, parseCloneUrl, projectNameProblem, projectPath, refusalText, rememberedFolder, trimFolder, typedPlace, wslDrivePath } from "./addProject";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 const { t } = initializeInterfaceI18n("en");
 const ko = initializeInterfaceI18n("ko").t;
 
-const device = (id: string, label: string, kind = "remote") => ({ id, label, kind }) as Device;
+const device = (id: string, label: string, kind = "remote", state = kind === "remote" ? "ready" : "local") => ({ id, label, kind, state }) as Device;
 const registration = (path: string, device_id = "local") => ({ id: path, label: path, path, device_id, pinned: false }) as WorkspaceRegistration;
 
 describe("Add a project", () => {
   it("lists this window's machine first, named for its system, then every registered device (PRD core-host-node-move B2)", () => {
     vi.stubGlobal("navigator", { platform: "MacIntel" });
-    expect(addProjectHosts(undefined, t)).toEqual([{ id: "", label: "This Mac" }]);
-    expect(addProjectHosts(undefined, ko)).toEqual([{ id: "", label: "이 Mac" }]);
+    expect(addProjectHosts(undefined, t)).toEqual([{ id: "", label: "This Mac", offline: false }]);
+    expect(addProjectHosts(undefined, ko)).toEqual([{ id: "", label: "이 Mac", offline: false }]);
     expect(addProjectHosts([device("mini", "Mini"), device("local", "Studio", "local")], t)).toEqual([
-      { id: "local", label: "This Mac" },
-      { id: "mini", label: "Mini" },
+      { id: "local", label: "This Mac", offline: false },
+      { id: "mini", label: "Mini", offline: false },
     ]);
     vi.stubGlobal("navigator", { platform: "Win32" });
-    expect(addProjectHosts(undefined, t)).toEqual([{ id: "", label: "This PC" }]);
+    expect(addProjectHosts(undefined, t)).toEqual([{ id: "", label: "This PC", offline: false }]);
     vi.unstubAllGlobals();
+  });
+
+  it("lists a device that is not connected as offline, never the machine this window runs on (PRD device-add-project B31)", () => {
+    const devices = [device("local", "", "local"), device("mini", "Mini", "remote", "unavailable"), device("win", "window", "remote", "disabled")];
+    expect(addProjectHosts(devices, t).map((host) => [host.id, host.offline])).toEqual([["local", false], ["mini", true], ["win", true]]);
+    window.location.hash = "#token=t&node=mbp";
+    const node = [device("mini-node", "Mac mini", "local"), { ...device("mbp", "MacBook-Pro.local", "remote", "unavailable"), dials_in: true }];
+    expect(addProjectHosts(node, t).map((host) => [host.id, host.offline])).toEqual([["mbp", false], ["mini-node", false]]);
+    window.location.hash = "";
   });
 
   describe("what each host offers (docs/UI_BEHAVIOR.md, Adding a project)", () => {
@@ -30,32 +39,71 @@ describe("Add a project", () => {
       vi.unstubAllGlobals();
     });
 
-    it("browses this window's own machine and makes a new project on the core's, both on one machine", () => {
+    it("opens the system's folder window only on the machine this window runs on, and the dialog's own list anywhere else (PRD device-add-project D-02)", () => {
       const devices = [device("core", "", "local"), device("mini", "Mini")];
-      expect(hostWays("core", devices, true)).toEqual({ own: true, browse: true, otherWays: true, pickParent: true });
-      expect(hostWays("mini", devices, true)).toEqual({ own: false, browse: false, otherWays: false, pickParent: false });
+      expect(hostWays("core", devices, true)).toEqual({ own: true, native: true });
+      expect(hostWays("mini", devices, true)).toEqual({ own: false, native: false });
       // Before the snapshot names a machine, the empty id is the core's own, where the window runs.
-      expect(hostWays("", undefined, true)).toEqual({ own: true, browse: true, otherWays: true, pickParent: true });
-      // A browser tab has no folder picker: its own machine takes a typed path, and the other ways stay, without the parent picker.
-      expect(hostWays("core", devices, false)).toEqual({ own: true, browse: false, otherWays: true, pickParent: false });
+      expect(hostWays("", undefined, true)).toEqual({ own: true, native: true });
+      // A browser tab has no folder window: its own machine is listed in the dialog too.
+      expect(hostWays("core", devices, false)).toEqual({ own: true, native: false });
     });
 
-    it("in a window on a node whose core runs elsewhere, browses the window's machine only, and makes a new project on the core's without its picker", () => {
+    it("in a window on a node whose core runs elsewhere, opens the folder window for the window's machine and lists the core's", () => {
       // The MacBook's window after the core moved to the mini: the core's row is the mini's, the MacBook dials in.
       vi.stubGlobal("navigator", { platform: "MacIntel" });
       window.location.hash = "#token=t&node=mbp";
       const devices = [{ ...device("mini-node", "Mac mini", "local") }, { ...device("mbp", "MacBook-Pro.local"), dials_in: true }];
-      expect(hostWays("mbp", devices, true)).toEqual({ own: true, browse: true, otherWays: false, pickParent: false });
-      expect(hostWays("mini-node", devices, true)).toEqual({ own: false, browse: false, otherWays: true, pickParent: false });
+      expect(hostWays("mbp", devices, true)).toEqual({ own: true, native: true });
+      expect(hostWays("mini-node", devices, true)).toEqual({ own: false, native: false });
       expect(addProjectHosts(devices, t).map((host) => host.label)).toEqual(["This Mac", "Mac mini"]);
     });
   });
 
-  it("opens on the focused device while it is listed, this Mac otherwise", () => {
-    const hosts = addProjectHosts([device("mini", "Mini")], t);
+  it("opens on the focused device while it is listed and connected, this Mac otherwise", () => {
+    const hosts = addProjectHosts([device("mini", "Mini"), device("win", "window", "remote", "unavailable")], t);
     expect(initialHost(hosts, "mini")).toBe("mini");
+    expect(initialHost(hosts, "win")).toBe("");
     expect(initialHost(hosts, "gone")).toBe("");
     expect(initialHost(hosts, null)).toBe("");
+  });
+
+  it("starts the folder list where it last was on that machine, the core's apart from each device's (PRD device-add-project D-04)", () => {
+    const kept = { add_project_folder: "/Users/me/work", device_add_project_folders: { win: "C:/Users/me/projects" } };
+    expect(rememberedFolder(kept, "core", "core")).toBe("/Users/me/work");
+    expect(rememberedFolder(kept, "", "core")).toBe("/Users/me/work");
+    expect(rememberedFolder(kept, "win", "core")).toBe("C:/Users/me/projects");
+    expect(rememberedFolder(kept, "mini", "core")).toBeNull();
+    expect(rememberedFolder(undefined, "core", "core")).toBeNull();
+  });
+
+  it("reads a typed line as a filter, a `~` folder and name, or a path the machine places (PRD device-add-project D-06)", () => {
+    expect(typedPlace("app", null, false)).toEqual({ kind: "filter", text: "app" });
+    expect(typedPlace("~", null, false)).toEqual({ kind: "folder", folder: "~", filter: "" });
+    expect(typedPlace("~/pro", null, false)).toEqual({ kind: "folder", folder: "~", filter: "pro" });
+    expect(typedPlace("~/projects/", null, false)).toEqual({ kind: "folder", folder: "~/projects", filter: "" });
+    expect(typedPlace("~/projects/we", null, false)).toEqual({ kind: "folder", folder: "~/projects", filter: "we" });
+    expect(typedPlace("/srv/app/", null, false)).toEqual({ kind: "path", path: "/srv/app" });
+    // Explorer's text and its quoted Copy as path reach a Windows device's node as one spelling.
+    for (const pasted of ["C:\\Users\\me\\work", "\"C:\\Users\\me\\work\"", "C:/Users/me/work/"]) {
+      expect(typedPlace(pasted, null, true), pasted).toEqual({ kind: "path", path: "C:/Users/me/work" });
+    }
+    // A Linux or macOS machine has no drive letters: the line filters there.
+    expect(typedPlace("C:\\work", null, false)).toEqual({ kind: "filter", text: "C:\\work" });
+    // A WSL device spells it as its own path (PRD wsl-device B16).
+    expect(typedPlace("C:\\work\\app", "/mnt", false)).toEqual({ kind: "path", path: "/mnt/c/work/app" });
+  });
+
+  it("filters a folder's children by a part of their name, letter case ignored, and names a child with `/`", () => {
+    const entries = [{ name: "Website" }, { name: "web-old" }, { name: "notes" }];
+    expect(filterEntries(entries, "WEB").map((entry) => entry.name)).toEqual(["Website", "web-old"]);
+    expect(filterEntries(entries, " ")).toHaveLength(3);
+    expect(childPath("C:/Users/me/", "work")).toBe("C:/Users/me/work");
+    expect(folderCrumbs("~/projects/old")).toEqual([
+      { name: "~", label: "~" },
+      { name: "projects", label: "~/projects" },
+      { name: "old", label: "~/projects/old" },
+    ]);
   });
 
   it("sees a folder already registered on the same device, trailing slash or not", () => {

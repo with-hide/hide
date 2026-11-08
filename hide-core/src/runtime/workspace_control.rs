@@ -100,6 +100,19 @@ impl Runtime {
         request_id: &str,
         caller_id: &str,
     ) {
+        self.change_look(|runtime| {
+            runtime.reveal_workspace_control_steps(context, key, request_id, caller_id)
+        });
+    }
+
+    /// The steps of `reveal_workspace_control`, which runs them as one selection (`look.rs`).
+    fn reveal_workspace_control_steps(
+        &mut self,
+        context: &Context,
+        key: &(String, String),
+        request_id: &str,
+        caller_id: &str,
+    ) {
         let tab = self.control_caller_tab(key, caller_id);
         if context.device_id == self.node.as_str() {
             if let Some(tab_id) = tab {

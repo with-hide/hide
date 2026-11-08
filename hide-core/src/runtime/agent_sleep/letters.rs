@@ -560,6 +560,7 @@ impl Runtime {
             intent: "wake-failed",
             component: "agent_sleep",
             unsent: "agent_sleep.wake_note_unsent",
+            now: false,
         };
         self.letter_wakes.noting = self.send_hide_notes(kind, notes, |runtime| {
             runtime.letter_wakes.noting = false;
@@ -582,6 +583,7 @@ pub(in crate::runtime) fn asleep_observation(actor: Actor) -> Observation {
         status: "asleep".into(),
         telemetry_stale: true,
         state_change_seq: None,
+        engine: None,
         status_changed_at_unix_ms: 0,
         last_input_at_unix_ms: 0,
         last_submit_at_unix_ms: 0,

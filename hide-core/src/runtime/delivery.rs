@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::delivery::doorbell::Turn;
-use crate::delivery::ledger::Ledger;
+use crate::delivery::ledger::{BELLS, Ledger};
+use crate::delivery::mailbox::Exchange;
 use crate::delivery::worker::{Authority, Client, Prepared, PreparedHuman};
 use crate::delivery::{Actor, Command};
 use crate::labels::overlay::LabelOverlay;
@@ -32,6 +33,10 @@ pub(crate) struct Observation {
     /// Keep identity and input clocks while a read is delayed, but admit no bell.
     pub telemetry_stale: bool,
     pub state_change_seq: Option<u64>,
+    /// The engine connection `status` and `state_change_seq` were read on
+    /// (`agent_state::ReadConnection::mark`), which a sequence is compared
+    /// within (`delivery::watch::StateRead`).
+    pub engine: Option<String>,
     pub status_changed_at_unix_ms: u64,
     /// The last input hide routed to this pane: a key, a paste, a phone
     /// write or an agent-find key.
@@ -196,6 +201,15 @@ impl Observation {
                 .max(self.released_input_at_unix_ms)
     }
 
+    /// The engine's reading of the agent this observation holds.
+    pub(crate) fn read(&self) -> crate::delivery::watch::StateRead<'_> {
+        crate::delivery::watch::StateRead {
+            engine: self.engine.as_deref(),
+            status: &self.status,
+            seq: self.state_change_seq,
+        }
+    }
+
     /// A draft a person may be writing: an unsent draft
     /// ([`Observation::unsent_draft`]) whose newest input is not what a
     /// `hide pane send` wrote. The one rule a pane send is held by.
@@ -232,6 +246,7 @@ impl Runtime {
         let mut present = HashSet::new();
         let mut excess = false;
         let mut unreadable_moved = false;
+        let engine = self.read_mark(device);
         for agent in &payload.agents {
             let (Some(pane), Some(name), Some(kind), Some(status)) = (
                 agent.pane_id.as_deref(),
@@ -287,19 +302,29 @@ impl Runtime {
                             .map(|reference| (reference.kind.as_str(), reference.value.as_str()))
                 })
                 .map_or(now, |old| old.observed_since_unix_ms);
-            let persisted = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
-                ledger.watches.iter().find(|watch| {
-                    watch.target.same_identity(&actor)
-                        && watch.last_status == status
-                        && watch.last_state_change_seq == agent.state_change_seq
-                })
-            });
+            // The ledger's watches are read only for an agent whose last
+            // observation does not already say when its state began: a
+            // resting pass looks no agent up in them.
+            let read = crate::delivery::watch::StateRead {
+                engine: engine.as_deref(),
+                status,
+                seq: agent.state_change_seq,
+            };
             let changed_at = previous
-                .filter(|old| {
-                    old.status == status && old.state_change_seq == agent.state_change_seq
-                })
+                .filter(|old| !read.moved_from(&old.read()))
                 .map(|old| old.status_changed_at_unix_ms)
-                .or_else(|| persisted.map(|watch| watch.status_changed_at_unix_ms))
+                .or_else(|| {
+                    self.delivery_ledger
+                        .as_ref()
+                        .ok()
+                        .and_then(|ledger| {
+                            ledger.watches.iter().find(|watch| {
+                                watch.target.same_identity(&actor)
+                                    && !read.moved_from(&watch.last_read())
+                            })
+                        })
+                        .map(|watch| watch.status_changed_at_unix_ms)
+                })
                 .unwrap_or(now);
             // Turn reporting is a session-format fact, independent of letters
             // and bell eligibility. An unread turn-capable session stays held.
@@ -347,6 +372,7 @@ impl Runtime {
                 status: status.to_owned(),
                 telemetry_stale: agent.telemetry_stale,
                 state_change_seq: agent.state_change_seq,
+                engine: engine.clone(),
                 status_changed_at_unix_ms: changed_at,
                 // A pane hide has not seen before has no key it knows of, so
                 // every clock starts at this observation: a 30 second grace,
@@ -746,6 +772,43 @@ impl Runtime {
                 .into_iter()
                 .filter(|(id, _)| !held.contains(id.as_str())),
         );
+    }
+
+    /// Puts the registrations of the agents a restore did not resume on the
+    /// ones the delivery store has still to end (`left`, from the engine's
+    /// session read, which names each until an agent shows in its pane). The
+    /// pane is there, a shell, so no read lists it gone: the engine says so.
+    /// A pane a sleep record holds keeps its registration, which a wake
+    /// continues. Said again by every read that names the agent, which costs
+    /// a pass over `left` and nothing once the registration has ended.
+    pub(crate) fn end_unresumed(
+        &mut self,
+        device: &str,
+        host_scope: Option<&str>,
+        payload: &SessionSnapshotPayload,
+        left: &[crate::session_sync::NotResumed],
+    ) {
+        if left.is_empty() || !self.delivery_pane_owner_registered(device) {
+            return;
+        }
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let shown: HashSet<&str> = payload
+            .agents
+            .iter()
+            .filter_map(|agent| agent.pane_id.as_deref())
+            .collect();
+        let asleep = &self.snapshot.ui_state.agent_sleep.records;
+        let left: Vec<_> = left
+            .iter()
+            .filter(|left| !asleep.contains_key(&left.pane_id))
+            .cloned()
+            .collect();
+        let ended = crate::coordination::not_resumed_registrations(
+            ledger, device, host_scope, &left, &shown,
+        );
+        self.registrations_gone.extend(ended);
     }
 
     /// The registration the live execution in `pane` holds, which a sleep
@@ -1338,6 +1401,17 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
+        // A machine named by a dialed device's SSH alias is that device's id
+        // from here on (`machine_named`).
+        if let Command::Agents {
+            command:
+                crate::coordination::Command::Spawn { machine, .. }
+                | crate::coordination::Command::Register { machine, .. },
+        } = &mut command
+            && let Some(name) = machine.as_mut()
+        {
+            *name = self.machine_named(name)?;
+        }
         let actor_pane = actor.pane_id.as_str();
         // A prompt hook's digest is the agent's own record of the prompt it
         // took, and confirms a brief a spawn typed into this pane. Judged
@@ -1596,11 +1670,13 @@ impl Runtime {
             }
             _ => None,
         };
+        let also_reads = self.node_checker_exchanges(&actor, &command);
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: caller.to_owned(),
                 context,
+                also_reads,
             },
             actor,
             target,
@@ -1616,6 +1692,42 @@ impl Runtime {
             Some(answer) => prepared.answered(answer),
             None => prepared,
         })
+    }
+
+    /// What a `Show` may read beyond its caller's own letters: when the
+    /// caller works a mission node, the letters that node's checkers (its
+    /// reviewer or verifier) wrote to the mission's Conductor
+    /// (docs/delivery.md, Who may read a letter). Only the pairs are worked
+    /// out here, from the mission book and the registrations; the store
+    /// decides the read (`mailbox::show`). A checker that has since ended
+    /// still counts, because its letters were written, but only a worker
+    /// that runs reads them.
+    fn node_checker_exchanges(&self, reader: &Actor, command: &Command) -> Vec<Exchange> {
+        let Command::Show { .. } = command else {
+            return Vec::new();
+        };
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return Vec::new();
+        };
+        let Some(worker) = ledger
+            .agents
+            .iter()
+            .rev()
+            .find(|record| record.actor.same_identity(reader) && !record.ended)
+        else {
+            return Vec::new();
+        };
+        self.missions
+            .book
+            .checkers_read_by(&worker.id)
+            .filter_map(|(checker, conductor)| {
+                let checker = ledger.agents.iter().find(|record| record.id == checker)?;
+                Some(Exchange {
+                    from: checker.actor.clone(),
+                    to: conductor.clone(),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn install_delivery_client(&mut self, client: Client) {
@@ -1723,51 +1835,48 @@ impl Runtime {
         self.letter_wakes.touch();
         // Or on a session Hide cannot read.
         self.unreadable_letters.touch();
-        let graph_changed = self.delivery_ledger.as_ref().ok().is_none_or(|previous| {
-            !self
-                .snapshot
-                .overview_graph
-                .matches_ledger(previous, &ledger, now)
-        });
+        // One walk of the new letters answers the graph, the newly delivered
+        // and the waiters (`ledger_walk`), where each was its own scan and the
+        // delivered one scanned the previous ledger per delivered letter.
+        let walk = super::ledger_walk::walk(
+            self.delivery_ledger
+                .as_ref()
+                .ok()
+                .map(|previous| &**previous),
+            &ledger,
+            &self.snapshot.overview_graph,
+            now,
+        );
+        let graph_changed = !walk.graph_unchanged;
         if graph_changed {
             let mut graph = crate::model::OverviewGraphSnapshot::from_ledger(&ledger, now);
             graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
             self.snapshot.overview_graph = graph;
         }
-        let delivered: Vec<_> = ledger
-            .letters
-            .iter()
-            .filter(|letter| {
-                letter.state == crate::delivery::ledger::State::Delivered
-                    && self.delivery_ledger.as_ref().ok().is_some_and(|previous| {
-                        previous
-                            .letters
-                            .iter()
-                            .any(|old| old.id == letter.id && old.state != letter.state)
-                    })
-            })
-            .map(|letter| letter.recipient.pane_id.clone())
-            .collect();
         let mut reopened = false;
-        for pane in delivered {
-            reopened |= self.reopen_resolved_session(&pane);
+        for pane in &walk.delivered {
+            reopened |= self.reopen_resolved_session(pane);
         }
-        let before = self.delivery_ledger.as_ref().ok().map(|ledger| {
-            ledger
+        // The watch views are read only when a transition asked to publish them.
+        let changed = transitions && {
+            let after = ledger
                 .watches
                 .iter()
                 .map(|watch| watch.view())
-                .collect::<Vec<_>>()
-        });
-        let after = ledger
-            .watches
-            .iter()
-            .map(|watch| watch.view())
-            .collect::<Vec<_>>();
-        let changed = transitions && before.as_ref() != Some(&after);
-        if changed {
-            self.snapshot.delivery_watches = after;
-        }
+                .collect::<Vec<_>>();
+            let moved = self.delivery_ledger.as_ref().ok().is_none_or(|before| {
+                before.watches.len() != after.len()
+                    || before
+                        .watches
+                        .iter()
+                        .zip(&after)
+                        .any(|(before, after)| &before.view() != after)
+            });
+            if moved {
+                self.snapshot.delivery_watches = after;
+            }
+            moved
+        };
         if !self.registrations_gone.is_empty() {
             self.registrations_gone.retain(|id, _| {
                 ledger
@@ -1788,28 +1897,7 @@ impl Runtime {
         // Only a change in who waits for a reply, from whom, and whether that
         // agent took the letter in moves a row's wait, so the lineage is not
         // rebuilt for every other step of a letter's delivery.
-        let waiters = |ledger: &Ledger| {
-            ledger
-                .letters
-                .iter()
-                .filter(|letter| letter.waiting_answer)
-                .map(|letter| {
-                    (
-                        (letter.sender.pane_id.clone(), letter.sender.session.clone()),
-                        (
-                            letter.recipient.pane_id.clone(),
-                            letter.recipient.session.clone(),
-                        ),
-                        letter.awaiting_intake(),
-                    )
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        let waiters_moved = self
-            .delivery_ledger
-            .as_ref()
-            .ok()
-            .is_none_or(|previous| waiters(previous) != waiters(&ledger));
+        let waiters_moved = walk.waiters_moved;
         // Only a change in what Hide started moves a row's mark or a checkout's
         // group, so a letter's step or a watch never rebuilds the lineage.
         let started = crate::coordination::started::hide_started(&ledger);
@@ -1901,6 +1989,7 @@ impl Runtime {
             Authority {
                 caller: actor.pane_id.clone(),
                 context,
+                also_reads: Vec::new(),
             },
             actor,
             Some(target),
@@ -1926,6 +2015,7 @@ impl Runtime {
             Authority {
                 caller: actor.pane_id.clone(),
                 context,
+                also_reads: Vec::new(),
             },
             actor,
         ))
@@ -2054,9 +2144,9 @@ impl Runtime {
                         && letter.state == crate::delivery::ledger::State::Pending
                         && match reserved {
                             Some(attempt) => {
-                                (1..=3).contains(&attempt) && letter.attempts() == attempt
+                                (1..=BELLS).contains(&attempt) && letter.attempts() == attempt
                             }
-                            None => letter.attempts() < 3,
+                            None => letter.attempts() < BELLS,
                         }
                         && letter.within_deadline(&ledger.node_clocks, now)
                 })
@@ -2195,6 +2285,7 @@ impl Runtime {
             Authority {
                 caller: pane.into(),
                 context,
+                also_reads: Vec::new(),
             },
             actor,
         ))
@@ -2241,16 +2332,24 @@ impl Runtime {
 }
 
 impl Runtime {
-    /// The node link of the device a spawn names with `--machine`, or why it
-    /// cannot take the spawn: a refusal code the caller can branch on, with
-    /// the ids it could have named when the id is not a device at all. The
-    /// caller's own device is never named here (the spawn drops it first), and a
-    /// caller that is not on this machine may name no other device.
+    /// The node link of the device a spawn names with `--machine`, with the
+    /// engine that starts the agent there (its definitions say what the
+    /// agent's program is called on that machine), or why it cannot take the
+    /// spawn: a refusal code the caller can branch on, with the ids it could
+    /// have named when the id is not a device at all. The caller's own device
+    /// is never named here (the spawn drops it first), and a caller that is
+    /// not on this machine may name no other device.
     pub(crate) fn spawn_target(
         &mut self,
         caller_device: &str,
         device: &str,
-    ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
+    ) -> Result<
+        (
+            Arc<dyn crate::node_access::NodeLink>,
+            crate::engine::SharedEngine,
+        ),
+        String,
+    > {
         // Only an agent on this machine starts work on a device: one on a
         // device would otherwise reach this machine or a third one, and the
         // refusal names no device so it maps nothing.
@@ -2279,10 +2378,14 @@ impl Runtime {
                 &connected.join(", "),
             ));
         }
-        self.coordination_context(device)
+        let engine = self
+            .coordination_context(device)
+            .map_err(|_| "machine_unavailable".to_owned())?
+            .engine;
+        let link = self
+            .node_link(device)
             .map_err(|_| "machine_unavailable".to_owned())?;
-        self.node_link(device)
-            .map_err(|_| "machine_unavailable".to_owned())
+        Ok((link, engine))
     }
 }
 
@@ -2458,6 +2561,7 @@ pub(crate) mod tests {
                 checkout_id: "checkout".into(),
                 checkout_path: "/checkouts/fixture".into(),
             },
+            also_reads: Vec::new(),
         }
     }
 
@@ -4537,6 +4641,139 @@ pub(crate) mod tests {
         drop(guard);
     }
 
+    /// The lead's pane with an agent, and the child's pane a shell: its
+    /// engine restored it after a restart and did not resume the agent.
+    fn lead_with_the_child_a_shell() -> SessionSnapshotPayload {
+        serde_json::from_value(json!({
+            "agents": [
+                {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle","state_change_seq":1,
+                 "lineage_session":crate::engine::tokens::session_digest("lead-native")},
+            ],
+            "panes": [{"pane_id": "lead"}, {"pane_id": "child"}],
+        }))
+        .unwrap()
+    }
+
+    fn not_resumed(pane: &str, session: &str) -> crate::session_sync::NotResumed {
+        crate::session_sync::NotResumed {
+            pane_id: pane.into(),
+            agent: "codex".into(),
+            session: Some(session.into()),
+            why: "its resume could not be typed (fixture)".into(),
+        }
+    }
+
+    /// Issue 653: after a reboot a pane can be a shell with the agent's
+    /// registration still live, and nothing ever ended it, so `hide agent show`
+    /// read it running. The engine names the agent it did not resume, and the
+    /// store ends its registration and the watches on it as a closed pane's
+    /// would; the agent whose pane runs one stays registered.
+    #[test]
+    fn an_agent_a_restore_did_not_resume_ends_its_registration_though_its_pane_stays() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        registered_pair(&mut runtime.lock().unwrap());
+        {
+            let mut guard = runtime.lock().unwrap();
+            let shown = lead_with_the_child_a_shell();
+            guard.observe_delivery_laid(crate::node::TEST_NODE, &shown, Some("scope"), None);
+            assert!(
+                guard.delivery_registrations_gone().is_empty(),
+                "both panes are there, so no read lists one gone"
+            );
+            guard.end_unresumed(
+                crate::node::TEST_NODE,
+                Some("scope"),
+                &shown,
+                &[
+                    not_resumed("child", "child-native"),
+                    // The lead's pane runs an agent now, whatever the restore left.
+                    not_resumed("lead", "lead-native"),
+                ],
+            );
+            assert_eq!(
+                guard
+                    .delivery_registrations_gone()
+                    .into_iter()
+                    .map(|(id, reason)| (id, reason.reason()))
+                    .collect::<Vec<_>>(),
+                [("agent-2".to_owned(), "agent_not_resumed")]
+            );
+        }
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        drop(worker);
+        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let ended = |ledger: &Ledger| {
+            ledger
+                .agents
+                .iter()
+                .map(|record| (record.id.clone(), record.ended))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ended(&persisted),
+            [("agent-1".to_owned(), false), ("agent-2".to_owned(), true)]
+        );
+        assert!(persisted.watches.is_empty());
+        // Said again by the next read, which still names it: nothing is left to end.
+        let mut guard = runtime.lock().unwrap();
+        guard.end_unresumed(
+            crate::node::TEST_NODE,
+            Some("scope"),
+            &lead_with_the_child_a_shell(),
+            &[not_resumed("child", "child-native")],
+        );
+        assert!(guard.delivery_registrations_gone().is_empty());
+    }
+
+    /// A registration that belongs to another conversation than the one the
+    /// restore did not resume is not that agent's, and one on another engine
+    /// or device is not this read's to end.
+    #[test]
+    fn a_registration_of_another_conversation_or_engine_is_not_ended_by_a_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, _) = fixture(root.path());
+        let mut guard = runtime.lock().unwrap();
+        registered_pair(&mut guard);
+        let shown = lead_with_the_child_a_shell();
+        let left = |session: &str| [not_resumed("child", session)];
+        // The pane's registration was made for another conversation.
+        guard.end_unresumed(
+            crate::node::TEST_NODE,
+            Some("scope"),
+            &shown,
+            &left("another"),
+        );
+        assert!(guard.delivery_registrations_gone().is_empty());
+        // Another engine of this machine, and another machine, judge their own.
+        guard.end_unresumed(
+            crate::node::TEST_NODE,
+            Some("another-herdr"),
+            &shown,
+            &left("child-native"),
+        );
+        guard.end_unresumed("device", None, &shown, &left("child-native"));
+        assert!(guard.delivery_registrations_gone().is_empty());
+        // A conversation the save did not name matches the pane's registration.
+        let unnamed = [crate::session_sync::NotResumed {
+            session: None,
+            ..not_resumed("child", "")
+        }];
+        guard.end_unresumed(crate::node::TEST_NODE, Some("scope"), &shown, &unnamed);
+        assert_eq!(guard.delivery_registrations_gone().len(), 1);
+    }
+
     /// The same close ends the answer wait of a request the closed pane's agent
     /// held, in the durable ledger, and its sender reads why through `show`.
     #[test]
@@ -4893,6 +5130,7 @@ pub(crate) mod tests {
                 label: id.to_owned(),
                 origin: crate::model::LinkOrigin::Dialed {
                     ssh_alias: id.to_owned(),
+                    naming: crate::model::DeviceNaming::Named,
                 },
                 host_consent: None,
             });
