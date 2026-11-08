@@ -300,7 +300,13 @@ pub(crate) fn of(
                 agent.raised.len()
             },
             raised: None,
-            subject: agent.ask_subject.clone().filter(|_| kind == "answer"),
+            subject: match human {
+                Some(lead) if lead.own => agent
+                    .declared_human_turn
+                    .as_ref()
+                    .map(crate::model::DeclaredHumanTurn::subject),
+                _ => agent.ask_subject.clone().filter(|_| kind == "answer"),
+            },
         }),
         ..Header::default()
     }

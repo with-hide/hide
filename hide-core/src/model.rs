@@ -1486,6 +1486,31 @@ pub enum AskSubject {
     },
 }
 
+/// A person's turn a row's own agent declared, as the row carries it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeclaredHumanTurn {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The device the agent runs on, by its name; absent for the core's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub since_unix_ms: u64,
+}
+
+impl DeclaredHumanTurn {
+    /// The question it asks of the operator, as a surface words it.
+    pub fn subject(&self) -> AskSubject {
+        AskSubject::HumanTurn {
+            id: self.id.clone(),
+            kind: self.kind,
+            place: self.place.clone(),
+            device: self.device.clone(),
+        }
+    }
+}
+
 /// The person's turn a row leads with (PRD ask-human D-09, D-17, D-20):
 /// on the agent that declared it and on its lineage root, never on a
 /// parent between them.
@@ -1585,6 +1610,13 @@ pub struct SidebarAgentSnapshot {
     /// only the head reads this.
     #[serde(skip)]
     pub human_below: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// The person's turn this row's own agent declared (PRD ask-human D-07),
+    /// laid from the ledger in a field of its own: the row's own question,
+    /// `ask_subject` and demand stay as they are, and every reading of the
+    /// row looks here first and counts them behind it. Absent while none
+    /// stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declared_human_turn: Option<DeclaredHumanTurn>,
     /// Derived: the person's turn this row leads with (PRD ask-human), its
     /// own declaration or the oldest one its descendants raised to it, which
     /// draws the key, the `<kind> · <place>` line and Done. Absent from the

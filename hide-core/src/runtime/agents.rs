@@ -1720,6 +1720,7 @@ impl Runtime {
             Some(&live_pane_ids),
         );
         self.lay_unseen_views(&mut session.agents);
+        self.lay_human_turns(&mut session.agents);
         crate::agent_state::apply_lineage(
             &mut session.agents,
             &session.workspaces,
@@ -4011,6 +4012,7 @@ impl Runtime {
         self.lay_checks(&mut agents);
         self.lay_hide_ai(&mut agents);
         self.lay_unseen_views(&mut agents);
+        self.lay_human_turns(&mut agents);
         crate::agent_state::apply_lineage(
             &mut agents,
             &workspaces,

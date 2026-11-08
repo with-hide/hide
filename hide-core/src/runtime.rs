@@ -1155,6 +1155,10 @@ pub struct Runtime {
     /// Declarations whose Done is being written on a settle thread, so a
     /// repeat press starts no second thread (PRD ask-human B18).
     human_turns_settling: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Each standing person's turn by the pane its agent runs in, as the
+    /// ledger last read says, which every row pass lays on its row
+    /// (`human_turn.rs`). A ledger that could not be read leaves it as it was.
+    human_turns_laid: HashMap<String, crate::model::DeclaredHumanTurn>,
     /// Counts `observe_delivery` passes; fences each observation's laid turn.
     delivery_observe_generation: u64,
     /// View openers waiting for their document, Sends under way, and the
@@ -2329,6 +2333,7 @@ impl Runtime {
             delivery_client: None,
             delivery_observations: HashMap::new(),
             human_turns_settling: Arc::default(),
+            human_turns_laid: HashMap::new(),
             delivery_observe_generation: 0,
             view_feedback: view_feedback::FeedbackRuntime::default(),
             view_sessions: view_sessions::ViewSessions::default(),

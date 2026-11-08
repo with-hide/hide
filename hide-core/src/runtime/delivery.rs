@@ -1927,18 +1927,12 @@ impl Runtime {
         // A person's turn declared, replaced or taken down, or its agent's
         // registration moved to another pane, lays the rows again (PRD
         // ask-human).
-        let human_moved = self
-            .delivery_ledger
-            .as_ref()
-            .ok()
-            .is_none_or(|before| human_turn_places(before) != human_turn_places(&ledger));
-        if human_moved {
-            self.plans.human_edit += 1;
-        }
+        let human_moved = self.read_human_turns(&ledger);
         self.delivery_ledger = Ok(ledger);
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
-        let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
+        let lineage =
+            (waiters_moved || started_moved || human_moved) && self.refresh_agent_lineage();
         // A plan step's child moved by its letters or its end (PRD
         // hide-plan-delegate B16, B17).
         let plans = self.fold_delegations();
@@ -1949,7 +1943,7 @@ impl Runtime {
             | continued
             | lineage
             | plans
-            | (human_moved && self.refresh_plan_reviews())
+            | (human_moved && self.refresh_pane_read_state())
             | self.sync_session_state()
             | self.refresh_agent_scopes()
     }
@@ -2479,29 +2473,6 @@ pub(crate) struct CoordinationContext {
     /// pane's shell is reading; none for a device whose helper is not
     /// connected now, since a spawn starts no helper.
     pub(crate) node: Option<Arc<dyn crate::node_access::NodeLink>>,
-}
-
-/// Each standing person's turn with the pane its declaring agent lives in,
-/// the facts that place its ask on the rows and the pane's head.
-fn human_turn_places(
-    ledger: &crate::delivery::ledger::Ledger,
-) -> Vec<(
-    &str,
-    Option<&str>,
-    &crate::coordination::human_turn::HumanTurn,
-)> {
-    ledger
-        .human_turns
-        .iter()
-        .map(|(agent, turn)| {
-            let pane = ledger
-                .agents
-                .iter()
-                .find(|record| &record.id == agent && !record.ended)
-                .map(|record| record.actor.pane_id.as_str());
-            (agent.as_str(), pane, turn)
-        })
-        .collect()
 }
 
 #[cfg(test)]

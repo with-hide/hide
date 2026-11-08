@@ -45,6 +45,46 @@ struct Clear {
 }
 
 impl Runtime {
+    /// Reads the standing person's turns from `ledger`, each by the pane its
+    /// agent runs in now, a device's included; whether any moved, so the
+    /// rows are laid again.
+    pub(super) fn read_human_turns(&mut self, ledger: &crate::delivery::ledger::Ledger) -> bool {
+        let laid: std::collections::HashMap<_, _> = ledger
+            .human_turns
+            .iter()
+            .filter_map(|(agent, turn)| {
+                let record = ledger
+                    .agents
+                    .iter()
+                    .find(|record| &record.id == agent && !record.ended)?;
+                Some((
+                    record.actor.pane_id.clone(),
+                    crate::model::DeclaredHumanTurn {
+                        id: turn.id.clone(),
+                        kind: turn.kind,
+                        place: turn.place.clone(),
+                        device: self.device_label(&record.actor.device_id),
+                        since_unix_ms: turn.declared_at_unix_ms,
+                    },
+                ))
+            })
+            .collect();
+        if laid == self.human_turns_laid {
+            return false;
+        }
+        self.human_turns_laid = laid;
+        true
+    }
+
+    /// Lays each standing person's turn on its agent's row, in a field of
+    /// its own (PRD ask-human D-07), before the lineage and the read axis
+    /// read the rows.
+    pub(super) fn lay_human_turns(&self, agents: &mut [crate::model::SidebarAgentSnapshot]) {
+        for agent in agents {
+            agent.declared_human_turn = self.human_turns_laid.get(&agent.pane_id).cloned();
+        }
+    }
+
     /// The operator pressed Done on declaration `id` (B18): the declaring
     /// agent gets one letter saying what was done, asleep or awake, and the
     /// declaration goes. A Done for a declaration that no longer stands (a
@@ -52,13 +92,20 @@ impl Runtime {
     /// nothing; the letter's intent and the settle by id make every repeat
     /// converge on one letter.
     pub(super) fn human_turn_done(&mut self, id: &str) -> bool {
-        let Some((record, turn)) = self.standing_human_turn(|_, turn| turn.id == id) else {
-            crate::diagnostic!(json!({
-                "component": "coordination",
-                "kind": "ask_human.done_stale",
-                "declaration_id": id,
-            }));
-            return false;
+        let (record, turn) = match self.standing_human_turn(|_, turn| turn.id == id) {
+            Ok(Some(standing)) => standing,
+            Ok(None) => {
+                crate::diagnostic!(json!({
+                    "component": "coordination",
+                    "kind": "ask_human.done_stale",
+                    "declaration_id": id,
+                }));
+                return false;
+            }
+            Err(code) => {
+                ledger_unreadable("done", Some(id), &code);
+                return false;
+            }
         };
         if self.settling(&turn.id) {
             return false;
@@ -118,9 +165,10 @@ impl Runtime {
     /// `pane_id`, from its pane or the phone's conversation (B22): its
     /// declaration goes, and no letter is sent, since the message says it.
     pub(super) fn human_turn_spoke(&self, pane_id: &str) {
-        let Some((_, turn)) = self.standing_human_turn(|record, _| record.actor.pane_id == pane_id)
-        else {
-            return;
+        let turn = match self.standing_human_turn(|record, _| record.actor.pane_id == pane_id) {
+            Ok(Some((_, turn))) => turn,
+            Ok(None) => return,
+            Err(code) => return ledger_unreadable("spoke", None, &code),
         };
         match self.operator_settle(&turn, Settled::Spoke) {
             Ok(clear) => self.settle(Settle {
@@ -140,19 +188,20 @@ impl Runtime {
             .contains(id)
     }
 
-    /// The live registration and declaration `matches` picks.
+    /// The live registration and declaration `matches` picks; an error
+    /// when the core could not read the ledger, never no declaration.
     fn standing_human_turn(
         &self,
         matches: impl Fn(&crate::coordination::AgentRecord, &HumanTurn) -> bool,
-    ) -> Option<(crate::coordination::AgentRecord, HumanTurn)> {
-        let ledger = self.delivery_state().ok()?;
-        ledger.human_turns.iter().find_map(|(agent, turn)| {
+    ) -> Result<Option<(crate::coordination::AgentRecord, HumanTurn)>, String> {
+        let ledger = self.delivery_state()?;
+        Ok(ledger.human_turns.iter().find_map(|(agent, turn)| {
             let record = ledger
                 .agents
                 .iter()
                 .find(|record| &record.id == agent && !record.ended)?;
             matches(record, turn).then(|| (record.clone(), turn.clone()))
-        })
+        }))
     }
 
     /// The settle of `turn`, as the operator's own identity.
@@ -242,4 +291,15 @@ impl Runtime {
             }));
         }
     }
+}
+
+/// A settle that could not read the ledger settles nothing, and says so.
+fn ledger_unreadable(step: &str, declaration: Option<&str>, code: &str) {
+    crate::diagnostic!(json!({
+        "component": "coordination",
+        "kind": "ask_human.ledger_unreadable",
+        "step": step,
+        "declaration_id": declaration,
+        "code": code,
+    }));
 }

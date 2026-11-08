@@ -576,10 +576,10 @@ fn descendant_signals_of(agent: &SidebarAgentSnapshot) -> Vec<crate::model::Desc
     }
     // A person's turn, by its declaration, so another one is news again to
     // the ancestors (PRD ask-human B14).
-    if let Some(crate::model::AskSubject::HumanTurn { id, .. }) = &agent.ask_subject {
+    if let Some(declared) = &agent.declared_human_turn {
         signals.push(crate::model::DescendantSignal {
             pane_id: agent.pane_id.clone(),
-            kind: format!("human:{id}"),
+            kind: format!("human:{}", declared.id),
         });
     }
     if activity == AgentActivity::Stopped && agent.completed {
@@ -792,10 +792,10 @@ fn read_fingerprint(agent: &SidebarAgentSnapshot) -> PaneReadRecord {
         server: None,
         unread: false,
         checks_ended: agent.checks_ended,
-        human_turn: match &agent.ask_subject {
-            Some(crate::model::AskSubject::HumanTurn { id, .. }) => Some(id.clone()),
-            _ => None,
-        },
+        human_turn: agent
+            .declared_human_turn
+            .as_ref()
+            .map(|declared| declared.id.clone()),
     }
 }
 

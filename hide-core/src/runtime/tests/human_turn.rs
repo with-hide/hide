@@ -194,9 +194,10 @@ fn shown(runtime: &mut Runtime) -> crate::model::SidebarAgentSnapshot {
 /// D-07, D-21, B11, B12, B15: a declaration is laid on a working row, on one
 /// with its own question and on a blocked one, stands in Needs You after the
 /// operator read it, leads the row's own ask on its row and on its pane's
-/// head, and gives the row's question back when it goes.
+/// head while that ask stays as it is, counted behind it, and leaves the
+/// row as it was when it goes.
 #[test]
-fn a_persons_turn_holds_a_working_or_asking_row_and_gives_its_own_question_back() {
+fn a_persons_turn_holds_a_working_or_asking_row_and_leaves_its_own_question_alone() {
     let root = tempfile::tempdir().unwrap();
     let (runtime, _, _, _) = fixture(root.path());
     let mut runtime = runtime.lock().unwrap();
@@ -215,8 +216,17 @@ fn a_persons_turn_holds_a_working_or_asking_row_and_gives_its_own_question_back(
         declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 7);
         runtime.publish_delivery(Arc::new(ledger.clone()), true);
         let row = shown(&mut runtime);
-        assert!(
-            matches!(row.ask_subject, Some(AskSubject::HumanTurn { ref place, .. }) if place == "github.com/login"),
+        assert_eq!(
+            row.declared_human_turn
+                .as_ref()
+                .map(|turn| turn.place.as_str()),
+            Some("github.com/login"),
+            "{activity}"
+        );
+        // The row's own question is not laid over: it is counted behind.
+        assert_eq!(
+            (&row.user_turn, &row.demand, &row.ask_subject),
+            (&before.user_turn, &before.demand, &before.ask_subject),
             "{activity}"
         );
         assert_eq!(row.group, "needs_you", "{activity}");
@@ -224,6 +234,10 @@ fn a_persons_turn_holds_a_working_or_asking_row_and_gives_its_own_question_back(
         assert!(lead.own);
         let ask = row.state.ask.clone().unwrap();
         assert_eq!(ask.more, usize::from(own.is_some()), "{activity}");
+        assert!(
+            matches!(ask.subject, Some(AskSubject::HumanTurn { ref place, .. }) if place == "github.com/login"),
+            "{activity}"
+        );
         let band = crate::agent_state::header::of(
             &super::pane("sender", "/checkouts/fixture"),
             Some(&row),
@@ -246,7 +260,8 @@ fn a_persons_turn_holds_a_working_or_asking_row_and_gives_its_own_question_back(
         ledger.human_turns.clear();
         runtime.publish_delivery(Arc::new(ledger), true);
         let after = shown(&mut runtime);
-        assert_eq!(after.ask_subject, None);
+        assert_eq!(after.declared_human_turn, None);
+        assert_eq!(after.ask_subject, before.ask_subject);
         assert_eq!(after.human_turn, None);
         assert_eq!(
             (after.user_turn, after.demand),
@@ -421,11 +436,52 @@ fn a_declaring_agents_move_to_another_pane_lays_the_rows_again() {
     let mut ledger = ledger_with_sender(&sender);
     declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 1);
     runtime.publish_delivery(Arc::new(ledger.clone()), true);
-    let laid = runtime.plans.human_edit;
+    let laid = |runtime: &Runtime| runtime.human_turns_laid.keys().cloned().collect::<Vec<_>>();
+    assert_eq!(laid(&runtime), std::slice::from_ref(&sender.pane_id));
     ledger.next_id += 1;
-    runtime.publish_delivery(Arc::new(ledger.clone()), true);
-    assert_eq!(runtime.plans.human_edit, laid, "nothing of the turn moved");
+    assert!(
+        !runtime.read_human_turns(&ledger),
+        "nothing of the turn moved"
+    );
     ledger.agents[0].actor.pane_id = "moved".into();
     runtime.publish_delivery(Arc::new(ledger), true);
-    assert_eq!(runtime.plans.human_edit, laid + 1);
+    assert_eq!(laid(&runtime), ["moved"]);
+}
+
+/// D-07: a question the agent asked of its own while its person's turn
+/// stood, and the operator answered, does not come back when the turn
+/// goes, since the turn never took its place.
+#[test]
+fn an_own_question_answered_while_a_persons_turn_stood_does_not_come_back_after_it() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _, _, _) = fixture(root.path());
+    let mut runtime = runtime.lock().unwrap();
+    let sender = registered_sender(&mut runtime);
+    let mut ledger = ledger_with_sender(&sender);
+    runtime.publish_delivery(Arc::new(ledger.clone()), true);
+    runtime.snapshot.navigator.agents = vec![sender_row("stopped", Some("question"))];
+    shown(&mut runtime);
+    declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 7);
+    runtime.publish_delivery(Arc::new(ledger.clone()), true);
+    assert!(shown(&mut runtime).declared_human_turn.is_some());
+    // The operator answers the agent's own question; it works again.
+    runtime.snapshot.navigator.agents = vec![sender_row("working", None)];
+    // The engine's next pass lays the turn on the fresh row.
+    runtime.refresh_agent_lineage();
+    let answered = shown(&mut runtime);
+    assert!(
+        answered.declared_human_turn.is_some(),
+        "the turn still stands"
+    );
+    assert_eq!(answered.user_turn, None);
+    // Done takes the turn down.
+    ledger.human_turns.clear();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    let after = shown(&mut runtime);
+    assert_eq!(after.declared_human_turn, None);
+    assert_eq!(
+        after.user_turn, None,
+        "the answered question stays answered"
+    );
+    assert_ne!(after.demand, "question");
 }

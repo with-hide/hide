@@ -67,14 +67,11 @@ pub(crate) fn of(
     if !child.delegated {
         return None;
     }
-    if matches!(
-        child.ask_subject,
-        Some(crate::model::AskSubject::HumanTurn { .. })
-    ) {
+    if let Some(declared) = &child.declared_human_turn {
         return Some(Escalation {
             cause: Cause::HumanTurn,
             letter_id: None,
-            since_unix_ms: child.laid_since_unix_ms,
+            since_unix_ms: Some(declared.since_unix_ms),
             human_notice: false,
         });
     }
@@ -343,10 +340,11 @@ pub(crate) fn lift(
             Verb::Approval | Verb::Confirm => label_line(row),
             // A question the core asks for the child is said by its
             // subject, never by the label's line about the work around it.
+            Verb::Answer if escalation.cause == Cause::HumanTurn => None,
             Verb::Answer
                 if matches!(
                     escalation.cause,
-                    Cause::ChildBlocked | Cause::InputUnconfirmed | Cause::HumanTurn
+                    Cause::ChildBlocked | Cause::InputUnconfirmed
                 ) && row.ask_subject.is_some() =>
             {
                 None
@@ -367,13 +365,16 @@ pub(crate) fn lift(
         let ask = RaisedAsk {
             verb,
             what,
-            subject: row.ask_subject.clone().filter(|_| {
-                verb == Verb::Answer
-                    && matches!(
-                        escalation.cause,
-                        Cause::ChildBlocked | Cause::InputUnconfirmed | Cause::HumanTurn
-                    )
-            }),
+            subject: match escalation.cause {
+                Cause::HumanTurn => row
+                    .declared_human_turn
+                    .as_ref()
+                    .map(crate::model::DeclaredHumanTurn::subject),
+                Cause::ChildBlocked | Cause::InputUnconfirmed if verb == Verb::Answer => {
+                    row.ask_subject.clone()
+                }
+                _ => None,
+            },
             raised_pane_id: row.pane_id.clone(),
             origin_title: row.identity_label.clone(),
             pane_id: named.pane_id.clone(),

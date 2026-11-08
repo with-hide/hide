@@ -182,21 +182,19 @@ fn raised_leads(agent: &SidebarAgentSnapshot) -> bool {
 /// first (PRD ask-human D-20).
 fn human_lead(agent: &SidebarAgentSnapshot) -> Option<crate::model::HumanTurnLead> {
     use crate::model::{AskSubject, HumanTurnLead};
-    let own = match &agent.ask_subject {
-        Some(AskSubject::HumanTurn {
-            id, kind, place, ..
-        }) => Some(HumanTurnLead {
-            id: id.clone(),
-            kind: *kind,
-            place: place.clone(),
+    let own = agent
+        .declared_human_turn
+        .as_ref()
+        .map(|declared| HumanTurnLead {
+            id: declared.id.clone(),
+            kind: declared.kind,
+            place: declared.place.clone(),
             pane_id: agent.pane_id.clone(),
             title: agent.identity_label.clone(),
             device_id: crate::address::pane_device(&agent.pane_id).map(str::to_owned),
-            since_unix_ms: agent.laid_since_unix_ms,
+            since_unix_ms: Some(declared.since_unix_ms),
             own: true,
-        }),
-        _ => None,
-    };
+        });
     let raised = agent.raised.first().and_then(|lead| match &lead.subject {
         Some(AskSubject::HumanTurn {
             id, kind, place, ..
@@ -228,15 +226,33 @@ fn human_lead(agent: &SidebarAgentSnapshot) -> Option<crate::model::HumanTurnLea
 }
 
 fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
-    // A block is not asked of the operator in a verb: its row draws the
-    // cause instead (agent-blocked-state B1).
-    if !needs_you || (agent.demand == "error" && agent.unread) {
+    if !needs_you {
         return None;
     }
     let own = demand_verb(agent);
+    let declared = agent.declared_human_turn.as_ref();
     // Everything else that waits on the operator under this root is counted
-    // behind the lead, `외 N건` (D-13).
-    let total = agent.raised.len() + usize::from(own.is_some()) + agent.laid_more;
+    // behind the lead, `외 N건` (D-13), the row's own question included
+    // while its person's turn leads (PRD ask-human D-21).
+    let total = agent.raised.len()
+        + usize::from(own.is_some())
+        + agent.laid_more
+        + usize::from(declared.is_some());
+    if let Some(declared) =
+        declared.filter(|_| agent.human_turn.as_ref().is_some_and(|lead| lead.own))
+    {
+        return Some(Ask {
+            verb: super::escalation::Verb::Answer,
+            what: first_line_cut(&declared.place),
+            more: total - 1,
+            subject: Some(declared.subject()),
+        });
+    }
+    // A block is not asked of the operator in a verb: its row draws the
+    // cause instead (agent-blocked-state B1).
+    if agent.demand == "error" && agent.unread {
+        return None;
+    }
     // A person's turn leads whatever else waits (PRD ask-human D-21).
     let own_leads = match &agent.human_turn {
         Some(lead) => lead.own,
@@ -913,14 +929,20 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     };
     let question = native_question_line(agent.user_turn.as_ref());
     // A question the core asks for the agent is said by its subject, never
-    // by the label's sentence about the work around it.
-    let (status_word_visible, detail) = if let Some(subject) = &agent.ask_subject {
+    // by the label's sentence about the work around it; the agent's own
+    // person's turn says where, ahead of its other asks (PRD ask-human D-21).
+    let declared = agent
+        .declared_human_turn
+        .as_ref()
+        .filter(|_| agent.human_turn.as_ref().is_some_and(|lead| lead.own));
+    let (status_word_visible, detail) = if let Some(declared) = declared {
+        (true, first_line_cut(&declared.place))
+    } else if let Some(subject) = &agent.ask_subject {
         // A mission decision's line is also its sentence, which a surface
         // that does not know the subject draws instead (D-12).
         let line = match subject {
             crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
             crate::model::AskSubject::MissionAttention { node, .. } => first_line_cut(node),
-            // A surface that does not know a person's turn says where.
             crate::model::AskSubject::HumanTurn { place, .. } => first_line_cut(place),
             crate::model::AskSubject::PlanReview { .. }
             | crate::model::AskSubject::InputUnconfirmed { .. } => None,
