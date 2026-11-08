@@ -240,21 +240,6 @@ fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     hide_platform::fs::atomic::rename_no_replace_path(from, to)
 }
 
-/// The same for a name Hide chose a moment ago from a random token, where
-/// nobody can have put anything yet: where the system has no no-replace
-/// rename, a look first and a plain rename.
-fn rename_to_fresh_name(from: &Path, to: &Path) -> std::io::Result<()> {
-    match hide_platform::fs::atomic::rename_no_replace_path(from, to) {
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
-            if std::fs::symlink_metadata(to).is_ok() {
-                return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
-            }
-            std::fs::rename(from, to)
-        }
-        other => other,
-    }
-}
-
 /// What Hide records, in its own store, before it sets `~/hide` aside: the
 /// name it will set it aside under, the identity of the folder that is being
 /// set aside, and the marker's text. Only a folder of that name whose identity
@@ -281,7 +266,7 @@ fn record_path(user_home: &Path) -> PathBuf {
 fn set_aside(user_home: &Path, home_path: &Path) -> HostResult<()> {
     let staging = staging_name();
     write_record(user_home, home_path, &staging)?;
-    if let Err(error) = rename_to_fresh_name(home_path, &user_home.join(&staging)) {
+    if let Err(error) = rename_no_replace(home_path, &user_home.join(&staging)) {
         let _ = std::fs::remove_file(record_path(user_home));
         return Err(io_error(&error, "~/hide could not be set aside"));
     }
