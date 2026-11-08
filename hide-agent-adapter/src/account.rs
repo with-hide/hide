@@ -338,9 +338,26 @@ pub fn resolve_rule(
         .map(|account| checked_account(rule, account, node.os))
         .transpose()?;
     // Each variable's value for the default profile, where it has one: the
-    // default reads its places by them, another account only compares.
+    // default reads its places by them, another account only compares. A
+    // named account's variable holds a name, not a folder: the node's value
+    // is the account the default profile reads, as the agent itself would.
     let mut defaults: BTreeMap<&str, Result<PathBuf, Refusal>> = BTreeMap::new();
+    let mut inherited: Option<Result<Checked<'_>, Refusal>> = None;
     for var in rule.iter().flat_map(|rule| &rule.vars) {
+        if rule.is_some_and(|rule| rule.by == By::Name) {
+            if let Some(value) = node.variable(&var.name) {
+                inherited = Some(
+                    value
+                        .to_str()
+                        .and_then(|name| checked_name(name).ok())
+                        .map(Checked::Name)
+                        .ok_or_else(|| Refusal::NodeVariable {
+                            variable: var.name.clone(),
+                        }),
+                );
+            }
+            continue;
+        }
         let value = match node.variable(&var.name) {
             Some(value) if is_absolute(value, node.os) => Ok(PathBuf::from(value)),
             Some(_) => Err(Refusal::NodeVariable {
@@ -377,6 +394,12 @@ pub fn resolve_rule(
             (AccountKey::Default, Vec::new(), values)
         }
     };
+    // The account the places are read in: the profile's own, or for the
+    // default profile the named account the node already chose.
+    let reading = match (&account, inherited) {
+        (Some(account), _) => Some(account.clone()),
+        (None, inherited) => inherited.transpose()?,
+    };
     env.extend(checked_env(rule, &profile.env, node.os)?);
     let mut paths = BTreeMap::new();
     for feature in AccountPath::ALL {
@@ -384,9 +407,9 @@ pub fn resolve_rule(
             None | Some(PathRule::Absent) => Place::Absent,
             Some(PathRule::Shared) => Place::Shared,
             Some(PathRule::Same(template)) => {
-                Place::At(expand(template, &values, account.as_ref(), node)?)
+                Place::At(expand(template, &values, reading.as_ref(), node)?)
             }
-            Some(PathRule::Split { default, profile }) => Place::At(match &account {
+            Some(PathRule::Split { default, profile }) => Place::At(match &reading {
                 None => expand(default, &values, None, node)?,
                 Some(account) => expand(profile, &values, Some(account), node)?,
             }),
@@ -423,6 +446,7 @@ pub fn default_folder(rule: &AccountRule, path: AccountPath) -> Option<Vec<Strin
 
 /// A profile's account, checked against the rule; the stored spelling is
 /// kept as it is.
+#[derive(Clone)]
 enum Checked<'a> {
     Folder(&'a str),
     Name(&'a str),
@@ -463,21 +487,25 @@ fn checked_account<'a>(
                 Ok(Checked::Folder(folder))
             }
         }
-        (By::Name, AccountRef::Name(name)) => {
-            if name.is_empty() {
-                Err(Refusal::AccountEmpty)
-            } else if name.len() > MAX_NAME_BYTES
-                || name.starts_with('.')
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-            {
-                Err(Refusal::AccountName)
-            } else {
-                Ok(Checked::Name(name))
-            }
-        }
+        (By::Name, AccountRef::Name(name)) => checked_name(name).map(Checked::Name),
         (by, _) => Err(Refusal::AccountKind { by }),
+    }
+}
+
+/// A named account's name: letters, digits, `-`, `_` and `.`, at most
+/// [`MAX_NAME_BYTES`], not starting with `.`.
+fn checked_name(name: &str) -> Result<&str, Refusal> {
+    if name.is_empty() {
+        Err(Refusal::AccountEmpty)
+    } else if name.len() > MAX_NAME_BYTES
+        || name.starts_with('.')
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        Err(Refusal::AccountName)
+    } else {
+        Ok(name)
     }
 }
 

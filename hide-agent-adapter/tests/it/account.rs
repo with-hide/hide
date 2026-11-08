@@ -371,6 +371,55 @@ fn a_folder_is_set_as_spelled_with_its_final_separator() {
 }
 
 #[test]
+fn the_default_profile_follows_the_named_account_its_node_chose() {
+    let omp = builtin("omp").unwrap();
+    // The node already runs omp in its `work` profile: the default profile
+    // reads there, as omp itself would, and sets nothing.
+    let chosen = node().with_variable("OMP_PROFILE", Some("work".into()));
+    let account = resolve(omp, &Profile::builtin_default("omp"), &chosen).unwrap();
+    assert_eq!(account.key, AccountKey::Default);
+    assert!(account.env.is_empty(), "the default sets no variable");
+    assert_eq!(
+        account.path(AccountPath::Sessions),
+        Some(under(&home(), ".omp/profiles/work/agent/sessions").as_path())
+    );
+    assert_eq!(
+        account.path(AccountPath::Login),
+        Some(under(&home(), ".omp/profiles/work/agent/agent.db").as_path())
+    );
+    // An empty name is unset.
+    let empty = node().with_variable("OMP_PROFILE", Some(OsString::new()));
+    let account = resolve(omp, &Profile::builtin_default("omp"), &empty).unwrap();
+    assert_eq!(
+        account.path(AccountPath::State),
+        Some(under(&home(), ".omp/agent").as_path())
+    );
+    // A name that leaves the profiles folder is refused.
+    for name in ["../escape", ".hidden", "a/b"] {
+        let bad = node().with_variable("OMP_PROFILE", Some(name.into()));
+        assert_eq!(
+            resolve(omp, &Profile::builtin_default("omp"), &bad),
+            Err(Refusal::NodeVariable {
+                variable: "OMP_PROFILE".to_owned()
+            }),
+            "{name}"
+        );
+    }
+    // A profile of its own sets its name whatever the node chose.
+    let account = resolve(
+        omp,
+        &profile("omp", Some(AccountRef::Name("home".to_owned())), &[]),
+        &chosen,
+    )
+    .unwrap();
+    assert_eq!(account.env, [("OMP_PROFILE".to_owned(), "home".to_owned())]);
+    assert_eq!(
+        account.path(AccountPath::State),
+        Some(under(&home(), ".omp/profiles/home/agent").as_path())
+    );
+}
+
+#[test]
 fn the_default_profile_follows_the_variables_its_node_honours() {
     let codex = builtin("codex").unwrap();
     let elsewhere = absolute("/elsewhere/codex");
