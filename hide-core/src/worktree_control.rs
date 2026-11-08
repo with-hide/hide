@@ -2097,12 +2097,11 @@ pub fn spawn_home_retire(
     thread::Builder::new()
         .name("hide-core-home-retire".into())
         .spawn(move || {
-            let retired: Result<hide_node_link::home::HomeRetired, _> =
-                crate::node_access::call_as(
-                    host.as_ref(),
-                    hide_node_link::protocol::Call::HomeRetire { keep_empty },
-                    HOME_RETIRE_TIMEOUT,
-                );
+            let retired: Result<hide_node_link::home::HomeRetired, _> = crate::node_access::call_as(
+                host.as_ref(),
+                hide_node_link::protocol::Call::HomeRetire { keep_empty },
+                HOME_RETIRE_TIMEOUT,
+            );
             if let Some(runtime) = runtime.upgrade()
                 && let Ok(mut guard) = runtime.lock()
             {

@@ -1137,7 +1137,8 @@ pub fn handle_with_progress(
             )?)
         }
         Call::HomeRetire { keep_empty } => {
-            let home = env.home("HOME is not set, so the old Home folder has no place to be found")?;
+            let home =
+                env.home("HOME is not set, so the old Home folder has no place to be found")?;
             if !Path::new(&home).is_absolute() {
                 return Err(HostError::new(
                     ErrorCode::Unsupported,

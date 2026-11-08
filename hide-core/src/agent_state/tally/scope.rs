@@ -1118,11 +1118,7 @@ impl Cache {
                             .or_insert_with(|| Place {
                                 project_id: project.id.clone(),
                                 checkout_id: checkout.id.clone(),
-                                kind: if folder {
-                                    "folder"
-                                } else {
-                                    "checkout"
-                                },
+                                kind: if folder { "folder" } else { "checkout" },
                             });
                     }
                 }

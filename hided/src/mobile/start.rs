@@ -638,11 +638,7 @@ mod tests {
         let mut value = rest();
         value["status"]["remote"][0]["state"] = json!("unreachable");
         let catalog = Catalog::of(&value, "local");
-        let mini = catalog
-            .targets
-            .iter()
-            .find(|t| t.id == "rc1")
-            .unwrap();
+        let mini = catalog.targets.iter().find(|t| t.id == "rc1").unwrap();
         assert!(!mini.connected);
     }
 
@@ -706,7 +702,10 @@ mod tests {
     fn the_old_home_target_ids_lead_nowhere() {
         let catalog = Catalog::of(&rest(), "local");
         for old in ["home:local", "home:mini"] {
-            assert_eq!(event(&request(old, None), &catalog).unwrap_err(), "unknown_target");
+            assert_eq!(
+                event(&request(old, None), &catalog).unwrap_err(),
+                "unknown_target"
+            );
         }
     }
 

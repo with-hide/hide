@@ -276,7 +276,11 @@ mod tests {
             serde_json::json!({"version": 1, "links": links}).to_string(),
         )
         .unwrap();
-        std::fs::write(home.join(AGENTS_FILE), format!("{AGENTS_HEADER}\n- a -> /a\n")).unwrap();
+        std::fs::write(
+            home.join(AGENTS_FILE),
+            format!("{AGENTS_HEADER}\n- a -> /a\n"),
+        )
+        .unwrap();
         if cfg!(windows) {
             std::fs::write(home.join(CLAUDE_FILE), CLAUDE_IMPORT).unwrap();
         } else {
@@ -305,7 +309,10 @@ mod tests {
         assert!(!home.exists());
         assert!(dir.path().join("alpha").is_dir() && dir.path().join("beta").is_dir());
         for expected in ["alpha", "beta", AGENTS_FILE, CLAUDE_FILE, MARKER_FILE] {
-            assert!(retired.removed.iter().any(|name| name == expected), "{retired:?}");
+            assert!(
+                retired.removed.iter().any(|name| name == expected),
+                "{retired:?}"
+            );
         }
     }
 
@@ -318,7 +325,10 @@ mod tests {
         let retired = retire(dir.path(), false).unwrap();
         assert!(retired.kept);
         assert_eq!(names(&home), ["notes.md"]);
-        assert_eq!(std::fs::read_to_string(home.join("notes.md")).unwrap(), "mine");
+        assert_eq!(
+            std::fs::read_to_string(home.join("notes.md")).unwrap(),
+            "mine"
+        );
     }
 
     /// B9: a link that now points elsewhere, or became a real folder, stays.

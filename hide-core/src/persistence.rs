@@ -297,7 +297,10 @@ const OLD_HOME_FOLDER_LABEL: &str = "hide";
 /// out of reach in between (D-04, D-08).
 fn read_registrations(
     stored: Vec<StoredRegistration>,
-) -> (Vec<WorkspaceRegistration>, Vec<crate::model::HomeRetirement>) {
+) -> (
+    Vec<WorkspaceRegistration>,
+    Vec<crate::model::HomeRetirement>,
+) {
     let mut retirements = Vec::new();
     let registrations = stored
         .into_iter()
