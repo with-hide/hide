@@ -268,17 +268,11 @@ for (const id of CHAPTER_IDS) {
 
 test("Back over a step that changed the screen plays the chapter again up to that step as it began", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await playFromList(practice, "screen");
-    const layer = practice.locator('[data-practice-chapter="screen"] [data-practice-layer]');
-    const focused = practice.locator('[data-pane-view][data-focused="true"]');
-    // Split, then jump back to the agent: two steps that each changed the screen.
-    await pressTo(practice, "screen", 2);
-    await expect(focused).toHaveAttribute("data-pane-view", "lead");
-    // Back to the jump: the split is there and the keyboard is in the new pane again, as the jump step began.
-    await layer.locator("[data-practice-back]").click();
-    await expect(layer).toHaveAttribute("data-practice-index", "1");
+    await playFromList(practice, "agents");
+    const layer = practice.locator('[data-practice-chapter="agents"] [data-practice-layer]');
+    // The split is the step that changed the screen: a second terminal stands beside the agent.
+    await pressTo(practice, "agents", 1);
     await expect(practice.locator("[data-pane-view]")).toHaveCount(2);
-    await expect(focused).not.toHaveAttribute("data-pane-view", "lead");
     // Back to the split: one pane, before anything was split.
     await layer.locator("[data-practice-back]").click();
     await expect(layer).toHaveAttribute("data-practice-index", "0");
@@ -289,15 +283,15 @@ test("Back over a step that changed the screen plays the chapter again up to tha
 
 test("the bubble's Exit closes the practice from any step, keeping where the chapter stopped", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await playFromList(practice, "switch");
-    await pressTo(practice, "switch", 1);
-    await clickClosingItsPage(practice.locator('[data-practice-chapter="switch"] [data-practice-exit]'));
+    await playFromList(practice, "overview");
+    await pressTo(practice, "overview", 1);
+    await clickClosingItsPage(practice.locator('[data-practice-chapter="overview"] [data-practice-exit]'));
     // The step reached went to the shell before the window went, so the list opened again offers to continue there.
     await page.locator("[data-help-menu-trigger]").click();
     const reopened = page.context().waitForEvent("page");
     await page.locator('[data-help-item="practice"]').click();
     const again = await reopened;
-    await expect(again.locator('[data-practice-hub-chapter="switch"]')).toHaveAttribute("data-status", "paused", { timeout: 20_000 });
+    await expect(again.locator('[data-practice-hub-chapter="overview"]')).toHaveAttribute("data-status", "paused", { timeout: 20_000 });
   });
 });
 
@@ -315,20 +309,20 @@ test("the first chapter ends by asking what next, and Use Hide now closes the pr
 
 test("the chapter list leads back to Hide, and a finished chapter stops on its end card", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    await playFromList(practice, "switch");
-    await practice.locator('[data-practice-chapter="switch"] [data-practice-hub-open]').click();
+    await playFromList(practice, "overview");
+    await practice.locator('[data-practice-chapter="overview"] [data-practice-hub-open]').click();
     await expect(practice.locator("[data-practice-hub]")).toBeVisible();
     await expect(practice.locator("[data-practice-hub] [data-practice-leave]")).toBeVisible();
     await expect(practice).toHaveTitle(/Practice Hide|Hide 연습/);
     // The last step's button finishes the chapter on its end card, which lists the tasks and leads back to the list.
-    await playFromList(practice, "switch");
-    await pressTo(practice, "switch", 4);
+    await playFromList(practice, "overview");
+    await pressTo(practice, "overview", 8);
     await practice.keyboard.press("Enter");
-    const end = practice.locator('[data-practice-chapter="switch"] [data-practice-end]');
+    const end = practice.locator('[data-practice-chapter="overview"] [data-practice-end]');
     await expect(end).toBeVisible();
-    await expect(end.locator("li")).toHaveCount(3);
+    await expect(end.locator("li")).toHaveCount(2);
     await end.locator("[data-practice-end-hub]").click();
-    await expect(practice.locator('[data-practice-hub-chapter="switch"]')).toHaveAttribute("data-status", "done");
+    await expect(practice.locator('[data-practice-hub-chapter="overview"]')).toHaveAttribute("data-status", "done");
   });
 });
 
