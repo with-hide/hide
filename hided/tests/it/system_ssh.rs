@@ -696,6 +696,32 @@ for last; do :; done
         assert!(row.asked().is_empty());
     }
 
+    /// A restart is ready on its own server's "Server listening" line, not on
+    /// the line the first start left in the appended log, and a port another
+    /// server took while it was down is named, since a restart cannot choose
+    /// another (the client's config is bound to the port).
+    #[test]
+    fn a_restart_waits_for_its_own_listening_line_and_names_a_lost_port() {
+        let fixture = fixture();
+        let port = fixture.sshd.port;
+        let listening = format!("Server listening on 127.0.0.1 port {port}.");
+        fixture.sshd.online(false).unwrap();
+        let other_server = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let error = fixture.sshd.online(true).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("another server holds it"),
+            "{error:#}"
+        );
+        drop(other_server);
+        fixture.sshd.online(true).unwrap();
+        assert_eq!(
+            fixture.sshd.log().matches(&listening).count(),
+            2,
+            "{}",
+            fixture.sshd.log()
+        );
+    }
+
     /// B6: a password is answered on the row. The account and its server
     /// are the runner's (`user:password:port`).
     #[test]

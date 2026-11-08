@@ -127,7 +127,8 @@ jobs:
         run: |
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
           stress=()
-          if [ "$REPEAT" != 1 ]; then stress=(--stress-count "$REPEAT"); fi
+          # A repetition shows a fix only if one failure fails the job, so no retry.
+          if [ "$REPEAT" != 1 ]; then stress=(--stress-count "$REPEAT" --retries 0); fi
           HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest --profile ci ${stress[@]+"${stress[@]}"} -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine)::/) & !test(protocol24)' --run-ignored only
       - name: Another account's hide <path> on a device's bridge
         # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only

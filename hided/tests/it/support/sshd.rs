@@ -139,10 +139,15 @@ impl Sshd {
 
     /// Whether this server's log says another server held its port.
     fn lost_the_bind(&self) -> bool {
-        self.log().contains(&format!(
+        self.log().contains(&self.bind_failure())
+    }
+
+    /// The line this server's log gets when another server holds its port.
+    fn bind_failure(&self) -> String {
+        format!(
             "Bind to port {} on 127.0.0.1 failed: Address already in use",
             self.port
-        ))
+        )
     }
 
     /// Lets the key whose public half is `public` sign in too.
@@ -211,24 +216,40 @@ impl Sshd {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
+        // The log is appended to across restarts, so a start reads only what
+        // its own server wrote after this point: an earlier start's
+        // "Server listening" line is not this server's.
+        let from = self.log().len();
         let started = child.insert(OwnedChild::spawn(&mut command)?);
         // Ready is this server's own "Server listening" line for this port.
         // A connection that succeeds proves only that some server holds the
         // port, and a server that lost the bind has exited by then.
         let listening = format!("Server listening on 127.0.0.1 port {}.", self.port);
         let deadline = Instant::now() + READY_BOUND;
-        while !self.log().contains(&listening) {
+        loop {
+            let log = self.log();
+            let written = log.get(from..).unwrap_or_default();
+            if written.contains(&listening) {
+                return Ok(());
+            }
             if let Some(status) = started.try_wait()? {
                 child.take();
-                bail!("sshd exited {status}: {}", self.log());
+                bail!(
+                    "sshd exited {status} before it listened on port {}{}: {written}",
+                    self.port,
+                    if written.contains(&self.bind_failure()) {
+                        " (another server holds it)"
+                    } else {
+                        ""
+                    }
+                );
             }
             if Instant::now() >= deadline {
                 child.take();
-                bail!("sshd did not listen: {}", self.log());
+                bail!("sshd did not listen: {written}");
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(())
     }
 
     /// How many connections signed in since the server first started.
