@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileDiffIcon, FileTextIcon, FolderGit2Icon, GitBranchIcon, GitPullRequestIcon, ListChecksIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { ProjectLanePin } from "./ProjectLanePin";
 import { PR_LOOK } from "./prMark";
@@ -8,10 +8,8 @@ import { KindMark } from "./components/kind-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
-import { MissionMap } from "./MissionMap";
 import { PlanMap } from "./PlanMap";
 import { ProjectCostView, RemainsView, WorktreesView } from "./ProjectDetail";
-import { missionOf } from "./missions";
 import { BranchCardView } from "./BranchCard";
 import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
@@ -22,8 +20,7 @@ import { catalogWorkspaces, type DetailItem, type DetailSlot, type WorkSession }
 import { useShellStore } from "./store";
 
 // The lane's 보기 slot (PRD sidebar-task-lens D-50, B46-B49): one pull
-// request's card, one session's record, a mission's map (PRD
-// software-factory-conductor D-14), a session's plan (PRD hide-plan B11),
+// request's card, one session's record, a session's plan (PRD hide-plan B11),
 // a project's worktrees or cost (PRD lane-two-columns B30, B31), or a
 // Hide AI branch's card (PRD hide-ai-branch-first-apply B4), a
 // the front Agent tab's: each tab keeps its own and
@@ -52,10 +49,6 @@ function useItemTitle(item: DetailItem | null, bare = false): string {
     if (item.kind === "pull_request") {
       const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
       return t("detail.pr", { number: item.number, project: project?.label ?? "" });
-    }
-    if (item.kind === "mission") {
-      const title = missionOf(s.rest, item.mission)?.title ?? item.mission;
-      return bare ? title : t("detail.mission", { title });
     }
     if (item.kind === "branch") {
       const row = s.suggestions?.project?.workspace_id === item.workspace_id ? s.suggestions.project.rows.find((candidate) => candidate.id === item.row) : undefined;
@@ -86,7 +79,6 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
   const state = useShellStore((s) => item.kind === "pull_request"
     ? catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.state ?? null
     : null);
-  if (item.kind === "mission") return <WaypointsIcon aria-hidden="true" className={className} data-detail-mark="mission" />;
   if (item.kind === "plan") return <ListChecksIcon aria-hidden="true" className={className} data-detail-mark="plan" />;
   if (item.kind === "worktrees") return <FolderGit2Icon aria-hidden="true" className={className} data-detail-mark="worktrees" />;
   if (item.kind === "cost") return <CoinsIcon aria-hidden="true" className={className} data-detail-mark="cost" />;
@@ -116,7 +108,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
     return catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.url ?? null;
   });
   if (!item) return null;
-  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : `${item.kind}:${item.workspace_id}`;
+  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : `${item.kind}:${item.workspace_id}`;
   return (
     // The slot reads as a page on the lane: its head keeps the lane's surface
     // and what it holds, a card or a record alike, sits on the page's.
@@ -128,27 +120,20 @@ export function DetailPanel({ actions }: { actions: Actions }) {
           </Button>
         </Hint>
         <span className="flex min-w-0 flex-1 items-center gap-xs font-semibold" data-detail-title={title}>
-          {item.kind === "mission" || item.kind === "plan" ? (
+          {item.kind === "plan" ? (
             <>
-              <KindMark kind={item.kind === "mission" ? "mission" : "task"} />
-              <KindHelpButton from={item.kind === "mission" ? "mission" : "task"} />
+              <KindMark kind="task" />
+              <KindHelpButton from="task" />
             </>
           ) : (
             <DetailIcon item={item} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
           )}
-          <span className="min-w-0 truncate" title={title}>{item.kind === "mission" || item.kind === "plan" ? name : title}</span>
+          <span className="min-w-0 truncate" title={title}>{item.kind === "plan" ? name : title}</span>
         </span>
         {url ? (
           <Hint label={t("detail.github")}>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("detail.github")} onClick={() => actions.openLink(url, true)} data-detail-github="true">
               <ExternalLinkIcon />
-            </Button>
-          </Hint>
-        ) : null}
-        {item.kind === "mission" ? (
-          <Hint label={t("mission.settings")}>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("mission.settings")} onClick={() => actions.openMissionSettings()} data-detail-conductor-settings="true">
-              <SettingsIcon />
             </Button>
           </Hint>
         ) : null}
@@ -167,9 +152,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" key={key}>
         {item.kind === "pull_request"
           ? <PrCardView workspaceId={item.workspace_id} number={item.number} actions={actions} />
-          : item.kind === "mission"
-            ? <MissionMap missionId={item.mission} actions={actions} />
-            : item.kind === "plan"
+          : item.kind === "plan"
               ? <PlanMap session={item.session} actions={actions} />
               : item.kind === "worktrees"
                 ? <WorktreesView workspaceId={item.workspace_id} actions={actions} />

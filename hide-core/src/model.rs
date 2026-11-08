@@ -78,8 +78,8 @@ pub struct Snapshot {
     /// Each Conductor's mission as its map draws it (PRD
     /// software-factory-conductor D-14).
     pub missions: crate::runtime::missions::MissionsSnapshot,
-    /// The events of the mission open in the 보기 slot only (PRD
-    /// mission-plan-visibility D-22).
+    /// The events of the mission the page's mission screen shows only (PRD
+    /// mission-plan-visibility D-22; PRD mission-screen D-16).
     pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
     /// The brief of the one node whose folded box the operator opened.
     pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
@@ -4311,8 +4311,6 @@ pub enum DetailItem {
     Record {
         session: crate::links::ledger::SessionIdentity,
     },
-    /// A Conductor's mission map (PRD software-factory-conductor D-14).
-    Mission { mission: String },
     /// A session's own plan, drawn large (PRD hide-plan B11).
     Plan {
         session: crate::links::ledger::SessionIdentity,
@@ -9851,9 +9849,6 @@ mod wire_enum_tests {
             DetailItem::Record {
                 session: session.clone(),
             },
-            DetailItem::Mission {
-                mission: "mission-1".into(),
-            },
             DetailItem::Worktrees {
                 workspace_id: "w".into(),
             },
@@ -9875,7 +9870,6 @@ mod wire_enum_tests {
             match item {
                 DetailItem::PullRequest { .. }
                 | DetailItem::Record { .. }
-                | DetailItem::Mission { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
                 | DetailItem::Remains { .. }

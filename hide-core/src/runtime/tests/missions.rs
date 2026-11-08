@@ -9,7 +9,7 @@ use crate::handle::ChangeNotifier;
 use crate::mission_criteria::CriterionState;
 use crate::missions::{AnswerFailure, MissionCommand, MissionStatus, NodeStatus, Strength};
 use crate::model::{
-    DetailItem, GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
+    GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
     PullRequestSnapshot, ReviewDecision,
 };
 use crate::runtime::delivery::tests::{authority, fixture};
@@ -80,17 +80,6 @@ fn without_gate(runtime: &mut Runtime) {
     for mission in &mut runtime.missions.book.missions {
         mission.exempt = true;
     }
-}
-
-fn mission_slot_items(runtime: &Runtime) -> usize {
-    runtime
-        .snapshot
-        .ui_state
-        .detail
-        .items
-        .iter()
-        .filter(|item| matches!(item, DetailItem::Mission { .. }))
-        .count()
 }
 
 fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::delivery::Command {
@@ -204,9 +193,8 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
         created["mission"]["cap"], 4,
         "the settings' concurrency is the default cap"
     );
-    assert_eq!(
-        mission_slot_items(&runtime),
-        0,
+    assert!(
+        runtime.snapshot.ui_state.detail.items.is_empty(),
         "an empty mission opens nothing"
     );
     let detail = runtime.snapshot.ui_state.detail.clone();
@@ -215,11 +203,9 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
     // draws; the lane's 보기 slot stays as it was (mission-pane-chip B11).
     let (planned, _) = command(&mut runtime, "sender", plan()).unwrap();
     assert_eq!(planned["mission"]["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(mission_slot_items(&runtime), 0);
     assert_eq!(runtime.snapshot.ui_state.detail, detail);
 
     command(&mut runtime, "sender", plan()).unwrap();
-    assert_eq!(mission_slot_items(&runtime), 0);
     assert_eq!(runtime.snapshot.ui_state.detail, detail);
 
     runtime.refresh_missions();
@@ -1424,18 +1410,19 @@ fn a_mission_goes_with_its_conductors_deleted_session() {
             .map(|session| session.session_id.as_str()),
         Some(native.as_str())
     );
-    // The operator opened the map.
+    // The operator's mission screen shows it.
     let id = runtime.missions.book.missions[0].id.clone();
-    runtime.open_detail(DetailItem::Mission { mission: id });
-    assert_eq!(mission_slot_items(&runtime), 1);
+    assert!(
+        runtime
+            .mission_shown(super::super::mission_events::MissionShownPayload { mission: Some(id) })
+    );
 
     assert!(!runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), "another".into())]));
     assert!(runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), native)]));
     assert!(runtime.missions.book.missions.is_empty());
     assert_eq!(
-        mission_slot_items(&runtime),
-        0,
-        "the map of a deleted mission leaves the slot"
+        runtime.missions.shown, None,
+        "the screen's detail of a deleted mission sends nothing"
     );
 }
 
@@ -2809,10 +2796,9 @@ fn the_open_missions_published_events_share_the_cores_list() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
-    runtime.snapshot.ui_state.detail.items = vec![DetailItem::Mission {
-        mission: "mission-1".into(),
-    }];
-    runtime.snapshot.ui_state.detail.shown = true;
+    runtime.mission_shown(super::super::mission_events::MissionShownPayload {
+        mission: Some("mission-1".into()),
+    });
     runtime.refresh_mission_events();
     let held = &runtime.missions.events["mission-1"].events;
     assert!(std::sync::Arc::ptr_eq(
@@ -2875,16 +2861,18 @@ fn a_conductor_whose_agent_the_doorbell_does_not_ring_takes_no_banner_answer() {
 }
 
 #[test]
-fn only_the_mission_open_in_the_slot_sends_its_events() {
+fn only_the_mission_the_screen_shows_sends_its_events() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);
     assert!(runtime.snapshot.mission_events.events.is_empty());
-    runtime.open_detail(DetailItem::Mission {
-        mission: "mission-1".into(),
-    });
+    assert!(
+        runtime.mission_shown(super::super::mission_events::MissionShownPayload {
+            mission: Some("mission-1".into()),
+        })
+    );
     runtime.refresh_mission_events();
     assert_eq!(
         runtime.snapshot.mission_events.mission.as_deref(),
@@ -2899,6 +2887,37 @@ fn only_the_mission_open_in_the_slot_sends_its_events() {
     .unwrap();
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.events.len(), 2);
+    // The detail closed: no mission's events are sent; the same answer again changes nothing.
+    let shown = |mission: Option<&str>| super::super::mission_events::MissionShownPayload {
+        mission: mission.map(str::to_owned),
+    };
+    // The typed event carries it from the page; a mission the book does not hold reads as none.
+    let event = |mission: Value| explorer_event("mission_shown", json!({ "mission": mission }));
+    assert!(runtime.dispatch_json(&event(json!("mission-404"))));
+    assert_eq!(runtime.missions.shown, None);
+    assert!(runtime.dispatch_json(&event(json!("mission-1"))));
+    assert_eq!(runtime.missions.shown.as_deref(), Some("mission-1"));
+    assert!(runtime.dispatch_json(&event(Value::Null)));
+    // A payload with a field the event does not know is refused and changes nothing.
+    runtime.dispatch_json(&explorer_event(
+        "mission_shown",
+        json!({ "mission": "mission-1", "pane": "p1" }),
+    ));
+    assert_eq!(
+        runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("event.invalid_payload")
+    );
+    assert_eq!(runtime.missions.shown, None);
+    assert!(!runtime.mission_shown(shown(None)));
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    assert!(runtime.snapshot.mission_events.events.is_empty());
+    assert!(runtime.mission_shown(shown(Some("mission-1"))));
     // The events go with their mission's deleted session (D-22).
     let session = runtime.missions.book.missions[0]
         .conductor

@@ -458,6 +458,26 @@ pub(crate) fn unreadable(path: &Path) -> Option<String> {
     }
 }
 
+/// A saved 보기 slot without the mission maps earlier builds kept in it: a
+/// mission is the page's mission screen now (PRD mission-screen D-09, B20),
+/// so the slot loads with the other items and ← steps only through them.
+fn without_mission_items(mut value: serde_json::Value) -> serde_json::Value {
+    let Some(slot) = value.as_object_mut() else {
+        return value;
+    };
+    if let Some(items) = slot
+        .get_mut("items")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        items
+            .retain(|item| item.get("kind").and_then(serde_json::Value::as_str) != Some("mission"));
+        if items.is_empty() {
+            slot.insert("shown".into(), false.into());
+        }
+    }
+    value
+}
+
 /// Reads the stored practice progress chapter by chapter and returns it with
 /// how many entries were dropped: one that is not a chapter id with a
 /// readable progress, a step past the limit, or past the chapter limit.
@@ -559,7 +579,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     };
     let detail = match stored.detail {
         None => DetailSlot::default(),
-        Some(value) => serde_json::from_value::<DetailSlot>(value)
+        Some(value) => serde_json::from_value::<DetailSlot>(without_mission_items(value))
             .ok()
             .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT)
             .unwrap_or_else(|| {
@@ -573,13 +593,15 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
         Some(serde_json::Value::Object(slots)) => slots
             .into_iter()
             .filter_map(|(tab, value)| {
-                let slot = serde_json::from_value::<DetailSlot>(value)
+                let slot = serde_json::from_value::<DetailSlot>(without_mission_items(value))
                     .ok()
                     .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT);
                 if slot.is_none() {
                     unrecognized.push(UnrecognizedField::Detail);
                 }
-                slot.map(|slot| (tab, slot))
+                // A tab's slot that held only mission maps is gone with them (PRD mission-screen B20).
+                slot.filter(|slot| !slot.items.is_empty())
+                    .map(|slot| (tab, slot))
             })
             .collect(),
         Some(_) => {
@@ -1748,6 +1770,50 @@ mod tests {
         );
         assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(unknown_state.detail, DetailSlot::default());
+
+        // PRD mission-screen B20: a slot saved with a mission map loads
+        // without it, the other items kept in their order.
+        let with_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"pull_request","workspace_id":"w","number":7},{"kind":"mission","mission":"mission-3"},
+            {"kind":"cost","workspace_id":"w"},{"kind":"mission","mission":"mission-4"}],"shown":true}}"#;
+        let (mission_state, _sizes, mission_disposition) = decode(with_mission);
+        assert_eq!(mission_disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            mission_state.detail,
+            DetailSlot {
+                items: vec![
+                    crate::model::DetailItem::PullRequest {
+                        workspace_id: "w".into(),
+                        number: 7
+                    },
+                    crate::model::DetailItem::Cost {
+                        workspace_id: "w".into()
+                    },
+                ],
+                shown: true,
+            }
+        );
+        let only_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"mission","mission":"mission-3"}],"shown":true}}"#;
+        let (only_state, _sizes, only_disposition) = decode(only_mission);
+        assert_eq!(only_disposition, LoadDisposition::Loaded);
+        assert_eq!(only_state.detail, DetailSlot::default());
+        // Each Agent tab's own slot sheds them the same way; one that held only maps goes.
+        let tabs = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail_tabs":{"w1:t2":{"items":[{"kind":"mission","mission":"mission-3"},{"kind":"cost","workspace_id":"w"}],"shown":true},
+            "w1:t3":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}}"#;
+        let (tabs_state, _sizes, tabs_disposition) = decode(tabs);
+        assert_eq!(tabs_disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            tabs_state.detail_tabs.keys().collect::<Vec<_>>(),
+            vec!["w1:t2"]
+        );
+        assert_eq!(
+            tabs_state.detail_tabs["w1:t2"].items,
+            vec![crate::model::DetailItem::Cost {
+                workspace_id: "w".into()
+            }]
+        );
     }
 
     /// Practice-mode progress survives a relaunch; a store written before it

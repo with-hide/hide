@@ -68,7 +68,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
           aria-pressed={undefined}
           onClick={() => {
             chip.close();
-            actions.openMission(mission.id);
+            actions.openMission(mission.id, { paneId });
           }}
           aria-label={label}
           data-pane-mission-chip={mission.id}
