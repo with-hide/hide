@@ -1569,6 +1569,7 @@ impl Runtime {
                     intent,
                     kind,
                     body,
+                    None,
                     |stored| {
                         qualify(target) == stored.pane_id
                             || *target == stored.name

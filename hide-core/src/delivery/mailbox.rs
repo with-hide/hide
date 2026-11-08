@@ -136,19 +136,24 @@ pub(crate) fn existing_intent<'a>(
 /// The letter a send under `intent` retries, if its sender already holds one.
 ///
 /// A retry is the same letter again: the recipient (`to_recipient`, which
-/// each caller words in the terms it holds), the kind and the body are those
-/// the stored letter has. A report's stored body also carries the list of
+/// each caller words in the terms it holds), the kind, the letter a reply
+/// answers and the body are those the stored letter has. A report's stored body also carries the list of
 /// Views its sender opened (`list_opened_views`), added after the sender
 /// wrote it, so a report is the same letter when its stored body begins with
 /// the body sent. Another letter under the same intent is `intent_conflict`,
 /// refused before anything is stored, so a letter is never answered with an
 /// earlier one that went elsewhere.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each argument is one immutable field of the envelope the retry is compared on"
+)]
 pub(crate) fn retried_send<'a>(
     ledger: &'a Ledger,
     sender: &Actor,
     intent: &str,
     kind: &str,
     body: &str,
+    reply_to: Option<&str>,
     to_recipient: impl FnOnce(&Actor) -> bool,
     now: u64,
 ) -> Result<Option<&'a Letter>, String> {
@@ -160,7 +165,11 @@ pub(crate) fn retried_send<'a>(
     } else {
         letter.body == body
     };
-    if letter.kind == kind && same_body && to_recipient(&letter.recipient) {
+    if letter.kind == kind
+        && same_body
+        && letter.reply_to.as_deref() == reply_to
+        && to_recipient(&letter.recipient)
+    {
         Ok(Some(letter))
     } else {
         Err("intent_conflict".into())
@@ -220,6 +229,7 @@ pub(crate) fn send(
         intent,
         kind,
         body,
+        reply_to.as_deref(),
         |stored| stored.same_identity(recipient),
         now,
     )? {
@@ -342,14 +352,26 @@ pub fn apply_in(
                 intent,
                 kind,
                 body,
+                None,
                 |stored| target.is_none_or(|target| target.same_identity(stored)),
                 now,
             )? {
                 return Ok(json!(letter));
             }
         }
-        Command::Reply { intent, .. } => {
-            if let Some(letter) = existing_intent(ledger, actor, intent, now) {
+        // A reply goes to its original's sender, so the same original is the
+        // same recipient.
+        Command::Reply { id, intent, body } => {
+            if let Some(letter) = retried_send(
+                ledger,
+                actor,
+                intent,
+                "reply",
+                body,
+                Some(id),
+                |_| true,
+                now,
+            )? {
                 return Ok(json!(letter));
             }
         }
@@ -1517,26 +1539,33 @@ mod tests {
             &b,
             None,
             &Command::Reply {
-                id: first.id,
+                id: first.id.clone(),
                 intent: "reply".into(),
                 body: "done".into(),
             },
             4,
         )
         .unwrap();
-        let retry = apply(
-            &mut ledger,
-            &b,
-            None,
-            &Command::Reply {
-                id: second.id.clone(),
-                intent: "reply".into(),
-                body: "different decision".into(),
-            },
-            5,
-        )
-        .unwrap();
+        let reply_command = |id: &str, body: &str| Command::Reply {
+            id: id.into(),
+            intent: "reply".into(),
+            body: body.into(),
+        };
+        // The same reply again is a retry; a reply to another letter, or
+        // with another body, under that intent is refused and answers nothing.
+        let retry = apply(&mut ledger, &b, None, &reply_command(&first.id, "done"), 5).unwrap();
         assert_eq!(retry["id"], reply["id"]);
+        for (id, body) in [
+            (second.id.as_str(), "done"),
+            (second.id.as_str(), "different decision"),
+            (first.id.as_str(), "different decision"),
+        ] {
+            assert_eq!(
+                apply(&mut ledger, &b, None, &reply_command(id, body), 5),
+                Err("intent_conflict".into()),
+                "{id} {body}"
+            );
+        }
         assert!(
             ledger
                 .letters
@@ -1546,6 +1575,29 @@ mod tests {
                 .waiting_answer
         );
         assert_eq!(ledger.letters.len(), 3);
+    }
+
+    #[test]
+    fn a_reply_reusing_the_intent_of_an_earlier_send_is_refused_and_not_answered_with_it() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (actor("a"), actor("b"));
+        let asked = send(&mut ledger, &a, &b, "ask", "work", "request", None, 1).unwrap();
+        // `b` already used "status" for a send of its own.
+        let sent = send(&mut ledger, &b, &a, "status", "1/2", "progress", None, 2).unwrap();
+        let reply = Command::Reply {
+            id: asked.id.clone(),
+            intent: "status".into(),
+            body: "1/2".into(),
+        };
+        assert_eq!(
+            apply(&mut ledger, &b, None, &reply, 3),
+            Err("intent_conflict".into())
+        );
+        // The request is still waiting and the send is the only letter under it.
+        let waiting = ledger.letters.iter().find(|l| l.id == asked.id).unwrap();
+        assert!(waiting.waiting_answer);
+        assert_eq!(ledger.letters.len(), 2);
+        assert_eq!(ledger.letters[1].id, sent.id);
     }
 
     fn send_command(intent: &str, kind: &str, body: &str) -> Command {
