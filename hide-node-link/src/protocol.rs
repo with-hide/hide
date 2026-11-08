@@ -348,7 +348,11 @@ use crate::error::HostError;
 /// input (`holders::PaneCall::SleeperInput`) into a pane whose agent is
 /// asleep; a helper on an earlier protocol would refuse both calls, so it
 /// upgrades.
-pub const PROTOCOL_VERSION: u32 = 83;
+/// 84: `owed_confirmations` hands the core the letter confirmations a pane's
+/// hooks could not send in time (`hide_agent_hooks::owed::take`), which the
+/// core asks once the pane rests (`docs/delivery.md`, A confirmation that
+/// missed its hook); a helper on 83 would refuse it, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 84;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -773,6 +777,13 @@ pub enum Call {
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
     HookDiagnosis,
+    /// Hands over and forgets the letter confirmations the hooks of the
+    /// pane `pane` (the engine's id on this machine) could not send in time
+    /// (`hide_agent_hooks::owed::take`): `null`, or the session the letters
+    /// reached and their ids (`hide_agent_hooks::owed::Owed`).
+    OwedConfirmations {
+        pane: String,
+    },
     /// The node account's Herdr save and who runs the server on its default
     /// socket (`crate::herdr_save::Found`), only read (PRD
     /// engine-bundle-4-herdr-removal D-10).
@@ -1335,6 +1346,7 @@ impl Call {
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
             | Self::HookDiagnosis
+            | Self::OwedConfirmations { .. }
             | Self::HerdrSave
             | Self::HerdrStop { .. }
             | Self::GuardrailPolicy { .. }

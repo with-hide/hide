@@ -1531,6 +1531,19 @@ pub fn handle_with_progress(
             })?;
             to_value(hide_agent_hooks::Diagnosis::read(&home, &search))
         }
+        Call::OwedConfirmations { pane } => {
+            let home = env.home("HOME is not set, so the agent hooks keep no records")?;
+            // The hooks keep their records in the folder of the installation
+            // that started their pane, which is this node's own.
+            let install = crate::kit::running_install().map(|install| install.id);
+            let folder = hide_kit::layout::owed_confirmations_of(&home, install.as_deref());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| {
+                    u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+                });
+            to_value(hide_agent_hooks::owed::take(&folder, &pane, now))
+        }
         Call::HerdrSave => {
             let home = env.home("HOME is not set, so this account has no Herdr save")?;
             let found = crate::herdr_save::found(&home)
@@ -1941,6 +1954,39 @@ mod tests {
         );
         drop(writer);
         assert!(session_activity(home.path(), &request).unwrap()["bytes"].as_u64() > Some(0));
+    }
+
+    /// A node hands over, once, what its pane's hooks could not confirm,
+    /// from the records of the account it runs as, on every system and on
+    /// a device alike.
+    #[test]
+    fn owed_confirmations_are_handed_over_once_from_the_accounts_hook_records() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::standalone(Some(home.path().to_path_buf()));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        hide_agent_hooks::owed::owe(home.path(), "h2:p2", "s1", &["letter-12".to_owned()], now)
+            .unwrap();
+        let ask = || {
+            handle_in(
+                Call::OwedConfirmations {
+                    pane: "h2:p2".to_owned(),
+                },
+                &env,
+            )
+            .unwrap()
+        };
+        let owed: Option<hide_agent_hooks::owed::Owed> = serde_json::from_value(ask()).unwrap();
+        assert_eq!(
+            owed,
+            Some(hide_agent_hooks::owed::Owed {
+                session: "s1".to_owned(),
+                ids: vec!["letter-12".to_owned()],
+            })
+        );
+        assert!(ask().is_null(), "handed over once");
     }
 
     /// A helper answers the hook diagnosis the same way on every system:

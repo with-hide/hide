@@ -341,12 +341,10 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
     if input.letters.is_empty() || !delivery::valid_letter_ids(&input.letters) {
         return json!({});
     }
-    match delivery::confirm(&input.letters, deadline) {
+    // One that misses is kept for the core as a prompt hook's is.
+    match delivery::confirm_or_owe(home, &input.letters, input.session_id.as_deref(), deadline) {
         Ok(()) => json!({ "confirmed": input.letters }),
-        Err(failure) => {
-            delivery::diagnose_failure(home, &failure);
-            json!({})
-        }
+        Err(_) => json!({}),
     }
 }
 

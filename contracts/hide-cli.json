@@ -1629,6 +1629,16 @@
                             "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
                             "type": "boolean"
                         },
+                        "handed_at_unix_ms": {
+                            "default": null,
+                            "description": "When a hook last handed the letter over, at a prompt (`handed`) or at a tool (`tool_handovers`), on the core's clock: a rest whose state moved after it is a rest that hook had ended before, when the core asks the pane's machine for a confirmation it could not send (`Doorbell::settle_owed`). Null until handed, and for a letter an older build handed.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
                         "hook_confirmed": {
                             "default": null,
                             "type": [
@@ -1737,6 +1747,7 @@
                         "bell_line",
                         "bell_turn",
                         "handed",
+                        "handed_at_unix_ms",
                         "intake_from",
                         "immediate",
                         "forced",
@@ -2167,6 +2178,16 @@
                     "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
                     "type": "boolean"
                 },
+                "handed_at_unix_ms": {
+                    "default": null,
+                    "description": "When a hook last handed the letter over, at a prompt (`handed`) or at a tool (`tool_handovers`), on the core's clock: a rest whose state moved after it is a rest that hook had ended before, when the core asks the pane's machine for a confirmation it could not send (`Doorbell::settle_owed`). Null until handed, and for a letter an older build handed.",
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
                 "hook_confirmed": {
                     "default": null,
                     "type": [
@@ -2275,6 +2296,7 @@
                 "bell_line",
                 "bell_turn",
                 "handed",
+                "handed_at_unix_ms",
                 "intake_from",
                 "immediate",
                 "forced",
@@ -5698,7 +5720,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:83cd7672deda8629f95b3df1c2d3e3c7975ef7bdad46ff386ecc8962ac5adaa9",
+    "digest": "sha256:b194bf360ee8e74ff079638c028552c2e216ec75cee8e3389cbea962dca71a0f",
     "envelopes": {
         "agent": {
             "answer": "value",

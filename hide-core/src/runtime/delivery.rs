@@ -2096,6 +2096,28 @@ impl Runtime {
         Ok(current.clone())
     }
 
+    /// The pane `recipient` runs in while it still hosts the recipient's
+    /// session, with the node of its machine, which keeps what the pane's
+    /// hooks could not confirm (`Doorbell::settle_owed`). Asking starts no
+    /// helper; the node is asked off the lock.
+    pub(crate) fn delivery_owed_source(
+        &self,
+        recipient: &Actor,
+    ) -> Option<(Observation, Arc<dyn crate::node_access::NodeLink>)> {
+        if self.effects_held() {
+            return None;
+        }
+        let observation =
+            self.delivery_observations
+                .get(&recipient.pane_id)
+                .filter(|observation| {
+                    observation.actor.device_id == recipient.device_id
+                        && observation.actor.same_identity(recipient)
+                })?;
+        let (_, link) = self.linked_node(&recipient.device_id).ok()?;
+        Some((observation.clone(), link))
+    }
+
     /// The pane as it is now, if nothing moved since `observed`: the same
     /// agent and session, status, state sequence and last input.
     pub(crate) fn delivery_pane_unmoved(
@@ -2695,6 +2717,16 @@ pub(crate) mod tests {
         observation.hook_submit_at_unix_ms = hook;
         observation.entered_working_at_unix_ms = hook + 1;
         observation.status_changed_at_unix_ms = hook + 2;
+    }
+
+    /// The engine's state of the pane moves to `status` at `at` without a
+    /// read seeing what came between, as a turn that began and ended between
+    /// two reads does.
+    pub(crate) fn state_moved(runtime: &mut Runtime, pane: &str, status: &str, at: u64) {
+        let observation = runtime.delivery_observations.get_mut(pane).unwrap();
+        observation.state_change_seq = Some(observation.state_change_seq.unwrap_or(0) + 2);
+        observation.status_changed_at_unix_ms = at;
+        observation.engine(status);
     }
 
     /// The pane's turn ends at `at`: the engine reports it idle from then on.

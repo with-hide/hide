@@ -206,7 +206,13 @@ pub fn pane_install() -> Option<String> {
 /// started, whose pane ids are that installation's core's and whose records
 /// the app's core neither reads nor sweeps.
 pub fn pane_records(home: &Path) -> PathBuf {
-    records_of(home, std::env::var(INSTALL_VARIABLE).ok().as_deref())
+    pane_records_of(home, std::env::var(INSTALL_VARIABLE).ok().as_deref())
+}
+
+/// [`pane_records`] for the panes the installation `install` starts, as a
+/// node that starts them reads them; `None` for panes that name none.
+pub fn pane_records_of(home: &Path, install: Option<&str>) -> PathBuf {
+    records_of(home, install)
 }
 
 /// The file of `pane_id`'s record in `folder`. A pane id is in Herdr's shape

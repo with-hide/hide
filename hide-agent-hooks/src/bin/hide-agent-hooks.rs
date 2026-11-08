@@ -274,11 +274,6 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     )
     .then(|| read_stdin_before_deadline(started + GUARD_PAYLOAD_BUDGET))
     .flatten();
-    // What an earlier hook of the session owes is confirmed before this
-    // turn end hands anything over itself.
-    if event == HookEvent::Stop {
-        let _ = std::panic::catch_unwind(|| settle_basic(dialect, payload.as_ref(), started));
-    }
     let (answer, intake) = std::panic::catch_unwind(|| match event {
         HookEvent::PreToolUse => basic_tool_call(dialect, agent.id(), started),
         HookEvent::Stop | HookEvent::UserPromptSubmit => {
@@ -311,32 +306,14 @@ fn run_basic_hook(agent: GuidanceAgent, arguments: &[String], started: Instant) 
     if let Some(intake) = intake.filter(|_| printed)
         && let Some(home) = home_directory()
     {
-        hide_agent_hooks::delivery::confirm_or_owe(&home, &intake, started + GUARD_BUDGET);
+        let _ = hide_agent_hooks::delivery::confirm_or_owe(
+            &home,
+            &intake.ids,
+            intake.session.as_deref(),
+            started + GUARD_BUDGET,
+        );
     }
     let _ = std::panic::catch_unwind(|| report_basic(dialect, event, payload.as_ref(), started));
-}
-
-/// A turn end of the pane's own session confirms what an earlier hook of
-/// that session owes (`hide_agent_hooks::owed`), Grok's continuing one
-/// (`stopHookActive`) included; Grok's from inside a subagent is the
-/// subagent's, not the pane's session's.
-fn settle_basic(dialect: HookDialect, payload: Option<&(Vec<u8>, bool)>, started: Instant) {
-    let Some((payload, truncated)) = payload else {
-        return;
-    };
-    if dialect == HookDialect::Grok
-        && matches!(
-            basic::grok_stop(payload, *truncated),
-            basic::GrokStop::Ignore
-        )
-    {
-        return;
-    }
-    if let Ok(Some(session)) = basic::session(payload, *truncated, dialect)
-        && let Some(home) = home_directory()
-    {
-        hide_agent_hooks::delivery::settle_owed(&home, &session, started + GUARD_BUDGET);
-    }
 }
 
 fn basic_turn_event(
@@ -594,13 +571,6 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         }
         (HookEvent::Stop, None) => {
             report(Change::None, reporter(&conversation), Some(HookTurn::Done));
-            // Its own time after the report, as the report has after the
-            // conversation's read.
-            hide_agent_hooks::delivery::settle_owed(
-                &home,
-                &conversation,
-                Instant::now() + report::REPORT_TIMEOUT,
-            );
         }
         (
             HookEvent::PreToolUse
@@ -674,7 +644,12 @@ fn antigravity_prompt(home: &std::path::Path, conversation: &str, started: Insta
     drop(stdout);
     if let Some(intake) = intake.filter(|intake| !intake.ids.is_empty()) {
         if flushed {
-            hide_agent_hooks::delivery::confirm_or_owe(home, &intake, delivery_deadline);
+            let _ = hide_agent_hooks::delivery::confirm_or_owe(
+                home,
+                &intake.ids,
+                intake.session.as_deref(),
+                delivery_deadline,
+            );
         } else {
             hide_agent_hooks::delivery::diagnose(home, "stdout");
         }
@@ -717,7 +692,12 @@ fn antigravity_tool_gap(home: &std::path::Path, conversation: &str, started: Ins
         return;
     }
     if flushed {
-        hide_agent_hooks::delivery::confirm_or_owe(home, &intake, delivery_deadline);
+        let _ = hide_agent_hooks::delivery::confirm_or_owe(
+            home,
+            &intake.ids,
+            intake.session.as_deref(),
+            delivery_deadline,
+        );
     } else {
         hide_agent_hooks::delivery::diagnose(home, "stdout");
     }
@@ -1197,7 +1177,12 @@ fn run_hook(arguments: &[String], started: Instant) {
         // A count-only answer has no letter to confirm.
         if let Some(intake) = intake.filter(|intake| !intake.ids.is_empty()) {
             if flushed {
-                hide_agent_hooks::delivery::confirm_or_owe(&home, &intake, delivery_deadline);
+                let _ = hide_agent_hooks::delivery::confirm_or_owe(
+                    &home,
+                    &intake.ids,
+                    intake.session.as_deref(),
+                    delivery_deadline,
+                );
             } else {
                 hide_agent_hooks::delivery::diagnose(&home, "stdout");
             }
@@ -1237,21 +1222,6 @@ fn run_hook(arguments: &[String], started: Instant) {
             report::deadline(started, runtime, event)
         }),
     );
-    // The turn end of the pane's own session confirms what its prompt hook
-    // owes (`hide_agent_hooks::owed`); a subagent's is not that session's,
-    // and a session that takes no letters here owes none.
-    if event == HookEvent::Stop
-        && input.subagent.is_none()
-        && prompt_hook
-        && takes_letters
-        && let (Some(runtime), Some(session)) = (runtime, input.session.as_deref())
-    {
-        hide_agent_hooks::delivery::settle_owed(
-            &home,
-            session,
-            report::deadline(started, runtime, event),
-        );
-    }
 }
 
 /// What one event said of its session ([`counters::Said`]), and the session

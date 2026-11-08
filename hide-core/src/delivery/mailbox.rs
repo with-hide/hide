@@ -236,6 +236,7 @@ pub(crate) fn send(
         bell_line: None,
         bell_turn: None,
         handed: false,
+        handed_at_unix_ms: None,
         immediate: false,
         forced: false,
         tool_handovers: 0,
@@ -483,7 +484,7 @@ pub fn apply_in(
             let intake = pull_in(ledger, actor, language, Bundling::of(command))?;
             // Handed over now, whether or not the hook's confirmation, a
             // second process inside its last 400 ms, ever arrives.
-            mark_handed(ledger, &intake);
+            mark_handed(ledger, &intake, now);
             Ok(json!(intake))
         }
         // An agent no bell rings for takes its letters on its next prompt,
@@ -520,6 +521,40 @@ pub fn apply_in(
         | Command::WatchAssign { .. }
         | Command::WatchList => Err("watch_command_required".into()),
     }
+}
+
+/// The letters a pane's hooks handed to `recipient` and could not confirm
+/// in time, which the node of the pane's machine handed over
+/// (`hide_agent_hooks::owed`, `doorbell::Doorbell::settle_owed`): each that
+/// is a letter to `recipient` still awaiting intake is taken in as the
+/// hook's confirmation would have taken it. A record of another session,
+/// which ended in the pane, confirms nothing. Returns the letters confirmed.
+pub(crate) fn confirm_owed(
+    ledger: &mut Ledger,
+    recipient: &Actor,
+    owed: &hide_agent_hooks::owed::Owed,
+    now: u64,
+) -> Vec<String> {
+    let session = Some(owed.session.as_str())
+        .filter(|session| super::valid_session(session))
+        .and_then(crate::engine::tokens::session_digest);
+    if session.is_none() || session != recipient.session {
+        return Vec::new();
+    }
+    let mut confirmed = Vec::new();
+    let mut reports = Vec::new();
+    for letter in ledger.letters.iter_mut().filter(|letter| {
+        letter.recipient.same_identity(recipient)
+            && letter.awaiting_intake()
+            && owed.ids.contains(&letter.id)
+    }) {
+        reports.extend(record_intake(letter, now));
+        confirmed.push(letter.id.clone());
+    }
+    for report in reports {
+        end_report_watches(ledger, Some(report));
+    }
+    confirmed
 }
 
 /// Refuses `ids` unless each names a letter to `actor`, and at most one
@@ -766,7 +801,7 @@ pub(crate) fn gap_pull(
 
 /// Counts the handover of the letters `intake` carries, so that a letter
 /// whose receipt never comes is handed over at most [`TOOL_HANDOVERS`] times.
-pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool {
+pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake, now: u64) -> bool {
     let mut changed = false;
     for letter in ledger
         .letters
@@ -774,6 +809,7 @@ pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool
         .filter(|letter| intake.ids.contains(&letter.id))
     {
         letter.tool_handovers = letter.tool_handovers.saturating_add(1);
+        letter.handed_at_unix_ms = Some(now);
         changed = true;
     }
     changed
@@ -781,13 +817,14 @@ pub(crate) fn record_tool_handover(ledger: &mut Ledger, intake: &Intake) -> bool
 
 /// Marks the pending letters `intake` hands over as handed: no bell is typed
 /// for them again.
-fn mark_handed(ledger: &mut Ledger, intake: &Intake) {
+fn mark_handed(ledger: &mut Ledger, intake: &Intake, now: u64) {
     for letter in ledger
         .letters
         .iter_mut()
         .filter(|letter| letter.state == State::Pending && intake.ids.contains(&letter.id))
     {
         letter.handed = true;
+        letter.handed_at_unix_ms = Some(now);
     }
 }
 
@@ -1576,7 +1613,7 @@ mod tests {
             .unwrap();
             assert_eq!(intake.ids, ids);
             assert!(!intake.context.contains("late-body"));
-            record_tool_handover(&mut ledger, &intake);
+            record_tool_handover(&mut ledger, &intake, 1001);
             apply(
                 &mut ledger,
                 &recipient,
@@ -1925,6 +1962,63 @@ mod tests {
         assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 
+    /// What a pane's node hands over confirms only the letters to its
+    /// recipient's own session that still await intake, as the hook's
+    /// confirmation would: a report ends its watch at once rather than at
+    /// its deadline, and another session's record confirms nothing.
+    #[test]
+    fn owed_confirmations_take_in_only_the_recipients_own_sessions_letters() {
+        let mut ledger = Ledger::default();
+        let mut parent = actor("parent");
+        parent.session = crate::engine::tokens::session_digest("parent-native");
+        let child = actor("child");
+        super::super::watch::start(&mut ledger, &parent, &child, 0).unwrap();
+        let report = send(
+            &mut ledger,
+            &child,
+            &parent,
+            "done",
+            "body-0",
+            "report",
+            None,
+            1,
+        )
+        .unwrap()
+        .id;
+        let to_child = send(
+            &mut ledger,
+            &parent,
+            &child,
+            "ask",
+            "body-1",
+            "request",
+            None,
+            2,
+        )
+        .unwrap()
+        .id;
+        let line = "🦉 child 보고: body-0";
+        ring(&mut ledger, 0, line);
+        assert_eq!(pull_for(&mut ledger, &parent, line).ids, [report.as_str()]);
+        let owed = |session: &str| hide_agent_hooks::owed::Owed {
+            session: session.to_owned(),
+            ids: vec![report.clone(), to_child.clone()],
+        };
+        assert!(confirm_owed(&mut ledger, &parent, &owed("other-native"), 3).is_empty());
+        assert_eq!(ledger.letters[0].state, State::Pending);
+        assert_eq!(
+            confirm_owed(&mut ledger, &parent, &owed("parent-native"), 4),
+            std::slice::from_ref(&report)
+        );
+        assert_eq!(
+            (ledger.letters[0].state, ledger.letters[0].hook_confirmed),
+            (State::Delivered, Some(true))
+        );
+        assert!(ledger.watches.is_empty(), "the report ended its watch");
+        assert_eq!(ledger.letters[1].state, State::Pending, "not the parent's");
+        assert!(confirm_owed(&mut ledger, &parent, &owed("parent-native"), 5).is_empty());
+    }
+
     /// A report a prompt hook handed over ends its parent's watch at its
     /// deadline, as a confirmation would; one no hook handed ends
     /// undelivered and leaves the watch.
@@ -2043,13 +2137,13 @@ mod tests {
             // the next prompt; its batch-mate still goes.
             for _ in 0..TOOL_HANDOVERS {
                 let intake = tool_pull(&ledger, &recipient, Some(1000), 1001).unwrap();
-                assert!(record_tool_handover(&mut ledger, &intake), "{kind}");
+                assert!(record_tool_handover(&mut ledger, &intake, 1001), "{kind}");
             }
             assert_eq!(ledger.letters[1].tool_handovers, TOOL_HANDOVERS);
             assert!(pull(&ledger, Some(1000), 1001).is_empty(), "{kind}: spent");
             assert_eq!(pull(&ledger, Some(1000), 1000 + wait), ids[..1], "{kind}");
             let none = tool_pull(&ledger, &recipient, Some(1000), 1001).unwrap();
-            assert!(!record_tool_handover(&mut ledger, &none), "{kind}");
+            assert!(!record_tool_handover(&mut ledger, &none, 1001), "{kind}");
             // A letter past its deadline is not handed over.
             ledger.letters[1].created_at_unix_ms = 0;
             assert!(pull(&ledger, Some(1000), 61 * 60_000).is_empty(), "{kind}");
