@@ -917,6 +917,11 @@ mod tests {
             ),
         ];
         for (what, make) in variants {
+            // Windows made no links, so its marker lists no project to check
+            // an added line against; the guide's own order and form still are.
+            if cfg!(windows) && what == "an unlisted project" {
+                continue;
+            }
             let dir = tempfile::tempdir().unwrap();
             let home = old_home(dir.path(), &["alpha", "beta"]);
             std::fs::write(home.join(AGENTS_FILE), make(dir.path())).unwrap();
