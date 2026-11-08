@@ -11,8 +11,7 @@
 // (`later`).
 
 import type { ProjectTasksScope } from "../../agentScope";
-import type { AgentRow, ChangesSnapshot, EditorDocumentSnapshot, EditorTabSnapshot, LayoutNode, PaneHeader, RecentClosed, ViewDisplaySnapshot } from "../../snapshot";
-import type { DirectoryList } from "../../store";
+import type { AgentRow, EditorDocumentSnapshot, EditorTabSnapshot, LayoutNode, PaneHeader, RecentClosed, ViewDisplaySnapshot } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
 import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, withLineage, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab } from "./kit";
 
@@ -40,10 +39,9 @@ const paneOf = (model: AgentsModel, role: Role) => model.panes.find((pane) => ro
  * Where the script stands: 0 before the learner's words to the lead, 1 the
  * reviewer started, 2 the docs agent finished, 3 the reviewer asking, 4 the
  * learner's answer given and the reviewer at work, 5 the reviewer finished with
- * a View to look at, 6 the View looked at, 7 the lead given a job of its own
- * and its child started for part of it.
+ * a View to look at, 6 the View looked at.
  */
-export type AgentsStage = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type AgentsStage = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 /** How long each of the agents' own turns takes before the next stage, by the stage it ends. */
 export const BEATS: Partial<Record<AgentsStage, number>> = { 1: 2200, 2: 2200, 4: 2800 };
@@ -75,13 +73,19 @@ export type AgentsModel = DeskModel & {
   viewed: boolean;
   calls: number;
   /** The Explorer shown beside the lane, and its open folders. */
-  tool: "explorer" | null;
-  expanded: string[];
+  /** Whether the lead was given a job and started its child for part of it, and when. */
+  kid: boolean;
+  kidAt: number;
 };
 
 /** Whether the keyboard is in the pane of the reviewer. */
 export const inReviewer = (model: AgentsModel) => paneOf(model, "rev")?.id === focusedPane(model);
-export const showsExplorer = (model: AgentsModel) => model.tool === "explorer";
+/** The panes standing in the lead's tab: the learner's own splits count here. */
+export const leadTabPanes = (model: AgentsModel) => {
+  const lead = paneOf(model, "lead");
+  const tab = lead && model.tabs.find((row) => panesOf(row.root).includes(lead.id));
+  return tab ? panesOf(tab.root).length : 0;
+};
 /** Whether the last reopen brought the closed pane back as it was: in its tab, with its agent and its title. */
 export function reopenedAsClosed(model: AgentsModel): boolean {
   const back = model.reopened;
@@ -109,13 +113,13 @@ function initial(): AgentsModel {
     groups: [{ id: null, name: null, tabs: ["t1", "t2"] }],
     selectedGroup: null, activeTab: "t1", nextId: 4, operations: [],
     stage: 0, times: { 0: Date.now() }, draft: "", draftIn: null, said: [], answer: null,
-    recent: [LEAD, DOCS], closed: [], reopened: null, looked: false, switched: false, viewed: false, calls: 0, tool: null, expanded: [],
+    recent: [LEAD, DOCS], closed: [], reopened: null, looked: false, switched: false, viewed: false, calls: 0, kid: false, kidAt: 0,
   };
 }
 
 /** The reviewer the lead starts: an agent of its own in a pane beside the lead, as `hide agent spawn --beside` opens one; the keyboard stays where it was. */
 function startReviewer(model: AgentsModel): AgentsModel {
-  const rev: PracticePane = { id: REV, title: TITLE.rev, agent: placeholder("rev", REV, "codex", false) };
+  const rev: PracticePane = { id: REV, title: TITLE.rev, agent: placeholder("rev", REV, "claude", false) };
   return {
     ...model,
     panes: [...model.panes, rev],
@@ -222,7 +226,8 @@ function submit(model: AgentsModel, paneId: string): AgentsModel {
   if (!text) return cleared;
   const role = roleOf(model.panes.find((pane) => pane.id === paneId)!);
   if (role === "lead" && model.stage === 0) return to({ ...startReviewer(cleared), said: [...model.said, text] }, 1);
-  if (role === "lead" && model.stage === 6) return to({ ...startKid(cleared), said: [...model.said, text] }, 7);
+  // A job given to the lead once the reviewer stands starts its child, the one time.
+  if (role === "lead" && model.stage >= 1 && !model.kid) return { ...startKid(cleared), said: [...model.said, text], kid: true, kidAt: Date.now() };
   if (role === "rev" && model.stage === 3) return to({ ...cleared, answer: text }, 4);
   return role === "lead" ? { ...cleared, said: [...model.said, text] } : cleared;
 }
@@ -268,30 +273,18 @@ function apply(model: AgentsModel, event: CoreEvent): AgentsModel | null {
     }
     case "close_pane":
       return closePane(model, String(p.pane_id), p.confirmed === true);
-    // ⌘W closes the focused pane of the tab it names, the tab with it when that was its last.
+    // ⌘W closes the tab holding the keyboard; a practice tab holds one pane, so that pane closes with it.
     case "close_tab": {
-      const tab = model.tabs.find((row) => row.id === p.tab_id);
-      return tab ? closePane(model, tab.focused, p.confirmed === true) : null;
+      const panes = panesOf(model.tabs.find((tab) => tab.id === p.tab_id)?.root ?? { type: "pane", pane_id: "" });
+      return panes.length === 1 ? closePane(model, panes[0]!, p.confirmed === true) : null;
     }
     case "reopen_closed": {
       const back = reopen(model);
       return back && visited(back);
     }
-    // The Explorer shown or taken down, or the lane put away with what it showed.
-    case "workspace_view": {
-      let tool = model.tool;
-      if ("tool" in p) tool = p.tool === "explorer" ? "explorer" : null;
-      if (typeof p.reveal === "string") tool = "explorer";
-      if (p.open === false) tool = null;
-      const viewed = p.open === false ? false : model.viewed;
-      return tool === model.tool && viewed === model.viewed ? null : { ...model, tool, viewed };
-    }
-    // The Explorer folds a folder through the core's ui state.
-    case "ui_state_update": {
-      if (!Array.isArray(p.expanded_paths)) return null;
-      const expanded = p.expanded_paths.filter((path): path is string => typeof path === "string");
-      return expanded.join("\n") === model.expanded.join("\n") ? null : { ...model, expanded };
-    }
+    // The lane put away takes the file it showed with it.
+    case "workspace_view":
+      return p.open === false && model.viewed ? { ...model, viewed: false } : null;
     default: {
       const desk = applyDesk(model, event);
       return desk && visited({ ...model, ...desk });
@@ -309,7 +302,7 @@ function rowOf(model: AgentsModel, role: Role, paneId: string, nowMs: number): A
   const base = { pane_id: paneId, identity_label: TITLE[role], session_id: SESSION[role] };
   if (role === "lead") {
     const lead = agent({ ...base, agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "3m", requires_close_confirmation: true, state: rowState("working", true, nowMs - 3 * MINUTE), request: request("lead", nowMs - 3 * MINUTE) });
-    if (stage < 7) return lead;
+    if (!model.kid) return lead;
     // With a child at work the lead waits on it: the line says `자식 기다림 · 자식 1개 작업 중`, and the row folds the child under it (status-model.md, A quiet row that waits).
     const line = { text: "", mode: "waiting" as const, tone: { kind: "working" as const, read: true } };
     return { ...lead, mark: "waiting", status_code: "waiting", wait: "children", lineage_child_pane_ids: [KID], lineage_collapsed: true, direct_child_counts: KID_COUNTS, descendant_counts: KID_COUNTS, state: { ...lead.state, waits_on_children: true, line, subtree: "waiting" } };
@@ -325,7 +318,7 @@ function rowOf(model: AgentsModel, role: Role, paneId: string, nowMs: number): A
       : agent({ ...base, agent_kind: "codex", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "8m", requires_close_confirmation: true, state: rowState("working", true, at), request: request("docs", at) });
   }
   const at = since(model, 1);
-  const common = { ...base, agent_kind: "codex", request: request("rev", at) };
+  const common = { ...base, agent_kind: "claude", request: request("rev", at) };
   if (stage === 3) {
     const what = "Run the full test suite?";
     return agent({ ...common, group: "needs_you", mark: "turn", status_code: "question", demand: "question", activity: "idle", unread: true, elapsed: "2s", state: rowState("asking", true, since(model, 3), { ask: { verb: "answer", what, more: 0 }, line: { text: what, mode: "request", tone: { kind: "warning", read: false } } }) });
@@ -374,43 +367,8 @@ function tasks(model: AgentsModel, nowMs: number): ProjectTasksScope {
   const stage = model.stage;
   const rev = stage === 3 ? card("rev", "needs_you", 0, model.looked ? { read: true } : {}) : stage === 5 ? card("rev", "needs_you", 0) : stage === 6 ? card("rev", "resting", 0) : card("rev", "working", 1);
   const docs = card("docs", stage >= 2 ? "done" : "working", stage >= 2 ? 1 : 8);
-  const cards = [...rev.filter((one) => one.state === "needs_you"), ...card("lead", "working", 3).map((one) => (model.stage >= 7 ? { ...one, members: [...one.members, KID] } : one)), ...rev.filter((one) => one.state !== "needs_you"), ...docs];
+  const cards = [...rev.filter((one) => one.state === "needs_you"), ...card("lead", "working", 3).map((one) => (model.kid ? { ...one, members: [...one.members, KID] } : one)), ...rev.filter((one) => one.state !== "needs_you"), ...docs];
   return { cards, needs_you: cards.filter((one) => one.state === "needs_you").length, recency: at(0) };
-}
-
-// --- The checkout's files ------------------------------------------------------------------
-
-/** Every file of the checkout, relative to it. */
-const FILES = ["README.md", "package.json", "docs/api.md", "src/payment/checkout.ts", "src/payment/retry.ts", "src/payment/timeout.ts", "test/checkout.test.ts", REVIEW_FILE];
-
-/** Each folder's listing as the core answers it, folders first. */
-function listings(): Record<string, DirectoryList> {
-  const folders = new Set([""]);
-  for (const file of FILES) file.split("/").slice(0, -1).forEach((_, at, parts) => folders.add(parts.slice(0, at + 1).join("/")));
-  return Object.fromEntries([...folders].map((folder) => {
-    const path = folder ? `${ROOT}/${folder}` : ROOT;
-    const depth = folder ? folder.split("/").length + 1 : 1;
-    const inside = (name: string) => (folder ? name.startsWith(`${folder}/`) : true);
-    const subfolders = [...folders].filter((one) => one && inside(one) && one.split("/").length === depth);
-    const files = FILES.filter((file) => inside(file) && file.split("/").length === depth);
-    const entries = [...subfolders.sort().map((one) => ({ name: one.split("/").at(-1)!, path: `${ROOT}/${one}`, is_directory: true })), ...files.sort().map((one) => ({ name: one.split("/").at(-1)!, path: `${ROOT}/${one}`, is_directory: false }))];
-    return [path, { kind: "file_list" as const, root_path: path, entries, truncated: false }];
-  }));
-}
-
-/** What the lead has changed so far, uncommitted. */
-const CHANGED = [
-  { file: "src/payment/checkout.ts", added: 12, removed: 3, fresh: false },
-  { file: "src/payment/timeout.ts", added: 9, removed: 0, fresh: true },
-  { file: "test/checkout.test.ts", added: 18, removed: 0, fresh: false },
-];
-
-function changes(): ChangesSnapshot {
-  return {
-    root_path: ROOT,
-    entries: CHANGED.map((one) => ({ path: `${ROOT}/${one.file}`, relative_path: one.file, previous_relative_path: null, status: one.fresh ? "untracked" as const : "modified" as const, added_lines: one.added, removed_lines: one.removed })),
-    committed: [], base_branch: "main", selected_path: null, selected_committed: false, diff: null, unavailable_reason: null,
-  };
 }
 
 const EDITOR_TAB = "file1";
@@ -425,7 +383,7 @@ const NOTES = [
 
 /** The lane as the core draws it: the Explorer beside the View, and the reviewer's notes as the View's one display. */
 function viewOf(model: AgentsModel, view: NonNullable<WorldSnapshot["rest"]["workspace_view"]>): NonNullable<WorldSnapshot["rest"]["workspace_view"]> {
-  const lane = { ...view, open: model.tool !== null || model.viewed, tool: model.tool, lane_called: model.calls, lane_calls: model.calls, lane_called_side: "view" as const };
+  const lane = { ...view, open: model.viewed, tool: null, lane_called: model.calls, lane_calls: model.calls, lane_called_side: "view" as const };
   if (!model.viewed) return lane;
   const display: ViewDisplaySnapshot = { id: "view1", tab_id: EDITOR_TAB, path: REVIEW_PATH, label: REVIEW_FILE, kind: "file", committed: null, preview: true, state: "open", reason: null };
   return { ...lane, documents: true, layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } } };
@@ -459,19 +417,19 @@ function snapshot(model: AgentsModel, nowMs: number): WorldSnapshot {
   const navigator = drawn.rest.navigator!;
   const scope = { ...navigator.devices![0]!.agent_scope, tasks: tasks(model, nowMs) };
   // The lead's child is drawn under it in the lists, as the core draws a delegated child.
-  const lineage = model.stage >= 7 ? withLineage(drawn.rest, LEAD, [KID]) : drawn.rest;
+  const lineage = model.kid ? withLineage(drawn.rest, LEAD, [KID]) : drawn.rest;
   const kids = lineage.navigator!;
   return {
     ...drawn,
     rest: {
       ...lineage,
-      navigator: { ...kids, devices: kids.devices!.map((device) => ({ ...device, agent_scope: { ...device.agent_scope, tasks: scope.tasks } })), changes_root_path: ROOT },
-      ui_state: { ...lineage.ui_state, sidebar_lens: "tasks", recent_pane_ids: model.recent, expanded_paths: model.expanded },
+      navigator: { ...kids, devices: kids.devices!.map((device) => ({ ...device, agent_scope: { ...device.agent_scope, tasks: scope.tasks } })) },
+      ui_state: { ...lineage.ui_state, sidebar_lens: "tasks", recent_pane_ids: model.recent },
       workspace_view: viewOf(model, lineage.workspace_view!),
       recent_closed: recentClosed(model),
       terminal: { headers },
     },
-    frames: { listings: listings(), changes: changes(), ...opened(model) },
+    frames: { ...opened(model) },
   };
 }
 
@@ -495,7 +453,7 @@ function leadScreen(model: AgentsModel, cols: number): string {
   ];
   if (model.stage >= 1) {
     rows.push(...said(model.said[0]!), `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --beside --name reviewer …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.rev} beside this pane`);
-    model.said.slice(1).forEach((later, at) => rows.push(...said(later), ...(model.stage >= 7 && at === 0 ? [`${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --parent here --name export …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.kid}, waiting for it`] : [`${CLAUDE}●${RESET} Noted.`])));
+    model.said.slice(1).forEach((later, at) => rows.push(...said(later), ...(model.kid && at === 0 ? [`${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide agent spawn --parent here --name export …)`, `  ${DIM}⎿${RESET}  Started ${TITLE.kid}, waiting for it`] : [`${CLAUDE}●${RESET} Noted.`])));
   }
   rows.push("", `${CLAUDE}✻ ${DIM}Working… (esc to interrupt)${RESET}`, "", rule(cols), `${DIM}>${RESET} ${model.draftIn === paneOf(model, "lead")?.id ? model.draft : ""}`, rule(cols));
   return rows.join("\r\n");
@@ -510,7 +468,7 @@ function docsScreen(model: AgentsModel): string {
 }
 
 function revScreen(model: AgentsModel, cols: number): string {
-  const rows = [`${BOLD}>_ Codex${RESET}`, "", `${CODEX}›${RESET} ${TITLE.rev}`, "", `${DIM}•${RESET} ${BOLD}Read${RESET} src/payment/timeout.ts`, `  ${DIM}└${RESET} the timeout now comes from settings`];
+  const rows = [`${CLAUDE}✻${RESET} ${BOLD}Claude Code${RESET}`, "", `${CODEX}›${RESET} ${TITLE.rev}`, "", `${DIM}•${RESET} ${BOLD}Read${RESET} src/payment/timeout.ts`, `  ${DIM}└${RESET} the timeout now comes from settings`];
   if (model.stage >= 3) rows.push("", `${DIM}•${RESET} ${BOLD}Run the full test suite?${RESET}`, `  ${CODEX}› 1. Yes${RESET}   2. No`);
   if (model.stage >= 4) rows.push(...said(model.answer ?? ""), `${DIM}•${RESET} ${BOLD}Ran${RESET} pnpm test`, `  ${DIM}└${RESET} ${GREEN}41 passed${RESET}`);
   if (model.stage >= 5) rows.push("", `${DIM}•${RESET} ${BOLD}Ran${RESET} hide file open ${REVIEW_FILE}`, `  ${DIM}└${RESET} opened for you to look at`, "", `${DIM}•${RESET} The review notes are ready.`);
@@ -528,9 +486,11 @@ export const AGENTS_WORLD: PracticeWorld<AgentsModel> = {
   snapshot,
   prompt: (model, paneId) => (model.draftIn === paneId ? model.draft : ""),
   // The agents' own turns end by themselves, as agents at work would.
+  // The reviewer waits for the learner to have split a pane and handed the lead a job, so nothing arrives mid-lesson.
   later: (model) => {
     const wait = BEATS[model.stage];
-    return wait === undefined ? null : { at: since(model, model.stage) + wait, event: { kind: BEAT, payload: { stage: model.stage + 1 } } };
+    if (wait === undefined || (model.stage === 1 && !model.kid)) return null;
+    return { at: Math.max(since(model, model.stage), model.kidAt) + wait, event: { kind: BEAT, payload: { stage: model.stage + 1 } } };
   },
   panes: (model) => model.panes.map((pane) => pane.id),
   screen: (model, paneId, cols) => {

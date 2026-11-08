@@ -575,7 +575,6 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : field ? (palette && filled ? null : say("practice.via.typeField"))
     : step.command && step.gesture && "click" in step.gesture ? <WithKeys id={step.command} text={say("practice.via.buttonOrKey", { keys: KEYS_MARK })} />
     : step.command ? <WithKeys id={step.command} text={say("practice.via.key", { keys: KEYS_MARK })} />
-    : step.shows && chordOf(step.shows) ? <WithKeys id={step.shows} text={say("practice.via.shown", { keys: KEYS_MARK })} />
     : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
     : step.gesture && "type" in step.gesture ? say("practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu")

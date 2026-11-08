@@ -15,7 +15,9 @@ const cards = (model: AgentsModel) => AGENTS_WORLD.snapshot(model, Date.now()).r
 const focus = (pane_id: string, extra: Record<string, unknown> = {}): CoreEvent => ({ kind: "focus_pane", payload: { pane_id, origin: "operator", ...extra } });
 
 const started = () => apply(AGENTS_WORLD.initial(), typedInto(LEAD, "start a reviewer\r"));
-const asking = () => beat(beat(started()));
+/** The lead given its job as well, which lets the reviewer's own turns go on. */
+const handed = () => apply(started(), typedInto(LEAD, "Start the export button work\r"));
+const asking = () => beat(beat(handed()));
 const answered = () => apply(apply(asking(), focus(REV)), typedInto(REV, "yes\r"));
 const looking = () => beat(answered());
 
@@ -46,7 +48,7 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
   });
 
   it("brings a closed reviewer back with its conversation and its View still waiting", () => {
-    const closed = apply(looking(), { kind: "close_tab", payload: { tab_id: "t1" } });
+    const closed = apply(looking(), { kind: "close_pane", payload: { pane_id: REV } });
     expect(doneAt("close", closed)).toBe(true);
     expect(AGENTS_WORLD.panes(closed)).not.toContain(REV);
     const back = apply(closed, { kind: "reopen_closed", payload: {} });
@@ -68,21 +70,15 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
   });
 
   it("goes back to the lead after the reviewer came back", () => {
-    const back = apply(apply(looking(), { kind: "close_tab", payload: { tab_id: "t1" } }), { kind: "reopen_closed", payload: {} });
+    const back = apply(apply(looking(), { kind: "close_pane", payload: { pane_id: REV } }), { kind: "reopen_closed", payload: {} });
     expect(doneAt("switch", back)).toBe(false);
     expect(doneAt("switch", apply(back, focus(LEAD)))).toBe(true);
   });
 
-  it("marks the files the lead changed in the Explorer", () => {
-    const frames = AGENTS_WORLD.snapshot(AGENTS_WORLD.initial(), Date.now()).frames!;
-    expect(frames.changes!.entries.map((entry) => entry.relative_path)).toContain("src/payment/timeout.ts");
-    expect(doneAt("changes", apply(AGENTS_WORLD.initial(), { kind: "workspace_view", payload: { tool: "explorer" } }))).toBe(true);
-  });
   it("starts a child under the lead when the lead is given a job, and the lead then waits on it", () => {
-    const seen = apply(looking(), focus(REV, { reveal_unseen: true }));
-    // Words to the lead before the reviewer was looked at start nothing.
-    expect(AGENTS_WORLD.panes(apply(looking(), typedInto(LEAD, "more\r")))).not.toContain(KID);
-    const model = apply(seen, typedInto(LEAD, "Add the export button\r"));
+    // Before the reviewer stands, words to the lead start the reviewer, not a child.
+    expect(started().kid).toBe(false);
+    const model = handed();
     expect(doneAt("job", model)).toBe(true);
     expect(AGENTS_WORLD.panes(model)).toContain(KID);
     const lead = row(model, LEAD);
@@ -90,5 +86,17 @@ describe("the several-agents flow's script (UI_BEHAVIOR, Practice window)", () =
     expect(lead.lineage_child_pane_ids).toEqual([KID]);
     expect(row(model, KID)).toMatchObject({ delegated: true, lineage_parent_pane_id: LEAD });
     expect(cards(model).find((card) => card.root === LEAD)!.members).toEqual([LEAD, KID]);
+    // The reviewer's script waits for the job, so nothing arrives while the learner splits and hands the lead its job.
+    expect(AGENTS_WORLD.later!(started())).toBeNull();
+    expect(AGENTS_WORLD.later!(model)).not.toBeNull();
+  });
+
+  it("opens the reviewer beside the lead and counts the learner's own splits", () => {
+    const model = started();
+    expect(doneAt("right", model)).toBe(false);
+    const right = apply(model, { kind: "create_pane", payload: { tab_id: "t1", direction: "right" } });
+    expect(doneAt("right", right)).toBe(true);
+    expect(doneAt("down", right)).toBe(false);
+    expect(doneAt("down", apply(right, { kind: "create_pane", payload: { tab_id: "t1", direction: "down" } }))).toBe(true);
   });
 });
