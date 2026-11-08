@@ -147,7 +147,9 @@ fn upgrade(fixture: &Path) -> Vec<String> {
     let before = json(&settings_path);
     let operator: Vec<String> = commands(&before)
         .into_iter()
-        .filter(|command| !command.contains(hide_agent_hooks::HELPER_BINARY_NAME))
+        // Hide's name the release's helper in that account; the helper's file
+        // name differs by system, the account does not.
+        .filter(|command| !command.contains(RELEASED_HOME))
         .collect();
     for (install, pieces) in &installs {
         if !pieces.iter().any(|piece| piece == "claude_code_hook") {
