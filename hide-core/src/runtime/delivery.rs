@@ -1552,16 +1552,34 @@ impl Runtime {
         }
         // A spawn of Desk's past its places waits in Desk's queue (B21).
         let queued = self.desk_spawn_admission(&actor, &command)?;
+        // A send under an intent its sender already used is a retry only of
+        // the same letter; another recipient, kind or body is refused here,
+        // before a target is looked for.
         let repeated = match &command {
-            Command::Send { intent, .. } => self.delivery_ledger.as_ref().is_ok_and(|ledger| {
-                crate::delivery::mailbox::existing_intent(
+            Command::Send {
+                target,
+                intent,
+                kind,
+                body,
+                ..
+            } => match self.delivery_ledger.as_ref() {
+                Ok(ledger) => crate::delivery::mailbox::retried_send(
                     ledger,
                     &actor,
                     intent,
+                    kind,
+                    body,
+                    |stored| {
+                        qualify(target) == stored.pane_id
+                            || *target == stored.name
+                            || crate::coordination::resolve_registered(ledger, target)
+                                .is_some_and(|registered| registered.same_identity(stored))
+                    },
                     unix_milliseconds(),
-                )
-                .is_some()
-            }),
+                )?
+                .is_some(),
+                Err(_) => false,
+            },
             _ => false,
         };
         let target = match &command {

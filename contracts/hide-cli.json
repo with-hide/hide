@@ -4339,7 +4339,8 @@
             "refusals": [
                 "composer_not_empty",
                 "composer_unconfirmed",
-                "force_target_asleep"
+                "force_target_asleep",
+                "intent_conflict"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5720,7 +5721,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b194bf360ee8e74ff079638c028552c2e216ec75cee8e3389cbea962dca71a0f",
+    "digest": "sha256:ecaf4eebd54411fa5c69b77b120697a8fe4edd7443bc75cde097bb94cadc27fc",
     "envelopes": {
         "agent": {
             "answer": "value",

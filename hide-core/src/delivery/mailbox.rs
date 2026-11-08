@@ -133,6 +133,40 @@ pub(crate) fn existing_intent<'a>(
     })
 }
 
+/// The letter a send under `intent` retries, if its sender already holds one.
+///
+/// A retry is the same letter again: the recipient (`to_recipient`, which
+/// each caller words in the terms it holds), the kind and the body are those
+/// the stored letter has. A report's stored body also carries the list of
+/// Views its sender opened (`list_opened_views`), added after the sender
+/// wrote it, so a report is the same letter when its stored body begins with
+/// the body sent. Another letter under the same intent is `intent_conflict`,
+/// refused before anything is stored, so a letter is never answered with an
+/// earlier one that went elsewhere.
+pub(crate) fn retried_send<'a>(
+    ledger: &'a Ledger,
+    sender: &Actor,
+    intent: &str,
+    kind: &str,
+    body: &str,
+    to_recipient: impl FnOnce(&Actor) -> bool,
+    now: u64,
+) -> Result<Option<&'a Letter>, String> {
+    let Some(letter) = existing_intent(ledger, sender, intent, now) else {
+        return Ok(None);
+    };
+    let same_body = if kind == "report" {
+        letter.body.starts_with(body)
+    } else {
+        letter.body == body
+    };
+    if letter.kind == kind && same_body && to_recipient(&letter.recipient) {
+        Ok(Some(letter))
+    } else {
+        Err("intent_conflict".into())
+    }
+}
+
 /// Where the finished letter that finished first stands: the one a full
 /// ledger drops to make room. An open letter is never a candidate.
 fn oldest_finished(ledger: &Ledger) -> Option<usize> {
@@ -180,7 +214,15 @@ pub(crate) fn send(
     ) {
         return Err("invalid_kind".into());
     }
-    if let Some(letter) = existing_intent(ledger, sender, intent, now) {
+    if let Some(letter) = retried_send(
+        ledger,
+        sender,
+        intent,
+        kind,
+        body,
+        |stored| stored.same_identity(recipient),
+        now,
+    )? {
         return Ok(letter.clone());
     }
     let open = ledger.letters.iter().filter(|letter| letter.open()).count();
@@ -288,10 +330,30 @@ pub fn apply_in(
     also_reads: &[Exchange],
 ) -> Result<Value, String> {
     actor.require_native_identity()?;
-    if let Command::Send { intent, .. } | Command::Reply { intent, .. } = command
-        && let Some(letter) = existing_intent(ledger, actor, intent, now)
-    {
-        return Ok(json!(letter));
+    match command {
+        // The runtime judged a repeated send's recipient from the key it
+        // named and hands no target; a target handed here is compared whole.
+        Command::Send {
+            intent, kind, body, ..
+        } => {
+            if let Some(letter) = retried_send(
+                ledger,
+                actor,
+                intent,
+                kind,
+                body,
+                |stored| target.is_none_or(|target| target.same_identity(stored)),
+                now,
+            )? {
+                return Ok(json!(letter));
+            }
+        }
+        Command::Reply { intent, .. } => {
+            if let Some(letter) = existing_intent(ledger, actor, intent, now) {
+                return Ok(json!(letter));
+            }
+        }
+        _ => {}
     }
     match command {
         Command::Send {
@@ -1358,18 +1420,9 @@ mod tests {
         .unwrap();
         let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
         assert_eq!(
-            send(
-                &mut restored,
-                &a,
-                &b,
-                "intent",
-                "different",
-                "request",
-                None,
-                4
-            )
-            .unwrap()
-            .id,
+            send(&mut restored, &a, &b, "intent", "body", "request", None, 4)
+                .unwrap()
+                .id,
             letter.id
         );
         assert_eq!(restored.letters.len(), 1);
@@ -1449,7 +1502,7 @@ mod tests {
             &Command::Send {
                 target: "gone".into(),
                 intent: "first".into(),
-                body: "changed".into(),
+                body: "work".into(),
                 kind: "request".into(),
                 now: false,
                 force: false,
@@ -1495,6 +1548,75 @@ mod tests {
         assert_eq!(ledger.letters.len(), 3);
     }
 
+    fn send_command(intent: &str, kind: &str, body: &str) -> Command {
+        Command::Send {
+            target: "b".into(),
+            intent: intent.into(),
+            body: body.into(),
+            kind: kind.into(),
+            now: false,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn an_intent_reused_for_another_recipient_is_refused_not_answered_with_the_first_letter() {
+        let mut ledger = Ledger::default();
+        let (a, b, c) = (actor("a"), actor("b"), actor("c"));
+        let first = send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 1).unwrap();
+        // The same letter again is a retry.
+        let retry = send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 2).unwrap();
+        assert_eq!(retry.id, first.id);
+        // Another recipient is not, whether it arrives as a target or as a key.
+        let elsewhere = send(&mut ledger, &a, &c, "once", "1/2", "progress", None, 3);
+        assert_eq!(elsewhere, Err("intent_conflict".into()));
+        let command = send_command("once", "progress", "1/2");
+        let applied = apply(&mut ledger, &a, Some(&c), &command, 4);
+        assert_eq!(applied, Err("intent_conflict".into()));
+        assert_eq!(ledger.letters.len(), 1);
+    }
+
+    #[test]
+    fn an_intent_reused_with_another_kind_or_body_is_refused() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (actor("a"), actor("b"));
+        send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 1).unwrap();
+        for (kind, body) in [("progress", "2/2"), ("request", "1/2")] {
+            let command = send_command("once", kind, body);
+            assert_eq!(
+                apply(&mut ledger, &a, None, &command, 2),
+                Err("intent_conflict".into()),
+                "{kind} {body}"
+            );
+        }
+        assert_eq!(ledger.letters.len(), 1);
+    }
+
+    #[test]
+    fn a_report_retry_matches_the_stored_report_that_gained_a_views_list() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (actor("a"), actor("b"));
+        let listed = "done\n\nViews this agent opened (read one):\n- v1 page (seen)";
+        let first = send(&mut ledger, &a, &b, "report", listed, "report", None, 1).unwrap();
+        let retry = apply(
+            &mut ledger,
+            &a,
+            None,
+            &send_command("report", "report", "done"),
+            2,
+        )
+        .unwrap();
+        assert_eq!(retry["id"], first.id.as_str());
+        let other = apply(
+            &mut ledger,
+            &a,
+            None,
+            &send_command("report", "report", "something else"),
+            3,
+        );
+        assert_eq!(other, Err("intent_conflict".into()));
+    }
+
     fn pending_for(ledger: &mut Ledger, recipient: &Actor, count: usize) -> Vec<String> {
         (0..count)
             .map(|index| {
@@ -1502,7 +1624,7 @@ mod tests {
                     ledger,
                     &actor(&format!("sender-{index}")),
                     recipient,
-                    &format!("intent-{index}"),
+                    &format!("intent-{}-{index}", recipient.pane_id),
                     &format!("body-{index}"),
                     "request",
                     None,
@@ -2390,7 +2512,7 @@ mod tests {
                 &child,
                 &parent,
                 "report",
-                "changed",
+                "done",
                 "report",
                 None,
                 3
@@ -2513,7 +2635,7 @@ mod tests {
                 &child,
                 &parent,
                 "report",
-                "different",
+                "done",
                 "report",
                 None,
                 7
@@ -2982,8 +3104,8 @@ mod tests {
                 &local,
                 &remote,
                 "remote",
-                "changed",
-                "report",
+                "body",
+                "block",
                 None,
                 3
             )

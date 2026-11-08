@@ -69,8 +69,11 @@ The sender reads it in the answer of `hide request show` (and in every other ans
 A letter that ended its wait without an answer no longer counts against the open-letter limit, and the recipient can still reply to it by the same rules.
 It is still a retained letter: it leaves the ledger one day after its wait ended, or earlier when the 5000-letter total is full and it is the finished letter that finished first (see [Persistence, clocks and limits](#persistence-clocks-and-limits)).
 Acknowledgement is the recipient's receipt for every agent kind: only the recipient's own pane and native session can acknowledge (`hide request ack` from a pane-bound caller is the only path, with no operator or helper path), so it records `hook_confirmed: true` and ends a matching report watch (a `progress` letter ends none); a reply separately closes the original request's answer wait.
-Retry the same intent after an interrupted call: the same sender identity and intent return the existing letter during its retention period, including after cancellation or delivery, for one day after the letter finished or until a full ledger drops it first; a send with the same intent after that creates a new letter.
-Use a new intent for a new letter.
+Retry the same intent after an interrupted call: the same sender identity, intent, recipient, kind and body return the existing letter during its retention period, including after cancellation or delivery, for one day after the letter finished or until a full ledger drops it first; a send with the same intent after that creates a new letter.
+The same intent with another recipient, kind or body is refused `intent_conflict` with nothing stored, as a spawn is when its intent is reused with another mode or machine, so a letter is never answered with an earlier one that went elsewhere; the recipient is matched by the name, registration id or pane id the send names, so a retry still converges after the recipient left.
+A report is the same letter when the body sent is the beginning of the stored one, which gained the list of Views its sender opened.
+A reply's intent still returns the reply it was first used for, whatever body is sent.
+Use a new intent for a new letter, including the same text for another recipient.
 The envelope identifies the sender and letter kind; it is not a session-level authority or anti-forgery proof.
 The current first-line format is `Hide letter <id> from <name> (<agent>) [<kind>]`, with independent writer and transcript-reader examples in [delivery-envelope.json](../contracts/delivery-envelope.json).
 
