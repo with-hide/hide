@@ -8,11 +8,15 @@
 //! `definition::builtins`, which compiles the built-in files' screen rules
 //! once, on first use, behind a `LazyLock`, and keeps them for the process.
 
+pub mod account;
+pub use account::{
+    Account, AccountKey, AccountRef, LaunchTarget, NodeEnv, Os, Place, Profile, ProfileId, Refusal,
+    default_folder, resolve,
+};
 pub mod composer;
 mod declarations;
 pub mod definition;
-mod home;
-pub use home::{HomeScope, HomeUnresolved, antigravity_app_data};
+pub use definition::AccountPath;
 mod journey;
 pub mod usage;
 pub use declarations::ADAPTERS;
@@ -925,16 +929,15 @@ pub struct AgentAdapter {
     pub key: AgentId,
     /// The agent's identity is its built-in definition file's
     /// (`agents/<id>.toml`, [`definition::Builtin`]): `id`, `label` (the
-    /// file's `name`), `aliases`, `executables` and `folder` (its `home`)
-    /// are that file's values, never written here.
+    /// file's `name`), `aliases` and `executables` are that file's values,
+    /// never written here, and so are its account's folders (`[account]`,
+    /// read through [`resolve`]).
     pub id: &'static str,
     pub label: &'static str,
     pub picker_label: &'static str,
     pub sidebar_label: Option<&'static str>,
     pub aliases: &'static [&'static str],
     pub executables: &'static [&'static str],
-    /// The agent's own folder under the account's home, as its parts.
-    pub folder: &'static [&'static str],
     /// Every supported agent declares one; only a retired agent, for which
     /// Hide installs nothing, has none.
     pub minimum: Option<MinimumVersion>,
@@ -943,11 +946,6 @@ pub struct AgentAdapter {
     pub guidance: Capability<ContextRoute>,
     /// The agent kind the engine reports the agent's panes as.
     pub engine_kind: &'static str,
-    /// The variable that moves the agent's own folder away from
-    /// [`AgentAdapter::folder`] when the operator runs it (Codex's
-    /// `CODEX_HOME`), read only through [`AgentAdapter::home`]; `None` for an
-    /// agent whose folder Hide reads at its default place alone.
-    pub home_variable: Option<&'static str>,
     /// How Hide AI runs the agent for background features, or why it does
     /// not: `hide-ai`'s registry lists exactly the agents that declare one.
     pub ai: Capability<AiProvider>,

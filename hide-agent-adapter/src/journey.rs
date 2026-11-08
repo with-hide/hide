@@ -11,7 +11,7 @@ pub struct JourneyAdapter {
     pub engine_kind: &'static str,
     /// The agent's own folder in its HOME, whose presence tells the kit the
     /// agent is set up there, as a CLI that has run once leaves it.
-    pub home_folder: &'static [&'static str],
+    pub home_folder: Vec<String>,
     /// The words that give a start its first prompt, `{}` replaced by the
     /// prompt (`LaunchDialect::prompt_form`); absent for an agent Hide cannot
     /// start.
@@ -298,7 +298,11 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             id: row.id,
             fake_home: row.fake_home,
             engine_kind: row.engine_kind,
-            home_folder: row.folder,
+            home_folder: crate::definition::builtin(row.id)
+                .and_then(|definition| {
+                    crate::default_folder(definition, crate::AccountPath::State)
+                })
+                .expect("a built-in agent with Hide's features names its own folder"),
             prompt_form: row.start.map(|start| start.prompt_form()),
             model_flag: row.start.map_or(&[], |start| start.options().model),
             full_access_flag: row

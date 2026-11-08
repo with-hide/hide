@@ -163,14 +163,17 @@ fn each_agent_with_hides_features_takes_its_identity_from_its_definition() {
         assert_eq!(definition.name, adapter.label);
         assert_eq!(definition.executables, adapter.executables);
         assert_eq!(definition.aliases, adapter.aliases);
+        // The definition's `home` and its default account's own folder are
+        // one folder; retired Cursor keeps no account (PRD agent-profiles D-25).
+        if key == AgentId::Cursor {
+            assert!(definition.account.is_none());
+            continue;
+        }
         assert_eq!(
-            definition.home.as_deref(),
-            Some(adapter.folder)
-                .map(|parts| parts
-                    .iter()
-                    .map(|part| part.to_string())
-                    .collect::<Vec<_>>())
-                .as_deref()
+            definition.home,
+            hide_agent_adapter::default_folder(definition, hide_agent_adapter::AccountPath::State),
+            "{}",
+            adapter.id
         );
         if let Some(dialect) = adapter.resume {
             let session = definition

@@ -16,6 +16,28 @@ hooks = "codex"
 [resume]
 session = ["resume", "{session}"]
 
+# Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts).
+[account]
+by = "folder"
+
+[account.vars]
+CODEX_HOME = { default = "~/.codex", profile = "{account}", isolated_home = true }
+
+[account.paths]
+hooks = "{CODEX_HOME}/hooks.json"
+hook_trust = "{CODEX_HOME}/config.toml"
+plugins = false
+skills = "shared"
+folder_trust = "{CODEX_HOME}/config.toml"
+sessions = "{CODEX_HOME}/sessions"
+login = "{CODEX_HOME}/auth.json"
+state = "{CODEX_HOME}"
+usage = "{CODEX_HOME}/archived_sessions"
+
+[account.forbid]
+vars = ["CODEX_SQLITE_HOME"]
+
 [screen]
 version = "2026.11.08.1"
 min_engine_version = 3
