@@ -210,6 +210,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
   A new commit alone sends no letter: wait for its CI letter rather than watching the checks in a shell.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
 - While a node waits on CI, start the next work that does not depend on it, as the cap allows.
+  A node's reviewer and verifier are such work: start them the moment its pull request opens and read the head they record with `--commit`, so the review and CI run together; never hold a checker until the CI letter comes.
+  A later push needs the next review round only when the strength allows one, and that round reads only what changed.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
 - A node whose approach fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
   A second review FAIL in the same area is such a failure: change the design or hand the node to a fresh worker, never plug the holes one at a time.

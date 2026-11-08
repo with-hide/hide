@@ -179,10 +179,14 @@ fn roots(home: &Path, agent: Agent) -> Result<Vec<PathBuf>, Refusal> {
         Agent::OpenCode => Ok(vec![
             crate::opencode::database_path(home).map_err(|_| Refusal::Environment)?,
         ]),
-        Agent::Codex => Ok(vec![
-            home.join(crate::CODEX_SESSIONS),
-            home.join(".codex/archived_sessions"),
-        ]),
+        // Codex moves a session it archives out of its sessions folder.
+        Agent::Codex => {
+            let codex = hide_agent_adapter::AgentId::Codex.adapter();
+            Ok(vec![
+                codex.place_in(home, hide_agent_adapter::AccountPath::Sessions),
+                codex.place_in(home, hide_agent_adapter::AccountPath::Usage),
+            ])
+        }
         _ => Ok(vec![
             crate::session_root(home, agent).ok_or(Refusal::Unsupported)?,
         ]),

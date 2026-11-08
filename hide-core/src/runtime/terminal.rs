@@ -1308,7 +1308,10 @@ impl Runtime {
         self.recent_visible_tabs
             .truncate(ATTACHED_TAB_LIMIT.max(shown.len()));
         let released = self.release_sessions_outside_attach_window();
-        self.sync_terminal_intents() | released
+        // The 보기 slot follows the tab now in front, on every path that
+        // moves it.
+        let detail = self.sync_detail_home();
+        self.sync_terminal_intents() | released | detail
     }
     /// Ends the terminal session of every pane whose tab has left the attach
     /// window.

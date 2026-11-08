@@ -594,7 +594,7 @@ fn usage_holds_an_unfinished_record_and_counts_a_broken_one() {
         let home = tempfile::tempdir().unwrap();
         let path = home
             .path()
-            .join(hide_session::CLAUDE_SESSIONS)
+            .join(".claude/projects")
             .join("-work-app/session-a.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, &bytes).unwrap();

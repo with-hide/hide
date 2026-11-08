@@ -46,7 +46,7 @@ export function MissionsScreen() {
       <div className={cn("flex-1", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
         {failed ? (
           // The reason is in the core's log; the operator can do nothing with it here (design principle 13).
-          <p className="px-xl py-lg text-body text-muted-foreground" data-phone-missions-state="unreadable">{t("missionTool.unreadable")}</p>
+          <p className="px-xl py-lg text-body text-muted-foreground" data-phone-missions-state="unreadable">{t("missionScreen.unreadable")}</p>
         ) : entries && entries.length === 0 ? (
           <div className="flex flex-col gap-xs px-xl py-xxl text-center" data-phone-missions-state="empty">
             <p className="text-title text-muted-foreground">{t("mobile.missions.empty")}</p>
@@ -71,13 +71,13 @@ function Group({ group, entries }: { group: MissionGroup; entries: MissionEntry<
   const closed = group === "closed";
   const shown = closed && !all ? entries.slice(0, CLOSED_SHOWN) : entries;
   return (
-    <section className="px-xl pt-lg" aria-label={`${t(`missionTool.group.${group}`)} ${entries.length}`} data-phone-mission-group={group} data-phone-mission-group-count={entries.length}>
+    <section className="px-xl pt-lg" aria-label={`${t(`missionScreen.group.${group}`)} ${entries.length}`} data-phone-mission-group={group} data-phone-mission-group-count={entries.length}>
       <h2 className={cn("flex items-center gap-sm pb-xs text-body", group === "turn" ? "font-semibold text-mission-hold" : "text-muted-foreground")}>
-        <span>{t(`missionTool.group.${group}`)}</span>
+        <span>{t(`missionScreen.group.${group}`)}</span>
         <span className="font-mono font-normal">{entries.length}</span>
         {closed && !all && entries.length > CLOSED_SHOWN ? (
           <Button variant="text" size="inline" className="ml-auto min-h-(--size-touch-target) gap-0" data-phone-fold="closed" onClick={() => setMissionFold("closed", true)}>
-            {t("missionTool.all")}
+            {t("missionScreen.all")}
             <ChevronRightIcon aria-hidden="true" className="size-(--size-icon)" />
           </Button>
         ) : null}
@@ -107,7 +107,7 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
   const pill = t(missionPillKey(mission, first));
   return (
     <RowButton
-      aria-label={t("missionTool.open", { title: mission.title })}
+      aria-label={t("missionScreen.open", { title: mission.title })}
       data-phone-mission={mission.id}
       data-phone-mission-state={group}
       className={cn("min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent", mission.stale && "opacity-(--opacity-dimmed)")}
@@ -146,7 +146,7 @@ function ClosedRow({ mission }: { mission: PhoneMission }) {
   const done = mission.status === "done";
   return (
     <RowButton
-      aria-label={t("missionTool.open", { title: mission.title })}
+      aria-label={t("missionScreen.open", { title: mission.title })}
       data-phone-mission={mission.id}
       data-phone-mission-state="closed"
       className="min-h-(--size-touch-target) gap-sm rounded-none px-none py-md text-body hover:bg-transparent active:bg-accent"

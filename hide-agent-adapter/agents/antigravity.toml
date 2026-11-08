@@ -16,6 +16,23 @@ hooks = "agy"
 [resume]
 session = ["--conversation", "{session}"]
 
+# Where the account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts): agy has no variable that moves them.
+[account]
+by = "none"
+reason = "agy has no variable that moves its folder; only a different HOME does"
+
+[account.paths]
+hooks = "~/.gemini/config/hooks.json"
+hook_trust = false
+plugins = false
+skills = "~/.gemini/config/skills"
+folder_trust = "~/.gemini/antigravity-cli/settings.json"
+sessions = "~/.gemini/antigravity-cli/brain"
+login = false
+state = "~/.gemini/config"
+usage = false
+
 [screen]
 version = "2026.10.05.1"
 min_engine_version = 1

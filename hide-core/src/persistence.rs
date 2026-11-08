@@ -97,6 +97,11 @@ struct StoredUiState {
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<serde_json::Value>,
+    /// The tab `detail` belongs to, and the slots of the other tabs by tab id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_tabs: Option<serde_json::Value>,
     /// Kept as JSON and read record by record
     /// (`OverviewGraphChoices::read_stored`), so a record this build cannot
     /// read is left out and the rest of the store still loads.
@@ -453,6 +458,26 @@ pub(crate) fn unreadable(path: &Path) -> Option<String> {
     }
 }
 
+/// A saved 보기 slot without the mission maps earlier builds kept in it: a
+/// mission is the page's mission screen now (PRD mission-screen D-09, B20),
+/// so the slot loads with the other items and ← steps only through them.
+fn without_mission_items(mut value: serde_json::Value) -> serde_json::Value {
+    let Some(slot) = value.as_object_mut() else {
+        return value;
+    };
+    if let Some(items) = slot
+        .get_mut("items")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        items
+            .retain(|item| item.get("kind").and_then(serde_json::Value::as_str) != Some("mission"));
+        if items.is_empty() {
+            slot.insert("shown".into(), false.into());
+        }
+    }
+    value
+}
+
 /// Reads the stored practice progress chapter by chapter and returns it with
 /// how many entries were dropped: one that is not a chapter id with a
 /// readable progress, a step past the limit, or past the chapter limit.
@@ -554,13 +579,35 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     };
     let detail = match stored.detail {
         None => DetailSlot::default(),
-        Some(value) => serde_json::from_value::<DetailSlot>(value)
+        Some(value) => serde_json::from_value::<DetailSlot>(without_mission_items(value))
             .ok()
             .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT)
             .unwrap_or_else(|| {
                 unrecognized.push(UnrecognizedField::Detail);
                 DetailSlot::default()
             }),
+    };
+    // One slot this build cannot read drops alone; the others still load.
+    let detail_tabs = match stored.detail_tabs {
+        None => BTreeMap::new(),
+        Some(serde_json::Value::Object(slots)) => slots
+            .into_iter()
+            .filter_map(|(tab, value)| {
+                let slot = serde_json::from_value::<DetailSlot>(without_mission_items(value))
+                    .ok()
+                    .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT);
+                if slot.is_none() {
+                    unrecognized.push(UnrecognizedField::Detail);
+                }
+                // A tab's slot that held only mission maps is gone with them (PRD mission-screen B20).
+                slot.filter(|slot| !slot.items.is_empty())
+                    .map(|slot| (tab, slot))
+            })
+            .collect(),
+        Some(_) => {
+            unrecognized.push(UnrecognizedField::Detail);
+            BTreeMap::new()
+        }
     };
     let overview_graph = match stored.overview_graph {
         None => OverviewGraphChoices::default(),
@@ -657,6 +704,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             practice,
             practice_invite_closed: stored.practice_invite_closed,
             detail,
+            detail_home: stored.detail_home,
+            detail_tabs,
             overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
@@ -843,6 +892,9 @@ pub fn save(
         practice_invite_closed: state.practice_invite_closed,
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
+        detail_home: state.detail_home.clone(),
+        detail_tabs: (!state.detail_tabs.is_empty())
+            .then(|| serde_json::to_value(&state.detail_tabs).expect("the 보기 slots serialize")),
         overview_graph: Some(
             serde_json::to_value(&state.overview_graph)
                 .expect("the Overview map's choices serialize"),
@@ -1677,9 +1729,17 @@ mod tests {
             workspace_id: "workspace:alpha".to_owned(),
             number: 7,
         });
+        state.detail_home = Some("w1:t1".to_owned());
+        let mut other = DetailSlot::default();
+        other.open(crate::model::DetailItem::Cost {
+            workspace_id: "workspace:alpha".to_owned(),
+        });
+        state.detail_tabs.insert("w1:t2".to_owned(), other);
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the lens");
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.detail_home, state.detail_home);
+        assert_eq!(restored.detail_tabs, state.detail_tabs);
         assert_eq!(restored.sidebar_lens, SidebarLens::Tasks);
         assert_eq!(restored.task_view, TaskView::Project);
         assert_eq!(restored.sidebar_project, state.sidebar_project);
@@ -1693,6 +1753,10 @@ mod tests {
         assert_eq!(older_state.task_view, TaskView::Status);
         assert_eq!(older_state.sidebar_project, None);
         assert_eq!(older_state.detail, DetailSlot::default());
+        assert_eq!(
+            (older_state.detail_home, older_state.detail_tabs.len()),
+            (None, 0)
+        );
 
         let unknown = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
             "sidebar_lens":"sessions","task_view":"status","detail":{"items":[{"kind":"tab"}],"shown":true}}"#;
@@ -1706,6 +1770,50 @@ mod tests {
         );
         assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(unknown_state.detail, DetailSlot::default());
+
+        // PRD mission-screen B20: a slot saved with a mission map loads
+        // without it, the other items kept in their order.
+        let with_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"pull_request","workspace_id":"w","number":7},{"kind":"mission","mission":"mission-3"},
+            {"kind":"cost","workspace_id":"w"},{"kind":"mission","mission":"mission-4"}],"shown":true}}"#;
+        let (mission_state, _sizes, mission_disposition) = decode(with_mission);
+        assert_eq!(mission_disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            mission_state.detail,
+            DetailSlot {
+                items: vec![
+                    crate::model::DetailItem::PullRequest {
+                        workspace_id: "w".into(),
+                        number: 7
+                    },
+                    crate::model::DetailItem::Cost {
+                        workspace_id: "w".into()
+                    },
+                ],
+                shown: true,
+            }
+        );
+        let only_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"mission","mission":"mission-3"}],"shown":true}}"#;
+        let (only_state, _sizes, only_disposition) = decode(only_mission);
+        assert_eq!(only_disposition, LoadDisposition::Loaded);
+        assert_eq!(only_state.detail, DetailSlot::default());
+        // Each Agent tab's own slot sheds them the same way; one that held only maps goes.
+        let tabs = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail_tabs":{"w1:t2":{"items":[{"kind":"mission","mission":"mission-3"},{"kind":"cost","workspace_id":"w"}],"shown":true},
+            "w1:t3":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}}"#;
+        let (tabs_state, _sizes, tabs_disposition) = decode(tabs);
+        assert_eq!(tabs_disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            tabs_state.detail_tabs.keys().collect::<Vec<_>>(),
+            vec!["w1:t2"]
+        );
+        assert_eq!(
+            tabs_state.detail_tabs["w1:t2"].items,
+            vec![crate::model::DetailItem::Cost {
+                workspace_id: "w".into()
+            }]
+        );
     }
 
     /// Practice-mode progress survives a relaunch; a store written before it

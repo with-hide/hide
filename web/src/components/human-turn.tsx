@@ -7,6 +7,7 @@ import { machineName } from "../screenMachine";
 import { useShellStore } from "../store";
 import type { HumanKind } from "../snapshot";
 import { DeviceChip } from "./device-chip";
+import { HumanTurnCopy, type CopyText } from "./human-turn-copy";
 import { Button } from "./ui/button";
 
 /** What Done needs of a person's turn: the declaration it settles, what it says, and the device its agent runs on (absent for this machine). */
@@ -53,17 +54,20 @@ export function HumanTurnDone({ turn, actions, variant = "secondary", reason = t
 /**
  * A person's turn as a line where no ask line stands for it, such as the
  * declaring child's tree row (PRD ask-human B14): its kind and place as
- * plain text the operator can select, never a link (B10), and the chip of
- * the device it waits on when that is not this machine (B9).
+ * plain text the operator can select, never a link (B10), Copy beside the
+ * place where the surface draws Done (`copy`), and the chip of the device it
+ * waits on when that is not this machine (B9). `textHidden` keeps the words
+ * from assistive technology on a row whose open button already says them.
  */
-export function HumanTurnLine({ turn, className }: { turn: HumanTurnTarget; className?: string }) {
+export function HumanTurnLine({ turn, copy, textHidden = false, className }: { turn: HumanTurnTarget; copy?: CopyText; textHidden?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const device = useShellStore((state) => (turn.device_id ? machineName(state.rest?.navigator?.devices, turn.device_id, t) : null));
   const what = humanTurnText(t, turn);
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-human-turn-line={turn.id}>
-      <span className="pointer-events-auto min-w-0 cursor-text truncate text-warning select-text" title={what} data-human-turn-place={turn.id}>{what}</span>
-      {device ? <DeviceChip label={device} variant="inline" className="shrink-0 self-center" /> : null}
+      <span aria-hidden={textHidden || undefined} className="pointer-events-auto min-w-0 cursor-text truncate text-warning select-text" title={what} data-human-turn-place={turn.id}>{what}</span>
+      {copy ? <HumanTurnCopy turn={turn} copy={copy} /> : null}
+      {device ? <span aria-hidden={textHidden || undefined} className="contents"><DeviceChip label={device} variant="inline" className="shrink-0 self-center" /></span> : null}
     </span>
   );
 }

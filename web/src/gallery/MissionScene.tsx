@@ -31,12 +31,12 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { DetailPanel } from "../DetailPanel";
+import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
 import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
-import { useUiStore } from "../ui";
+import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
 
 /** The Conductor's pane, as its agent row and the mission name it. */
@@ -416,12 +416,12 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
     const closed = ["done", "cancelled", "no-pr", "exempt"].includes(state);
     const conductor = { pane_id: CONDUCTOR_PANE, device_id: "local", mark: closed ? "asleep" : state === "decision" ? "quiet" : "going" };
     const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "no-conductor" || state === "failed" ? [] : state === "decision" ? [conductor, raised] : [conductor]) as unknown as AgentRow[];
-    // The 보기 slot holds the mission, so its head wears the kind mark and the `?` as the app's does.
-    const shown = withMapFlow(fixture.rest, flow);
-    const rest = { ...shown, ui_state: { ...shown.ui_state, detail: { items: [{ kind: "mission" as const, mission: "mission-1" }], shown: true } } } as SnapshotRest;
+    // The mission screen shows the mission, so its head wears the kind mark and the `?` as the app's does.
+    const rest = withMapFlow(fixture.rest, flow);
     useShellStore.setState({ rest, agents, connection: "live" });
     // The popover pinned, as a press, the Show task steps chord or a first plan watched leaves it.
-    useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
+    const device = rest.missions?.items.find((row) => row.id === "mission-1")?.device_id ?? null;
+    useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null, screen: { kind: "missions" }, missions: { ...MISSION_ENTRY, deviceId: device, selected: "mission-1" } });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
@@ -452,7 +452,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
             <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
           </div>
         ) : (
-          <DetailPanel actions={actions} />
+          <MissionScreen actions={actions} />
         )}
       </div>
     </TooltipProvider>

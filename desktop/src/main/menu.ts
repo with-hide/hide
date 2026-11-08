@@ -72,6 +72,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "toggle_left_sidebar",
     "toggle_sidebar_lens",
     "overview",
+    "open_missions",
     "add_backlog",
     "sidebar_projects",
     "toggle_device_rail",

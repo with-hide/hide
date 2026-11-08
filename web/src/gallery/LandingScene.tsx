@@ -39,7 +39,8 @@ import { useShellStore } from "../store";
 import { PALETTE_HIDE_CLASS } from "../theme";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
-import { useUiStore } from "../ui";
+import { MISSION_ENTRY, useUiStore } from "../ui";
+import { MissionScreen } from "../MissionScreen";
 import { workspaceKey } from "../viewLayout";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import { LEAD_PANE, laneItem, withSessions, landingMission, landingPrCard, landingPrLink, landingPrWork, landingRecord, type LandingLane } from "./landingLaneData";
@@ -100,7 +101,8 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       rest.status = { ...rest.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } } as SnapshotRest["status"];
       const project = rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
       const tab = project.checkouts[0]!.tabs[0]!;
-      rest.ui_state = { ...rest.ui_state!, detail: { items: [laneItem(lane, scene.agents)], shown: true } };
+      const item = laneItem(lane, scene.agents);
+      rest.ui_state = { ...rest.ui_state!, detail: item ? { items: [item], shown: true } : { items: [], shown: false } };
       rest.workspace_view = { ...rest.workspace_view!, tool: null, detail_width: DETAIL_WIDTH[lane] };
       // The lead alone in its tab, so the slot beside it has the room.
       rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
@@ -154,7 +156,9 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
 
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
-    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
+    // The Conductor's shot is its mission on the mission screen (PRD mission-screen D-01).
+    const conductor = shot === "conductor" ? fixture.rest.missions?.items[0]?.id ?? null : null;
+    useUiStore.setState({ screen: { kind: conductor ? "missions" : workspace ? "workspace" : "main" }, missions: { ...MISSION_ENTRY, selected: conductor }, overviewOpen: false, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
     root.classList.toggle("light", theme === "light");
@@ -205,7 +209,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
         <TitleRow actions={actions} />
         <div className="flex min-h-0 flex-1">
           {shot === "map" || shot === "projects" ? null : <Sidebar actions={actions} />}
-          {workspace ? <WorkspaceScreen actions={actions} /> : null}
+          {shot === "conductor" ? <MissionScreen actions={actions} /> : workspace ? <WorkspaceScreen actions={actions} /> : null}
           {shot === "map" || shot === "projects" ? (
             <main className="flex min-h-0 min-w-0 flex-1 flex-col">
               <OverviewPage actions={actions} />

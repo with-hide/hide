@@ -83,7 +83,9 @@ pub fn read_only_hooks_file(workspace: &Path) -> PathBuf {
 /// agy's settings file, whose `trustedWorkspaces` lists the folders whose own
 /// hooks it loads.
 fn settings_path(home: &Path) -> PathBuf {
-    hide_agent_adapter::antigravity_app_data(home).join("settings.json")
+    hide_agent_adapter::AgentId::Antigravity
+        .adapter()
+        .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
 }
 
 /// A `PATH` that finds nothing: no browser opener and no shell for a hook.
@@ -219,7 +221,7 @@ impl AntigravityCliBackend {
     fn signed_in_before(&self) -> bool {
         self.home
             .as_deref()
-            .is_some_and(|home| hide_agent_adapter::antigravity_app_data(home).is_dir())
+            .is_some_and(|home| settings_path(home).parent().is_some_and(Path::is_dir))
     }
 
     fn probe(

@@ -1978,7 +1978,9 @@ impl Runtime {
         fetched: Result<RemoteSessionSnapshot, SessionFetchError>,
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
-        changed | self.complete_look()
+        // The engine's word on the tab in front, or a tab it closed.
+        let detail = self.sync_detail_home();
+        changed | detail | self.complete_look()
     }
 
     fn apply_remote_session(

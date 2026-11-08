@@ -17,6 +17,7 @@ import { useShellStore, type DirectoryList, type Documents } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
+import { MissionScreen } from "../MissionScreen";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
@@ -53,6 +54,8 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const [model, setModel] = useState<unknown>(() => chapter.world.initial());
   // How many events the world has answered: the signal a step that takes several presses moves on.
   const [moves, setMoves] = useState(0);
+  // A mission opened from its chip shows on the mission screen, in the Workspace's place, as in the shell (PRD mission-screen B10).
+  const missionsShown = useUiStore((s) => s.screen?.kind === "missions");
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
@@ -89,8 +92,9 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
     // The practice screen is the practice: its sidebar never invites to practice.
     const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
     // A frame the world does not send is empty, so one chapter's files or records never show in the next.
+    // A world with no missions holds an empty book, so the sidebar's 미션 row opens the quiet empty table, as in Hide.
     useShellStore.setState({
-      rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
+      rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
       listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
@@ -138,7 +142,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <TitleRow actions={actions} />
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar actions={actions} />
-          <WorkspaceScreen actions={actions} />
+          {missionsShown ? <MissionScreen actions={actions} /> : <WorkspaceScreen actions={actions} />}
         </div>
         <OverviewModal actions={actions} />
         <Palette actions={actions} />

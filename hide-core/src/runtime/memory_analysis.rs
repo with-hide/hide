@@ -3750,7 +3750,7 @@ mod tests {
             let auth = store
                 .receipt_auth_tag(&identity.id, "claude", SESSION, "UserPromptSubmit", "m1@1")
                 .unwrap();
-            let folder = home.join(hide_session::CLAUDE_SESSIONS).join("-project");
+            let folder = home.join(".claude/projects").join("-project");
             std::fs::create_dir_all(&folder).unwrap();
             let locator = folder.join(format!("{SESSION}.jsonl"));
             let checkout = root.to_string_lossy().into_owned();
@@ -7633,7 +7633,7 @@ mod tests {
         let relative = fixture.root.strip_prefix(temp).unwrap().to_string_lossy();
         let folder = fixture
             .home
-            .join(hide_session::OMP_SESSIONS)
+            .join(".omp/agent/sessions")
             .join(format!("-tmp-{}", relative.replace(['/', '\\', ':'], "-")));
         std::fs::create_dir_all(&folder).unwrap();
         let said = |at: u64| {

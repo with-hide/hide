@@ -24,7 +24,7 @@ use crate::missions::{
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, Restored, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
-use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
+use crate::model::{PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
 
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
@@ -472,7 +472,7 @@ pub(crate) struct MissionRuntime {
     /// inputs did not move makes nothing (docs/PERFORMANCE_TESTING.md).
     views: ViewsMadeFrom,
     /// Each mission's events (PRD mission-plan-visibility D-22), saved by
-    /// their own store; only the mission open in the 보기 slot sends them.
+    /// their own store; only the mission the page's detail shows sends them.
     pub(crate) events: HashMap<String, History>,
     pub(crate) event_store: Option<crate::mission_events::MissionEventStore>,
     /// Counts the events' changes, for the published section.
@@ -491,6 +491,10 @@ pub(crate) struct MissionRuntime {
     pub(crate) answer_absent_since: HashMap<String, u64>,
     /// The mission and events edit the published events were made from.
     pub(crate) events_made: (Option<String>, u64),
+    /// The mission the page's mission screen shows in its detail
+    /// (`mission_shown`, PRD mission-screen D-16): page navigation the core
+    /// holds only to send that one mission's events, never saved (D-10).
+    pub(crate) shown: Option<String>,
     /// The outside nodes' reads (B19, B20).
     pub(super) outside: super::mission_outside::Outside,
     /// The nodes finished as the book last read, by mission and node, so a
@@ -2283,18 +2287,15 @@ impl Runtime {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "missions.deleted_with_session", "count": dropped,
         }));
-        // A slot item of a mission that is gone would draw nothing.
-        let known: Vec<String> = self
+        // The mission screen's detail of a mission that is gone sends nothing.
+        if self
             .missions
-            .book
-            .missions
-            .iter()
-            .map(|mission| mission.id.clone())
-            .collect();
-        self.drop_detail_items(|item| match item {
-            DetailItem::Mission { mission } => known.contains(mission),
-            _ => true,
-        });
+            .shown
+            .as_ref()
+            .is_some_and(|shown| gone.contains(shown))
+        {
+            self.missions.shown = None;
+        }
         self.save_missions();
         true
     }
