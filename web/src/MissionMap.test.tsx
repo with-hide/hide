@@ -367,7 +367,7 @@ it("offers Take over beside 터미널로 once a raise the live Conductor was ask
   try {
     const row = late.q("[data-mission-conductor]")!;
     expect(row.dataset.missionConductor).toBe("resting");
-    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal", "Take over"]);
+    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal", "Resume command"]);
     await act(async () => row.querySelector<HTMLElement>("[data-mission-takeover]")!.click());
     const start = late.events.find((event) => event.kind === "agent_start_in_checkout");
     expect(start?.payload).not.toHaveProperty("resume_session_id");
@@ -862,12 +862,12 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(item.querySelector("[data-attention-pr]")?.getAttribute("data-attention-pr")).toBe("1232");
     // Its choices say what they do, handing it to the Conductor first; 이 단계 빼기 never goes on one press.
     expect([...item.querySelectorAll<HTMLButtonElement>("[data-attention-choice]")].map((button) => button.dataset.attentionChoice)).toEqual(["leave", "drop"]);
-    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Leave to Conductor");
+    expect(item.querySelector('[data-attention-choice="leave"]')?.textContent).toBe("Hand to the conducting agent");
     const drop = item.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
-    expect(drop.textContent).toBe("Drop node");
+    expect(drop.textContent).toBe("Remove this step");
     await act(async () => drop.click());
     expect(map.events.filter((event) => event.kind === "mission_attention")).toEqual([]);
-    expect(drop.textContent).toBe("Confirm drop");
+    expect(drop.textContent).toBe("Confirm removal");
     expect(drop.dataset.attentionConfirm).toBe("true");
     // The second press sends it, once, as one event (B15, B16).
     await act(async () => drop.click());
@@ -920,7 +920,7 @@ it("puts in a node's panel what waits on whom with its choices, the worker's lif
     const drop = panel.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
     await act(async () => drop.click());
     await act(async () => { drop.focus(); drop.blur(); });
-    expect(drop.textContent).toBe("Drop node");
+    expect(drop.textContent).toBe("Remove this step");
     expect(map.events.filter((event) => event.kind === "mission_attention")).toEqual([]);
     await act(async () => drop.click());
     await act(async () => drop.click());

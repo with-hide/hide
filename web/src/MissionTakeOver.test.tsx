@@ -59,7 +59,7 @@ it("starts a new agent asked to take the mission once the resume is refused, and
     expect(view.starts()[1]!.resume_session_id).toBeUndefined();
     await view.refuse(view.starts()[1]!.request_id);
     expect(view.button().getAttribute("data-mission-takeover")).toBe("failed");
-    expect(view.button().textContent).toBe("Take over failed · Retry");
+    expect(view.button().textContent).toBe("Resume command failed · Retry");
   } finally { await view.unmount(); }
 });
 
