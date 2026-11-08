@@ -13,7 +13,7 @@ import { lineText, markWords, rowDimmed } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { sleepingCaption } from "../sleeping-session";
 import { actOnSleepingSession, openDetail } from "./connection";
-import { AgentHead, LIST_INSET, Place } from "./parts";
+import { AgentHead, LIST_INSET, PhoneHumanTurn, Place } from "./parts";
 import { keyTag, type AgentGroup, type GroupRow, type PhoneAgent, type PhoneSleepingSession } from "./protocol";
 import { foldKey, openFold, setChildrenOpen, usePhone } from "./store";
 
@@ -74,6 +74,7 @@ function AgentItem({ agent }: { agent: PhoneAgent }) {
       {/* Only the row itself dims: its children keep their own state. */}
       <div className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined} data-phone-row={tag}>
         <AgentRow agent={agent} />
+        <PhoneHumanTurn agent={agent} inset={`${LIST_INSET} pb-md`} />
         <Descendants agent={agent} count={kids.length + more.length} open={open} onToggle={hasKids ? () => setChildrenOpen(agent, !open) : null} />
       </div>
       {hasKids && open ? (
@@ -153,7 +154,8 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>
       <Place agent={agent} inset={LIST_INSET} />
-      {agent.line ? (
+      {/* A person's turn says itself under the row, with Done (PRD ask-human B19). */}
+      {agent.line && !agent.human_turn ? (
         <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
           {lineText(t, { wait: agent.wait, status_code: agent.status_code, descendant_counts: { working: agent.descendants_working }, background_left: agent.background_left }, agent.line)}
         </span>

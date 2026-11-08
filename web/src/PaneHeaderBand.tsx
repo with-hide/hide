@@ -11,14 +11,11 @@ import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type Device, type RemoteStatus } from "./snapshot";
-import { remoteStateText } from "./coreError";
-import { machineName } from "./screenMachine";
+import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { relationState } from "./lineage";
-import { deviceConnected } from "./devices";
-import { remoteTargetOfPane } from "./remote";
+import { notConnectedText, useUnreachable } from "./deviceReach";
 import { useRelationProgress } from "./PaneRelations";
 import { markTone, markWords, recordWords, waitWord } from "./agentRow";
 import { allAgents, agentsByPane } from "./paneAgents";
@@ -31,6 +28,7 @@ import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
 import { Button } from "./components/ui/button";
+import { HumanTurnDone } from "./components/human-turn";
 
 /** The View menu's turn row mode; absent reads as one line. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
@@ -289,6 +287,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   ].filter(Boolean).join("\n") : null;
   const more = !hasTree && band.more > 0 && self ? <AgentTreePopover
     parent={self}
+    actions={actions}
     agents={agents}
     raised
     onOpenChild={(id, label) => actions.followRelation(paneId, id, label)}
@@ -298,34 +297,21 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
     trigger={<Button variant="text-link" size="inline" data-pane-band-more={paneId} className="shrink-0 px-xs py-xxs text-micro text-muted-foreground underline-offset-2">{t("agentSessions.moreAsks", { count: band.more })}</Button>}
   /> : null;
   const read = !raised && band.read;
+  // A person's turn, the pane's own or raised to it, is settled with Done here too (PRD ask-human B15).
+  const human = raised ? (raised.subject?.cause === "human_turn" ? raised.subject : null) : band.subject?.cause === "human_turn" ? band.subject : null;
+  const humanTurn = human ? { id: human.id, kind: human.kind, place: human.place, device_id: raised ? raised.open_device_id : self?.human_turn?.device_id } : null;
   return <>
     <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
       {raised || band.kind === "approval" || band.kind === "answer" ? null : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
       {raised && originTitle ? <Hint label={who!}><span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs font-semibold" data-pane-band-who={raised.raised_pane_id}><span className="min-w-0 truncate">{originTitle}</span><span className="shrink-0 text-muted-foreground">({t(originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span></Hint> : null}
-      <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive")} role={failed ? "alert" : navigation ? "status" : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
+      <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive", humanTurn && !navigation && "cursor-text select-text")} role={failed ? "alert" : navigation ? "status" : undefined} data-human-turn-place={humanTurn && !navigation ? humanTurn.id : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
     </span>
     {unreachable && !navigation ? <span className="min-w-0 max-w-1/4 shrink truncate text-muted-foreground" title={unreachable} data-pane-band-unreachable="true">{unreachable}</span> : null}
     {raised?.unreceived_by && minutes !== null ? <span className="min-w-0 max-w-1/4 flex-1 truncate text-muted-foreground" data-pane-band-unreceived="true">{t("agentSessions.unreceived", { name: raised.unreceived_by, minutes })}</span> : null}
     {raised?.unreceived_by ? null : <Elapsed since={band.since_unix_ms} className={cn("shrink-0 font-mono text-micro text-muted-foreground", read && "opacity-(--opacity-read-status)")} />}
     {more}
+    {humanTurn ? <HumanTurnDone turn={humanTurn} actions={actions} className="shrink-0" /> : null}
   </>;
-}
-
-/** Why `device` is not connected, worded from its state; a device still connecting or holding its last report is plainly not connected. */
-function notConnectedText(remote: readonly RemoteStatus[] | undefined, devices: readonly Device[] | undefined, device: string, t: TFunction<"translation">): string {
-  const state = remote?.find((row) => row.target_id === device)?.state;
-  return !state || state === "not_connected" || state === "stale" ? t("devices.rail.notConnected") : remoteStateText(state, machineName(devices, device, t), t);
-}
-
-/** Why a pane on a device that is not connected cannot be opened now, or null when it can (B8). */
-function useUnreachable(target: { device: string | null } | { pane: string } | null): string | null {
-  const { t } = useInterfaceTranslation();
-  return useShellStore((state) => {
-    if (target === null) return null;
-    const device = "device" in target ? target.device : remoteTargetOfPane(state.rest, target.pane);
-    if (device === null || deviceConnected(state.rest, device)) return null;
-    return notConnectedText(state.rest?.status?.remote, state.rest?.navigator?.devices, device, t);
-  });
 }
 
 /** Every agent row this page knows, including a device's retained topology; it changes only when a row does. */
@@ -416,6 +402,7 @@ function PaneTreeButton({ paneId, children, agents, actions, connection }: { pan
   const marked = connection ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
   return <AgentTreePopover
     parent={children.parent}
+    actions={actions}
     agents={agents}
     raised={children.raised > 0}
     onOpenChild={(id, name) => actions.followRelation(paneId, id, name)}

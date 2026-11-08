@@ -110,7 +110,7 @@ export type AgentRow = {
   resolved_recent?: boolean;
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
-  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
+  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
   /** On a lineage root: every raised descendant, lead first. */
@@ -148,6 +148,8 @@ export type AgentRow = {
   user_turn?: UserTurnFact;
   /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
   ask_subject?: AskSubject;
+  /** The person's turn this row leads with, its own or a descendant's (PRD ask-human); absent when none stands. */
+  human_turn?: HumanTurnLead;
   /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
   /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
@@ -200,9 +202,21 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed"] as const;
-/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), or a brief or letter Hide typed that the agent never took. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean };
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
+
+export const HUMAN_KINDS = ["auth", "permission"] as const;
+/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
+export type HumanKind = typeof HUMAN_KINDS[number];
+
+/**
+ * The person's turn a row leads with (`HumanTurnLead`, PRD ask-human D-09,
+ * D-17, D-20): on the agent that declared it and on its lineage root. Done
+ * settles `id`; `device_id` is where the declaring pane runs, absent for
+ * this machine, and Done waits while it is not connected (D-21).
+ */
+export type HumanTurnLead = { id: string; kind: HumanKind; place: string; pane_id: string; title: string; device_id?: string; since_unix_ms: number | null; own: boolean };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";

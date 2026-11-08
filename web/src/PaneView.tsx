@@ -396,7 +396,7 @@ export const PaneView = memo(function PaneView({
             actions={actions}
             plain={
               <>
-                {markSymbol && !look ? <StatusMark mark={markSymbol} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
+                {markSymbol && !look ? <StatusMark mark={markSymbol} human={recordAgent?.human_turn !== undefined} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
                 <Hint label={agentProductName(agentKind)}><span data-pane-move-excluded="true" className="flex shrink-0"><AgentMark kind={agentKind} /></span></Hint>
                 <Hint label={`${title}\n${agentProductName(agentKind)}`} reveals>
                   <span data-pane-move-title="true" className="flex min-w-0 flex-1 items-center">{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
@@ -406,7 +406,7 @@ export const PaneView = memo(function PaneView({
           >
             {/* The marks are the button's first column, the title its second (`PaneRecordButton`). */}
             <span className="flex items-center gap-sm">
-              {markSymbol && !look ? <StatusMark mark={markSymbol} className={markTone} data-pane-status-mark={markSymbol} /> : null}
+              {markSymbol && !look ? <StatusMark mark={markSymbol} human={recordAgent?.human_turn !== undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
               {/* The logo names its product as the plain head's does (agent-mark-quiet B4, B6); the button's own name already says it. */}
               <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentProductName(agentKind)}><AgentMark kind={agentKind} /></span>
             </span>

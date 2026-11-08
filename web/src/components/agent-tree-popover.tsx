@@ -19,6 +19,8 @@ import { AgentPrHover } from "./pr-mark";
 import { AgentRecordTitle } from "./agent-record-title";
 import { rowPulls } from "../prMark";
 import { DeviceChip } from "./device-chip";
+import { HumanTurnDone, HumanTurnLine } from "./human-turn";
+import type { Actions } from "../actions";
 import { Elapsed } from "./elapsed";
 import { StatusMark } from "./status-mark";
 import { Command, CommandGroup, CommandItem, CommandList, CommandSeparator } from "./ui/command";
@@ -66,6 +68,7 @@ export function AgentTreePopover({
   returnFocus,
   trigger,
   triggerLabel,
+  actions = null,
 }: {
   parent: AgentRow;
   agents: readonly AgentRow[];
@@ -76,6 +79,8 @@ export function AgentTreePopover({
   returnFocus: () => void;
   trigger: ReactNode;
   triggerLabel: string;
+  /** Done on a descendant's person's turn (PRD ask-human B14); without it the tree draws none. */
+  actions?: Pick<Actions, "finishHumanTurn"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -237,6 +242,7 @@ export function AgentTreePopover({
                     place={places[index]!}
                     ask={asks.get(line.agent.pane_id) ?? null}
                     pending={progress?.phase === "pending"}
+                    actions={actions}
                     onToggle={() => (line.depth >= 2 ? setRootId(line.agent.pane_id) : toggle(line.agent.pane_id))}
                     onOpen={() => openChild(line.agent)}
                     onOpenAsk={(ask) => {
@@ -287,6 +293,7 @@ function TreeItem({
   place,
   ask,
   pending,
+  actions,
   onToggle,
   onOpen,
   onOpenAsk,
@@ -296,6 +303,7 @@ function TreeItem({
   place: ReturnType<typeof treePlaces>[number];
   ask: RaisedAsk | null;
   pending: boolean;
+  actions: Pick<Actions, "finishHumanTurn"> | null;
   onToggle: () => void;
   onOpen: () => void;
   onOpenAsk: (ask: RaisedAsk) => void;
@@ -319,7 +327,9 @@ function TreeItem({
   const askUnavailable = !deviceConnected(rest, askDevice);
   const branch = child.state.branch_badge;
   // The same second line a tree row draws: a block's cause, a waiting ring's 대기 line, a sleep or unknown state (status-marks B29, B31).
-  const childLine = ask || unavailable ? null : treeLine(child);
+  // A child that declared a person's turn says it and keeps Done here (PRD ask-human B14).
+  const human = unavailable ? null : child.human_turn ?? null;
+  const childLine = ask || unavailable || human ? null : treeLine(child);
   const minutes = ask?.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - ask.since_unix_ms) / 60_000));
   return (
     <CommandItem
@@ -336,7 +346,7 @@ function TreeItem({
       <TreeChevron name={child.identity_label} open={line.hasChildren ? line.open : null} onToggle={onToggle} hangs={line.depth > 1} popup={line.depth >= 2} data-tree-chevron={child.pane_id} />
       <span className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <StatusMark mark={unavailable ? null : child.mark} className={unavailable ? undefined : markTone(child)} />
+          <StatusMark mark={unavailable ? null : child.mark} human={child.human_turn !== undefined} className={unavailable ? undefined : markTone(child)} />
           <AgentMark kind={child.agent_kind} />
           <AgentRecordTitle agent={child} className="text-foreground" />
           <AgentPrHover agent={child} pulls={rowPulls(child, "own")} />
@@ -360,6 +370,8 @@ function TreeItem({
             </button>
           </span>
         ) : null}
+        {human && !ask ? <HumanTurnLine turn={human} /> : null}
+        {human && actions ? <HumanTurnDone turn={human} actions={actions} /> : null}
         {childLine ? <RowLineText data-tree-line={childLine.mode} parts={lineParts(t, child, childLine)} className={cn("text-caption", lineTone(childLine, child))} /> : null}
         {ask?.unreceived_by && minutes !== null && !unavailable ? (
           <span className="truncate text-caption text-muted-foreground">{t("agentSessions.unreceived", { name: ask.unreceived_by, minutes })}</span>
