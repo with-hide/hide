@@ -41,7 +41,7 @@ function AlertDialogContent({
         tabIndex={-1}
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-add-device-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-auto rounded-lg border border-border bg-popover p-lg text-body text-popover-foreground shadow-lg outline-none",
+          "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-var(--spacing-xxl))] w-(--size-add-device-sheet-w) max-w-[calc(100%-var(--spacing-xxl))] -translate-x-1/2 -translate-y-1/2 flex-col gap-md overflow-auto rounded-lg border border-border bg-dialog p-lg text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg outline-none",
           className,
         )}
         onOpenAutoFocus={(event) => {

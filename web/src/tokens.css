@@ -41,6 +41,8 @@
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
+  --color-dialog: var(--dialog);
+  --color-dialog-raised: var(--dialog-raised);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -427,6 +429,8 @@
   --card-foreground: var(--foreground);
   --popover: #ffffff;
   --popover-foreground: var(--foreground);
+  --dialog: #ffffff;
+  --dialog-raised: #eaeaec;
   --primary: var(--accent-choice-lime);
   --primary-foreground: #101112;
   --secondary: #eaeaec;
@@ -531,6 +535,8 @@
   --card-foreground: var(--foreground);
   --popover: #34373b;
   --popover-foreground: var(--foreground);
+  --dialog: #232528;
+  --dialog-raised: #2c2e32;
   --primary: var(--accent-choice-lime);
   --primary-foreground: #101112;
   --secondary: #27292c;
@@ -636,6 +642,8 @@
   --foreground: #0f1a1c;
   --card: #e7eef0;
   --popover: #ffffff;
+  --dialog: #ffffff;
+  --dialog-raised: #dce6e8;
   --secondary: #dce6e8;
   --muted: #e7eef0;
   --muted-foreground: #56696d;
@@ -658,6 +666,8 @@
   --foreground: #f1f6f5;
   --card: #15272a;
   --popover: #24383c;
+  --dialog: #1b2e32;
+  --dialog-raised: #24383c;
   --secondary: #1b3034;
   --muted: #15272a;
   --muted-foreground: #9cb1b3;
