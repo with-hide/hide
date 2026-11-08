@@ -4,7 +4,8 @@
 // `agent_notice` frame while it asks for them; this window words each one in
 // the interface language and hands it to the desktop host, which drops it
 // while a Hide window has the keyboard. A click opens that agent's pane, and
-// an agent the operator has seen takes its notification back. The app icon
+// the newest View it has to look at, as pressing its row does; an agent the
+// operator has seen takes its notification back. The app icon
 // counts root agents in each notification group whose switch is on.
 
 import { useEffect } from "react";
@@ -85,7 +86,9 @@ export function useAgentNotifications(actions: Actions) {
       for (const notice of notices) {
         if (!(notice.state === "needs_you" ? needsYouEnabled : doneEnabled)) continue;
         // The row's own word leads, as on its line (status-marks B23); the section name only when the core sent none.
-        const word = askSubjectLead(t, notice.subject) ?? (notice.status_code ? statusText(t, notice.status_code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done"));
+        // A View to look at says the eye's word with the View as its sentence (status-model.md, A View to look at).
+        const code = notice.status_code;
+        const word = askSubjectLead(t, notice.subject) ?? (code === "look" ? t("agents.mark.look") : code ? statusText(t, code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done"));
         const detail = notice.subject ? askSubjectText(t, notice.subject) : notice.detail;
         const state = detail ? `${word} · ${detail}` : word;
         const body = notice.place ? t("firstRun.notice.body", { state, project: notice.place }) : state;

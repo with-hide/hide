@@ -31,7 +31,7 @@ import {
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prOf } from "./prModel";
-import { CLOSED_SHEET, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { forgetPush, syncPush } from "./push";
@@ -359,7 +359,12 @@ function openPending(): void {
   const pending = usePhone.getState().pendingOpen;
   if (!pending) return;
   patch({ pendingOpen: null });
-  openDetail(pending);
+  openNoticed(pending);
+}
+
+/** A tapped notification opens its agent as the row does: on 볼 것 while it has a View to look at (B11, status-model.md A View to look at). */
+export function openNoticed(key: AgentKey): void {
+  openDetail(key, agentOf(usePhone.getState().groups, key)?.mark === "look" ? "looks" : "conversation");
 }
 
 function reopenDetail(): void {

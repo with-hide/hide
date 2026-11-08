@@ -764,7 +764,7 @@ export interface AgentNotice {
     state: "needs_you" | "done";
     place: string;
     /**
-     * The root row's status word code. Optional for older frames.
+     * The root row's status word code, or `look` for a View the operator has not looked at, worded as the eye mark (`To look at`, `볼 것`) with the View's name as detail. Optional for older frames.
      */
     status_code?:
       | "error"
@@ -782,6 +782,7 @@ export interface AgentNotice {
       | "sleeping"
       | "waking"
       | "sleep_failed"
+      | "look"
       | null;
     /**
      * The core's chosen row detail, untranslated; absent or null means the original state-and-project body.

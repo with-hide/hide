@@ -91,6 +91,10 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
   expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["질문 · 작업 단계 검토 · 5단계 · my-app", "Question · Task steps review · 5 steps · my-app"]);
 
+  // A View to look at says the eye's word and the View's name (status-model.md, A View to look at).
+  await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", status_code: "look", detail: "report.html", place: "my-app" }], clear: [] }));
+  expect(shown.at(-1)?.[2]).toBe("To look at · report.html · my-app");
+
   await act(async () => open?.("agent:node|w1:p1"));
   expect(events.some((event) => event.kind === "focus_pane" && event.payload.pane_id === "w1:p1")).toBe(true);
 
@@ -100,7 +104,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   });
   expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p2", device_id: "node", pane_id: "w1:p2", title: "x", state: "done", place: "" }], clear: [] }));
-  expect(shown).toHaveLength(12);
+  expect(shown).toHaveLength(13);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });

@@ -552,29 +552,91 @@ mod tests {
         );
     }
 
-    /// A View to look at lists the row in Needs You and calls no notice
-    /// (unseen-agent-views D-13, B12): the notice follows the group the row
-    /// would have without it.
+    /// A View to look at notifies like any Needs You entry
+    /// (status-model.md, A View to look at): once per news, as `볼 것` with the newest
+    /// View, and taken back when it is seen. A finished turn that has one is
+    /// that one notice, and the row's own question keeps its own.
     #[test]
-    fn a_row_with_a_view_to_look_at_is_listed_in_needs_you_and_never_announced() {
-        let mut transitions = Transitions::default();
-        let looking = |group: &str| {
-            let mut look = row("w1:p1", group, "none", None);
-            look["look"] = json!({"group": "seen", "count": 1});
-            project(&rest(json!([look])), "local")
+    fn a_view_to_look_at_is_one_notice_per_news_and_yields_to_the_rows_own_ask() {
+        let at = |group: &str, demand: &str, own: Option<&str>, views: &[&str]| {
+            let mut agent = row("w1:p1", group, demand, None);
+            agent["status_code"] = json!(if group == "done" { "done" } else { "idle" });
+            if let Some(own) = own {
+                agent["look"] = json!({"group": own, "count": views.len(), "view_id": "d1",
+                                       "label": views[0]});
+                agent["mark"] = json!("look");
+            }
+            project(&rest(json!([agent])), "local")
         };
-        let working = project(
-            &rest(json!([row("w1:p1", "working", "none", None)])),
-            "local",
+        let mut transitions = Transitions::default();
+        transitions.observe(&at("working", "none", None, &[]));
+
+        // The View opens while the agent works: one notice, the eye's word
+        // and the View's name; the row's sentence and subject stay out.
+        let (notices, _) =
+            transitions.observe(&at("needs_you", "none", Some("working"), &["report.html"]));
+        assert_eq!(
+            notices
+                .iter()
+                .map(|n| (n.state, n.status_code.as_deref(), n.detail.as_deref()))
+                .collect::<Vec<_>>(),
+            [(NoticeState::NeedsYou, Some("look"), Some("report.html"))]
         );
-        transitions.observe(&working);
-        let opened = looking("needs_you");
-        let listed = opened.agents().next().unwrap();
-        assert_eq!(listed.group, "needs_you");
-        assert!(
-            transitions.observe(&opened).0.is_empty(),
-            "an unseen View announces nothing"
-        );
+        assert_eq!(notices[0].place, "hide");
+        // A second open while it is still unseen, and the turn finishing
+        // under it, say nothing new.
+        let (notices, cleared) = transitions.observe(&at(
+            "needs_you",
+            "none",
+            Some("working"),
+            &["b.html", "report.html"],
+        ));
+        assert!(notices.is_empty() && cleared.is_empty());
+        let (notices, _) = transitions.observe(&at("needs_you", "none", Some("done"), &["b.html"]));
+        assert!(notices.is_empty(), "the finished turn is no Done beside it");
+        // Seen: the row goes back to its own Done with no notice, and the
+        // View's notice is taken back.
+        let (notices, cleared) = transitions.observe(&at("done", "none", None, &[]));
+        assert!(notices.is_empty());
+        assert_eq!(cleared.len(), 1);
+        // An open again of a View already seen is news again.
+        let (notices, _) =
+            transitions.observe(&at("needs_you", "none", Some("done"), &["report.html"]));
+        assert_eq!(notices[0].status_code.as_deref(), Some("look"));
+
+        // A turn that finishes with a View open is one notice, the View's.
+        let mut transitions = Transitions::default();
+        transitions.observe(&at("working", "none", None, &[]));
+        let (notices, _) =
+            transitions.observe(&at("needs_you", "none", Some("done"), &["report.html"]));
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].status_code.as_deref(), Some("look"));
+
+        // A question on the row keeps its own notice, with the View or
+        // without, and its answer leaves the row in Needs You for the View
+        // with nothing new to say.
+        let mut transitions = Transitions::default();
+        transitions.observe(&at("working", "none", None, &[]));
+        let (notices, _) = transitions.observe(&at(
+            "needs_you",
+            "question",
+            Some("needs_you"),
+            &["report.html"],
+        ));
+        assert_eq!(notices[0].status_code.as_deref(), Some("idle"));
+        assert_eq!(notices[0].state, NoticeState::NeedsYou);
+        let (notices, cleared) =
+            transitions.observe(&at("needs_you", "none", Some("working"), &["report.html"]));
+        assert!(notices.is_empty() && cleared.is_empty());
+        // A question asked while the View waits is announced as a question.
+        let (notices, _) = transitions.observe(&at(
+            "needs_you",
+            "question",
+            Some("needs_you"),
+            &["report.html"],
+        ));
+        assert_eq!(notices.len(), 1);
+        assert_ne!(notices[0].status_code.as_deref(), Some("look"));
     }
 
     /// The worker receives the row's sentence and status unchanged, not a

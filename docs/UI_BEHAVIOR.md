@@ -710,7 +710,7 @@ The choices themselves and their order are the core's (`AttentionReason::choices
 The phone shows the same reason with the step's pull request mark and takes no choice.
 A root whose agent opened a View the operator has not looked at is in Needs You with the `볼 것` mark, an eye in the warning badge, and the line `볼 것 · <newest View>`, ending with ` · 외 N` for the others so a long name never cuts the count; pressing it brings its pane and that View forward, the lane showing the documents, and the mark goes once the operator looks at every such View, or each is closed (PRD unseen-agent-views B1-B3, B9, B13).
 A question, approval or block on the same row keeps its mark and line, which ends with `볼 것 N`, and the row stays in Needs You after it is answered while a View is still to look at (B11).
-`볼 것` counts with the operator's turns on badges and the rail and sends no push, notice or sound (B12).
+`볼 것` counts with the operator's turns on badges and the rail, and notifies as the row's other Needs You entries do (Agent notifications, below): one notice per open the operator has not looked at, `볼 것 · <newest View> · <project>` (operator decision 2026-11-08, replacing B12).
 What to do is the core's `detail`: the label's reply, else the first line of a native question waiting now in the agent's own words (up to 40 characters, `…` when cut), else the label's line, else the verb's own words (`답을 기다림`); a native question therefore reads as itself with Hide AI off and while the label still describes the turn's work ([status-model.md](status-model.md#task-identity)).
 An idle or done parent still owns its children, and a closed pane or ended parent agent makes them orphan roots.
 A parent waiting on a working descendant stays Working; a descendant that asks waits on its parent, so the parent keeps its own state, unread because the ask is news to it ([status-model.md](status-model.md#a-quiet-row-that-waits)).
@@ -1943,12 +1943,13 @@ A remote target never uses the core machine's login result; its kit reports inst
 A browser tab shows the agents step alone, with no progress bar, and Continue there ends the wizard, so the sidebar's invitation is its way into practice (Practice window, below); the notifications and start steps are the desktop app's (D-14, B26).
 The desktop app's Help > Set up Hide opens the same steps from the first as this window's own walk: the agents step starts from the agents switched on now and its Continue switches only the agents whose switch changed, the way Settings > Agents does; Escape and the close button end it, and a step not continued changes nothing (B45, B46).
 
-With Needs You on, the desktop app shows a notification when a root agent newly needs the operator (a question, an approval, a block or an error); Done independently enables new completions.
+With Needs You on, the desktop app shows a notification when a root agent newly needs the operator (a question, an approval, a block, an error, or a View it opened to look at); Done independently enables new completions.
 Both are sent only while no Hide window has the keyboard: its title is the root's row title (the provider when no task or proven native title exists), and with a second-line sentence its body is `<translated row status> · <exact sentence> · <project>` (D-09 to D-11, B31, B39, operator-approved update 2026-10-13).
 The sentence stays in its original language; without one the body is the row's word and the project (`Approval · <project>`), a frame with no status code says its section (`Needs You · <project>`, `Unread · <project>`), and an empty project omits its separator.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for the title priorities, native and inferred questions, counts and both notification channels in each mode.
 hided judges the changes with the phone push's rules (status-model.md, Row presentation and phone notifications), so a child's raise arrives on its root, the same state never notifies twice, an agent back within ten minutes is not announced again, and nothing already waiting when the app opened is announced (B32, B33).
-A click brings Hide forward and opens that agent's pane, on a device too; an agent the operator has seen takes its notification back, and a newer one for the same agent replaces it (B34, B35).
+A View to look at is one notification, `To look at · report.html · <project>` (`볼 것 · …` in Korean), naming the newest View: a second open while the row is still unseen sends nothing, an open again of a View already seen is news again, a turn that finishes with a View to look at sends that one notification and no Done, and a question, approval or block on the same row sends its own instead (operator decision 2026-11-08, [status-model.md](status-model.md#a-view-to-look-at)).
+A click brings Hide forward and opens that agent's pane, on a device too, and with a View to look at brings that View forward as pressing the row does; an agent the operator has seen takes its notification back, as a View looked at takes back its own, and a newer one for the same agent replaces it (B34, B35).
 On Windows a click on a notification in Action Center after Hide quit starts Hide and opens what it named once the shell is up, as a click while it runs does.
 The app icon sums root agents in every enabled notification group across every device and project the window shows: Needs You under its switch and unread Done under its own, including rows folded into `more`, and nothing at zero (operator decision 2026-10-18).
 Reading a Done row removes it from that group and the count; turning either switch off removes only that group's contribution.
@@ -2829,7 +2830,7 @@ When a relay device is unreachable, the list stays dimmed and the list, detail a
 The existing automatic reconnect resumes when the device answers.
 
 The first hosted pairing offers the home-screen hint until dismissed, once per browser storage, and keeps the existing 알림 켜기 action, denied-permission line and Safari-tab installation line.
-Each saved device owns its own notification subscription; tapping a notification selects that device and opens its agent even when another device was last shown.
+Each saved device owns its own notification subscription; tapping a notification selects that device and opens its agent even when another device was last shown, on 볼 것 while the agent has a View to look at, as its eye row does.
 The hosted app asks for no account, login or payment and loads no external script or analytics.
 The following Tailscale-specific address and transport guidance remains for the advanced direct connection; the list, conversation, reply, quick keys, start and wake behavior is common to both transports.
 
