@@ -179,9 +179,9 @@ fn set(names: &[&str]) -> BTreeSet<String> {
 /// B20, B21, B23, B26: a repository worked in from a linked worktree and a
 /// subfolder is one row carrying each agent; a folder Paseo and Herdr both
 /// keep is one row carrying both; home, a folder outside home, a folder
-/// that is gone, an archived Paseo project, a project older than thirty days
-/// and a registered one are not rows; and every file read is the same byte
-/// for byte afterwards.
+/// that is gone, an archived Paseo project, a project older than thirty days,
+/// a registered one and a folder inside Hide's own `~/.hide` are not rows;
+/// and every file read is the same byte for byte afterwards.
 #[test]
 fn every_source_merges_into_the_projects_a_registration_would_add() {
     let home = Home::new();
@@ -215,6 +215,7 @@ fn every_source_merges_into_the_projects_a_registration_would_add() {
             ]})
             .to_string(),
         ),
+        home.claude("in-hide", &home.folder(".hide/state/desk-work")),
     ];
     // Herdr keeps no time per workspace: its save is as recent as its file.
     std::fs::File::options()
