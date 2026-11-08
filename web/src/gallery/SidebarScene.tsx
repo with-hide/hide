@@ -32,6 +32,10 @@ export type SceneParams = {
   front: SceneFront;
   /** `hidden` seeds the core's `ui_state.device_rail_visible` as false: the name on the top line is the device menu. */
   rail: "shown" | "hidden";
+  /** The list the sidebar shows, seeded as the core's `ui_state.sidebar_lens`; `tasks-project` is the 태스크 list in 프로젝트별. */
+  lens?: "projects" | "tasks" | "tasks-project";
+  /** `shown` seeds the core's `ui_state.agent_logo_mode`, so the rows draw their logos. */
+  logos?: "hidden" | "shown";
 };
 
 export function sceneParams(params: URLSearchParams): SceneParams {
@@ -48,10 +52,14 @@ export function sceneParams(params: URLSearchParams): SceneParams {
   if (devices === "one" && front !== "local") throw new Error(`Scene front ${front} needs devices=two`);
   const rail = params.get("rail") ?? "shown";
   if (rail !== "shown" && rail !== "hidden") throw new Error(`Unknown scene rail ${rail}`);
-  return { theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
+  const lens = params.get("lens") ?? "projects";
+  if (lens !== "projects" && lens !== "tasks" && lens !== "tasks-project") throw new Error(`Unknown scene lens ${lens}`);
+  const logos = params.get("logos") ?? "hidden";
+  if (logos !== "hidden" && logos !== "shown") throw new Error(`Unknown scene logos ${logos}`);
+  return { lens, logos, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
 }
 
-export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, axis = false }: SceneParams) {
+export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", axis = false }: SceneParams) {
   const [folds, setFolds] = useState<SceneFolds>({ ...REFERENCE_FOLDS, frontDevice: front === "mini" ? "mini" : front === "offline" ? OFFLINE_DEVICE : "local" });
   const actions = useMemo(
     () =>
@@ -69,11 +77,11 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
   const scene = useMemo(() => axis ? sidebarStatusAxisScene(content, folds, Date.now()) : sidebarScene(content, folds, Date.now(), devices), [content, folds, devices, axis]);
   useLayoutEffect(() => {
     const sized = width === null ? scene.rest : { ...scene.rest, ui_state: { ...scene.rest.ui_state, sidebar_width: width } };
-    const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown" } };
+    const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown", sidebar_lens: lens === "projects" ? "projects" as const : "tasks" as const, task_view: lens === "tasks-project" ? "project" as const : "status" as const, agent_logo_mode: logos } };
     // `mission-ask`: a mission waits on the operator with no session row to carry it, so Needs You lists the mission itself.
     const rest = state === "mission-ask" ? withMissionAsk(shown, "local", Date.now()) : shown;
     useShellStore.setState({ rest, agents: scene.agents, connection: "live", ...(axis ? { focusedPaneId: "a1" } : {}) });
-  }, [scene, width, rail, axis, state]);
+  }, [scene, width, rail, axis, state, lens, logos]);
 
   useLayoutEffect(() => {
     useUiStore.setState({ screen: axis ? { kind: "workspace" } : { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "hide" }, overviewOpen: false });
