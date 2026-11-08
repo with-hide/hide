@@ -1270,6 +1270,11 @@ export type TaskView = "status" | "project";
 export type SidebarProject = { device_id: string; workspace_id: string };
 
 /** One 마무리 맡기기 and where it stands (`status.stray_hand_offs`). */
+/** One add's receipt: `refused` carries the core's error kind and message. */
+export type ProjectAddReceipt = { request_id: string; device_id: string; path: string } & (
+  | { state: "pending" | "added" }
+  | { state: "refused"; kind: string; message: string }
+);
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
@@ -1990,7 +1995,7 @@ export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | 
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
-export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
 export type MachineProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
 
 /** A machine the first-run Devices step offers: an ssh config Host, or this PC's WSL. */
@@ -2379,6 +2384,8 @@ export type TaskOperation = {
  */
 export type RepositoryClone = {
   id: number;
+  /** The machine the clone runs on and registers its project on; absent from an older daemon, whose clones ran on the core's machine. */
+  device_id?: string;
   host: string;
   /** The folder the clone creates, canonical; the registration carries the same path. */
   path: string;
@@ -3211,6 +3218,10 @@ export type SnapshotRest = {
     expanded_paths?: string[];
     /** Each SSH device's expanded Explorer folders; this machine's are `expanded_paths`. */
     device_expanded_paths?: Record<string, string[]>;
+    /** The folder Add a project's folder list last showed on the core's machine (PRD device-add-project D-04). */
+    add_project_folder?: string | null;
+    /** The same for each device, by device id. */
+    device_add_project_folders?: Record<string, string>;
     /** Projects whose checkouts the sidebar folds. */
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */
@@ -3317,6 +3328,8 @@ export type SnapshotRest = {
     browser_opens?: import("./viewLayout").BrowserOpenReceipt[];
     /** The latest 마무리 맡기기 presses, oldest first and bounded (PRD project-panel-results B12, B13). */
     stray_hand_offs?: StrayHandOff[];
+    /** The adds that named a request id (Add a project's importable list), oldest first and bounded, each with its own outcome (PRD device-add-project B25). */
+    project_adds?: ProjectAddReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
     last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
   };

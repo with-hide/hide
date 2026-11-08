@@ -52,7 +52,9 @@ pub enum EngineError {
     /// a connection that closed unanswered. The engine may have done what was
     /// asked, so a caller that made a change reconciles before it asks again.
     Unanswered(String),
-    /// The engine answered with a refusal, under its stable code.
+    /// The engine answered with a refusal, under its stable code. A refusal
+    /// is made before the engine does what was asked: an input it refuses,
+    /// its own or its node's, typed nothing (`delivery::ladder`).
     Refused { code: String, message: String },
     /// The engine's answer could not be read as an answer at all.
     Malformed(String),
@@ -169,6 +171,11 @@ pub(crate) trait Engine: Send + Sync {
     /// core: what an engine that starts and reads agents itself starts,
     /// recognizes and reads them by.
     fn set_agent_definitions(&self, _catalog: Arc<hide_agent_adapter::definition::Catalog>) {}
+    /// The program a start of the `kind` agent types: its definition's first
+    /// executable, as this engine reads the definitions now, which is also
+    /// what the pane's node is asked how it starts (`start_prompt::program_of`).
+    /// `None` where no definition names `kind`.
+    fn start_program_name(&self, kind: &str) -> Option<String>;
     /// The session the hook of the `kind` agent in `pane` reported, proved
     /// to come from that pane (PRD engine-bundle-3-core-owns D-9, D-16): an
     /// engine that starts and resumes agents itself keeps it as the pane's
@@ -395,6 +402,10 @@ pub(crate) trait Engine: Send + Sync {
     fn send_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Presses `keys` in a pane, in order.
     fn send_keys(&self, wait: Wait, pane: &str, keys: &[&str]) -> Answer<()>;
+    /// Presses `keys` in a pane as the sleep of its agent does, to end it:
+    /// the only keys, beside a wake's start, that a pane whose agent is
+    /// asleep takes.
+    fn send_sleep_keys(&self, wait: Wait, pane: &str, keys: &[&str]) -> Answer<()>;
     /// Types `text` into a pane and submits it.
     fn submit_text(&self, wait: Wait, pane: &str, text: &str) -> Answer<()>;
     /// Presses one key in a pane.
@@ -443,11 +454,26 @@ pub(crate) trait Engine: Send + Sync {
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String>;
     /// Starts `start` in its pane's shell: the agent's pane.
     fn start_agent(&self, wait: Wait, start: &PreparedStart) -> Answer<StartedAgent>;
+    /// Brings the pane's holder to this build before an agent starts again
+    /// in it (with-hide/hide-private#646): a shell pane whose holder runs from
+    /// another build is started again under the same id, in `cwd` when given
+    /// (else the folder it was started in), from its machine's current
+    /// holder. Every answer names the holder that runs the pane, which an
+    /// agent may start in; a refusal is a pane nothing may be typed into,
+    /// since no holder is known to run it.
+    fn renew_holder(
+        &self,
+        wait: Wait,
+        pane: &str,
+        cwd: Option<&str>,
+    ) -> Answer<hide_node_link::holders::HolderRenewal>;
     /// An agent's kind, status and state sequence, by name or pane.
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.
     fn delivery_agent(&self, wait: Wait, target: &str) -> Answer<DeliveryAgent>;
-    /// Types `text` into the agent's input and submits it.
+    /// Types `text` into the agent's input and submits it. A refusal typed
+    /// nothing; an answer that never came may follow a submission that
+    /// arrived.
     fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()>;
 
     // Worktrees.

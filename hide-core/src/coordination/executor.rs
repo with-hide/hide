@@ -39,6 +39,47 @@ fn worktree_create_refusal(error: EngineError) -> String {
 // read, so they are not: each is bounded by `TARGET_CHECK_TIMEOUT` and runs
 // beside another spawn's.
 pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
+
+/// The refusal for a spawn whose machine already runs the most pane holders
+/// it keeps: the machine and the node's own count and cap, so the caller
+/// knows where to end finished agents.
+fn holder_cap(machine: &str, why: &str) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "spawn.holder_cap", "machine": machine, "detail": why,
+    }));
+    super::refusal(
+        hide_node_link::holders::HOLDER_CAP_REFUSAL,
+        &format!("{machine}: {why}"),
+    )
+}
+
+/// What is left of a spawn's answer time for its agent to take input, at
+/// most [`super::BRIEF_READY_WAIT`].
+fn brief_wait(answer_by: Instant) -> Duration {
+    super::BRIEF_READY_WAIT.min(answer_by.saturating_duration_since(Instant::now()))
+}
+
+/// How long a spawn has to answer its caller: [`super::SPAWN_ANSWER_WAIT`],
+/// or [`super::DEVICE_SPAWN_ANSWER_WAIT`] on a device.
+fn answer_wait(on_device: bool) -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = TEST_ANSWER_WAIT.with(std::cell::Cell::get) {
+        return wait;
+    }
+    if on_device {
+        super::DEVICE_SPAWN_ANSWER_WAIT
+    } else {
+        super::SPAWN_ANSWER_WAIT
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A spawn's answer wait on this test thread, so a test of a shell that
+    /// never finishes starting does not wait out the real one.
+    pub(crate) static TEST_ANSWER_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
 /// Tests share `SPAWN` through the process, so those that spawn take turns
 /// when a runner puts them on threads of one process.
 #[cfg(test)]
@@ -54,7 +95,7 @@ fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String
 }
 /// The ledger with the registrations Hide holds asleep, read under one
 /// hold of the runtime's lock so the two agree.
-fn registrations(
+pub(super) fn registrations(
     client: &Client,
 ) -> Result<(Arc<crate::delivery::ledger::Ledger>, super::Sleeping), String> {
     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
@@ -226,7 +267,7 @@ pub(crate) fn spawn_ref(
     }
 }
 
-fn mutate(
+pub(super) fn mutate(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -245,7 +286,7 @@ fn mutate(
         STORE_TIMEOUT,
     )
 }
-fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
+pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
     client
         .runtime
         .upgrade()
@@ -281,6 +322,7 @@ fn wait_native_identity(
     pane: &str,
     name: Option<&str>,
     kind: &str,
+    answer_by: Instant,
 ) -> Result<ProjectedAgent, String> {
     // The public socket start acknowledges the typed command before the
     // process and its native session are detected. Wait for that observation,
@@ -288,7 +330,7 @@ fn wait_native_identity(
     // The agent runs by now, so a read the engine did not answer says nothing of
     // it: the wait reads again, and at its deadline the spawn leaves the
     // registration to an identity wait rather than an agent nothing tracks.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = (Instant::now() + Duration::from_secs(5)).min(answer_by);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -319,12 +361,19 @@ fn wait_native_identity(
     }
 }
 /// Waits until the engine reports the agent `name` in `pane` ready for input
-/// (`BRIEF_READY_WAIT`), the moment the spawn's brief may be typed. An agent
-/// that never takes input in that time is `brief_not_submitted`: nothing was
-/// typed, and the same command waits again.
-fn brief_ready(engine: &dyn Engine, spawn: &str, pane: &str, name: &str) -> Result<(), String> {
+/// (`BRIEF_READY_WAIT`, ending by the spawn's `answer_by`), the moment the
+/// spawn's brief may be typed. An agent that never takes input in that time
+/// is `brief_not_submitted`: nothing was typed, and the same command waits
+/// again.
+fn brief_ready(
+    engine: &dyn Engine,
+    spawn: &str,
+    pane: &str,
+    name: &str,
+    answer_by: Instant,
+) -> Result<(), String> {
     use crate::delivery::ladder::NotReady;
-    crate::delivery::ladder::ready(engine, pane, name, super::BRIEF_READY_WAIT).map_err(|not| {
+    crate::delivery::ladder::ready(engine, pane, name, brief_wait(answer_by)).map_err(|not| {
         match not {
             NotReady::Request(message) => message,
             NotReady::Unread(detail) => brief_refused(spawn, pane, "brief.agent_unread", detail),
@@ -340,32 +389,34 @@ fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String 
     "brief_not_submitted".to_owned()
 }
 
-/// How the pane's node starts `kind`'s program now, asked before every
-/// start of the spawn: what the start names and whether the brief can ride
-/// it. It only ever lets a start name a file or carry its brief: a program
-/// the node does not find (on Windows a `.ps1` alone, which the pane's
-/// PowerShell still runs), a node that could not be asked, or no node at all
-/// leave the start as it was, by the program's name with its brief typed. A
-/// device's start was refused already when its node did not find the
-/// program (`check_target`).
+/// The program the engine starts `kind` by (the definition's first
+/// executable, `start_prompt::program_of`) and how the pane's node starts it
+/// now, asked before every start of the spawn: what the start names and
+/// whether the brief can ride it. It only ever lets a start name a file or
+/// carry its brief: a program the node does not find (on Windows a `.ps1`
+/// alone, which the pane's PowerShell still runs), a node that could not be
+/// asked, or no node at all leave the start as it was, by the program's name
+/// with its brief typed. A device's start was refused already when its node
+/// did not find the program (`check_target`).
 fn start_form(
     node: Option<&dyn crate::node_access::NodeLink>,
+    engine: &dyn crate::engine::Engine,
     kind: &str,
     spawn: &str,
-) -> Option<StartForm> {
-    let node = node?;
-    crate::start_prompt::start_form(
-        node,
-        hide_agent_adapter::canonical_kind(kind),
-        TARGET_CHECK_TIMEOUT,
-    )
-    .unwrap_or_else(|error| {
-        crate::diagnostic!(json!({
-            "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
-            "agent_kind": kind, "cause": error.to_string(),
-        }));
-        None
-    })
+) -> (String, Option<StartForm>) {
+    let program = crate::start_prompt::program_of(engine, kind);
+    let Some(node) = node else {
+        return (program, None);
+    };
+    let form = crate::start_prompt::start_form(node, &program, TARGET_CHECK_TIMEOUT)
+        .unwrap_or_else(|error| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
+                "agent_kind": kind, "program": program, "cause": error.to_string(),
+            }));
+            None
+        });
+    (program, form)
 }
 
 /// The words a fresh start of `kind` adds to carry `brief` as its launch
@@ -548,15 +599,8 @@ pub(crate) fn run(
         Command::End {
             id,
             actor: asserted,
-        } => mutate(
-            &client,
-            &authority,
-            &actor,
-            Mutation::End {
-                id,
-                actor: asserted,
-            },
-        ),
+            keep_pane,
+        } => super::end::end(&client, &authority, &actor, id, asserted, keep_pane),
         Command::Register {
             check,
             machine,
@@ -796,7 +840,7 @@ fn check_target(
 ) -> Result<(), String> {
     use crate::node_access::{LinkError, call_as};
     use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
-    let link = client
+    let (link, engine) = client
         .runtime
         .upgrade()
         .ok_or("delivery_unavailable")?
@@ -840,7 +884,8 @@ fn check_target(
     match call_as::<Option<StartForm>>(
         link.as_ref(),
         Call::AgentInstalled {
-            name: hide_agent_adapter::canonical_kind(kind).to_owned(),
+            // The device's own engine says what the agent is started by.
+            name: crate::start_prompt::program_of(engine.as_ref(), kind),
         },
         TARGET_CHECK_TIMEOUT,
     ) {
@@ -913,6 +958,18 @@ fn spawn(
     {
         *machine = None;
     }
+    // The caller waits this long for the answer, besides the hook's wait
+    // below; the new shell's wait and every wait after the start (the agent
+    // taking input, its session) end inside it, so a stopped shell or a slow
+    // agent is answered rather than timed out.
+    let mut answer_by = Instant::now()
+        + answer_wait(matches!(
+            &command,
+            Command::Spawn {
+                machine: Some(_),
+                ..
+            }
+        ));
     let Command::Spawn {
         parent,
         machine,
@@ -1058,7 +1115,10 @@ fn spawn(
         .is_some_and(|record| record.completed || record.typed > 0)
     {
         let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        let hook_started = Instant::now();
         check_hook(client, child_machine, kind, intent)?;
+        // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
+        answer_by += hook_started.elapsed();
     }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
@@ -1233,6 +1293,7 @@ fn spawn(
                             caller,
                             &existing,
                             &reserved.id,
+                            &child_device,
                         )?;
                         // Drawing ahead is only the screen's: the engine's layout
                         // replaces it, so a runtime that cannot draw it now
@@ -1268,7 +1329,12 @@ fn spawn(
                                 .unwrap_or_default(),
                             launch.as_ref().map(|launch| launch.command.as_slice()),
                         )
-                        .map_err(|error| format!("{error:?}"))?;
+                        .map_err(|failure| match failure.code() {
+                            Some(hide_node_link::holders::HOLDER_CAP_REFUSAL) => {
+                                holder_cap(&child_device, failure.message())
+                            }
+                            _ => failure.message().to_owned(),
+                        })?;
                         shell = ShellStart::of_tab(tab.launched, launch.as_ref());
                         seed_tab = tab.initial_label.map(|label| super::naming::SeedTab {
                             id: tab.tab_id,
@@ -1300,6 +1366,11 @@ fn spawn(
                     )
                     .map_err(|error| match error {
                         EngineError::Request(message) | EngineError::Answer(message) => message,
+                        EngineError::Refused { code, message }
+                            if code == hide_node_link::holders::HOLDER_CAP_REFUSAL =>
+                        {
+                            holder_cap(&child_device, &message)
+                        }
                         error => worktree_create_refusal(error),
                     })?;
                 let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);
@@ -1404,7 +1475,7 @@ fn spawn(
                 }));
             }
             close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
-            let form = start_form(node.as_deref(), kind, &reserved.id);
+            let (program, form) = start_form(node.as_deref(), engine.as_ref(), kind, &reserved.id);
             let mut start_args = with_permission(kind, &permissions, start_args);
             // A fresh start carries the brief as its prompt argument where
             // the agent holds that through its own start screens
@@ -1442,14 +1513,30 @@ fn spawn(
                 &reserved.id,
                 pane,
                 shell,
+                answer_by.saturating_duration_since(Instant::now()),
                 name,
                 kind,
                 start_args,
                 codex_daemon,
-                form.as_ref().and_then(|form| {
-                    crate::engine::StartProgram::of(hide_agent_adapter::canonical_kind(kind), form)
-                }),
-            )?;
+                form.as_ref()
+                    .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+            )
+            .inspect_err(|code| {
+                // A pane a start of this spawn was typed into keeps it: the
+                // engine may still hold the agent's name there.
+                if reserved.typed == 0
+                    && super::split_refusal(code).0 == crate::agent_start::SHELL_STARTING
+                {
+                    close_unstarted_pane(
+                        client,
+                        authority,
+                        actor,
+                        engine.as_ref(),
+                        &reserved,
+                        pane,
+                    );
+                }
+            })?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
@@ -1469,7 +1556,7 @@ fn spawn(
                     engine.as_ref(),
                     pane,
                     name,
-                    super::BRIEF_READY_WAIT,
+                    brief_wait(answer_by),
                 ) {
                     Ok(()) => {
                         reserved = serde_json::from_value(mutate(
@@ -1500,14 +1587,16 @@ fn spawn(
                 // Its session start drops an Enter typed during it
                 // (`AgentId::brief_after_session`). Unseen within the wait,
                 // the brief goes in anyway and its record still judges it.
-                if let Err(reason) = wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
+                if let Err(reason) =
+                    wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
+                {
                     crate::diagnostic!(json!({
                         "component": "spawn", "kind": "brief.session_unseen",
                         "spawn": reserved.id, "pane_id": pane, "reason": reason,
                     }));
                 }
             }
-            brief_ready(engine.as_ref(), &reserved.id, pane, name)?;
+            brief_ready(engine.as_ref(), &reserved.id, pane, name, answer_by)?;
             let pane_key = if on_node {
                 pane.to_owned()
             } else {
@@ -1595,7 +1684,8 @@ fn spawn(
                 .map_err(|_| "delivery_unavailable")?
                 .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
         }
-        let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind) {
+        let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
+        {
             Err(reason) if reason == "native_identity_unavailable" => {
                 // The agent rests without a session (Codex and OpenCode 2
                 // report theirs at their first turn): the core binds it when
@@ -1805,6 +1895,7 @@ fn beside_pane(
     caller: &str,
     cwd: &str,
     spawn: &str,
+    machine: &str,
 ) -> Result<(String, bool), String> {
     let label = crate::start_claim::spawn_label(spawn);
     if let Some(pane) = snapshot
@@ -1828,6 +1919,11 @@ fn beside_pane(
         Default::default(),
     ) {
         Err(EngineError::Request(message)) => return Err(message),
+        Err(EngineError::Refused { code, message })
+            if code == hide_node_link::holders::HOLDER_CAP_REFUSAL =>
+        {
+            return Err(holder_cap(machine, &message));
+        }
         pane => pane.map_err(|error| refused(error.to_string()))?,
     };
     match engine.rename_pane(Wait::Each(Duration::from_secs(5)), &pane, Some(&label)) {
@@ -1869,8 +1965,40 @@ fn shell_alone(engine: &dyn Engine, pane: &str) -> Result<bool, String> {
 /// The terminal the engine runs in `pane` now.
 fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
     engine
-        .pane_terminal(Wait::Each(Duration::from_secs(5)), pane)
+        .pane_terminal(Wait::Each(super::PANE_WAIT), pane)
         .map_err(String::from)
+}
+
+/// What the pane a spawn or a registration recorded is now, against the
+/// terminal recorded with it: a pane id can outlive its terminal (Herdr
+/// handed ids out again after a new server, and a live handoff moves a
+/// pane), so the pane is the record's only while it runs that terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RecordedPane {
+    /// It runs the recorded terminal.
+    Same,
+    /// The record is from before terminals were recorded.
+    Unrecorded,
+    /// The id runs another terminal now.
+    Replaced,
+    /// The engine has no such pane.
+    Gone,
+}
+
+pub(super) fn recorded_pane(
+    engine: &dyn Engine,
+    recorded: Option<&str>,
+    pane: &str,
+) -> Result<RecordedPane, EngineError> {
+    match engine.pane_terminal(Wait::Each(super::PANE_WAIT), pane) {
+        Err(error) if error.code() == Some("pane_not_found") => Ok(RecordedPane::Gone),
+        Err(error) => Err(error),
+        Ok(terminal) => Ok(match recorded {
+            None => RecordedPane::Unrecorded,
+            Some(recorded) if recorded == terminal => RecordedPane::Same,
+            Some(_) => RecordedPane::Replaced,
+        }),
+    }
 }
 
 /// Closes the pane of every earlier attempt of `reserved`: a spawn of the
@@ -1925,6 +2053,40 @@ fn close_unstarted_attempts(
     }
 }
 
+/// Closes the pane `reserved` made, whose shell had not finished starting
+/// when its start's wait ran out, so nothing was typed there (a startup file
+/// stopped at a question or blocked), and takes it off the spawn: the
+/// attempt leaves no tab, and the same intent opens a new pane with a new
+/// shell. A pane that no longer runs the terminal the spawn recorded is left
+/// alone. Every outcome is logged; the caller's refusal says why either way.
+fn close_unstarted_pane(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    engine: &dyn Engine,
+    reserved: &SpawnRecord,
+    pane: &str,
+) {
+    let closed = same_terminal(engine, reserved, pane)
+        .and_then(|()| close_pane(engine, pane))
+        .and_then(|()| {
+            mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Withdraw {
+                    id: reserved.id.clone(),
+                    pane: pane.to_owned(),
+                },
+            )
+            .map(drop)
+        });
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "shell_starting.close", "spawn": reserved.id,
+        "pane_id": pane, "closed": closed.is_ok(), "reason": closed.err(),
+    }));
+}
+
 /// Closes the pane `reserved` made, whose agent started but whose session a
 /// registration cannot keep (`reason`), when it is still the terminal the
 /// spawn recorded.
@@ -1949,16 +2111,16 @@ fn same_terminal(engine: &dyn Engine, record: &SpawnRecord, pane: &str) -> Resul
         .terminal
         .as_deref()
         .ok_or("pane_identity_unrecorded")?;
-    if pane_terminal(engine, pane)? == recorded {
-        Ok(())
-    } else {
-        Err("pane_replaced".to_owned())
+    match recorded_pane(engine, Some(recorded), pane).map_err(String::from)? {
+        RecordedPane::Same => Ok(()),
+        RecordedPane::Replaced | RecordedPane::Unrecorded => Err("pane_replaced".to_owned()),
+        RecordedPane::Gone => Err("pane_gone".to_owned()),
     }
 }
 
-fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
+pub(super) fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
     engine
-        .close_pane(Wait::Each(Duration::from_secs(5)), pane)
+        .close_pane(Wait::Each(super::PANE_WAIT), pane)
         .map_err(String::from)
 }
 
@@ -2276,6 +2438,50 @@ mod tests {
     use crate::engine::fake::{FakeEngine, processes, reply, session};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// A spawn's answer time that ends no wait in these tests.
+    fn far() -> Instant {
+        Instant::now() + super::super::SPAWN_ANSWER_WAIT
+    }
+
+    /// Issue 666: a spawn's start asks its node about the program its
+    /// definition starts the agent by, and names that program in the file it
+    /// carries, not the agent's kind. Kiro's kind is `kiro` and its first
+    /// executable `kiro-cli`; the node looks the name up on its `PATH`.
+    #[test]
+    fn a_spawns_start_asks_its_node_about_the_definitions_first_executable_not_the_kind() {
+        struct Asked(std::sync::Mutex<Vec<String>>);
+        impl crate::node_access::NodeLink for Asked {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                let hide_node_link::protocol::Call::AgentInstalled { name } = call else {
+                    panic!("the node was asked {call:?}");
+                };
+                self.0.lock().unwrap().push(name);
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    json!({"direct": {"program": "C:\\npm\\kiro-cli.js", "leading": []}}),
+                ))
+            }
+        }
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let engine = fake.engine();
+        let node = Asked(std::sync::Mutex::default());
+        let (program, form) = start_form(Some(&node), engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!(program, "kiro-cli");
+        assert_eq!(*node.0.lock().unwrap(), ["kiro-cli"]);
+        // The file the node named stands for the word the start line begins
+        // with, which is the program and not the kind.
+        let file = crate::engine::StartProgram::of(&program, &form.expect("the node named a file"))
+            .expect("a direct start names a file");
+        assert_eq!(file.name, "kiro-cli");
+        assert_eq!(file.program, "C:\\npm\\kiro-cli.js");
+        // No node leaves the start by the program's name.
+        let (program, form) = start_form(None, engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!((program.as_str(), form), ("kiro-cli", None));
+    }
+
     /// A `worktree.create` whose answer never came may still finish in
     /// the engine, so it is one stable code the same intent resolves; a refusal
     /// and a connection that never opened keep their own words.
@@ -2342,7 +2548,7 @@ mod tests {
                     "kind":"id","value":"parent-session"}}]})))
         });
         let native =
-            wait_native_identity(fake.engine().as_ref(), "w9J:p9R", None, "claude").unwrap();
+            wait_native_identity(fake.engine().as_ref(), "w9J:p9R", None, "claude", far()).unwrap();
         assert_eq!(native.name, None);
         let host = || HostIdentity {
             machine: crate::node::TEST_NODE,
@@ -2383,9 +2589,14 @@ mod tests {
                     "agent_session":{"source":"herdr:pi","agent":"pi",
                         "kind":"path","value":reported}}]})))
             });
-            let native =
-                wait_native_identity(fake.engine().as_ref(), "w9J:p9R", Some("child"), "pi")
-                    .unwrap();
+            let native = wait_native_identity(
+                fake.engine().as_ref(),
+                "w9J:p9R",
+                Some("child"),
+                "pi",
+                far(),
+            )
+            .unwrap();
             let made = record(
                 &native,
                 HostIdentity {
@@ -2424,9 +2635,14 @@ mod tests {
                         "agent":session_agent,"kind":"id","value":"fixture-child-session"}
                 }]})))
             });
-            let child =
-                wait_native_identity(fake.engine().as_ref(), "w2:p1", Some("child"), requested)
-                    .unwrap();
+            let child = wait_native_identity(
+                fake.engine().as_ref(),
+                "w2:p1",
+                Some("child"),
+                requested,
+                far(),
+            )
+            .unwrap();
             assert_eq!(child.agent.as_deref(), Some(reported));
             assert_eq!(
                 child.lineage_session,
@@ -2451,8 +2667,14 @@ mod tests {
             }
             reply(session(json!({"agents":[agent]})))
         });
-        let child =
-            wait_native_identity(fake.engine().as_ref(), "w2:p1", Some("child"), "claude").unwrap();
+        let child = wait_native_identity(
+            fake.engine().as_ref(),
+            "w2:p1",
+            Some("child"),
+            "claude",
+            far(),
+        )
+        .unwrap();
         assert_eq!(
             child.lineage_session,
             crate::engine::tokens::session_digest("fixture-child-session")

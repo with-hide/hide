@@ -34,6 +34,7 @@ hide inbox
 - Letters come as one bundle: each sender's questions and blocks in full, its newest three other letters in full, and older ones folded into one line you open with `hide request show <id>`. Taking the bundle takes the folded letters too; an agent with no prompt hook takes it with the one `hide inbox --ack <bundle>` that `hide inbox` prints.
 - An agent Hide put to sleep still takes letters: a `request` or `block` wakes it, resuming its conversation, and is handed over once it is awake; a `report` or `progress` waits for its next wake, and the hour a letter waits does not run while it sleeps. Each `request` or `block` wakes it once: one that already rang or already woke it does not wake it again, and its hour runs while it sleeps.
   When it cannot be woken, the letter ends undelivered and Hide's own letter tells you whom and why; send again to try once more.
+- When Hide cannot bring a letter of yours to its recipient, after its wake failed or its three bells were spent, the letter ends undelivered at once and Hide's own letter tells you whom, in which pane, why and what to do now; `hide inbox` lists your letters that came back under `returned`, apart from the letters you received.
 
 ## Agents
 
@@ -45,7 +46,7 @@ hide agent show <id|here|spawn id|intent>
 hide agent catalog [--machine <device id>]
 hide agent sleep <id> [--actor <id>]
 hide agent archive <id> [--actor <id>]
-hide agent end <id> [--actor <id>]
+hide agent end <id> [--actor <id>] [--keep-pane]
 ```
 
 {session_rules}
@@ -58,7 +59,8 @@ hide agent end <id> [--actor <id>]
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
 - `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
-  `hide agent end <id>` instead ends only its registration and leaves its process running.
+  `hide agent end <id>` instead ends its registration and closes its pane, which ends the agent and every program it started; its conversation waits under 보관됨, where 이어가기 resumes it, and `--keep-pane` ends only the registration.
+  To end yourself, run `hide agent end <your id> --keep-pane`: without it your own pane closes, and the command never gets its answer.
 - `hide agent archive <id>` does what the screen's `세션 보관` does for that session: its conversation is saved, its panes close, and the operator resumes it from 보관됨; it answers `{"archived":"<id>","pane_id":"<pane>"}`, and refuses a session that is working with `archive_confirmation_required`, which only the operator confirms, from Hide's screen.
 
 ## Panes
@@ -98,13 +100,13 @@ hide workspace remove <path> [--delete-branch] [--force]
 ```
 hide device list [--json]
 hide device add <ssh alias> [--name <name>] [--json]
-hide device remove <device id> [--json]
-hide device retry <device id> [--wait] [--json]
+hide device remove <device id or ssh alias> [--json]
+hide device retry <device id or ssh alias> [--wait] [--json]
 ```
 
 - Add, connect or remove a device only when the operator asked for it, and only from the machine that runs Hide; on a device these are refused with `machine_not_permitted`.
 - `add` takes a `Host` name from `~/.ssh/config` and registers the device without Hide's helper; tell the operator what its answer says: they open Settings › Devices and choose Allow and install on its row, and until then its files, Git and terminals wait.
-- `list` gives each device's id, the one `--machine` takes, its `state` (`connected`, `connecting`, `operator_turn`, `failed`), what it `waits_on` from the operator (`allow_and_install`, `sign_in` with its `input`, `host_key`, `browser` with its `url`, or nothing), its `failure` (`action` `sign_in`, `check_host_key`, `reopen_hide` when an update replaced the running Hide and only quitting and opening it again connects, or `retry`, the finer `cause`, and for a retry ssh's last line as `detail`) and its `next_action`.
+- `list` gives each device's id, its machine's own id once it has connected, and its SSH alias; `--machine`, `remove` and `retry` take either, an alias two devices share being refused with their ids. It also gives its `state` (`connected`, `connecting`, `operator_turn`, `failed`), what it `waits_on` from the operator (`allow_and_install`, `sign_in` with its `input`, `host_key`, `browser` with its `url`, or nothing), its `failure` (`action` `sign_in`, `check_host_key`, `reopen_hide` when an update replaced the running Hide and only quitting and opening it again connects, or `retry`, the finer `cause`, and for a retry ssh's last line as `detail`) and its `next_action`.
 - `retry` starts the attempt the row's Retry starts, which may ask the operator; with `--wait` it answers once the device is connected, it is the operator's turn, the attempt failed, or five minutes passed (`device_wait_timeout`). A device that is connected, connecting or waiting on the operator gets no new attempt; the answer says where it is.
 - When it is the operator's turn, ask them for what `next_action` names. No command answers what ssh asks, trusts a server key or allows the helper: those are the operator's, on the device's row, and you never see what they type.
 - `remove` forgets a device, takes Hide's kit off it when its helper was allowed, and leaves its panes, agents and files running there.

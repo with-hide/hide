@@ -171,6 +171,9 @@ struct Shared {
     calls: Mutex<Vec<(&'static str, Value)>>,
     arrived: std::sync::Condvar,
     wake: Mutex<Option<Wake>>,
+    /// The definitions the core handed this engine, as a real engine keeps
+    /// them; the built-in ones until it does.
+    definitions: Mutex<Option<Arc<hide_agent_adapter::definition::Catalog>>>,
 }
 
 /// The stand-in engine; [`FakeEngine::engine`] hands the core its
@@ -195,6 +198,7 @@ impl FakeEngine<'static> {
                 calls: Mutex::default(),
                 arrived: std::sync::Condvar::new(),
                 wake: Mutex::default(),
+                definitions: Mutex::default(),
             }),
             gates: Vec::new(),
         })
@@ -318,6 +322,21 @@ impl<'g> Engine for FakeEngine<'g> {
 
     fn changes(&self, wake: Wake) {
         *lock(&self.shared.wake) = Some(wake);
+    }
+
+    fn set_agent_definitions(&self, catalog: Arc<hide_agent_adapter::definition::Catalog>) {
+        *lock(&self.shared.definitions) = Some(catalog);
+    }
+
+    fn start_program_name(&self, kind: &str) -> Option<String> {
+        let held = lock(&self.shared.definitions).clone();
+        let definitions = held
+            .as_ref()
+            .map_or(hide_agent_adapter::definition::builtins(), |catalog| {
+                catalog.definitions.as_slice()
+            });
+        hide_agent_adapter::definition::find(definitions, kind)
+            .and_then(|definition| definition.executables.first().cloned())
     }
 
     fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
@@ -689,6 +708,13 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("send_keys", json!({"pane": pane, "keys": keys}))
     }
 
+    fn send_sleep_keys(&self, _wait: Wait, pane: &str, keys: &[&str]) -> Answer<()> {
+        self.ask(
+            "send_keys",
+            json!({"pane": pane, "keys": keys, "sleep": true}),
+        )
+    }
+
     fn submit_text(&self, _wait: Wait, pane: &str, text: &str) -> Answer<()> {
         self.ask("submit_text", json!({"pane": pane, "text": text}))
     }
@@ -744,6 +770,15 @@ impl<'g> Engine for FakeEngine<'g> {
         )?;
         let line = launch.kind.len() + launch.args.iter().map(|arg| arg.len() + 1).sum::<usize>();
         Ok(PreparedStart::new(launch, line))
+    }
+
+    fn renew_holder(
+        &self,
+        _wait: Wait,
+        pane: &str,
+        cwd: Option<&str>,
+    ) -> Answer<hide_node_link::holders::HolderRenewal> {
+        self.ask("renew_holder", json!({"pane": pane, "cwd": cwd}))
     }
 
     fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {

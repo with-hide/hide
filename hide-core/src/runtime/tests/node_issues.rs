@@ -1516,6 +1516,7 @@ fn a_dialed_device_s_worktree_read_asks_no_branch_notes() {
         runtime.snapshot.ui_state.device_registrations[0].origin =
             crate::model::LinkOrigin::Dialed {
                 ssh_alias: "macbook".to_owned(),
+                naming: crate::model::DeviceNaming::Named,
             };
         runtime.request_device_worktrees(NODE, true);
     }
@@ -1587,6 +1588,7 @@ fn a_device_this_core_dials_keeps_no_issues_here() {
     let mut runtime = shared.lock().unwrap();
     runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
         ssh_alias: "macbook".to_owned(),
+        naming: crate::model::DeviceNaming::Named,
     };
     runtime.refresh_device_catalog(NODE);
     let project = node_project(&runtime).unwrap();
@@ -1637,6 +1639,7 @@ fn a_device_this_core_dials_has_its_pull_requests_read_with_this_machine_s_login
     let mut runtime = shared.lock().unwrap();
     runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
         ssh_alias: "macbook".to_owned(),
+        naming: crate::model::DeviceNaming::Named,
     };
     let request = runtime.device_github_request(NODE, std::time::Instant::now());
     assert_eq!(
@@ -1896,7 +1899,7 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
 /// links, label and fold kept under that id still meet it, and once nothing
 /// has worked in it for a week it folds under Inactive as this machine's do,
 /// a fold the sidebar opens and a new derive of the session keeps. A device
-/// this core dials keeps only the checkouts its session opens.
+/// this core dials over SSH lists and folds it the same way.
 #[test]
 fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_when_idle() {
     let repo = repo(None, "parked");
@@ -1993,6 +1996,7 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
 
     runtime.snapshot.ui_state.device_registrations[0].origin = crate::model::LinkOrigin::Dialed {
         ssh_alias: "macbook".to_owned(),
+        naming: crate::model::DeviceNaming::Named,
     };
     runtime.refresh_device_catalog(NODE);
     let project = node_project(&runtime).unwrap();
@@ -2000,9 +2004,23 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         project
             .checkouts
             .iter()
-            .all(|checkout| checkout.path != repo.linked),
+            .any(|checkout| checkout.path == repo.linked && checkout.id == moved),
         "{:?}",
         project.checkouts
+    );
+    assert_eq!(project.inactive_checkouts.checkout_ids, [moved.as_str()]);
+    drop(runtime);
+    // Its fold closes and opens as a node's does.
+    dispatch(
+        &shared,
+        "inactive_checkouts_toggle",
+        serde_json::json!({"project_path": repo.root}),
+    );
+    let runtime = shared.lock().unwrap();
+    assert!(
+        !node_project(&runtime).unwrap().inactive_checkouts.expanded,
+        "{:?}",
+        runtime.snapshot.status.last_error
     );
 }
 

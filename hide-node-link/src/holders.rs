@@ -15,6 +15,11 @@ pub use hide_agent_hooks::pane::HIDE_PANE_ID as PANE_ID_VARIABLE;
 
 use serde::{Deserialize, Serialize};
 
+/// The code a node refuses a pane's start with while its state folder holds
+/// the most pane holders it keeps (`hide_kit::panes::HOLDER_CAP`); the core
+/// answers a spawn refused this way with the same code.
+pub const HOLDER_CAP_REFUSAL: &str = "holder_cap";
+
 /// One pane to start, under the id the core chose for it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderStart {
@@ -73,6 +78,54 @@ impl HolderStart {
 pub struct HolderReservation {
     pub incarnation: u64,
 }
+
+/// What [`PaneHolders::renew`] found and did to a pane's holder
+/// (with-hide/hide-private#646), each answer one the pane can be used on:
+/// a holder its record names runs it, and which one is said. An outcome
+/// after which no holder runs it, or nobody knows which, is an error
+/// ([`RENEWAL_PANE_CLOSED`], [`RENEWAL_BUSY`], [`RENEWAL_LOST`],
+/// [`RENEWAL_UNSETTLED`], or the node's answer lost on the way), and
+/// nothing is typed into the pane on it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "renewal", rename_all = "snake_case")]
+pub enum HolderRenewal {
+    /// The pane's holder already runs from this build's version folder.
+    Current,
+    /// The pane's holder, its shell alone in it, was ended and the pane
+    /// started again under its own id from this build's folder, replacing
+    /// the earlier start's incarnation.
+    Renewed {
+        /// The version folder the earlier holder ran from.
+        from: String,
+        /// The version folder the pane runs from now.
+        to: String,
+    },
+    /// The pane was not renewed and the earlier holder its record names
+    /// runs it, untouched. `code` says why (`pane_busy` while anything but
+    /// its shell runs in it, `pane_awake` while its agent is not asleep).
+    Kept { code: String, message: String },
+}
+
+/// The refusal [`PaneHolders::renew`] answers when the pane's record is
+/// closed or gone by the time its turn comes: nothing runs it to wake in.
+pub const RENEWAL_PANE_CLOSED: &str = "holder_renewal_pane_closed";
+
+/// The refusal [`PaneHolders::renew`] answers when another change of the
+/// pane's holder kept its turn past the renewal's wait: what runs the pane
+/// is not known to this call.
+pub const RENEWAL_BUSY: &str = "holder_renewal_busy";
+
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder ended
+/// and the pane's new one did not start: no holder runs the pane, as a pane
+/// a restore could not start.
+pub const RENEWAL_LOST: &str = "holder_renewal_lost";
+
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder was
+/// asked to end and what runs the pane then is not known (the close did not
+/// finish, or the new holder's start could not be confirmed): the node's
+/// next reconcile settles its record, and the pane is used as one a restore
+/// could not start, nothing typed into it.
+pub const RENEWAL_UNSETTLED: &str = "holder_renewal_unsettled";
 
 /// An interrupted existence record whose original process is gone. The
 /// replacement must consume this exact incarnation under the same pane ID.
@@ -390,6 +443,20 @@ pub trait PaneHolders: Send + Sync {
     fn cancel(&self, _intent: &HolderIntent, _request: HolderRequest) -> Result<(), HolderError> {
         Err(reservation_unsupported())
     }
+    /// Brings the pane `start` names to this node's build (with-hide/hide-private#646):
+    /// when its holder runs from another build's version folder and its
+    /// shell runs alone, ends that holder and starts the pane again under the
+    /// same id from `start` (a shell, in `start.cwd`), replacing the earlier
+    /// incarnation, and attaches its screen again. A pane already on this
+    /// build is [`HolderRenewal::Current`], and one it does not renew,
+    /// nothing of it ended, [`HolderRenewal::Kept`]. A node that cannot
+    /// renew keeps every pane.
+    fn renew(&self, _start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        Ok(HolderRenewal::Kept {
+            code: "holder_renewal_unsupported".to_owned(),
+            message: "this node cannot renew a pane's holder".to_owned(),
+        })
+    }
     /// How a pane started with no program runs its shell, when it runs one
     /// with Hide's shell integration, which marks its first prompt on its
     /// screen: what a start into such a pane waits for. `None` for a shell
@@ -437,6 +504,16 @@ pub trait PaneHolders: Send + Sync {
     /// screen was let go is attached again for it. It is the engine's
     /// typing, never reported as the operator's.
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError>;
+    /// [`PaneHolders::input`] as the sleep of the pane's agent types it: the
+    /// keys that end the agent and the line that wakes it, the only input a
+    /// pane whose agent is asleep takes. Any other input to such a pane is
+    /// refused `pane_asleep`, and what was waiting to be written when it
+    /// went to sleep is cancelled, so nothing typed for its agent reaches the
+    /// shell under it. A node that keeps no such distinction takes it as
+    /// [`PaneHolders::input`].
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.input(pane, input)
+    }
     /// Types a letter: `text`'s parts in order, at most
     /// `hide_holder_protocol::MAX_SUBMIT_PARTS`, then `submit` once `gap`
     /// has passed, as one submission, holding
@@ -495,6 +572,10 @@ pub enum PaneCall {
     Retire {
         request: HolderRequest,
     },
+    /// [`PaneHolders::renew`]; answers a [`HolderRenewal`].
+    Renew {
+        start: HolderStart,
+    },
     /// [`PaneHolders::shell_launch`]; answers an optional
     /// [`crate::protocol::ShellLaunch`].
     ShellLaunch,
@@ -531,6 +612,11 @@ pub enum PaneCall {
     },
     /// [`PaneHolders::input`]; answers nothing.
     Input {
+        pane: String,
+        input: PaneInput,
+    },
+    /// [`PaneHolders::sleeper_input`]; answers nothing.
+    SleeperInput {
         pane: String,
         input: PaneInput,
     },

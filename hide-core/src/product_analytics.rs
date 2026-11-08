@@ -151,6 +151,8 @@ pub enum DeviceFailure {
     KitRefused,
     /// The device's kit pass failed.
     KitFailed,
+    /// The device's machine id does not name its registration.
+    MachineName,
 }
 
 /// Unknown means establishment failed before the helper reported its system.
@@ -317,6 +319,7 @@ fn device_failure_name(failure: DeviceFailure) -> &'static str {
         DeviceFailure::HelperLost => "helper_lost",
         DeviceFailure::KitRefused => "kit_refused",
         DeviceFailure::KitFailed => "kit_failed",
+        DeviceFailure::MachineName => "machine_name",
     }
 }
 

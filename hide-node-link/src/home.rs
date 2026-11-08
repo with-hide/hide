@@ -12,7 +12,8 @@ pub struct HomeSynced {
     pub home: String,
     /// This call made the Home folder.
     pub created: bool,
-    /// Every link Hide manages after the sync, sorted by name.
+    /// Every project Home holds after the sync, sorted by name: a link Hide
+    /// manages, or where Home holds no link (Windows) its line in `AGENTS.md`.
     pub links: Vec<HomeLink>,
     /// Managed links this sync removed.
     pub dropped: Vec<HomeDrop>,
@@ -30,6 +31,7 @@ pub struct HomeLink {
 pub struct HomeDrop {
     pub name: String,
     pub target: String,
+    /// `listed` (Home lists the project now and holds no link, on Windows),
     /// `unregistered` (the project left the list) or `dangling` (its folder
     /// is gone).
     pub reason: String,

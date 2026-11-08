@@ -836,6 +836,7 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
             label: "Mini".into(),
             origin: crate::model::LinkOrigin::Dialed {
                 ssh_alias: "mini".into(),
+                naming: crate::model::DeviceNaming::Named,
             },
             host_consent: None,
         });

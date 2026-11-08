@@ -301,7 +301,7 @@ fn start_dormant(
         args,
         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
         wakes: true,
-        program: crate::start_prompt::start_program(node, &work.record.kind),
+        program: crate::start_prompt::start_program_of(engine, node, &work.record.kind),
     }) {
         Ok(start) => start,
         Err(_) => return DormantStartOutcome::NotStarted,
@@ -361,7 +361,7 @@ fn start_dormant(
             }
         }
         Err(StartError::NotStarted { .. })
-        | Err(StartError::ShellStarting(_))
+        | Err(StartError::ShellStarting { .. })
         | Err(StartError::Engine(EngineError::Refused { .. })) => DormantStartOutcome::NotStarted,
         Err(StartError::Engine(_)) => {
             crate::diagnostic!(serde_json::json!({

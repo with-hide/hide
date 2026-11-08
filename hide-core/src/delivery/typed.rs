@@ -294,8 +294,9 @@ pub(crate) fn notice_body(
         // A try is a typing or the Enter a composer still showing it got.
         (Ok(()), SendRoute::Typed) if undelivered => {
             format!(
-                "{agent} did not get {what}: Hide tried {INPUT_ATTEMPTS} times and the agent \
-                 recorded none of them, so Hide does not type it again.\n\
+                "{agent} did not get {what}: Hide tried {INPUT_ATTEMPTS} times and found none \
+                 of them in the agent's session record, or could not read that record, so Hide \
+                 does not type it again.\n\
                  {read_up}; `hide agent show` names what it waits on. Once its screen shows its \
                  input box, type it there yourself with `hide pane send {pane} <text> --enter`, \
                  or stop the agent and start the work again.\n{trust}",
@@ -374,6 +375,7 @@ mod tests {
             status: status.into(),
             telemetry_stale: false,
             state_change_seq: Some(4),
+            engine: None,
             status_changed_at_unix_ms: changed,
             last_input_at_unix_ms: input,
             last_submit_at_unix_ms: 0,

@@ -4,15 +4,14 @@
 //! has registered. The guards themselves are `crate::guardrails`,
 //! `crate::plan_record`, `crate::global_guard` and `crate::opener_guard`.
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use hide_agent_adapter::HookDialect;
-use hide_platform::process::{CaptureFailureKind, OwnedChild};
 use hide_shell::Syntax;
 use serde::Deserialize;
+
+use crate::hook_request::HookCommand;
 
 /// The shell tool's call, as a runtime's `PreToolUse` payload carries it.
 #[derive(Debug, Eq, PartialEq)]
@@ -163,55 +162,38 @@ pub enum Registration {
     Registered,
     /// The daemon answered and does not know this pane's checkout.
     NotRegistered,
-    /// The daemon could not be asked: no CLI, no daemon, no answer in time.
+    /// The daemon could not be asked: no daemon, no answer in time, or a
+    /// reason that is not its "not Hide's" answer.
     Unreachable(&'static str),
 }
 
-/// Asks `hide workspace bootstrap`, the daemon-owned call a session start makes
-/// too: it needs no open window and succeeds only for a caller inside a
-/// registered checkout. A refusal with a reason is the daemon answering; a
-/// missing daemon, a timeout and an unreadable answer are not.
-pub fn registration(program: &OsStr, deadline: Instant) -> Registration {
-    let mut command = Command::new(program);
-    if let Err(reason) = crate::route::apply(&mut command) {
-        return Registration::Unreachable(reason);
-    }
-    command
-        .args(["workspace", "bootstrap"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let Ok(mut child) = OwnedChild::spawn(&mut command) else {
-        return Registration::Unreachable("cli");
+/// Asks the daemon whether the caller sits in a registered checkout, by the
+/// hook's own request (`HookCommand::Registration`), the proof `hide
+/// workspace bootstrap` gives: it needs no open window and starts no
+/// program. A refusal with a reason is the daemon answering; a missing
+/// daemon, a timeout and an unreadable answer are not.
+pub fn registration(deadline: Instant) -> Registration {
+    let answer = match crate::delivery::answer_of(HookCommand::Registration {}, deadline).0 {
+        Ok(answer) => answer,
+        Err(failure) => return Registration::Unreachable(failure.code),
     };
-    let output = match child.capture_until(deadline, 16 * 1024) {
-        Ok(output) => output,
-        Err(failure) => {
-            return Registration::Unreachable(match failure.kind {
-                CaptureFailureKind::Deadline => "deadline",
-                _ => "cli",
-            });
-        }
-    };
-    if output.status.success() {
-        return match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-            Ok(answer) if answer["ok"] == true => Registration::Registered,
-            _ => Registration::Unreachable("format"),
-        };
+    if answer["ok"] == true {
+        return Registration::Registered;
     }
     // Only the daemon's own "this caller is not in a Hide checkout" answers
     // mean the call is not Hide's to guide. Every other word, an empty one and
     // a reason a later build adds included, is a daemon that could not be
     // asked, which lets the call run and leaves a diagnostic.
-    let reason = String::from_utf8_lossy(&output.stderr);
     if matches!(
-        reason.trim(),
-        "checkout_not_registered"
-            | "caller_unavailable"
-            | "pane_not_connected"
-            | "pane_unavailable"
-            | "pane_changed"
-            | "caller_not_in_pane"
+        answer["reason"].as_str(),
+        Some(
+            "checkout_not_registered"
+                | "caller_unavailable"
+                | "pane_not_connected"
+                | "pane_unavailable"
+                | "pane_changed"
+                | "caller_not_in_pane"
+        )
     ) {
         Registration::NotRegistered
     } else {

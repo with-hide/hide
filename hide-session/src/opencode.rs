@@ -413,6 +413,71 @@ fn newest_write(
     Ok(proven.updated.max(newest))
 }
 
+/// The folders OpenCode's root sessions worked in since `since_unix_ms`,
+/// each with when its newest session there last changed, for the folders
+/// agents worked in (`SessionCatalog::worked_folders`). Each folder is one
+/// row counted with the catalog's other entries, at most `limit`; crossing
+/// it is the catalog's capacity failure. No database means no folders, and
+/// a database Hide cannot open or list answers the inner `Err` with why.
+pub(crate) fn worked_directories(
+    home: &Path,
+    since_unix_ms: u64,
+    visited: &mut usize,
+    limit: usize,
+) -> Result<Result<Vec<(PathBuf, u64)>, String>, crate::SessionCatalogError> {
+    let database = match database_path(home) {
+        Ok(database) => database,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    if std::fs::symlink_metadata(database)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(Ok(Vec::new()));
+    }
+    let remaining = limit.saturating_sub(*visited);
+    let rows = with_read(home, |connection, schema| {
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT directory, max(time_updated) FROM {} WHERE parent_id IS NULL \
+                 AND typeof(directory) = 'text' AND octet_length(directory) <= ?1 \
+                 AND time_updated >= ?2 GROUP BY directory ORDER BY 2 DESC, 1 LIMIT ?3",
+                schema.sessions()
+            ))
+            .map_err(|error| refusal(&error))?;
+        statement
+            .query_map(
+                params![
+                    DIRECTORY_LIMIT_BYTES,
+                    i64::try_from(since_unix_ms).unwrap_or(i64::MAX),
+                    remaining as i64 + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                    ))
+                },
+            )
+            .map_err(|error| refusal(&error))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| refusal(&error))
+    });
+    let rows = match rows {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(reason)) => return Ok(Err(reason)),
+        Err(refused) => return Ok(Err(refused.into())),
+    };
+    if rows.len() > remaining {
+        return Err(crate::SessionCatalogError::Capacity { limit });
+    }
+    *visited += rows.len();
+    Ok(Ok(rows
+        .into_iter()
+        .map(|(directory, at)| (PathBuf::from(directory), at))
+        .filter(|(directory, _)| directory.is_absolute())
+        .collect()))
+}
+
 /// The project's root OpenCode sessions, as the session catalog lists them:
 /// each one's checkout is the `directory` its own row records, resolved to
 /// the project like a file reader's `cwd`. At most `limit` session rows

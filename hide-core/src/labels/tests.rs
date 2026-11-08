@@ -181,7 +181,7 @@ fn owed_ids(input: &str) -> Vec<String> {
 }
 
 /// Counts the reads it passes on to this machine's files.
-struct CountingSource {
+pub(crate) struct CountingSource {
     inner: super::NodeTranscripts,
     reads: AtomicUsize,
     completed: AtomicUsize,
@@ -223,7 +223,10 @@ impl TranscriptSource for CountingSource {
     }
 }
 
-struct Harness {
+/// A label worker's surroundings: a home with the agents' session files, a
+/// state folder for its store, and a scripted model. The runtime's tests
+/// run a real worker with it too.
+pub(crate) struct Harness {
     home: tempfile::TempDir,
     state: tempfile::TempDir,
     locks: tempfile::TempDir,
@@ -236,7 +239,7 @@ struct Harness {
 }
 
 impl Harness {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_usage_gate(None)
     }
 
@@ -275,7 +278,7 @@ impl Harness {
         }
     }
 
-    fn store(&self) -> Arc<LabelStore> {
+    pub(crate) fn store(&self) -> Arc<LabelStore> {
         Arc::new(LabelStore::open(
             Some(self.state.path()),
             Some(self.home.path()),
@@ -283,7 +286,15 @@ impl Harness {
         ))
     }
 
-    fn worker(&self, store: Arc<LabelStore>) -> (LabelWorker, Receiver<()>, Arc<CountingSource>) {
+    /// The home the worker reads the agents' session files in.
+    pub(crate) fn home(&self) -> &Path {
+        self.home.path()
+    }
+
+    pub(crate) fn worker(
+        &self,
+        store: Arc<LabelStore>,
+    ) -> (LabelWorker, Receiver<()>, Arc<CountingSource>) {
         let source = Arc::new(CountingSource {
             inner: {
                 let node: Arc<dyn crate::node_access::NodeLink> =
@@ -405,7 +416,7 @@ fn agent(path: &Path, status: &str, seq: u64) -> ObservedAgent {
     }
 }
 
-fn observe(worker: &mut LabelWorker, agent: &ObservedAgent) {
+pub(crate) fn observe(worker: &mut LabelWorker, agent: &ObservedAgent) {
     observe_at(worker, agent, Instant::now());
 }
 
@@ -1464,8 +1475,12 @@ fn an_analysis_that_lands_after_the_session_changed_is_dropped() {
     );
 }
 
+/// A restarted daemon runs a new engine, so it reads each session once,
+/// from where the last read stopped, before it trusts what it read for a
+/// state; the label it stored is shown at once and asked for again by no
+/// request.
 #[test]
-fn a_restart_restores_the_label_with_no_read_and_no_request() {
+fn a_restart_restores_the_label_with_one_read_from_where_it_stopped_and_no_request() {
     let harness = Harness::new();
     let path = harness.session(
         "a",
@@ -1489,8 +1504,12 @@ fn a_restart_restores_the_label_with_no_read_and_no_request() {
         Some("재시작 전에 붙은 작업")
     );
     settle(&mut worker, &woken);
-    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
     assert_eq!(harness.backend.calls(), 1);
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("재시작 전에 붙은 작업")
+    );
 }
 
 /// A device's conversation and labels stay in memory, so a restart used to
@@ -3250,7 +3269,7 @@ fn turn_at(second: u64) -> u64 {
 }
 
 #[test]
-fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_read() {
+fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart() {
     let harness = Harness::new();
     let store = harness.store();
     let (mut worker, woken, source) = harness.worker(Arc::clone(&store));
@@ -3283,8 +3302,9 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
     assert_eq!(row.last_prompt_at_unix_ms, Some(turn_at(2)));
     assert_ne!(row.changed_at_unix_ms, row.last_prompt_at_unix_ms);
 
-    // A restarted daemon has no submits and reads nothing for an unchanged
-    // pane; what it shows is what was stored.
+    // A restarted daemon has no submits and reads an unchanged pane once,
+    // from where the last read stopped (a new engine's states are not the
+    // ones it read for); what it shows is what was stored.
     drop(worker);
     store.flush();
     let reads = source.reads.load(Ordering::SeqCst);
@@ -3295,7 +3315,7 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
     restarted_store.flush();
     assert_eq!(
         source.reads.load(Ordering::SeqCst),
-        0,
+        1,
         "{reads} reads before"
     );
     assert_eq!(harness.store().target(LOCAL_TARGET)["w1:p1"].facts, facts);
@@ -3369,7 +3389,7 @@ fn a_message_no_submit_explains_is_another_agents() {
 
 /// Takes results and the provider waits that came due until nothing is
 /// left, so a retry made on the next tick is taken too.
-fn settle_with_ticks(worker: &mut LabelWorker, woken: &Receiver<()>) {
+pub(crate) fn settle_with_ticks(worker: &mut LabelWorker, woken: &Receiver<()>) {
     for _ in 0..4 {
         settle(worker, woken);
         worker.tick(Instant::now());
@@ -4920,11 +4940,13 @@ fn a_default_turn_not_yet_ended_in_the_file_waits_for_nothing() {
     assert_eq!(waits(&worker, &done), (Some(Waiting::Nothing), Some(false)));
 }
 
-/// B8: a restarted daemon shows the wait it read for the same state without
-/// reading the session again; a record from before turns were read is read
-/// once, and does not claim a wait it could not read.
+/// B8: a restarted daemon runs a new engine, whose states are not the ones
+/// the saved wait was read for, so it shows no wait until it has read the
+/// session once, continuing from where the last read stopped with the turns
+/// it had folded; a record from before turns were read is read once too,
+/// and does not claim a wait it could not read.
 #[test]
-fn a_restart_keeps_the_plan_wait_and_reads_a_record_without_one_once() {
+fn a_restart_reads_the_plan_wait_again_from_where_it_stopped() {
     let harness = Harness::new();
     let (_, done) = codex_plan_session(&harness, "done", 5);
     {
@@ -4939,12 +4961,13 @@ fn a_restart_keeps_the_plan_wait_and_reads_a_record_without_one_once() {
     let (mut worker, woken, source) = harness.worker(Arc::clone(&store));
     worker.set_summaries(false, Instant::now());
     observe(&mut worker, &done);
+    assert_eq!(waits(&worker, &done), (None, Some(false)));
+    settle(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
     assert_eq!(
         waits(&worker, &done),
         (Some(Waiting::PlanApproval), Some(true))
     );
-    settle(&mut worker, &woken);
-    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     drop(worker);
     store.flush();
 

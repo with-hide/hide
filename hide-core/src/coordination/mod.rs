@@ -1,6 +1,7 @@
 //! Persistent participant identities and resumable child creation. The delivery
 //! store is the sole writer; native I/O is performed by request workers.
 
+mod end;
 pub(crate) mod executor;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
@@ -17,11 +18,31 @@ use serde_json::{Value, json};
 const DETAIL: char = '\u{1f}';
 
 /// A refusal code with the detail its next action names (the device ids a
-/// caller could have used, or the last line of a shell that had not finished
-/// starting); the daemon splits them again with
+/// caller could have used, or how long a shell that had not finished
+/// starting was waited for, with its last line); the daemon splits them again with
 /// [`split_refusal`] and answers the code alone.
 pub(crate) fn refusal(code: &str, detail: &str) -> String {
     format!("{code}{DETAIL}{detail}")
+}
+
+/// A spawn's `shell_starting` refusal: how long its new shell was waited
+/// for, in whole seconds, and the screen's last line when there was one.
+pub(crate) fn shell_starting_refusal(waited: std::time::Duration, screen: Option<&str>) -> String {
+    let seconds = crate::agent_start::whole_seconds(waited);
+    refusal(
+        crate::agent_start::SHELL_STARTING,
+        &format!("{seconds}{DETAIL}{}", screen.unwrap_or_default()),
+    )
+}
+
+/// The seconds a `shell_starting` refusal's shell was waited for and the
+/// screen's last line, read from its detail.
+pub fn shell_starting_detail(detail: &str) -> (Option<u64>, Option<&str>) {
+    let (seconds, screen) = detail.split_once(DETAIL).unwrap_or(("", detail));
+    (
+        seconds.parse().ok(),
+        Some(screen).filter(|line| !line.is_empty()),
+    )
 }
 
 /// The code of a refusal and the detail it carries, if any.
@@ -35,6 +56,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "send_unconfirmed"
             | "operator_typing"
             | crate::agent_start::SHELL_STARTING
+            | hide_node_link::holders::HOLDER_CAP_REFUSAL
             | "card_not_processed"
             | "mission_cap_reached"
             | "mission_conducted"
@@ -118,9 +140,15 @@ pub enum Command {
     Show {
         id: String,
     },
+    /// Ends the registration and, unless `keep_pane`, closes the pane its
+    /// agent ran in, which ends the pane's holder, its shell, the agent and
+    /// everything under it; the agent's conversation is kept in the session
+    /// archive for 이어가기 (`coordination::end`).
     End {
         id: String,
         actor: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_pane: bool,
     },
     Spawn {
         parent: Option<String>,
@@ -271,6 +299,31 @@ fn spawn_cap(
 /// submitted: the TUI of a started agent takes seconds to draw its prompt,
 /// and a trust question at startup holds it longer.
 pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a spawn on the caller's own machine has to answer. The CLI
+/// waits this, and an ordinary command's wait for the answer to come back,
+/// and the spawn's new shell gets what is left of it, at most
+/// `agent_start::SHELL_WAIT`, to finish starting: a shell stopped in its
+/// startup files is answered as `shell_starting` while the caller still
+/// waits, rather than as a timeout whose spawn holds the spawn lock. The
+/// waits after the start (the agent's session, the agent taking its brief,
+/// at most [`BRIEF_READY_WAIT`]) take what is left after that, so a slow
+/// shell and a slow agent together are still answered in time.
+pub const SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+/// [`SPAWN_ANSWER_WAIT`] for a spawn on a connected device, whose checks,
+/// worktree, tab and start are each a round trip over SSH.
+pub const DEVICE_SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// The wait the engine is asked for on each call that reads or closes a
+/// pane a spawn or an end made. The core's own engine answers a read from
+/// its topology and bounds a close by the pane's end on its node
+/// ([`END_ANSWER_WAIT`]), so this bounds no call of its own.
+pub(crate) const PANE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// What `hide agent end` takes beyond an ordinary command: the end of its
+/// pane on the pane's node, this machine's or a device's, which ends the
+/// holder's tree and, when that tree ignores it, its pids
+/// (`hide_node_link::link_panes::END_WAIT`). Its other steps read the
+/// ledger and the topology. The CLI waits this and an ordinary command's
+/// wait.
+pub const END_ANSWER_WAIT: std::time::Duration = hide_node_link::link_panes::END_WAIT;
 
 /// How long a spawn waits for the pass it asked of its child's machine's
 /// kit before it makes anything (`runtime::start_hook`). A pass asks Codex
@@ -2158,6 +2211,10 @@ pub(crate) enum PaneGone {
     /// The registration was made before this read's snapshot was asked for,
     /// and the snapshot lacks its pane.
     Absent,
+    /// The pane is there, a shell: its engine restored it after a restart
+    /// and did not resume the agent that ran in it, and no resume will be
+    /// typed (`ProjectionState::not_resumed`).
+    NotResumed,
 }
 
 impl PaneGone {
@@ -2165,6 +2222,7 @@ impl PaneGone {
         match self {
             Self::Left => "pane_left",
             Self::Absent => "pane_absent",
+            Self::NotResumed => "agent_not_resumed",
         }
     }
 }
@@ -2223,6 +2281,46 @@ pub(crate) fn gone_registrations(
                 .is_some_and(|floor| sequence < floor)
                 .then(|| (record.id.clone(), PaneGone::Absent))
         })
+        .collect()
+}
+
+/// The live registrations on `device` whose agent a restore did not resume
+/// (`left`, the panes' engine says are shells now), none of which runs: the
+/// registration on each such pane, unless an agent shows in that pane now
+/// (`shown`, the panes of the same read that list one) or the registration
+/// belongs to another conversation than the one that was not resumed, which
+/// both name. A registration on another engine of the same machine is not
+/// judged by this one's read (`host_scope`, as [`gone_registrations`]).
+pub(crate) fn not_resumed_registrations(
+    ledger: &Ledger,
+    device: &str,
+    host_scope: Option<&str>,
+    left: &[crate::session_sync::NotResumed],
+    shown: &std::collections::HashSet<&str>,
+) -> Vec<(String, PaneGone)> {
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            !record.ended
+                && !record.actor.code_owned()
+                && record.actor.device_id == device
+                && host_scope.is_none_or(|scope| scope == record.host_scope)
+                && !shown.contains(record.pane.as_str())
+        })
+        .filter(|record| {
+            left.iter().any(|left| {
+                left.pane_id == record.pane
+                    && match (&left.session, &record.actor.session) {
+                        (Some(session), Some(registered)) => {
+                            crate::engine::tokens::session_digest(session).as_ref()
+                                == Some(registered)
+                        }
+                        _ => true,
+                    }
+            })
+        })
+        .map(|record| (record.id.clone(), PaneGone::NotResumed))
         .collect()
 }
 

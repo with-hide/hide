@@ -265,6 +265,35 @@ fn child_role() {
             write_ready_file();
             thread::sleep(Duration::from_secs(60));
         }
+        // A terminal's shell: the leader of a session of its own, running
+        // nothing.
+        #[cfg(unix)]
+        "session_alone" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
+        }
+        // A session leader whose session holds a process another member
+        // started and left behind when it exited, as `sh -c "sleep 120 &"`
+        // leaves one: no descendant of the leader, still of its session.
+        #[cfg(unix)]
+        "session_with_orphan" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            let mut starter = role_command("orphaner").spawn().unwrap();
+            let orphan = ready_number(starter.stdout.take().unwrap());
+            starter.wait().unwrap();
+            println!("READY {orphan}");
+            thread::sleep(Duration::from_secs(60));
+        }
+        // Starts a sleeping child, says which, and exits without it.
+        #[cfg(unix)]
+        "orphaner" => {
+            let child = role_command("sleep").stdout(Stdio::null()).spawn().unwrap();
+            println!("READY {}", child.id());
+            std::mem::forget(child);
+        }
         // A child with one child of its own that has left no handle behind.
         "tree" => {
             let mut grandchild = Command::new(std::env::current_exe().unwrap())
@@ -2174,6 +2203,118 @@ fn killing_by_pid_ends_the_process_and_its_descendants() {
         gone_within(grandchild, Duration::from_secs(10)),
         "the grandchild survived"
     );
+}
+
+/// `pid` as it runs now, as a pane record names it.
+fn recorded(pid: u32) -> hide_platform::process::Recorded {
+    hide_platform::process::Recorded {
+        pid,
+        started: hide_platform::process::start_time(pid).unwrap(),
+    }
+}
+
+/// A pane's shell runs alone while ending its session would end nothing
+/// else (with-hide/hide-private#646). On Unix that is every process of the
+/// session it leads, one left there by a process that exited included,
+/// though it is no descendant of the shell any more; a pid that names
+/// another process than the one recorded is no answer at all.
+#[cfg(unix)]
+#[test]
+fn a_session_leader_runs_alone_until_its_session_holds_another_process() {
+    use hide_platform::process::{Recorded, runs_alone};
+    let _serial = serial();
+    // The holder's end ends the shell's session whichever holder it is.
+    let holder = recorded(std::process::id());
+    let mut alone = role_command("session_alone").spawn().unwrap();
+    let leader = recorded(ready_number(alone.stdout.take().unwrap()));
+    assert!(runs_alone(holder, leader).unwrap());
+    let taken = Recorded {
+        started: leader.started + 1,
+        ..leader
+    };
+    assert!(
+        runs_alone(holder, taken).is_err(),
+        "a pid another process took is not the recorded shell"
+    );
+    kill_tree(leader.pid).unwrap();
+    alone.wait().unwrap();
+
+    let mut with = role_command("session_with_orphan").spawn().unwrap();
+    let orphan = ready_number(with.stdout.take().unwrap());
+    let leader = recorded(with.id());
+    assert!(
+        !hide_platform::process::descendants(leader.pid)
+            .unwrap()
+            .contains(&orphan),
+        "the orphan was handed to another parent"
+    );
+    assert!(
+        !runs_alone(holder, leader).unwrap(),
+        "a process left in the session is ended with it"
+    );
+    hide_platform::process::terminate(orphan).unwrap();
+    kill_tree(leader.pid).unwrap();
+    with.wait().unwrap();
+}
+
+/// On Windows a shell runs alone while the kill-on-close job its holder
+/// holds it in runs nothing else: this process stands for the holder,
+/// holding the job of a [`hide_platform::process::Session`] as a holder
+/// does, its handle never inherited. A process in that job that is no
+/// descendant of the shell is ended with the job, so it counts; a holder
+/// that holds no job of the shell, and a pid another process took, are no
+/// answer at all.
+#[cfg(windows)]
+#[test]
+fn a_shell_runs_alone_until_the_job_its_holder_holds_runs_another_process() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+    use hide_platform::process::{Recorded, Session, SessionEnd, runs_alone};
+    let _serial = serial();
+    let holder = recorded(std::process::id());
+    let mut session = Session::new().unwrap();
+    let job = session.job();
+    let join = |child: &std::process::Child| {
+        // SAFETY: both handles are open for the call.
+        let joined = unsafe { AssignProcessToJobObject(job.cast(), child.as_raw_handle().cast()) };
+        assert_ne!(joined, 0, "{}", std::io::Error::last_os_error());
+    };
+    let mut shell = role_command("sleep").spawn().unwrap();
+    ready_number(shell.stdout.take().unwrap());
+    let outside = recorded(shell.id());
+    assert!(
+        runs_alone(holder, outside).is_err(),
+        "a holder that holds no job of the shell cannot say"
+    );
+    join(&shell);
+    session.adopt(shell.id()).unwrap();
+    let shell_recorded = recorded(shell.id());
+    assert!(runs_alone(holder, shell_recorded).unwrap());
+    assert!(
+        runs_alone(
+            holder,
+            Recorded {
+                started: shell_recorded.started + 1,
+                ..shell_recorded
+            }
+        )
+        .is_err(),
+        "a pid another process took is not the recorded shell"
+    );
+    let mut beside = role_command("sleep").spawn().unwrap();
+    ready_number(beside.stdout.take().unwrap());
+    join(&beside);
+    assert!(
+        !runs_alone(holder, shell_recorded).unwrap(),
+        "a process of the job that is no descendant of the shell ends with it"
+    );
+    assert_eq!(
+        session.end(Duration::from_secs(10)).unwrap(),
+        SessionEnd::Ended
+    );
+    shell.wait().unwrap();
+    beside.wait().unwrap();
 }
 
 #[test]

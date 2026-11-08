@@ -86,6 +86,25 @@ pub(crate) struct ProjectedAgent {
     pub(crate) tokens: BTreeMap<String, Value>,
 }
 
+/// An agent a restore did not bring back: its pane is a shell now, because
+/// no resume could be typed or the one typed ended without the agent running
+/// (its start's deadline passed with no program shown, or its program ended
+/// before the start settled). The core ends the agent's registration
+/// (`Runtime::end_unresumed`), so the row reads ended, never running with
+/// nothing behind it.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default, serde::Deserialize))]
+#[cfg_attr(test, serde(default))]
+pub(crate) struct NotResumed {
+    pub(crate) pane_id: String,
+    /// The definition's id.
+    pub(crate) agent: String,
+    /// The conversation it ran, when the save knew it.
+    pub(crate) session: Option<String>,
+    /// Why it was not resumed, as the diagnostic says it.
+    pub(crate) why: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(Default, serde::Deserialize))]
 #[cfg_attr(test, serde(default))]
@@ -111,6 +130,11 @@ pub(crate) struct ProjectionState {
     /// sleeping agent (`Runtime::adopt_resting`). None is running, so none
     /// is among `agents`.
     pub(crate) resting: Vec<ProjectedAgent>,
+    /// The agents a restore did not bring back and will not, each until an
+    /// agent shows in its pane, by a start, its hook or its foreground; the
+    /// core ends the registration of each while it is named
+    /// (`Runtime::end_unresumed`). None runs, so none is among `agents`.
+    pub(crate) not_resumed: Vec<NotResumed>,
     /// The next moment an agent start this read has pending (`launch_pending`)
     /// can end with nothing the engine reports changing: its settle passing
     /// while its screen already rests, or its deadline. The coordinator that

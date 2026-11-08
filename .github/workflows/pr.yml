@@ -449,11 +449,12 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
-      - name: hided's pane bootstrap, file opener, root identity, the device node's pane service, the CLI's daemon start and end-to-end tests
+      - name: hided's pane bootstrap, file opener, root identity, its roles, the device node's pane service, the CLI's daemon start and end-to-end tests
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 25
         run: |
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & (test(pane_auth) | test(opener) | test(open_command) | test(workspace_cli) | test(root_identity_is_the_one_the_node_reads))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & (test(pane_auth) | test(opener) | test(open_command) | test(workspace_cli) | test(root_identity_is_the_one_the_node_reads) | test(/^role::/))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^arguments::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-node) & kind(lib)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^opener_lifecycle::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^connect_stop::/)'
@@ -467,6 +468,12 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & (test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does) | test(=kit::tests::every_kit_location_follows_the_home_the_platform_names))'
+      - name: Hide's Home lists its projects and holds no link
+        # Every process of an ssh session refuses a junction no administrator
+        # made, so Home holds none on Windows (hide-host/src/home.rs, LINKS).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(/^home::tests::/)'
       - name: The weekly usage child's environment
         # The `/usage` child is started with a restricted environment, which
         # on Windows has to carry what Node and the CLI need to start, and the
@@ -491,6 +498,15 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
+      - name: Ending an agent closes its pane, and a stuck shell is answered
+        # hide-core/src/coordination/end.rs (with-hide/hide-private#676): an
+        # end closes the agent's pane after saving its conversation to the
+        # state folder's archive, and takes it back when the close fails; a
+        # spawn whose new shell never finishes starting answers why and closes
+        # the tab it opened (with-hide/hide#2181).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(/^runtime::tests::agent_end::/) | test(=runtime::tests::remote_spawn::a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_starts_again))'
       - name: A device's agent versions reach the core
         # A helper answers the hook diagnosis from its own account's program
         # search, the same call on every system, and the core reads a pane on

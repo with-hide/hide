@@ -1873,7 +1873,6 @@ fn view_authority_a_catalog_rebuild_keeps_the_visible_tab() {
         "schema_version": SCHEMA_VERSION,
         "kind": "register_device",
         "payload": {
-            "id": "device-rebuild",
             "label": "Rebuild",
             "ssh_alias": "rebuild-host"
         }
@@ -2385,10 +2384,11 @@ fn a_key_that_moves_the_keyboard_tells_the_engine_and_a_stale_layout_does_not_un
     let (mut runtime, _) = live_tab_order_runtime(checkout_path);
     runtime.ingest_session(Ok(split_tab_payload(checkout_path, "w-order:a")));
     assert_eq!(runtime.snapshot().tab.id.as_deref(), Some("w-order:t1"));
-    let looked = runtime.operator_focused_pane_id.clone();
+    let looked = runtime.look.focus().map(str::to_owned);
     assert!(runtime.ingest_terminal_reports(vec![typed_into("w-order:b")]));
     assert_eq!(
-        runtime.operator_focused_pane_id, looked,
+        runtime.look.focus().map(str::to_owned),
+        looked,
         "a key moves no read record"
     );
     assert_eq!(
@@ -4594,7 +4594,7 @@ fn a_checkout_chosen_with_its_device_moves_both_or_neither() {
         }))
         .expect("focus checkout event")
     };
-    runtime.snapshot.navigator.focused_device_id = Some("mini".to_owned());
+    runtime.set_front_device(Some("mini".to_owned()));
 
     runtime.dispatch_json(&choose("checkout:missing"));
     assert!(runtime.snapshot.status.last_error.is_none());

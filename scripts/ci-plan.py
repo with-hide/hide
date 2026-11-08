@@ -138,16 +138,16 @@ DEVICE_KIT_CONTRACT = "contracts/device-kits.json"
 # distribution over Windows' own `ssh.exe`: the crates the links cross (the
 # platform layer's WSL listing, the connector and its pipe, the system ssh,
 # the link's protocol, the helper's serve) and the node command the helper
-# runs as, and the kit files that lay a Windows device's programs out and
-# name its command (the redirection guard walk). The core's decisions about a
+# runs as, and the two kit files the redirection guard walk proves: the
+# Windows command's shim (`cli_windows.rs`) and the helper root's `current`
+# folder (`current.rs`); the rest of hide-kit does not reach the link
+# (with-hide/hide-private#596). The core's decisions about a
 # WSL device have their own unit tests, so a change to a crate that only
 # consumes these does not plan it.
 WSL_CRATES = {"hide-host", "hide-node", "hide-node-link", "hide-platform"}
 WSL_CRATE_FILES = (
-    "hide-kit/src/cli.rs",
     "hide-kit/src/cli_windows.rs",
     "hide-kit/src/current.rs",
-    "hide-kit/src/device.rs",
     "hided/src/node_cli.rs",
     "hided/tests/it/wsl_device.rs",
     "hided/tests/it/windows_ssh_device.rs",

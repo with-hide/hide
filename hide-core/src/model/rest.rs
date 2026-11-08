@@ -163,6 +163,7 @@ section!(StatusSections, StatusSnapshot, s, {
     pane_focus_request: Option<PaneFocusRequestSnapshot> => s.pane_focus_request,
     browser_opens: Vec<BrowserOpenReceiptSnapshot> => s.browser_opens,
     stray_hand_offs: Vec<StrayHandOffSnapshot> => s.stray_hand_offs,
+    project_adds: Vec<ProjectAddReceiptSnapshot> => s.project_adds,
     agent_definitions: Option<AgentDefinitionsSnapshot> => s.agent_definitions,
 }, {});
 

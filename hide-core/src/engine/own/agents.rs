@@ -28,6 +28,7 @@ use hide_node_link::holders::{
 
 use super::shell_line::stripped_title;
 use crate::engine::answers::{PaneSessionKind, Readiness};
+use crate::session_sync::NotResumed;
 
 /// How long a start the engine typed may take to show its program in the
 /// pane's foreground before it is taken as a start that did not happen, and
@@ -68,14 +69,7 @@ impl Definitions {
 /// The definition a caller's kind names: its id or one of its other
 /// spellings, as Herdr's names (`claude`) reach the engine too.
 pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Definition> {
-    let kind = kind.trim();
-    catalog.definitions.iter().find(|definition| {
-        definition.id.eq_ignore_ascii_case(kind)
-            || definition
-                .aliases
-                .iter()
-                .any(|alias| alias.eq_ignore_ascii_case(kind))
-    })
+    hide_agent_adapter::definition::find(&catalog.definitions, kind)
 }
 
 /// Native and runtime script names take precedence over the optional
@@ -329,6 +323,12 @@ pub(super) struct Live {
     pub(super) start_claim: Option<Arc<()>>,
     /// A listed name the same attempt can still restore on non-delivery.
     pub(super) start_previous_name: Option<String>,
+    /// The start is a restore's resume of an agent that ended with its
+    /// holder. A resume the program does not take (its session is gone, it
+    /// exits) leaves the pane a shell like one never typed, so it is named
+    /// the same way once its start ends without the agent running
+    /// ([`PaneAgent::resume_missed`]).
+    pub(super) resumed: bool,
     /// Its program is in the pane's foreground.
     pub(super) shown: bool,
     /// The terminal edits lines, as its holder last read it: the program has
@@ -383,6 +383,56 @@ impl PaneAgent {
                     settles_from: Some(now),
                     ..Live::default()
                 }
+            },
+        }
+    }
+
+    /// An agent of `kind` the pane shows running: a program a definition
+    /// names in its foreground, or one whose own integration reported its
+    /// session from the pane ([`program_may_run`]).
+    pub(super) fn shown(kind: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            live: Live {
+                shown: true,
+                ..Live::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// An agent a restore resumes now: a start like [`Self::started`], whose
+    /// failure to take is named ([`Self::resume_missed`]).
+    pub(super) fn resumed(kind: &str, name: Option<&str>, session: Option<String>) -> Self {
+        let mut agent = Self::started(kind, name, session);
+        agent.live.resumed = true;
+        agent
+    }
+
+    /// Whether the agent a restore resumed has had its start end without it
+    /// running: its deadline passed with no program shown, or its program
+    /// left the foreground before the start settled (`ended`, the pane's
+    /// facts just ended the agent, which ends a start at once whatever the
+    /// clock says). One that ran past its settle and then ended is an
+    /// ordinary agent ending in its pane, whose own hooks end its
+    /// registration. The start's deadline and settle ([`Self::starting`],
+    /// [`Live::started`]) decide this, as they decide every start.
+    pub(super) fn resume_missed(&self, now: Instant, ended: bool) -> bool {
+        self.live.resumed && self.live.started.is_some() && (ended || !self.listed(now))
+    }
+
+    /// This agent, which a restore resumed and whose resume was missed
+    /// ([`Self::resume_missed`]), as the agent `pane` did not resume.
+    pub(super) fn not_resumed(&self, pane: &str) -> NotResumed {
+        NotResumed {
+            pane_id: pane.to_owned(),
+            agent: self.kind.clone(),
+            session: self.session.clone(),
+            why: if self.live.shown {
+                "its program ended before the resume's start settled".to_owned()
+            } else {
+                "no program showed within the start's deadline after its resume was typed"
+                    .to_owned()
             },
         }
     }
@@ -568,7 +618,7 @@ impl PaneLive {
 }
 
 /// What applying a pane's facts changed.
-#[derive(Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Default)]
 pub(super) struct Applied {
     /// The session as a snapshot projects it moved.
     pub(super) changed: bool,
@@ -579,6 +629,22 @@ pub(super) struct Applied {
     /// holder or node built before it could, or a Windows console its
     /// helper could not read (`hide-holder/src/console_input.rs`).
     pub(super) settled_unread: Option<String>,
+    /// The agent a restore resumed, which these facts ended before its start
+    /// settled ([`PaneAgent::resume_missed`]); the pane is a shell now.
+    pub(super) resume_missed: Option<PaneAgent>,
+}
+
+/// Whether `facts` leave room for an agent the pane's foreground does not
+/// name: a program other than the pane's own holds its terminal, or the
+/// system could not say what does. An agent's own integration reporting its
+/// session from the pane then speaks for that program, as the start of an
+/// agent the engine typed does (with-hide/hide-private#696): an agent typed
+/// into the shell is otherwise known only by its program's name, which a
+/// wrapper, an unreadable argument list (a native Claude Code's process is
+/// named by its version) or an unread terminal leaves unknown. While the
+/// shell holds the terminal no program of its runs there yet.
+pub(super) fn program_may_run(facts: &PaneFacts) -> bool {
+    facts.foreground.is_some() || facts.foreground_unread
 }
 
 /// Lays `facts` on a pane whose folder is `cwd` and whose agent is `agent`:
@@ -629,20 +695,14 @@ pub(super) fn apply(
         // Another agent's program: the operator typed it, or the start that
         // was typed ran something else.
         (_, _, Some(definition)) => {
-            *agent = Some(PaneAgent {
-                kind: definition.id.clone(),
-                live: Live {
-                    shown: true,
-                    ..Live::default()
-                },
-                ..PaneAgent::default()
-            });
+            *agent = Some(PaneAgent::shown(&definition.id));
             applied.changed = true;
         }
         // Nothing is in the foreground but the shell: an agent that showed
         // has ended, and one still starting waits until its deadline.
         (Some(current), None, None) => {
             if current.live.shown || !current.starting(now) {
+                applied.resume_missed = current.resume_missed(now, true).then(|| current.clone());
                 *agent = None;
                 applied.changed = true;
             }

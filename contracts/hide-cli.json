@@ -292,6 +292,314 @@
             ],
             "type": "object"
         },
+        "agent_end": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "Actor": {
+                    "properties": {
+                        "device_id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "pane_id": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "pane_id",
+                        "name",
+                        "kind",
+                        "device_id",
+                        "session"
+                    ],
+                    "type": "object"
+                },
+                "Connection": {
+                    "enum": [
+                        "connected",
+                        "disconnected"
+                    ],
+                    "type": "string"
+                },
+                "ConversationEnd": {
+                    "description": "The conversation of an ended registration.",
+                    "oneOf": [
+                        {
+                            "description": "Kept under \ubcf4\uad00\ub428, where \uc774\uc5b4\uac00\uae30 resumes it.",
+                            "enum": [
+                                "archived"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Not kept: the archive already holds as many sessions as it keeps.",
+                            "enum": [
+                                "archive_full"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Nothing was archived: the pane stayed, was gone, showed no conversation Hide knows, or Hide could not form the record (its reason is in the diagnostic log).",
+                            "enum": [
+                                "none"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "Names": {
+                    "properties": {
+                        "tab": {
+                            "$ref": "#/definitions/Outcome"
+                        },
+                        "workspace": {
+                            "$ref": "#/definitions/Outcome"
+                        }
+                    },
+                    "required": [
+                        "workspace",
+                        "tab"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "enum": [
+                        "pending",
+                        "applied",
+                        "preserved",
+                        "failed"
+                    ],
+                    "type": "string"
+                },
+                "PaneEnd": {
+                    "description": "The pane of an ended registration.",
+                    "oneOf": [
+                        {
+                            "description": "Closed: its holder, shell, agent and everything under them ended.",
+                            "enum": [
+                                "closed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Left open, as `--keep-pane` asked.",
+                            "enum": [
+                                "kept"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "No pane of the registration runs: it closed before, or its id now names another terminal.",
+                            "enum": [
+                                "gone"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Another conversation runs in the pane now, so it was left open.",
+                            "enum": [
+                                "other_agent"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Left open: the registration is from before Hide recorded its pane's terminal, and no agent shows in the pane, so nothing proves the pane is still the registration's.",
+                            "enum": [
+                                "left"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "Runtime": {
+                    "enum": [
+                        "running",
+                        "asleep",
+                        "ended"
+                    ],
+                    "type": "string"
+                },
+                "Watch": {
+                    "properties": {
+                        "activity_failures": {
+                            "format": "uint32",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "first_warning_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "generation": {
+                            "default": 0,
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "last_activity_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "last_state_change_seq": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "last_status": {
+                            "type": "string"
+                        },
+                        "parent": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "status_changed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "target": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "warning_count": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "parent",
+                        "target",
+                        "last_activity_at_unix_ms",
+                        "first_warning_at_unix_ms",
+                        "warning_count",
+                        "activity_failures",
+                        "last_status",
+                        "last_state_change_seq",
+                        "status_changed_at_unix_ms",
+                        "generation"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide agent end`: the registration as it ended, what became of the pane its agent ran in, and of the conversation that ran there.",
+            "properties": {
+                "connection": {
+                    "$ref": "#/definitions/Connection"
+                },
+                "conversation": {
+                    "$ref": "#/definitions/ConversationEnd"
+                },
+                "hostScope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "instance": {
+                    "type": "string"
+                },
+                "machine": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "names": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Names"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Naming has its own receipt; it never changes successful spawn identity."
+                },
+                "origin": {
+                    "description": "The spawner, independently of responsibility; null for ordinary roots.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "pane": {
+                    "type": "string"
+                },
+                "parent": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "project": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "registered": {
+                    "type": "boolean"
+                },
+                "runtime": {
+                    "$ref": "#/definitions/Runtime"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "watch": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Watch"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The watch on this agent, if one is running."
+                }
+            },
+            "required": [
+                "pane",
+                "conversation",
+                "id",
+                "name",
+                "machine",
+                "hostScope",
+                "session",
+                "instance",
+                "parent",
+                "origin",
+                "project",
+                "runtime",
+                "connection",
+                "registered",
+                "watch"
+            ],
+            "title": "AgentEnd",
+            "type": "object"
+        },
         "agent_list": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -1144,6 +1452,28 @@
                         }
                     ]
                 },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
                     "properties": {
@@ -1206,10 +1536,31 @@
                                 "null"
                             ]
                         },
+                        "bell_ended": {
+                            "default": null,
+                            "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
                         "bell_errors": {
                             "format": "uint8",
                             "minimum": 0.0,
                             "type": "integer"
+                        },
+                        "bell_failure": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/BellFailure"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                         },
                         "bell_line": {
                             "default": null,
@@ -1393,7 +1744,8 @@
                         "bell_typed_at_unix_ms",
                         "bell_route",
                         "input_noticed",
-                        "input_noticed_at_unix_ms"
+                        "input_noticed_at_unix_ms",
+                        "bell_ended"
                     ],
                     "type": "object"
                 },
@@ -1488,7 +1840,14 @@
                     "type": "array"
                 },
                 "letters": {
-                    "description": "The letters shown in full, grouped by sender, then the caller's own letters that went undelivered.",
+                    "description": "The letters shown in full, grouped by sender.",
+                    "items": {
+                        "$ref": "#/definitions/Letter"
+                    },
+                    "type": "array"
+                },
+                "returned": {
+                    "description": "The caller's own letters that went undelivered, returned to it: each names the recipient that did not get it, and `bell_failure` why its last bell failed when one did.",
                     "items": {
                         "$ref": "#/definitions/Letter"
                     },
@@ -1497,6 +1856,7 @@
             },
             "required": [
                 "letters",
+                "returned",
                 "folded"
             ],
             "title": "Inbox",
@@ -1579,6 +1939,28 @@
                             "type": "string"
                         }
                     ]
+                },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
                 },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
@@ -1692,10 +2074,31 @@
                         "null"
                     ]
                 },
+                "bell_ended": {
+                    "default": null,
+                    "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
                 "bell_errors": {
                     "format": "uint8",
                     "minimum": 0.0,
                     "type": "integer"
+                },
+                "bell_failure": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/BellFailure"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                 },
                 "bell_line": {
                     "default": null,
@@ -1879,7 +2282,8 @@
                 "bell_typed_at_unix_ms",
                 "bell_route",
                 "input_noticed",
-                "input_noticed_at_unix_ms"
+                "input_noticed_at_unix_ms",
+                "bell_ended"
             ],
             "title": "Letter",
             "type": "object"
@@ -3059,7 +3463,7 @@
         },
         {
             "answers": [
-                "agent"
+                "agent_end"
             ],
             "arguments": [
                 {
@@ -3080,11 +3484,24 @@
                     }
                 },
                 {
+                    "name": "--keep-pane",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
                     "value": null
                 }
+            ],
+            "refusals": [
+                "agent_unavailable",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "machine_unavailable",
+                "pane_close_failed"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3347,6 +3764,7 @@
                 "intent_conflict",
                 "invalid_launch_choice",
                 "shell_starting",
+                "holder_cap",
                 "pane_busy",
                 "agent_not_started",
                 "worktree_unconfirmed",
@@ -5280,7 +5698,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:4abe04d860d5ab4909b7339482e755dc67feee6b1b1087b71e5006301afc825b",
+    "digest": "sha256:83cd7672deda8629f95b3df1c2d3e3c7975ef7bdad46ff386ecc8962ac5adaa9",
     "envelopes": {
         "agent": {
             "answer": "value",

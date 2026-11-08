@@ -3,12 +3,14 @@
 //! each way (docs/agent-hooks.md, What the hook returns and reports back).
 //!
 //! The hook speaks it itself, and `hide`'s hook commands speak it through
-//! the same function, so the two never differ. The hook never starts `hide`
-//! to ask: on Windows the system holds a program's start until its scan
-//! ends, which for `hide` took a second on every start and eight the first
-//! time a new copy ran, past Memory's whole budget and, three starts
-//! together, past the agent's eight-second limit for the hook. A socket
-//! costs no program start on any system.
+//! the same function, so the two never differ. The hook never starts `hide`,
+//! to ask or to confirm: on Windows the system holds a program's start until
+//! its scan ends, which for `hide` took a second on every start and eight to
+//! twenty-five the first time a new copy ran, inside a call no deadline can
+//! end, while the starting program already held the agent's output pipe, so
+//! the agent's eight-second limit for the hook ran out and it dropped the
+//! hook's answer (with-hide/hide-private#663). A socket costs no program
+//! start on any system.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -35,11 +37,18 @@ pub enum PullPoint {
 
 /// The only commands admitted by a hook's proof-and-answer exchange.
 /// Keeping this separate from Workspace commands prevents this transport
-/// from acquiring dispatch, browser, or letter-confirmation authority.
+/// from acquiring dispatch or browser authority. Its one write of a letter is
+/// the receipt for letters the same pane's pull handed over, which the core
+/// takes only from their recipient's own pane and session, as it does from
+/// `hide inbox --confirm`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HookCommand {
     WorkspaceInfo {},
+    /// Whether the caller sits in a checkout Hide has registered: the proof
+    /// that admits the request is the answer, as it is for `hide workspace
+    /// bootstrap`, and nothing outlives it.
+    Registration {},
     LetterPull {
         prompt_digest: Option<String>,
         session: Option<String>,
@@ -50,6 +59,11 @@ pub enum HookCommand {
         /// before (`docs/delivery.md`, One bundle per handover).
         #[serde(default)]
         bundle: bool,
+    },
+    /// The letters a pull handed over reached the agent: the hook printed
+    /// them and its output was flushed.
+    LetterConfirm {
+        ids: Vec<String>,
     },
     Memory {
         event: String,

@@ -140,8 +140,10 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 /// deadline passed; a read of the name then answers it is gone. The pane
 /// shows its shell's first-prompt mark once `unmarked` reads of it have
 /// passed, `refused` makes the engine refuse the next start before typing
-/// anything, and `list_fails` is how many agent lists after the start the
-/// engine fails to answer.
+/// anything, `list_fails` is how many agent lists after the start the
+/// engine fails to answer, and while `full` the device's node holds the
+/// most pane holders it keeps, so no pane starts there.
+#[allow(clippy::too_many_arguments)] // each the test's own control of the engine
 fn device_engine(
     started: Arc<AtomicBool>,
     session: Arc<Mutex<Option<String>>>,
@@ -150,9 +152,14 @@ fn device_engine(
     unmarked: Arc<AtomicUsize>,
     refused: Arc<AtomicBool>,
     list_fails: Arc<AtomicUsize>,
+    full: Arc<AtomicBool>,
 ) -> Fake {
     FakeEngine::start(move |method, _| match method {
         "worktree_path" => reply(None::<String>),
+        "create_worktree" if full.load(Ordering::SeqCst) => self::refused(
+            hide_node_link::holders::HOLDER_CAP_REFUSAL,
+            "128 holders are recorded in this state folder, the most it keeps (128)",
+        ),
         "create_worktree" => reply(crate::engine::CreatedWorktree {
             tab_label: "hide".into(),
             workspace_id: "w2".into(),
@@ -174,6 +181,11 @@ fn device_engine(
         "pane_processes" => reply(fake::processes(&json!({
             "shell_pid": 4100, "foreground_process_group_id": 4100,
             "foreground_processes": [{"pid": 4100, "name": "zsh"}]}))),
+        // What a shell stopped in its startup files shows last.
+        "read_pane" => reply(crate::engine::PaneText {
+            text: "Last login: today\n".to_owned(),
+            truncated: false,
+        }),
         "start_agent" if refused.swap(false, Ordering::SeqCst) => {
             self::refused("internal_error", "the start was refused")
         }
@@ -238,6 +250,8 @@ struct Spawner {
     refused: Arc<AtomicBool>,
     /// How many agent lists after the start the engine fails to answer.
     list_fails: Arc<AtomicUsize>,
+    /// Whether the device's node holds the most pane holders it keeps.
+    full: Arc<AtomicBool>,
     fake: Fake,
     path: PathBuf,
     _worker: Worker,
@@ -271,6 +285,7 @@ fn spawner() -> Spawner {
     let unmarked = Arc::new(AtomicUsize::new(0));
     let refused = Arc::new(AtomicBool::new(false));
     let list_fails = Arc::new(AtomicUsize::new(0));
+    let full = Arc::new(AtomicBool::new(false));
     let fake = device_engine(
         started,
         session.clone(),
@@ -279,6 +294,7 @@ fn spawner() -> Spawner {
         unmarked.clone(),
         refused.clone(),
         list_fails.clone(),
+        full.clone(),
     );
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
@@ -303,6 +319,7 @@ fn spawner() -> Spawner {
                     label: id.to_owned(),
                     origin: crate::model::LinkOrigin::Dialed {
                         ssh_alias: id.to_owned(),
+                        naming: crate::model::DeviceNaming::Named,
                     },
                     host_consent: None,
                 });
@@ -397,6 +414,7 @@ fn spawner() -> Spawner {
         unmarked,
         refused,
         list_fails,
+        full,
         fake,
         path,
         _worker: worker,
@@ -516,13 +534,18 @@ impl Spawner {
 
 /// A spawn asked as the Desk process asks it and run as hided runs it.
 fn desk_ask(spawner: &Spawner, intent: &str) -> Result<Value, String> {
+    desk_ask_on(spawner, intent, DEVICE)
+}
+
+/// `desk_ask` with `--machine <machine>`.
+fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, String> {
     let command = crate::delivery::Command::Agents {
         command: Command::Spawn {
             mission: None,
             plan_node: None,
             plan: None,
             parent: None,
-            machine: Some(DEVICE.into()),
+            machine: Some(machine.into()),
             // The device's engine names its one agent `worker`.
             name: "worker".into(),
             intent: intent.into(),
@@ -605,6 +628,35 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
         .map(|job| (job.state, job.queue_position));
     assert_eq!(queued, Some((crate::model::DeskJobState::Queued, Some(1))));
     drop(runtime);
+    assert_eq!(spawner.count("start_agent"), 1);
+}
+
+/// `--machine` may name a dialed device by the SSH alias it was added with,
+/// as before its id became its machine's: the spawn starts on that device
+/// and records the device's id.
+#[test]
+fn a_spawn_naming_a_device_by_its_alias_starts_on_that_device() {
+    let spawner = spawner();
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        runtime.open_test_desk(1);
+        let registration = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == DEVICE)
+            .unwrap();
+        registration.origin = crate::model::LinkOrigin::Dialed {
+            ssh_alias: "mini-ssh".to_owned(),
+            naming: crate::model::DeviceNaming::Named,
+        };
+    }
+
+    let started = desk_ask_on(&spawner, "first", "mini-ssh").unwrap();
+    assert_eq!(started["machine"], DEVICE);
+    assert_eq!(spawner.ledger().spawns[0].machine.as_deref(), Some(DEVICE));
     assert_eq!(spawner.count("start_agent"), 1);
 }
 
@@ -1052,6 +1104,133 @@ fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
         .unwrap();
     assert!(marked < typed, "{methods:?}");
     assert_eq!(count(&methods, "create_worktree"), 1, "{methods:?}");
+}
+
+/// with-hide/hide#2181: a new pane whose shell never finishes starting (a
+/// startup file blocked on a read) answers why while its caller still waits,
+/// rather than a timeout whose spawn holds the spawn lock; it closes the tab
+/// it opened, and the same intent opens a new tab and starts the agent once
+/// a shell starts.
+#[test]
+fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_starts_again() {
+    let spawner = spawner();
+    spawner.node.integrated.store(true, Ordering::SeqCst);
+    spawner.unmarked.store(usize::MAX, Ordering::SeqCst);
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    let ask = || spawner.spawn(Some("here"), Some(DEVICE), "stuck");
+    let asked = std::time::Instant::now();
+    let refused = ask().expect_err("the shell never marked its first prompt");
+    assert!(
+        asked.elapsed() < crate::agent_start::SHELL_WAIT,
+        "the shell's wait ended inside the spawn's answer time"
+    );
+    let (code, detail) = split_refusal(&refused);
+    assert_eq!(code, "shell_starting");
+    assert_eq!(
+        crate::coordination::shell_starting_detail(detail.expect("a detail")),
+        (Some(1), Some("Last login: today")),
+        "the reason, with how long the shell was waited for and what it shows last"
+    );
+    assert_eq!(spawner.count("start_agent"), 0, "nothing was typed");
+    assert_eq!(spawner.count("close_pane"), 1, "the tab it opened closed");
+    let record = &spawner.ledger().spawns[0];
+    assert_eq!(record.pane, None, "the spawn names no pane");
+    assert!(!record.completed);
+
+    // The shell starts now: the same intent is not refused, and runs in a
+    // new tab.
+    spawner.unmarked.store(0, Ordering::SeqCst);
+    let child = ask().expect("the same intent starts the agent");
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(spawner.count("launch_tab"), 2, "a new tab");
+    assert_eq!(spawner.count("start_agent"), 1);
+    assert_eq!(spawner.count("close_pane"), 1);
+}
+
+/// A spawn's answer time, shortened for one test.
+struct AnswerWait;
+
+impl AnswerWait {
+    fn set(wait: Duration) -> Self {
+        crate::coordination::executor::TEST_ANSWER_WAIT.set(Some(wait));
+        Self
+    }
+}
+
+impl Drop for AnswerWait {
+    fn drop(&mut self) {
+        crate::coordination::executor::TEST_ANSWER_WAIT.set(None);
+    }
+}
+
+/// A spawn whose agent started and never takes input answers inside its
+/// answer time: the waits after the start (its session, the agent taking
+/// its brief) draw on what the shell left of that time, never on 30 s of
+/// their own, and the brief is not typed.
+#[test]
+fn a_spawn_whose_agent_never_takes_input_answers_within_its_answer_time() {
+    let spawner = spawner();
+    let _wait = AnswerWait::set(Duration::from_millis(300));
+    let asked = std::time::Instant::now();
+    let answer = crate::coordination::run(
+        spawner.client.clone(),
+        authority(&spawner.actor),
+        spawner.actor.clone(),
+        Command::Spawn {
+            mission: None,
+            plan_node: None,
+            plan: None,
+            parent: Some("here".into()),
+            machine: Some(DEVICE.into()),
+            name: "worker".into(),
+            intent: "slow".into(),
+            kind: "codex".into(),
+            repo: "/srv/repo".into(),
+            branch: "topic".into(),
+            path: None,
+            args: Vec::new(),
+            launch: Default::default(),
+            task: None,
+            brief: Some("fix it".into()),
+            beside: false,
+        },
+    );
+    assert!(
+        asked.elapsed() < crate::coordination::BRIEF_READY_WAIT,
+        "answered in {:?}: {answer:?}",
+        asked.elapsed()
+    );
+    assert_eq!(
+        split_refusal(&answer.expect_err("the agent never took input")).0,
+        "brief_not_submitted"
+    );
+    assert_eq!(count(&spawner.fake.methods(), "prompt_agent"), 0);
+}
+
+/// #676: a device whose node holds the most pane holders it keeps refuses
+/// the spawn as `holder_cap`, naming the device and the node's count, and
+/// the same intent starts the agent once a pane there was given back.
+#[test]
+fn a_spawn_on_a_machine_at_its_holder_cap_names_the_machine_and_starts_once_one_is_free() {
+    let spawner = spawner();
+    spawner.full.store(true, Ordering::SeqCst);
+    let refused = spawner
+        .spawn(Some("here"), Some(DEVICE), "full")
+        .expect_err("no pane starts on a full machine");
+    assert_eq!(
+        split_refusal(&refused),
+        (
+            "holder_cap",
+            Some("mini: 128 holders are recorded in this state folder, the most it keeps (128)")
+        )
+    );
+    assert_eq!(spawner.count("start_agent"), 0);
+
+    spawner.full.store(false, Ordering::SeqCst);
+    let child = spawner
+        .spawn(Some("here"), Some(DEVICE), "full")
+        .expect("the same intent starts once a pane is free");
+    assert_eq!(child["pane"], "w2:p1");
 }
 
 /// The device's kit report with Codex's hook in `state` for `cause`, and

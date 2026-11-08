@@ -216,7 +216,9 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
         .spawn(move || {
             let node = context.node.as_ref();
             let folders = |path: &str| crate::node_access::is_directory(node, path);
-            let program = |kind: &str| crate::start_prompt::start_program(node, kind);
+            let program = |kind: &str| {
+                crate::start_prompt::start_program_of(context.engine.as_ref(), node, kind)
+            };
             let asks = ReopenNode {
                 folders: &folders,
                 program: &program,
@@ -291,8 +293,8 @@ fn run_file_reopen(
 struct ReopenNode<'a> {
     /// Whether a closed pane's folder is still a directory there.
     folders: &'a dyn Fn(&str) -> bool,
-    /// The file a start of an agent names there
-    /// (`start_prompt::start_program`).
+    /// The file a start of the agent of a kind names there
+    /// (`start_prompt::start_program_of`).
     program: &'a dyn Fn(&str) -> Option<crate::engine::StartProgram>,
 }
 
@@ -939,6 +941,7 @@ fn start_or_degrade_agent(
             &format!("hide-core:{key}:agent:{index}:resume"),
             pane_id,
             crate::agent_start::ShellStart::Plain,
+            crate::agent_start::SHELL_WAIT,
             &name,
             &agent.kind,
             args,
@@ -967,6 +970,7 @@ fn start_or_degrade_agent(
         &format!("hide-core:{key}:agent:{index}:fresh"),
         pane_id,
         crate::agent_start::ShellStart::Plain,
+        crate::agent_start::SHELL_WAIT,
         &name,
         &agent.kind,
         launch,

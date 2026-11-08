@@ -80,6 +80,7 @@ impl Runtime {
             EstablishError::Unsupported(_) => DeviceFailure::Unsupported,
             EstablishError::Install(_) => DeviceFailure::Install,
             EstablishError::Helper(_) => DeviceFailure::Helper,
+            EstablishError::MachineName(_) => DeviceFailure::MachineName,
         };
         self.finish_device_connect(device, DeviceOutcome::Failed(failure));
     }

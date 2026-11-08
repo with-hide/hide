@@ -187,12 +187,12 @@ The shared `BackgroundRead` has one in-flight request and observes the latest de
 ## The opener guard hook on a shell call
 
 The `PreToolUse` entry runs `hide-agent-hooks` before every shell call a Claude Code or Codex agent makes, so it is a high-frequency path that every agent pays and no operator sees.
-Per input it adds one process start: the helper reads the payload (at most 256 KiB, waiting at most 0.5 seconds) and runs a byte test over the whole payload for a word of an opener and a viewable mark ([agent-hooks.md](agent-hooks.md#the-opener-guard)), and exits with no output when either is missing, before it parses JSON or starts a child; the [project guardrails](#the-guardrails-on-a-pre-tool-call) read their policy file first.
+Per input it adds one process start: the helper reads the payload (at most 256 KiB, waiting at most 0.5 seconds) and runs a byte test over the whole payload for a word of an opener and a viewable mark ([agent-hooks.md](agent-hooks.md#the-opener-guard)), and exits with no output when either is missing, before it parses JSON or asks the daemon; the [project guardrails](#the-guardrails-on-a-pre-tool-call) read their policy file first.
 A call that holds both, which includes an ordinary call whose payload mentions `open` and a `.md` file, pays one JSON parse and the shell lexer and starts nothing.
-Only an opener of a viewable target in a Hide pane starts a child: one `hide workspace bootstrap`, owned through `hide_platform::process` with the guard's 2.5 second deadline, a 16 KiB output cap, and an end of the child on success, failure and timeout alike.
-The guard keeps no state, runs no timer or worker, takes no lock of the runtime, publishes nothing and fans out no notification; the daemon sees one `bootstrap` request per refused call, the call `SessionStart` already makes.
+Only an opener of a viewable target in a Hide pane asks the daemon anything: one `registration` hook request over the local stream, within the guard's 2.5 second deadline, which starts no program.
+The guard keeps no state, runs no timer or worker, takes no lock of the runtime, publishes nothing and fans out no notification; the daemon sees one proof request per refused call, the proof `SessionStart` already asks for.
 The retained data is the hooks' log, capped at 256 KiB with one rotation, holding one `opener.refused` line per refusal, and the throttled diagnostic store `delivery` already caps; crossing a cap rotates or suppresses, and never refuses a call.
-A defect, a missing `hide` or a daemon that does not answer lets the shell call run, so the worst the guard can add to an ordinary call is its own bounded wait, never a refusal.
+A defect or a daemon that does not answer lets the shell call run, so the worst the guard can add to an ordinary call is its own bounded wait, never a refusal.
 
 Measure it at the command boundary: the installed command line run as the runtime runs it (`sh -c`, the payload on stdin), wall time per call from the caller's side, against a process-spawn baseline, with the first calls discarded as warm-up (ten, and five for the real `hide` row).
 Report p50, p95 and the load average before and after, and report the idle and driven (refusal) paths separately.
@@ -267,6 +267,16 @@ Package identity comes from the command-line path with no file read or subproces
 The holder keeps one cached program and sends at most 64 arguments within 8 KiB; facts publish only when changed, with no added notification fan-out or pending queue.
 The existing process-table snapshot scales with the machine's process count and has no row cap; this change adds no process table or resident cache.
 The argv contract, real-holder busy-shell refusal and `agent-start-platform.spec.ts` own the regression checks; CPU and latency parity remain unmeasured.
+
+The read axis's look adds no thread, timer or queue: it is compared where a selection completes (`Runtime::change_look`), under the lock that selection already holds.
+Each outermost selection costs one comparison of the operator's look (this machine's focus, at most 16 phone agents, and per connected device its focus filtered by the tabs its window shows); a selection inside another adds a depth count and no comparison.
+Only a moved look reads rows again, once, over the rows already published; that read is separate from the read a session makes of its own rows as it arrives and from what is recomputed for other reasons (checks, plans, Desk, lineage), which this neither adds nor removes.
+For each device whose rows that read changed, it projects that device's tree again with the existing functions: `sync_pane_status` looks each pane's row up, sets each tab's agent and label, searches each strip entry's tab among the rows, and redoes the checkout summaries and the project sort; `judge_device_pane_children` passes over the device's rows once per pane; and the session the device last sent is read with the same look and projected the same way, rows and relations.
+A device whose rows did not change, and a look that did not move, run none of it, so the same look and the same session repeat no projection and announce nothing more.
+A device's session already rebuilds its strips on every arrival; naming each rebuilt entry's agent there adds one search of that entry's tab among the rows, as this machine's strips have.
+Terminal input and a document's keystrokes are no selection and skip the comparison; terminal output never reaches the core.
+A reconnect that keeps a device in front is one selection that reads nothing, though its comparison still runs.
+It does no I/O, subprocess or serialization; regression owners are the `read_on_look.rs` tests, and no latency or CPU parity was measured.
 
 Every change adding resident work or touching a high-frequency path must explain its cost in the PR's Review section, even when it claims no performance improvement.
 This is a review requirement, not a new CI benchmark or permission to change runtime behavior through documentation.

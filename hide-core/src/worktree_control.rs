@@ -1593,20 +1593,23 @@ fn launch_agent(
     // PATH is not this machine's, so there its engine answers for it. Asked
     // before every start: how the node starts the program now is what the
     // start names and whether its first input can ride it.
+    // The node looks up the program the engine types for the agent (its
+    // definition's first executable), which is not always the kind's name.
+    let program = crate::start_prompt::program_of(engine, kind);
     let mut form = None;
     if let Some(node) = agent_node {
-        match crate::start_prompt::start_form(node, kind, AGENT_CHECK_TIMEOUT) {
+        match crate::start_prompt::start_form(node, &program, AGENT_CHECK_TIMEOUT) {
             Ok(Some(answer)) => form = Some(answer),
             Ok(None) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.not_installed",
-                    format!("{kind} is not installed on the daemon's PATH"),
+                    format!("{program} is not installed on the daemon's PATH"),
                 ));
             }
             Err(error) => {
                 return Launch::Failed(AgentFailure::with_detail(
                     "agent_start.install_check_failed",
-                    format!("Could not check whether {kind} is installed ({error})"),
+                    format!("Could not check whether {program} is installed ({error})"),
                 ));
             }
         }
@@ -1644,7 +1647,7 @@ fn launch_agent(
         wakes: false,
         program: form
             .as_ref()
-            .and_then(|form| crate::engine::StartProgram::of(kind, form)),
+            .and_then(|form| crate::engine::StartProgram::of(&program, form)),
     }) {
         Ok(start) => start,
         // An unread Codex is named by its own code; the rest is a wire fault.
@@ -1678,7 +1681,7 @@ fn launch_agent(
         }
         // The screen's last line is the operator's terminal content: the
         // screen quotes it, and no log keeps it.
-        Err(StartError::ShellStarting(line)) => Launch::Failed(AgentFailure {
+        Err(StartError::ShellStarting { screen: line, .. }) => Launch::Failed(AgentFailure {
             reason: crate::agent_start::SHELL_STARTING_REASON.to_owned(),
             detail: None,
             line,
@@ -4764,6 +4767,69 @@ mod tests {
             }]
         );
         assert!(requests_of(&server).is_empty());
+    }
+
+    /// Issue 666: the node looks a name up on its `PATH`, so the pane's start
+    /// asks about the program the engine's definition starts the agent by and
+    /// names that program when it is missing, not the agent's kind. A kind
+    /// that can start has the name of its executable until an operator's
+    /// definition names another (`claude` run as `claude-beta`).
+    #[test]
+    fn an_agent_is_looked_up_on_its_node_by_its_definitions_first_executable_not_its_kind() {
+        struct Missing(Mutex<Vec<hide_node_link::protocol::Call>>);
+        impl crate::node_access::NodeLink for Missing {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _timeout: std::time::Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                self.0.lock().unwrap().push(call);
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    serde_json::Value::Null,
+                ))
+            }
+        }
+        let mut definitions = hide_agent_adapter::definition::builtins().to_vec();
+        definitions
+            .iter_mut()
+            .find(|definition| definition.id == "claude-code")
+            .expect("the built-in Claude Code definition")
+            .executables = vec!["claude-beta".to_owned()];
+        let node = Missing(Mutex::default());
+        let server = server(vec![]);
+        (*server).set_agent_definitions(Arc::new(hide_agent_adapter::definition::Catalog {
+            definitions,
+            rejected: Vec::new(),
+        }));
+        let outcome = launch_with_prompt(
+            &*server,
+            Some(&node),
+            7,
+            PendingAgentStart {
+                resume_reference: None,
+                resume_scope: None,
+                pane_id: "w1:p1".into(),
+                kind: "claude".into(),
+                prompt: None,
+                args: Vec::new(),
+                codex_daemon: Default::default(),
+                shell: crate::agent_start::ShellStart::Plain,
+                made_worktree: None,
+            },
+        );
+        assert_eq!(
+            outcome,
+            TaskAgentOutcome::Failed(AgentFailure::with_detail(
+                "agent_start.not_installed",
+                "claude-beta is not installed on the daemon's PATH"
+            ))
+        );
+        assert_eq!(
+            *node.0.lock().unwrap(),
+            [hide_node_link::protocol::Call::AgentInstalled {
+                name: "claude-beta".into()
+            }]
+        );
     }
 
     #[test]

@@ -1600,7 +1600,41 @@ fn git_within_limit(
     {
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
-    let output = crate::git_run::output(crate::git_run::at(cwd).args(arguments), deadline, limit)
+    git_output(crate::git_run::at(cwd), arguments, deadline, limit)
+}
+
+/// [`git`] in a held folder (`hide_platform::fs::held`): the folder a node
+/// checked, whatever its path names by the time Git starts.
+pub fn git_in(
+    folder: &hide_platform::fs::held::HeldFolder,
+    arguments: &[&str],
+) -> Result<String, String> {
+    if let Some(calls) = GIT_CALLS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_mut()
+    {
+        calls.push((
+            folder.path().to_owned(),
+            arguments.first().unwrap_or(&"").to_string(),
+        ));
+    }
+    git_output(
+        crate::git_run::in_folder(folder),
+        arguments,
+        GIT_DEADLINE,
+        None,
+    )
+}
+
+/// Runs `git` with `arguments` and answers its stdout, or why it failed.
+fn git_output(
+    mut git: std::process::Command,
+    arguments: &[&str],
+    deadline: Duration,
+    limit: Option<u64>,
+) -> Result<String, String> {
+    let output = crate::git_run::output(git.args(arguments), deadline, limit)
         .map_err(|error| format!("git could not be run: {error}"))?;
     let Some(output) = output else {
         return Err(format!(

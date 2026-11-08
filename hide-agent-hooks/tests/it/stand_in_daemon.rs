@@ -1,20 +1,17 @@
 //! A stand-in for hided's bootstrap service, which a hook's requests reach
 //! (`hide_agent_hooks::hook_request`). Each request is answered by the test's
-//! stand-in `hide` program, run with the arguments of the `hide` command that
+//! stand-in `hide` program ([`serve`](StandInDaemon::serve)), or by a table the
+//! test keeps in code ([`serve_table`](StandInDaemon::serve_table)), the one
+//! form a Windows test can use. A program is run with the arguments of the `hide` command that
 //! sends the same request and with the request's input on its stdin, so a
-//! test keeps one table of answers for what the hook asks the daemon and for
-//! the `hide` it still runs (a letter's confirmation).
+//! test keeps one table of answers, keyed by the command an operator would
+//! type, for everything the hook asks the daemon.
 //!
 //! The service lives in a state folder of its own, which [`route`] hands the
 //! hook through `HIDE_STATE_DIR`, so no test's hook can reach the account's
 //! own daemon; a test of how the hook finds its state folder names the
 //! folder ([`serve_at`](StandInDaemon::serve_at)).
 //!
-//! Its answers come from the `sh` stand-ins the Unix tests keep; on Windows
-//! the hook's requests are proved against the real daemon by the agent
-//! journey.
-
-#![cfg(unix)]
 //!
 //! [`route`]: StandInDaemon::route
 
@@ -44,16 +41,36 @@ impl StandInDaemon {
     /// Serves every request with `program`, run with `envs` besides the test's
     /// own environment, the request's pane as `HIDE_PANE_ID` and this
     /// service's state folder as `HIDE_STATE_DIR`.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn serve(program: &Path, envs: &[(&'static str, OsString)]) -> Self {
         Self::serve_at(None, program, envs)
     }
 
     /// [`serve`](Self::serve) for the daemon of the state folder `state`.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn serve_at(
         state: Option<&Path>,
         program: &Path,
         envs: &[(&'static str, OsString)],
     ) -> Self {
+        Self::serve_with(
+            state,
+            Answerer::Program {
+                program: program.to_path_buf(),
+                envs: envs.to_vec(),
+            },
+        )
+    }
+
+    /// Serves every request with `table`'s answer to the request's command
+    /// (`hide_agent_hooks::hook_request::HookCommand`, as JSON); `None` ends
+    /// the stream without an answer.
+    #[cfg_attr(unix, allow(dead_code))]
+    pub fn serve_table(table: impl Fn(&Value) -> Option<Value> + Send + Sync + 'static) -> Self {
+        Self::serve_with(None, Answerer::Table(Arc::new(table)))
+    }
+
+    fn serve_with(state: Option<&Path>, answerer: Answerer) -> Self {
         let sockets = short_dir();
         let state = state.map_or_else(|| sockets.path().join("state"), Path::to_path_buf);
         let socket = sockets.path().join("s").join("b.sock");
@@ -69,8 +86,7 @@ impl StandInDaemon {
         let answering = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(Mutex::new(Running::default()));
         let served = Served {
-            program: program.to_path_buf(),
-            envs: envs.to_vec(),
+            answerer,
             state: state.clone(),
             running: Arc::clone(&running),
         };
@@ -90,6 +106,16 @@ impl StandInDaemon {
             accepting: Some(accepting),
             answering,
         }
+    }
+
+    /// Withdraws the socket's record, as a daemon that is not running has
+    /// published none: no request reaches this service from here on.
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn withdraw(&self) {
+        std::fs::remove_file(hide_agent_hooks::hook_request::bootstrap_socket_record(
+            &self.state,
+        ))
+        .unwrap();
     }
 
     /// Points `command`'s hook at this service.
@@ -122,10 +148,24 @@ impl Drop for StandInDaemon {
     }
 }
 
+/// A table's answer to a request's command; `None` sends none.
+type Table = Arc<dyn Fn(&Value) -> Option<Value> + Send + Sync>;
+
+/// What answers a request.
+#[derive(Clone)]
+enum Answerer {
+    /// The stand-in `hide`, run with the request's command line.
+    Program {
+        program: PathBuf,
+        envs: Vec<(&'static str, OsString)>,
+    },
+    /// A table the test keeps in code, by the request's command.
+    Table(Table),
+}
+
 #[derive(Clone)]
 struct Served {
-    program: PathBuf,
-    envs: Vec<(&'static str, OsString)>,
+    answerer: Answerer,
     state: PathBuf,
     running: Arc<Mutex<Running>>,
 }
@@ -153,47 +193,11 @@ impl Served {
             return;
         };
         let hook = &request["hook"];
-        let (arguments, input) = as_hide_command(&hook["command"]);
-        let mut command = Command::new(&self.program);
-        command
-            .args(&arguments)
-            .envs(self.envs.iter().map(|(key, value)| (key, value)))
-            .env("HIDE_STATE_DIR", &self.state)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        match request["pane_id"].as_str() {
-            Some(pane) if !pane.is_empty() => command.env("HIDE_PANE_ID", pane),
-            _ => command.env_remove("HIDE_PANE_ID"),
+        let answer = match &self.answerer {
+            Answerer::Program { program, envs } => self.run(program, envs, &request),
+            Answerer::Table(table) => table(&hook["command"]),
         };
-        let Ok(mut child) = command.spawn() else {
-            return;
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(input.as_bytes());
-        }
-        let stdout = child.stdout.take();
-        {
-            let mut running = self.running.lock().unwrap();
-            if running.closed {
-                drop(running);
-                end(child);
-                return;
-            }
-            running.children.push(child);
-        }
-        // Its output ends when it does, or when the service ends it.
-        let mut output = Vec::new();
-        if let Some(mut stdout) = stdout {
-            let _ = stdout.read_to_end(&mut output);
-        }
-        // What the stand-in printed is the daemon's answer; one that printed
-        // no JSON line ends the stream without an answer.
-        let Some(Ok(mut answer)) = String::from_utf8_lossy(&output)
-            .lines()
-            .next()
-            .map(serde_json::from_str::<Value>)
-        else {
+        let Some(mut answer) = answer else {
             return;
         };
         if answer["ok"] == true && answer.get("request_id").is_none() {
@@ -205,6 +209,54 @@ impl Served {
             answer["install"] = request["install"].clone();
         }
         let _ = writeln!(stream, "{answer}");
+    }
+
+    /// What the stand-in `program` printed for `request`: its first line, the
+    /// daemon's answer, or `None` when it printed no JSON line.
+    fn run(
+        &self,
+        program: &Path,
+        envs: &[(&'static str, OsString)],
+        request: &Value,
+    ) -> Option<Value> {
+        let (arguments, input) = as_hide_command(&request["hook"]["command"]);
+        let mut command = Command::new(program);
+        command
+            .args(&arguments)
+            .envs(envs.iter().map(|(key, value)| (key, value)))
+            .env("HIDE_STATE_DIR", &self.state)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        match request["pane_id"].as_str() {
+            Some(pane) if !pane.is_empty() => command.env("HIDE_PANE_ID", pane),
+            _ => command.env_remove("HIDE_PANE_ID"),
+        };
+        let Ok(mut child) = command.spawn() else {
+            return None;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(input.as_bytes());
+        }
+        let stdout = child.stdout.take();
+        {
+            let mut running = self.running.lock().unwrap();
+            if running.closed {
+                drop(running);
+                end(child);
+                return None;
+            }
+            running.children.push(child);
+        }
+        // Its output ends when it does, or when the service ends it.
+        let mut output = Vec::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_end(&mut output);
+        }
+        String::from_utf8_lossy(&output)
+            .lines()
+            .next()
+            .and_then(|line| serde_json::from_str(line).ok())
     }
 }
 
@@ -252,6 +304,21 @@ fn as_hide_command(command: &Value) -> (Vec<String>, String) {
             }
             (arguments, String::new())
         }
+        Some("letter_confirm") => {
+            let mut arguments = vec!["inbox".to_owned(), "--confirm".to_owned()];
+            arguments.extend(
+                command["ids"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_owned)),
+            );
+            (arguments, String::new())
+        }
+        Some("registration") => (
+            ["workspace", "bootstrap"].map(str::to_owned).to_vec(),
+            String::new(),
+        ),
         _ => (Vec::new(), String::new()),
     }
 }

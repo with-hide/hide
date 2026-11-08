@@ -190,7 +190,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
   Start every reviewer and verifier yourself, as a worker of the mission, so the cap counts it; tell a worker not to start agents of its own.
   Then bind it to its line: `hide mission node <key> --reviewer <agent-N>` (or `--verifier`), which Hide refuses for the node's own worker (`mission_checker_is_worker`) or an agent it does not know (`mission_checker_unknown`).
-  End a finished worker with `hide agent end <id>` to free its place, and start the next node then.
+  End a finished worker or checker with `hide agent end <id>` to free its place, and start the next node then: its pane closes with every program in it, which also gives back the pane holder it held, and its conversation waits under 보관됨, where 이어가기 resumes it.
 - When a node is done or dropped, every pull request it holds merges or closes, or the mission closes, Hide puts that node's worker and checkers to sleep once they rest and are off the operator's screen (never you); a sleeping worker still counts against the cap until you end it, and `hide agent list` and `hide ps` show it `asleep` until it wakes.
   A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.

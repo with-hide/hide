@@ -1,25 +1,25 @@
 //! Prompt intake has a single total deadline. Pull is read-only; only a
-//! successful stdout flush permits confirmation. The pull is a hook request
-//! the hook sends itself ([`ask`]); the confirmation is a Workspace command,
-//! run by the `hide` beside the helper, an owned child whose bounded stdout
-//! is drained while it runs.
+//! successful stdout flush permits confirmation. The pull and the
+//! confirmation are hook requests the hook sends itself ([`ask`]); neither
+//! starts a program (`crate::hook_request`).
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_platform::fs::{self, private};
-use hide_platform::process::{CaptureFailureKind, OwnedChild};
 use serde::{Deserialize, Serialize};
 
 use crate::hook_request::{Caller, HookCommand, PullPoint, Timing};
 
-const OUTPUT_LIMIT: usize = 64 * 1024;
 const CONTEXT_LIMIT: usize = 8 * 1024;
 const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
+/// How long a letter waits to be taken before the core ends it; named below
+/// the core so a confirmation a hook owes ([`crate::owed`]) is kept no longer
+/// than its letters can still be taken.
+pub const DELIVERY_EXPIRY_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Deserialize)]
 struct PromptInput {
@@ -193,6 +193,10 @@ pub struct Intake {
     /// be older than the core it asks.
     #[serde(default)]
     pub plan_context: Option<serde_json::Value>,
+    /// The native session the letters were pulled for, which a confirmation
+    /// that misses its hook is owed under ([`confirm_or_owe`]).
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 #[derive(Debug)]
@@ -210,6 +214,30 @@ impl From<&'static str> for Failure {
     }
 }
 
+impl Failure {
+    /// Whether the core was not reached in time, so the same request may
+    /// still be taken later: the deadline passed, the hook could not form its
+    /// request (`cli`), no daemon or connection answered whole
+    /// ([`refusal_cause`]'s steps), or its store was not available. The
+    /// core's own refusal (`refused`, `capacity`, `identity`), an answer that
+    /// could not be read (`format`) and one that confirmed other letters
+    /// (`confirm`) would be the same again.
+    pub fn transient(&self) -> bool {
+        matches!(
+            self.code,
+            "deadline"
+                | "cli"
+                | "ledger"
+                | "unavailable"
+                | "record"
+                | "connect"
+                | "unsent"
+                | "timeout"
+                | "answer"
+        )
+    }
+}
+
 /// What the agent receives for the submitted prompt: the letter bodies when
 /// the core recognizes the prompt as the line its doorbell typed, otherwise
 /// at most a count.
@@ -224,7 +252,7 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
         },
         pull_deadline,
     )?;
-    let intake = intake(answer)?;
+    let intake = intake(answer, prompt.session.as_deref())?;
     Ok(intake.and_then(|intake| keep_plan(intake, prompt.session.as_deref())))
 }
 
@@ -289,11 +317,12 @@ fn pull_at_gap(
         },
         pull_deadline,
     )?;
-    intake(answer)
+    intake(answer, Some(session))
 }
 
-fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
-    let intake: Intake = serde_json::from_value(answer).map_err(|_| "format")?;
+fn intake(answer: serde_json::Value, session: Option<&str>) -> Result<Option<Intake>, Failure> {
+    let mut intake: Intake = serde_json::from_value(answer).map_err(|_| "format")?;
+    intake.session = session.map(str::to_owned);
     if intake.context.len() > CONTEXT_LIMIT || !valid_letter_ids(&intake.ids) {
         return Err("format".into());
     }
@@ -310,8 +339,9 @@ fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
 /// limit keeps a bundle under it.
 pub const BUNDLE_LETTERS: usize = 1_024;
 
-/// Whether `ids` may travel to `hide inbox --confirm` as its arguments: at
-/// most one bundle's letters, each a letter id rather than an option.
+/// Whether `ids` may be confirmed in one request, a hook's or `hide inbox
+/// --confirm`'s: at most one bundle's letters, each a letter id rather than
+/// an option.
 pub fn valid_letter_ids(ids: &[String]) -> bool {
     ids.len() <= BUNDLE_LETTERS
         && ids.iter().all(|id| {
@@ -322,23 +352,96 @@ pub fn valid_letter_ids(ids: &[String]) -> bool {
         })
 }
 
-pub fn confirm(intake: &Intake, deadline: Instant) -> Result<(), Failure> {
-    let mut arguments = vec!["inbox", "--confirm"];
-    arguments.extend(intake.ids.iter().map(String::as_str));
-    let answer = run_cli(&arguments, deadline)?;
-    let confirmed = answer
-        .get("confirmed")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("confirm")?;
-    if confirmed.len() != intake.ids.len()
-        || !confirmed
-            .iter()
-            .zip(&intake.ids)
-            .all(|(actual, expected)| actual.as_str() == Some(expected))
-    {
-        return Err("confirm".into());
+/// Confirms `intake`'s letters, which reached the agent, by `deadline`. One
+/// that did not reach the core in time ([`Failure::transient`]) is recorded
+/// and owed to the pane's next turn end of the same session ([`crate::owed`],
+/// [`settle_owed`]), which confirms it then; the core takes a confirmation
+/// that comes late. One the core refused would be refused again and is only
+/// recorded as a failure.
+pub fn confirm_or_owe(home: &Path, intake: &Intake, deadline: Instant) {
+    let Err(failure) = confirm(&intake.ids, deadline) else {
+        return;
+    };
+    diagnose_failure(home, &failure);
+    if !failure.transient() {
+        return;
+    }
+    let (Some(pane), Some(session)) = (crate::pane::from_env(), intake.session.as_deref()) else {
+        return;
+    };
+    let owed = crate::owed::owe(home, &pane, session, &intake.ids, crate::hook_log::now_ms());
+    if let Err(cause) = owed {
+        diagnose(home, cause);
+    }
+}
+
+/// At a turn end of the pane's own `session`, confirms what an earlier hook
+/// of the session owes, by `deadline` ([`crate::owed::settle`]).
+pub fn settle_owed(home: &Path, session: &str, deadline: Instant) {
+    let Some(pane) = crate::pane::from_env() else {
+        return;
+    };
+    let settled = crate::owed::settle(home, &pane, session, crate::hook_log::now_ms(), |ids| {
+        confirm(ids, deadline)
+    });
+    if let Err(failure) = settled {
+        diagnose_failure(home, &failure);
+    }
+}
+
+/// Tells the daemon the letters `ids` name reached the agent, in as many
+/// requests as they take ([`confirm_runs`]), each answered with exactly the
+/// ids it named.
+pub fn confirm(ids: &[String], deadline: Instant) -> Result<(), Failure> {
+    for run in confirm_runs(ids) {
+        let answer = ask(HookCommand::LetterConfirm { ids: run.to_vec() }, deadline)?;
+        let confirmed = answer
+            .get("confirmed")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("confirm")?;
+        if confirmed.len() != run.len()
+            || !confirmed
+                .iter()
+                .zip(run)
+                .all(|(actual, expected)| actual.as_str() == Some(expected))
+        {
+            return Err("confirm".into());
+        }
     }
     Ok(())
+}
+
+/// The most bytes one confirmation's ids take, encoded: half a hook
+/// request, so the request's envelope (pane, nonce, installation, proof)
+/// fits beside them.
+const CONFIRM_IDS_BYTES: usize = crate::hook_request::HOOK_REQUEST_LIMIT / 2;
+
+/// `ids` cut, in order, into runs whose encoded ids fit one confirmation: a
+/// bundle of up to [`BUNDLE_LETTERS`] letters can name more than one hook
+/// request carries, and a bundle that could never be confirmed would be
+/// handed over again at every prompt.
+fn confirm_runs(ids: &[String]) -> Vec<&[String]> {
+    let mut runs = Vec::new();
+    let (mut start, mut bytes) = (0, 0);
+    for (at, id) in ids.iter().enumerate() {
+        // The id, its quotes, a backslash before each `"` and `\` in it (a
+        // valid id holds no control character, the only other escape), and
+        // its comma.
+        let size = id.len()
+            + id.bytes()
+                .filter(|byte| matches!(byte, b'"' | b'\\'))
+                .count()
+            + 3;
+        if at > start && bytes + size > CONFIRM_IDS_BYTES {
+            runs.push(&ids[start..at]);
+            (start, bytes) = (at, 0);
+        }
+        bytes += size;
+    }
+    if start < ids.len() {
+        runs.push(&ids[start..]);
+    }
+    runs
 }
 
 /// The `result` of one hook request this hook sends the daemon itself
@@ -365,6 +468,22 @@ pub fn ask_timed(
 /// The daemon's whole `ok` answer to one hook request, `result` and all,
 /// with how long its steps took; an answer that is not `ok` is its cause.
 pub fn ask_answer(
+    command: HookCommand,
+    deadline: Instant,
+) -> (Result<serde_json::Value, Failure>, Timing) {
+    let (answer, timing) = answer_of(command, deadline);
+    let answer = answer.and_then(|value| {
+        if value["ok"] != true {
+            return Err(refusal_cause(value["reason"].as_str()).into());
+        }
+        Ok(value)
+    });
+    (answer, timing)
+}
+
+/// The daemon's answer to one hook request, `ok` or a refusal with its
+/// `reason`; only a request no daemon answered is the cause it stopped at.
+pub fn answer_of(
     command: HookCommand,
     deadline: Instant,
 ) -> (Result<serde_json::Value, Failure>, Timing) {
@@ -396,54 +515,12 @@ pub fn ask_answer(
     let answer = sent
         .answer
         .map_err(|failure| Failure::from(refusal_cause(Some(failure.reason))));
-    let answer = answer.and_then(|value| {
-        if value["ok"] != true {
-            return Err(refusal_cause(value["reason"].as_str()).into());
-        }
-        Ok(value)
-    });
     (answer, sent.timing)
 }
 
 /// The variable a pane names its persistent Workspace reference by, which a
 /// hook request names for its fresh proof to agree with.
 const CAP_REF_VARIABLE: &str = "HIDE_CAP_REF";
-
-fn run_cli(arguments: &[&str], deadline: Instant) -> Result<serde_json::Value, Failure> {
-    if Instant::now() >= deadline {
-        return Err("deadline".into());
-    }
-    let executable = std::env::current_exe().map_err(|_| "cli")?;
-    let sibling = executable
-        .parent()
-        .ok_or("cli")?
-        .join(format!("hide{}", std::env::consts::EXE_SUFFIX));
-    // Reuse the installed sibling rather than trusting a different checkout
-    // earlier on PATH. A missing part follows the manual-inbox fallback.
-    let mut command = Command::new(sibling);
-    crate::route::apply(&mut command).map_err(Failure::from)?;
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = OwnedChild::spawn(&mut command).map_err(|_| "cli")?;
-    let output = child
-        .capture_until(deadline, OUTPUT_LIMIT)
-        .map_err(|failure| Failure {
-            code: match failure.kind {
-                CaptureFailureKind::Deadline => "deadline",
-                CaptureFailureKind::OutputLimit { .. } => "format",
-                CaptureFailureKind::Io(_) | CaptureFailureKind::Cleanup => "cli",
-            },
-            cleanup: failure.cleanup.as_ref().map(std::io::Error::kind),
-        })?;
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| "format")?;
-    if !output.status.success() || value["ok"] != true {
-        return Err(refusal_cause(value["reason"].as_str()).into());
-    }
-    value.get("result").cloned().ok_or_else(|| "format".into())
-}
 
 /// The cause a `hide` answer that is not `ok` is recorded under, from its
 /// `reason`. A hook's request to its daemon names the step it stopped at
@@ -456,8 +533,8 @@ fn run_cli(arguments: &[&str], deadline: Instant) -> Result<serde_json::Value, F
 /// (`other_install`), or one answered without naming the pane's, as an
 /// earlier build does (`unconfirmed`; `hook_request::install`). A reason with
 /// no cause of its own is the daemon's refusal (`refused`), and an answer
-/// without one is malformed (`format`); `cli` is kept for a `hide` that could
-/// not be run.
+/// without one is malformed (`format`); `cli` is a request the hook could not
+/// form.
 pub fn refusal_cause(reason: Option<&str>) -> &'static str {
     match reason {
         Some("ledger_unavailable") => "ledger",
@@ -516,8 +593,9 @@ pub struct Stages {
 /// guardrails' three (`guardrails`: the policy file could not be read;
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
-/// call).
-const CAUSES: [&str; 28] = [
+/// call), the plan record's two, and an owed confirmation's two
+/// (`crate::owed`: its record could not be written, or too many panes owe).
+const CAUSES: [&str; 30] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -546,6 +624,8 @@ const CAUSES: [&str; 28] = [
     "guardrails_failed",
     "plan_record",
     "plan_context_format",
+    "owed_record",
+    "owed_capacity",
 ];
 
 /// Fixed causes ([`CAUSES`]), private storage and a nonblocking cross-process lock.
@@ -664,6 +744,32 @@ fn diagnostic_path(home: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// The largest bundle, of the longest ids a confirmation takes, is
+    /// confirmed in order and whole, in runs that each fit one hook request
+    /// beside its envelope; the bundles a prompt hands over in practice take
+    /// one.
+    #[test]
+    fn a_bundle_is_confirmed_in_runs_that_each_fit_one_request() {
+        let longest: Vec<String> = (0..BUNDLE_LETTERS).map(|n| format!("{n:0>256}")).collect();
+        assert!(valid_letter_ids(&longest));
+        let usual: Vec<String> = (28_000..28_000 + BUNDLE_LETTERS)
+            .map(|n| format!("letter-{n}"))
+            .collect();
+        for ids in [&longest, &usual] {
+            let runs = confirm_runs(ids);
+            assert_eq!(runs.concat(), *ids);
+            for run in &runs {
+                assert!(!run.is_empty());
+                let command =
+                    serde_json::to_string(&HookCommand::LetterConfirm { ids: run.to_vec() })
+                        .unwrap();
+                assert!(command.len() <= CONFIRM_IDS_BYTES + 64, "{}", command.len());
+            }
+        }
+        assert_eq!(confirm_runs(&usual[..20]).len(), 1);
+        assert!(confirm_runs(&[]).is_empty());
+    }
+
     #[test]
     fn a_plan_summary_this_helper_cannot_read_leaves_the_letters_to_deliver() {
         let answer = serde_json::json!({
@@ -671,7 +777,7 @@ mod tests {
             "ids": ["letter-1"],
             "plan_context": {"plan": null, "mission": null, "conductor": null, "later": 1},
         });
-        let intake = intake(answer).unwrap().unwrap();
+        let intake = intake(answer, None).unwrap().unwrap();
         assert_eq!(
             (intake.context.as_str(), intake.ids.as_slice()),
             ("letter body", &["letter-1".to_owned()][..])

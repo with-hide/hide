@@ -287,6 +287,34 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const sendRemote = (targetId: string, request: RemoteAction) => dispatch(remoteControl(targetId, request));
 
   /**
+   * The one event that opens a pane for the operator, wherever it lives: this
+   * machine's `focus_pane`, or the device's `remote_control` focus_pane. It
+   * also brings the pane's device forward when that device is not in front, so
+   * a row, a chip or a relationship Open that reaches a pane on another device
+   * (or back to this one) shows it, rather than focusing it out of sight. Every
+   * way of opening an agent pane builds its event here (docs/UI_BEHAVIOR.md,
+   * "Agent panes and the Agents explorer": a parent row opens a device child).
+   */
+  const openPaneEvent = (paneId: string, options: { requestId?: string; report?: boolean; revealUnseen?: boolean } = {}) => {
+    const node = localDeviceId(rest());
+    const target = remoteTargetOfPane(rest(), paneId) ?? node;
+    const forward = frontDeviceId(rest()) !== target;
+    if (target !== node) {
+      const event = remoteControl(target, { action: "focus_pane", pane_id: paneId }, options.requestId);
+      const reported = options.report ? { ...event, payload: { ...event.payload, report_pane_focus_outcome: true } } : event;
+      return { event: forward ? withDeviceForward(reported) : reported, remote: true };
+    }
+    return {
+      event: {
+        schema_version: 2,
+        kind: "focus_pane",
+        payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(options.requestId ? { request_id: options.requestId } : {}), ...(options.revealUnseen ? { reveal_unseen: true } : {}) },
+      },
+      remote: false,
+    };
+  };
+
+  /**
    * A child chip, a Return or a relationship Open (S6 B15, B16): one
    * focus_pane carrying a request id, so the core's receipt says whether this
    * click landed. A second click on the same target while the first is in
@@ -304,16 +332,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setRelation({ ...asked, timedOut: true });
     }, RELATION_ANSWER_TIMEOUT_MS);
     ui().setScreen({ kind: "workspace" });
-    const targetId = remoteTargetOfPane(rest(), targetPaneId);
-    if (targetId) {
-      dispatch({
-        schema_version: 2,
-        kind: "remote_control",
-        payload: { target_id: targetId, request_id: requestId, report_pane_focus_outcome: true, action: "focus_pane", pane_id: targetPaneId },
-      });
-      return;
-    }
-    dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: targetPaneId, origin: "operator", request_id: requestId } });
+    dispatch(openPaneEvent(targetPaneId, { requestId, report: true }).event);
   };
 
   /** The id of the core's task slot now, so a request can tell its own answer from an older one. */
@@ -1426,7 +1445,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     herdrImport(action: "move" | "import" | "look" | "continue", device?: string) {
       dispatch({ schema_version: 2, kind: "herdr_import", payload: device === undefined ? { action } : { action, device } });
     },
-    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
+    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },
     listMachineProfiles() {
@@ -1486,11 +1505,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "agent_definitions_read", payload: {} });
     },
 
-    registerDevice(id: string, label: string, alias: string, options: { hostConsent: boolean }) {
+    /** Adds an SSH device; the core gives it its id, its machine's own once it first connects. */
+    registerDevice(label: string, alias: string, options: { hostConsent: boolean }) {
       dispatch({
         schema_version: 2,
         kind: "register_device",
-        payload: { id, label, ssh_alias: alias, host_consent: options.hostConsent },
+        payload: { label, ssh_alias: alias, host_consent: options.hostConsent },
       });
     },
 
@@ -2496,16 +2516,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     openAgent(paneId: string, look?: LookAt) {
       beginOpening({ paneId });
-      const node = localDeviceId(rest());
-      const target = remoteTargetOfPane(rest(), paneId) ?? node;
-      const forward = frontDeviceId(rest()) !== target;
-      if (target !== node) {
-        const event = remoteControl(target, { action: "focus_pane", pane_id: paneId });
-        dispatch(forward ? withDeviceForward(event) : event);
+      const { event, remote } = openPaneEvent(paneId, { revealUnseen: Boolean(look) });
+      dispatch(event);
+      if (remote) {
         if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
         return;
       }
-      dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(look ? { reveal_unseen: true } : {}) } });
       // The core's answer moves the keys only when it moves the focus, so a
       // pane already focused would leave them on the row, link or mark that
       // was pressed. The operator asked for the pane, so the open takes the
@@ -3380,35 +3396,55 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * Registers a folder on `deviceId`; a device's own helper judges it against that device's home.
      * `confirmed` carries the operator's answer to the question a folder outside home asks: it names
-     * that same path, and the boundary takes it for no other (PRD wsl-device B15).
+     * that same path, and the boundary takes it for no other (PRD wsl-device B15). `requestId` names
+     * the add so its refusal is read as its own (`last_error.request_id`, `path_refused.request_id`).
      */
-    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false) {
+    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false, requestId?: string) {
       const confirmation = confirmed ? { confirmed_outside_home: path } : {};
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation } });
+      const request = requestId ? { request_id: requestId } : {};
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation, ...request } });
     },
 
-    /** Asks hided whether a clone could land at `parent/name`; answered as a `clone_target` frame. */
-    checkCloneTarget(parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "clone_target", payload: { parent, name } });
+    /**
+     * Asks whether a clone could land at `parent/name` on `deviceId`: hided's `$HOME` line answers for
+     * the core's machine, the device's node for a device; answered as a `clone_target` frame.
+     */
+    checkCloneTarget(parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "clone_target", payload: { ...deviceField(deviceId, localDeviceId(rest())), parent, name } });
     },
 
-    /** Clones `url` into `parent/name` on this machine; the core reports it as `repository_clone`. */
-    cloneRepository(url: string, parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "clone_repository", payload: { url, parent, name } });
+    /** Clones `url` into `parent/name` on `deviceId`; the core reports it as `repository_clone`. */
+    cloneRepository(url: string, parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "clone_repository", payload: { ...deviceField(deviceId, localDeviceId(rest())), url, parent, name } });
+    },
+
+    /** One folder under `deviceId`'s home for Add a project's folder list, answered as a `home_folder_list` frame. */
+    listHomeFolder(deviceId: string, path: string) {
+      dispatch({ schema_version: 2, kind: "home_folder_list", payload: { device_id: deviceId, path } });
+    },
+
+    /** The projects worth adding on `deviceId`, answered as an `importable_projects` frame (PRD device-add-project D-09). */
+    listImportableProjects(deviceId: string) {
+      dispatch({ schema_version: 2, kind: "importable_projects", payload: { device_id: deviceId } });
+    },
+
+    /** The core remembers the folder the list last showed on each machine (PRD device-add-project D-04). */
+    setAddProjectFolder(deviceId: string, path: string) {
+      dispatch({ schema_version: 2, kind: "add_project_folder_set", payload: { device_id: deviceId, path } });
     },
 
     cancelRepositoryClone(id: number) {
       dispatch({ schema_version: 2, kind: "cancel_repository_clone", payload: { id } });
     },
 
-    /** Asks hided where Create new project would make `name` in `parent`; answered as a `project_target` frame. */
-    probeProjectTarget(parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "project_target", payload: { parent, name } });
+    /** Asks where Create new project would make `name` in `parent` on `deviceId`; answered as a `project_target` frame. */
+    probeProjectTarget(parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "project_target", payload: { ...deviceField(deviceId, localDeviceId(rest())), parent, name } });
     },
 
-    /** Makes `path` as a new folder with its own Git repository, then registers it; on the core's machine only, whichever window asks. */
-    createProject(path: string, label: string) {
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { path, label, initialize_git: true, new_folder: true } });
+    /** Makes `path` as a new folder with its own Git repository on `deviceId`, then registers it there. */
+    createProject(path: string, label: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: true, new_folder: true } });
     },
 
     /** Removes a registration after its panes close (D-10); the folder is never touched. */

@@ -13,9 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
-    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderRequest,
-    HolderReservation, HolderScroll, HolderStart, PaneCall, PaneEnded, PaneFactsSink, PaneHolders,
-    PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
+    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderRenewal,
+    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneCall, PaneEnded,
+    PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
 };
 use crate::link::{LinkAnswer, LinkError, NodeLink};
 use crate::protocol::{Call, ShellLaunch};
@@ -24,9 +24,13 @@ use crate::protocol::{Call, ShellLaunch};
 /// within ten seconds, and a start that finds an earlier one ending waits
 /// for that end.
 const START_WAIT: Duration = Duration::from_secs(40);
-/// How long an end may take: a holder's close is bounded at 20 s, and a
-/// tree that ignores it is ended by its pids after that.
-const END_WAIT: Duration = Duration::from_secs(50);
+/// How long a pane's end may take on its node, this machine's or a
+/// device's: a holder's close is bounded at 20 s, and a tree that ignores
+/// it is ended by its pids after that.
+pub const END_WAIT: Duration = Duration::from_secs(50);
+/// How long a renewal may take: the earlier holder's end, then the new
+/// holder's start.
+const RENEW_WAIT: Duration = Duration::from_secs(90);
 /// How long an ask, an input or new rules may take.
 pub const ASK_WAIT: Duration = Duration::from_secs(15);
 /// What a letter may take beyond its gap.
@@ -305,6 +309,15 @@ impl PaneHolders for LinkPanes {
         )
     }
 
+    fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        self.answer(
+            PaneCall::Renew {
+                start: start.clone(),
+            },
+            RENEW_WAIT,
+        )
+    }
+
     fn shell_launch(&self) -> Option<ShellLaunch> {
         // The trait answers no failure here: a node that cannot say how its
         // shells start is told apart in the log, and the start goes on as
@@ -394,6 +407,16 @@ impl PaneHolders for LinkPanes {
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
         self.done(
             PaneCall::Input {
+                pane: pane.to_owned(),
+                input,
+            },
+            ASK_WAIT,
+        )
+    }
+
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.done(
+            PaneCall::SleeperInput {
                 pane: pane.to_owned(),
                 input,
             },

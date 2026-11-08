@@ -14,8 +14,8 @@
 
 use super::*;
 use crate::session_archive::{
-    ArchiveId, ArchivePhase, ArchiveRecord, ArchivedMember, ArchivedPull,
-    RESUME_CONFIRM_TIMEOUT_MS, Resume, SessionArchive,
+    ARCHIVE_FULL, AdmitRefusal, ArchiveId, ArchivePhase, ArchiveRecord, ArchivedMember,
+    ArchivedPull, RESUME_CONFIRM_TIMEOUT_MS, Resume, SessionArchive,
 };
 use crate::sidebar::SessionAgentSessionPayload;
 use serde::Deserialize;
@@ -306,28 +306,12 @@ impl Runtime {
         };
         let mut members = Vec::new();
         for (agent, parent, depth) in &tree {
-            let checkout = self
-                .archive_place(&agent.pane_id)
-                .map_or_else(|| checkout_path.clone(), |(_, _, path)| path);
-            let (native_session_id, source_reference) =
-                self.archive_proof(agent).expect("checked above");
-            members.push(ArchivedMember {
-                machine: self.archive_machine_of(&agent.pane_id),
-                pane_id: agent.pane_id.clone(),
-                kind: agent.agent_kind.clone(),
-                native_session_id,
-                source_reference,
-                cwd: self.archive_pane_cwd(&agent.pane_id),
-                checkout_path: checkout,
-                title: agent.identity_label.clone(),
-                last_line: crate::session_archive::last_line(agent.message.as_deref()),
-                pulls: archived_pulls(agent),
-                registration: self.delivery_registration_of(&agent.pane_id),
-                parent: parent.clone(),
-                depth: *depth,
-                closed: false,
-                resume: Resume::Idle,
-            });
+            let proof = self.archive_proof(agent).expect("checked above");
+            let mut member = self.archive_member(agent, &checkout_path, proof);
+            member.registration = self.delivery_registration_of(&agent.pane_id);
+            member.parent = parent.clone();
+            member.depth = *depth;
+            members.push(member);
         }
         let id = match existing {
             Some(id) => id,
@@ -368,7 +352,10 @@ impl Runtime {
             .ui_state
             .session_archive
             .admit(id.clone(), record)
-            .map_err(|reason| ("archive.full", reason.to_owned()))?;
+            .map_err(|refusal| match refusal {
+                AdmitRefusal::Full => ("archive.full", ARCHIVE_FULL.to_owned()),
+                AdmitRefusal::Fault(reason) => ("archive.save_failed", reason.to_owned()),
+            })?;
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.saving",
             "archive_id": id.as_str(), "pane_id": pane_id, "members": tree.len(),
@@ -376,6 +363,180 @@ impl Runtime {
         self.persist_ui_state();
         self.refresh_archived_rows();
         Ok(())
+    }
+
+    /// `agent`'s conversation, `(native session, reference)` as proven, as
+    /// an archive member that has not closed yet: a root holding no
+    /// registration, in `checkout_path` when its own pane's checkout is not
+    /// listed.
+    fn archive_member(
+        &self,
+        agent: &SidebarAgentSnapshot,
+        checkout_path: &str,
+        (native_session_id, source_reference): (String, Option<SessionAgentSessionPayload>),
+    ) -> ArchivedMember {
+        ArchivedMember {
+            machine: self.archive_machine_of(&agent.pane_id),
+            pane_id: agent.pane_id.clone(),
+            kind: agent.agent_kind.clone(),
+            native_session_id,
+            source_reference,
+            cwd: self.archive_pane_cwd(&agent.pane_id),
+            checkout_path: self
+                .archive_place(&agent.pane_id)
+                .map_or_else(|| checkout_path.to_owned(), |(_, _, path)| path),
+            title: agent.identity_label.clone(),
+            last_line: crate::session_archive::last_line(agent.message.as_deref()),
+            pulls: archived_pulls(agent),
+            registration: None,
+            parent: None,
+            depth: 0,
+            closed: false,
+            resume: Resume::Idle,
+        }
+    }
+
+    /// What `hide agent end` does with `pane_id`, the pane registration
+    /// `session` (its lineage digest) ran in: close it unless another
+    /// conversation runs there now, and keep the registration's conversation
+    /// for 이어가기 when Hide knows it. A pane no agent shows in is the
+    /// registration's own leftover shell, which the caller closes only while
+    /// it still runs the terminal the registration recorded. The row's
+    /// session is the one the agent registered with, which proves it as the
+    /// label reader would: an agent ended right after its first turn is
+    /// often ended before that reader confirmed its session file, and its
+    /// resume still confirms the session by id and folder.
+    pub(crate) fn end_pane_plan(&self, pane_id: &str, session: Option<&str>) -> EndPlan {
+        let Some(row) = self.archive_rows().find(|agent| agent.pane_id == pane_id) else {
+            return EndPlan::Shell;
+        };
+        if row
+            .session_id
+            .as_deref()
+            .and_then(crate::engine::tokens::session_digest)
+            .as_deref()
+            != session
+        {
+            return EndPlan::OtherAgent;
+        }
+        let Some((project_root, project_label, checkout)) = self.archive_place(pane_id) else {
+            return EndPlan::Own(Err(NotKept::CheckoutUnlisted));
+        };
+        let Some(proof) = self
+            .archive_proof(row)
+            .or_else(|| Some((row.session_id.clone()?, None)))
+        else {
+            return EndPlan::Own(Err(NotKept::SessionUnknown));
+        };
+        EndPlan::Own(Ok(Box::new(EndedConversation {
+            project_root,
+            project_label,
+            member: self.archive_member(row, &checkout, proof),
+            starred_at_unix_ms: self
+                .revisit_mark(pane_id)
+                .and_then(|mark| mark.starred_at_unix_ms),
+        })))
+    }
+
+    /// Keeps the conversation of an agent `hide agent end` closes, as an
+    /// archived session of its own under `보관됨`, where 이어가기 resumes it
+    /// as a new root: the registration has ended, so the record holds none.
+    /// It is kept before the pane closes, so a close that ends the pane but
+    /// not the command (a core that stops, a release that fails after the
+    /// pane left) still leaves it there; its member closes once the pane
+    /// left its machine's listing, so that listing is never taken for a
+    /// resume of the conversation. The record this call admitted, or none
+    /// when the conversation is archived already.
+    pub(crate) fn archive_ended(
+        &mut self,
+        ended: EndedConversation,
+    ) -> Result<Option<ArchiveId>, AdmitRefusal> {
+        let EndedConversation {
+            project_root,
+            project_label,
+            mut member,
+            starred_at_unix_ms,
+        } = ended;
+        member.closed = self.pane_left(&member.machine, &member.pane_id);
+        let archive = &mut self.snapshot.ui_state.session_archive;
+        if archive
+            .find(&member.machine, &member.kind, &member.native_session_id)
+            .is_some()
+        {
+            return Ok(None);
+        }
+        let pane_id = member.pane_id.clone();
+        let id = ArchiveId::new().map_err(AdmitRefusal::Fault)?;
+        archive.admit(
+            id.clone(),
+            ArchiveRecord {
+                phase: ArchivePhase::Archived,
+                revision: 1,
+                archived_at_unix_ms: unix_milliseconds(),
+                project_root,
+                project_label,
+                members: vec![member],
+                reason: None,
+                starred_at_unix_ms,
+                deleting: false,
+            },
+        )?;
+        crate::diagnostic!(serde_json::json!({
+            "component": "session_archive", "kind": "session_archive.agent_ended",
+            "archive_id": id.as_str(), "pane_id": pane_id,
+        }));
+        self.archive_ended_changed();
+        Ok(Some(id))
+    }
+
+    /// Takes back the record [`Self::archive_ended`] admitted for a pane
+    /// whose close did not happen: the conversation still runs there, so
+    /// it is not under 보관됨. A record whose pane has left is kept.
+    pub(crate) fn withdraw_ended(&mut self, id: &ArchiveId) {
+        let archive = &mut self.snapshot.ui_state.session_archive;
+        if !archive
+            .records
+            .get(id)
+            .is_some_and(|record| record.members.iter().all(|member| !member.closed))
+        {
+            return;
+        }
+        archive.records.remove(id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "session_archive", "kind": "session_archive.agent_end_withdrawn",
+            "archive_id": id.as_str(),
+        }));
+        self.archive_ended_changed();
+    }
+
+    fn archive_ended_changed(&mut self) {
+        self.persist_ui_state();
+        if self.refresh_archived_rows()
+            && let Some(context) = self.worker_context.as_ref()
+        {
+            context.notifier.notify();
+        }
+    }
+
+    /// Whether `pane_id` is gone from a connected `machine`'s listing; a
+    /// disconnected device's absence is not a close.
+    fn pane_left(&self, machine: &str, pane_id: &str) -> bool {
+        self.device_answers(machine) && !self.pane_listed(pane_id)
+    }
+
+    /// The panes of conversations `hide agent end` archived that have left
+    /// their machine's listing since.
+    fn ended_panes_left(&self) -> HashSet<String> {
+        self.snapshot
+            .ui_state
+            .session_archive
+            .records
+            .values()
+            .filter(|record| record.phase == ArchivePhase::Archived)
+            .flat_map(|record| &record.members)
+            .filter(|member| !member.closed && self.pane_left(&member.machine, &member.pane_id))
+            .map(|member| member.pane_id.clone())
+            .collect()
     }
 
     /// The root, then every live descendant its subtree close would take,
@@ -675,9 +836,7 @@ impl Runtime {
             .iter()
             .map(|member| member.pane_id.clone())
             .filter(|pane| {
-                closed.contains(pane)
-                    || (self.device_answers(&self.archive_machine_of(pane))
-                        && !self.pane_listed(pane))
+                closed.contains(pane) || self.pane_left(&self.archive_machine_of(pane), pane)
             })
             .collect::<HashSet<_>>();
         let record = self
@@ -1092,6 +1251,7 @@ impl Runtime {
         let now = unix_milliseconds();
         let mut changed = false;
         let live = self.archive_live();
+        let left = self.ended_panes_left();
         let task = self.snapshot.task_operation.clone();
         let mut restarred: Vec<(String, u64)> = Vec::new();
         let ids = self
@@ -1114,6 +1274,11 @@ impl Runtime {
                 continue;
             }
             for member in &mut record.members {
+                if !member.closed && left.contains(&member.pane_id) {
+                    member.closed = true;
+                    record.revision += 1;
+                    changed = true;
+                }
                 if !member.closed || matches!(member.resume, Resume::Done { .. }) {
                     continue;
                 }
@@ -1201,24 +1366,28 @@ impl Runtime {
         }
         changed |= self.continue_archived_registrations(now);
         changed |= self.start_next_resume(now);
-        // A record whose every member is live again is done.
+        // A record whose every member is live again is done. A member a
+        // failed close left open is a live session already; one `hide agent
+        // end` archived is not live until its pane left and it resumed.
         let before = self.snapshot.ui_state.session_archive.records.len();
+        let live_again = |member: &ArchivedMember| {
+            matches!(member.resume, Resume::Done { .. }) && member.registration.is_none()
+        };
         self.snapshot
             .ui_state
             .session_archive
             .records
-            .retain(|_, record| {
-                !(matches!(
-                    record.phase,
-                    ArchivePhase::Archived | ArchivePhase::CloseFailed
-                ) && record
+            .retain(|_, record| !match record.phase {
+                ArchivePhase::Archived => record
+                    .members
+                    .iter()
+                    .all(|member| member.closed && live_again(member)),
+                ArchivePhase::CloseFailed => record
                     .members
                     .iter()
                     .filter(|member| member.closed)
-                    .all(|member| {
-                        matches!(member.resume, Resume::Done { .. })
-                            && member.registration.is_none()
-                    }))
+                    .all(live_again),
+                _ => false,
             });
         changed |= before != self.snapshot.ui_state.session_archive.records.len();
         // A resumed root wears its ★ again, on the conversation it resumed.
@@ -1646,6 +1815,45 @@ impl Runtime {
         self.snapshot.navigator.archived_sessions = rows;
         true
     }
+}
+
+/// What `hide agent end` does with the pane a registration ran in.
+pub(crate) enum EndPlan {
+    /// The pane shows the registration's conversation: it closes, and the
+    /// conversation is kept for 이어가기, or [`NotKept`] says why not.
+    Own(Result<Box<EndedConversation>, NotKept>),
+    /// No agent shows in the pane: the registration's leftover shell, its
+    /// own only while it runs the terminal the registration recorded.
+    Shell,
+    /// Another conversation runs in the pane now; it is left alone.
+    OtherAgent,
+}
+
+/// Why the conversation of a pane `hide agent end` closes is not kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NotKept {
+    /// The pane's checkout is not listed, so no project holds the record.
+    CheckoutUnlisted,
+    /// Neither the label reader nor the registration names its session.
+    SessionUnknown,
+}
+
+impl NotKept {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::CheckoutUnlisted => "checkout_unlisted",
+            Self::SessionUnknown => "session_unknown",
+        }
+    }
+}
+
+/// The conversation of an agent `hide agent end` closes, kept for 이어가기
+/// once its pane closed (`Runtime::archive_ended`).
+pub(crate) struct EndedConversation {
+    project_root: String,
+    project_label: String,
+    pub(crate) member: ArchivedMember,
+    starred_at_unix_ms: Option<u64>,
 }
 
 /// The pull requests a row's own session holds or made, as kept with its
