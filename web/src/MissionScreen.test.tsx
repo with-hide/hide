@@ -228,6 +228,12 @@ describe("the turn pill (B5)", () => {
     const open = vi.spyOn(actions, "openMission");
     await press(row("mission-4").querySelector<HTMLElement>('[data-slot="row-overlay-button"]'));
     expect(open).toHaveBeenCalledWith("mission-4");
+    // The narrow list beside a detail marks a turn as every other row, with the mission mark and the action under the title, and no `!`.
+    act(() => actions.openMission("mission-1"));
+    const list = q('[data-mission-list-row="mission-4"]')!;
+    expect(list.textContent).toContain("Take over");
+    expect(list.textContent).not.toContain("!");
+    expect(q('[data-mission-list-row="mission-1"]')!.textContent).not.toContain("!");
   });
 });
 

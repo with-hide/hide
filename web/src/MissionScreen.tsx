@@ -493,7 +493,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
       data-selected={selected ? "true" : undefined}
     >
       <span className="flex min-w-0 items-center gap-xs">
-        {group === "turn" ? <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span> : group === "closed" ? <ClosedMark mission={mission} /> : <KindIcon kind="mission" className="size-(--size-icon-sm)" />}
+        {group === "closed" ? <ClosedMark mission={mission} /> : <KindIcon kind="mission" className="size-(--size-icon-sm)" />}
         <span className={cn("min-w-0 flex-1 truncate text-body", group === "closed" ? "text-subtle-foreground" : "text-foreground")} title={mission.title}>{mission.title}</span>
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>
