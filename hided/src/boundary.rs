@@ -1774,7 +1774,10 @@ mod tests {
                 Err(Unregistrable::ConfirmHome)
             ));
         }
-        assert_eq!(workspace(&f.boundary, &home, Some(&home)), Ok(f.home.clone()));
+        assert_eq!(
+            workspace(&f.boundary, &home, Some(&home)),
+            Ok(f.home.clone())
+        );
         assert_eq!(workspace(&f.boundary, "~", Some("~")), Ok(f.home.clone()));
     }
 

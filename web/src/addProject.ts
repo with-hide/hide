@@ -145,12 +145,12 @@ export function onCDrive(path: string, drives: string | null | undefined): boole
 }
 
 /** A refusal as one line, for a reason code hided answered or the shell's own `already_registered`. */
-export function refusalText(reason: string, t: TFunction<"translation">): string {
+export function refusalText(reason: string, t: TFunction<"translation">, home = false): string {
   switch (reason) {
     case "already_registered":
       return t("addProject.refusal.alreadyRegistered");
     case "needs_confirmation":
-      return t("addProject.confirmOutside");
+      return t(home ? "addProject.confirmHome" : "addProject.confirmOutside");
     case "outside_home":
       return t("addProject.refusal.outsideHome");
     case "home_root":

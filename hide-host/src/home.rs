@@ -590,11 +590,22 @@ mod tests {
         let synced = sync(&home, &asked).unwrap();
         assert_eq!(synced.links.len(), 1, "{synced:?}");
         assert!(synced.links[0].target.ends_with("/project"));
-        let reasons: Vec<&str> = synced.skipped.iter().map(|skip| skip.reason.as_str()).collect();
+        let reasons: Vec<&str> = synced
+            .skipped
+            .iter()
+            .map(|skip| skip.reason.as_str())
+            .collect();
         assert!(reasons.contains(&"home_folder"), "{synced:?}");
         let guide = std::fs::read_to_string(Path::new(&synced.home).join(AGENTS_FILE)).unwrap();
-        assert!(!guide.contains(&format!("-> {}\n", home.display())), "{guide}");
-        assert!(!Path::new(&synced.home).join(home.file_name().unwrap()).exists());
+        assert!(
+            !guide.contains(&format!("-> {}\n", home.display())),
+            "{guide}"
+        );
+        assert!(
+            !Path::new(&synced.home)
+                .join(home.file_name().unwrap())
+                .exists()
+        );
     }
 
     /// with-hide/hide-private#596: Windows' Home makes no link, and the

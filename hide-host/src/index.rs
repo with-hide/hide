@@ -246,7 +246,13 @@ mod tests {
 
         let others = [root.join("work/app")];
         let walked = |home: Option<&Path>, others: &[PathBuf]| {
-            walk(&Dir::from_std_file(open_test_dir(&root)), &root, home, others).paths
+            walk(
+                &Dir::from_std_file(open_test_dir(&root)),
+                &root,
+                home,
+                others,
+            )
+            .paths
         };
         assert_eq!(
             walked(Some(&root), &others),

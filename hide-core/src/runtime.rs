@@ -3170,7 +3170,9 @@ fn deepest_holder(
             let depth = workspace
                 .checkouts
                 .iter()
-                .filter_map(|checkout| checkout_holds(&checkout.path).or_else(|| project_holds(&checkout.path)))
+                .filter_map(|checkout| {
+                    checkout_holds(&checkout.path).or_else(|| project_holds(&checkout.path))
+                })
                 .chain(project_holds(&workspace.path))
                 .max()?;
             Some((index, depth))
@@ -3334,3 +3336,41 @@ impl Drop for Runtime {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// PRD home-folder-project D-07: a path held by a project and by a project
+/// under it is placed by the deeper one.
+#[cfg(test)]
+mod deepest_holder_tests {
+    use super::*;
+
+    fn space(path: &str) -> crate::model::WorkspaceSnapshot {
+        workspace::inspect_temporary(path, "node", &workspace::PathIndex::NONE)
+    }
+
+    #[test]
+    fn a_folder_inside_a_nested_project_is_placed_by_the_nested_project() {
+        let none = &workspace::PathIndex::NONE;
+        let spaces = [
+            space("/home/me"),
+            space("/home/me/work/app"),
+            space("/home/me/other"),
+        ];
+        let at = |path: &str, carrying: &[usize]| {
+            deepest_holder(&spaces, none, path, none.root(path).as_str(), carrying)
+        };
+        // Whichever is listed first, the deepest holder wins.
+        assert_eq!(at("/home/me/work/app/src", &[]), Some(1));
+        assert_eq!(at("/home/me/work/app", &[]), Some(1));
+        assert_eq!(at("/home/me/work/notes", &[]), Some(0));
+        assert_eq!(at("/home/me", &[]), Some(0));
+        assert_eq!(at("/elsewhere", &[]), None);
+        // Of equal holders the one the engine workspace belongs to wins; a
+        // deeper holder wins over a carrying one that holds less.
+        let twins = [space("/home/me/work"), space("/home/me/work")];
+        let twin = |carrying: &[usize]| {
+            deepest_holder(&twins, none, "/home/me/work/x", "/home/me/work/x", carrying)
+        };
+        assert_eq!((twin(&[]), twin(&[1])), (Some(0), Some(1)));
+        assert_eq!(at("/home/me/work/app/src", &[0]), Some(1));
+    }
+}

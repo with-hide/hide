@@ -150,7 +150,9 @@ export function coreErrorKey(kind: string): MessageKey | null {
 }
 
 /** `error` as the screen says it: its kind's sentence, else `fallback`, the surface's general sentence. */
-export function coreErrorText(error: { kind: string }, t: TFunction<"translation">, fallback: MessageKey = "coreError.other"): string {
+export function coreErrorText(error: { kind: string; home?: boolean }, t: TFunction<"translation">, fallback: MessageKey = "coreError.other"): string {
+  // The home folder is asked about in its own words, a pin of it included (PRD home-folder-project B6).
+  if (error.home === true && error.kind === "workspace.pin_refused.needs_confirmation") return t("coreError.project.pinHome");
   return t(coreErrorKey(error.kind) ?? fallback);
 }
 

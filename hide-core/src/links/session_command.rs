@@ -423,6 +423,29 @@ fn masked(text: &str) -> String {
     session_excerpt::mask(text)
 }
 
+/// The project of `device` whose deepest folder holds `cwd`: a project under
+/// another (one inside the home folder) is not labelled by the outer one (PRD
+/// home-folder-project D-07).
+fn project_holding<'a>(
+    projects: &'a [ScopeProject],
+    device: &str,
+    cwd: &str,
+) -> Option<&'a ScopeProject> {
+    projects
+        .iter()
+        .filter(|project| project.device_id == device)
+        .filter_map(|project| {
+            std::iter::once(&project.root)
+                .chain(&project.checkouts)
+                .filter(|owner| super::within(cwd, owner))
+                .map(|owner| owner.len())
+                .max()
+                .map(|depth| (project, depth))
+        })
+        .max_by_key(|(_, depth)| *depth)
+        .map(|(project, _)| project)
+}
+
 fn project_value(project: &ScopeProject) -> Value {
     json!({
         "label": project.label,
@@ -620,28 +643,11 @@ fn record(
     );
     let mut facts = host.facts(asked).ok_or_else(core_gone)?.into_iter();
     let own = facts.next().unwrap_or_default();
-    // The project whose deepest folder holds the session's cwd: a project
-    // under another (one inside the home folder) is not labelled by the
-    // outer one (PRD home-folder-project D-07).
     let project = record
         .cwd
         .as_deref()
-        .and_then(|cwd| {
-            scope
-                .projects
-                .iter()
-                .filter(|project| project.device_id == session.device_id)
-                .filter_map(|project| {
-                    std::iter::once(&project.root)
-                        .chain(&project.checkouts)
-                        .filter(|owner| super::within(cwd, owner))
-                        .map(|owner| owner.len())
-                        .max()
-                        .map(|depth| (project, depth))
-                })
-                .max_by_key(|(_, depth)| *depth)
-        })
-        .map(|(project, _)| project_value(project));
+        .and_then(|cwd| project_holding(&scope.projects, &session.device_id, cwd))
+        .map(project_value);
     let summaries = scope.summaries;
     let (title_text, title_source) = title(
         record.manual_title.as_deref(),
@@ -1711,6 +1717,31 @@ mod tests {
         let ids = ids(&list(&scope, None, None));
         assert!(!ids.contains(&"s-sub".to_owned()), "{ids:?}");
         assert!(ids.contains(&"s-vendor".to_owned()), "{ids:?}");
+    }
+
+    #[test]
+    fn a_session_is_labelled_by_the_deepest_project_holding_its_folder() {
+        let scope_project = |key: &str, device: &str, root: &str| ScopeProject {
+            key: key.into(),
+            workspace_id: format!("ws-{key}"),
+            label: key.into(),
+            root: root.into(),
+            device_id: device.into(),
+            checkouts: vec![root.into()],
+        };
+        // The outer project is listed first, as the home folder's would be.
+        let projects = [
+            scope_project("home", "local", "/home/me"),
+            scope_project("app", "local", "/home/me/work/app"),
+            scope_project("other", "mini", "/home/me/work/app"),
+        ];
+        let label = |device: &str, cwd: &str| {
+            project_holding(&projects, device, cwd).map(|project| project.key.as_str())
+        };
+        assert_eq!(label("local", "/home/me/work/app/src"), Some("app"));
+        assert_eq!(label("local", "/home/me/notes"), Some("home"));
+        assert_eq!(label("mini", "/home/me/work/app"), Some("other"));
+        assert_eq!(label("local", "/elsewhere"), None);
     }
 
     #[test]

@@ -180,8 +180,9 @@ it("lists a device's folders through its node and adds the one chosen there (PRD
   expect(find('[data-folder-row="app"] [data-folder-row-branch]')?.getAttribute("data-folder-row-branch")).toBe("main");
   expect(find('[data-folder-row="old"]')?.hasAttribute("data-folder-row-added")).toBe(true);
   expect(find('[data-folder-row="projects"] [data-folder-row-repositories]')?.textContent).toBe("3 repos");
-  // Home itself is never a project; the list says so and Add waits for a choice.
-  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  // Home itself can be added (PRD home-folder-project B1): the footer names it and Add is ready.
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(false);
+  expect(find("[data-folder-browser-target]")?.getAttribute("data-folder-browser-target")).toBe("/home/me");
   // The list it showed is the folder the core keeps for that machine (D-04).
   expect(events.filter((event) => event.kind === "add_project_folder_set").map((event) => event.payload)).toEqual([{ device_id: "ubuntu", path: "/home/me" }]);
 
@@ -192,6 +193,30 @@ it("lists a device's folders through its node and adds the one chosen there (PRD
   await act(async () => find('[data-folder-row="app"]')!.click());
   await act(async () => find("[data-folder-browser-submit]")!.click());
   expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false }]);
+  await unmount();
+});
+
+it("asks once about the whole home folder in its own words and adds it only when confirmed (PRD home-folder-project B1-B3)", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state("/mnt", "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: home });
+  await act(async () => find("[data-folder-browser-submit]")!.click());
+  expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me", label: "me", initialize_git: false }]);
+
+  // The node asks about home itself: its own sentence, the path, and 추가 holding the keyboard.
+  await act(async () =>
+    useShellStore.setState({
+      rest: { ...useShellStore.getState().rest, status: { last_error: { kind: "workspace.create_refused.needs_confirmation", message: "home", occurred_at: Date.now() + 1_000, home: true } } },
+    } as never),
+  );
+  const question = find('[data-registration-confirm="/home/me"]');
+  expect(question?.textContent).toContain("This is your whole home folder. Add it as a project?");
+  expect(question?.textContent).not.toContain("outside your home folder");
+  expect(document.activeElement).toBe(find("[data-registration-confirm-add]"));
+
+  await act(async () => find("[data-registration-confirm-add]")!.click());
+  expect(creates(events).at(-1)).toEqual({ device_id: "ubuntu", path: "/home/me", label: "me", initialize_git: false, confirmed_outside_home: "/home/me" });
   await unmount();
 });
 

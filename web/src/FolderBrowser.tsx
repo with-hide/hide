@@ -164,7 +164,6 @@ export function FolderBrowser(props: FolderBrowserProps) {
     if (chosen && !chosen.is_directory) return { path: "", label: "", problem: t("addProject.browse.file"), note: null };
     const path = chosen ? childPath(listing.path, chosen.name) : listing.path;
     const label = chosen ? childPath(listing.label, chosen.name) : listing.label;
-    if (mode === "add" && !chosen && listing.label === "~") return { path, label, problem: t("addProject.browse.homeRoot"), note: null };
     if (mode === "add" && alreadyRegistered(path, device, registrations)) return { path, label, problem: t("addProject.browse.added"), note: null };
     return { path, label, problem: null, note: null };
   })();
