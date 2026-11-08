@@ -2081,6 +2081,28 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
     running.stop();
 }
 
+/// PRD home-folder-project B5: once the operator registered the home folder,
+/// `hide ~` (or its path) only brings that project forward, never adds one.
+#[tokio::test]
+async fn hide_path_brings_a_registered_home_folder_forward() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    std::fs::create_dir_all(home.join("projects/alpha")).unwrap();
+    seed_registration(&env.state_dir, "w-home", &home);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let open = |path: String| {
+        let (port, token) = (running.port, running.token.clone());
+        tokio::task::spawn_blocking(move || {
+            hided::workspace_cli::request_project_open_with_token(port, &token, &path)
+        })
+    };
+    let answer = open(wire(&home)).await.unwrap().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["path"], json!(wire(&home)), "{answer}");
+    assert_eq!(answer["result"]["added"], false);
+    running.stop();
+}
+
 /// `hide <path>` for a project the operator registered outside home: the
 /// registration is the confirmation Add a project asked for, so the
 /// checkout and a folder inside it come forward without asking again, while
