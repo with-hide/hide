@@ -58,15 +58,15 @@ pub struct HumanTurn {
 /// The longest place, in characters, after it is cut (D-21).
 pub const PLACE_LIMIT: usize = 300;
 
-/// The place as it is kept: one line, each word the `url` crate reads as a
-/// URL without its user, password, query and fragment, which can carry
-/// one-time tokens that would otherwise reach the screen, a notification
-/// and the phone (D-04), and an `http` or `https` one without its scheme.
-/// Every other word is kept as written.
+/// The place as it is kept (D-04): one line, nothing of a word from the first
+/// `?` or `#` after a `/`, and each URL the `url` crate reads without its
+/// user and password, which can carry one-time tokens that would otherwise
+/// reach the screen, a notification and the phone; an `http` or `https` one
+/// without its scheme. Every other word is kept as written.
 pub fn place_of(raw: &str) -> Result<String, &'static str> {
     let place = raw
         .split_whitespace()
-        .map(|word| url_word(word).unwrap_or_else(|| word.to_owned()))
+        .map(kept_word)
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
@@ -78,6 +78,40 @@ pub fn place_of(raw: &str) -> Result<String, &'static str> {
     }
     Ok(place)
 }
+
+/// One word as it is kept. The cut does not try to tell a URL, or what wraps
+/// it, from any other word with a path: a path that is no URL loses its tail
+/// too, which never leaks (`src/lib.rs#L10` reads `src/lib.rs`). A URL
+/// starts at the scheme written before its `://`, after whatever wraps it.
+fn kept_word(word: &str) -> String {
+    let (word, closing) = match word
+        .find('/')
+        .and_then(|slash| word[slash..].find(['?', '#']).map(|at| slash + at))
+    {
+        Some(at) => {
+            let cut = &word[at..];
+            (&word[..at], &cut[cut.trim_end_matches(CLOSING).len()..])
+        }
+        None => (word, ""),
+    };
+    let start = word.find("://").map_or(0, |at| {
+        word[..at]
+            .char_indices()
+            .rev()
+            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+            .map_or(0, |(i, c)| i + c.len_utf8())
+    });
+    let (prefix, url) = word.split_at(start);
+    match url_word(url) {
+        Some(kept) if kept.is_empty() && prefix.is_empty() && closing.is_empty() => String::new(),
+        Some(kept) => format!("{prefix}{kept}{closing}"),
+        None => format!("{word}{closing}"),
+    }
+}
+
+/// What closes a wrapped word after its cut: a bracket, a quote, a
+/// backtick, punctuation.
+const CLOSING: [char; 12] = [')', ']', '}', '>', '"', '\'', '`', ',', '.', ';', ':', '!'];
 
 /// A word as its URL is kept, or None to keep the word as written. A word
 /// with no scheme is read as `https://<word>` only when that names a dotted
@@ -385,11 +419,28 @@ mod tests {
             ("at:localhost:3000/cb?t=1#f", "at:localhost:3000/cb"),
             ("me@example.com/x?t=1", "example.com/x"),
             ("user:pass@host.example/x", "host.example/x"),
-            ("mailto:me@example.com", "mailto:me@example.com"),
+            // Wrapped as an agent writes it in a sentence.
+            ("`https://github.com/login?t=1#f`", "`github.com/login`"),
+            ("(https://github.com/login?t=1#f)", "(github.com/login)"),
+            ("\"https://github.com/login?t=1\"", "\"github.com/login\""),
+            ("<https://github.com/login#f>", "<github.com/login>"),
+            ("url=https://github.com/login?t=1", "url=github.com/login"),
+            (
+                "[sign-in](https://github.com/login?t=1)",
+                "[sign-in](github.com/login)",
+            ),
+            ("(https://user:pw@host.example/x?t=1)", "(host.example/x)"),
+            ("(github.com/login?t=1).", "(github.com/login)."),
+            ("https://github.com/login?t=1,", "github.com/login,"),
+            ("[why?](github.com/login?t=1)", "[why?](github.com/login)"),
+            ("a?b/c?t=1", "a?b/c"),
+            // A path that is no URL loses its tail as well.
+            ("src/lib.rs#L10", "src/lib.rs"),
             // Words that are no URL are kept as written.
             ("Privacy & Security > Camera", "Privacy & Security > Camera"),
-            ("src/lib.rs#L10 README.md", "src/lib.rs#L10 README.md"),
+            ("README.md", "README.md"),
             ("Sign in as me@example.com", "Sign in as me@example.com"),
+            ("mailto:me@example.com", "mailto:me@example.com"),
             ("example.com:8443", "example.com:8443"),
         ] {
             assert_eq!(place_of(raw).unwrap(), kept, "{raw}");
