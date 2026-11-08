@@ -595,82 +595,173 @@ fn tree(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Linked {
+    /// No link: the account gets its pieces, the control of every other row.
+    Nothing,
     Account,
     Hook,
     Skill,
 }
 
+/// How many times Codex was asked to store its trust of Hide's hooks with
+/// `folder` as its `CODEX_HOME`.
+fn trust_writes(folder: &Path) -> usize {
+    std::fs::read_to_string(folder.join("fake-calls.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| *line == "config/batchWrite")
+        .count()
+}
+
 /// A link on each layer of a profile account's paths, to a place the
 /// default account keeps, to the shared skills folder, or to nothing yet:
-/// nothing outside the account is written or taken out through it, the link
-/// stays, and the account's other piece comes and goes as usual.
+/// nothing outside the account is written or taken out through it, Codex is
+/// not asked to write its trust through it, the link stays, and the
+/// account's other piece comes and goes as usual.
 #[test]
 fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it() {
     let guide = crate::agents::GUIDE_SKILL.name;
-    // Where the link is, relative to the account's folder ("" is the folder
-    // itself); where it leads, relative to the home; the piece it is on.
     let stub = format!("skills/{guide}");
     let file = format!("skills/{guide}/SKILL.md");
+    // The agent; where the link is, relative to the account's folder ("" is
+    // the folder itself); where it leads, relative to the home; the piece it
+    // is on.
+    let link = |at: &str, to: &str| Some((at.to_owned(), to.to_owned()));
     let rows = [
-        (String::new(), ".claude".to_owned(), Linked::Account),
+        ("claude-code", None, Linked::Nothing),
+        ("claude-code", link("", ".claude"), Linked::Account),
         (
-            "settings.json".to_owned(),
-            ".claude/settings.json".to_owned(),
+            "claude-code",
+            link("settings.json", ".claude/settings.json"),
             Linked::Hook,
         ),
         (
-            "skills".to_owned(),
-            ".agents/skills".to_owned(),
+            "claude-code",
+            link("skills", ".agents/skills"),
             Linked::Skill,
         ),
-        (stub.clone(), format!(".agents/{stub}"), Linked::Skill),
-        (file.clone(), format!(".agents/{file}"), Linked::Skill),
-        (file.clone(), "elsewhere/SKILL.md".to_owned(), Linked::Skill),
+        (
+            "claude-code",
+            link(&stub, &format!(".agents/{stub}")),
+            Linked::Skill,
+        ),
+        (
+            "claude-code",
+            link(&file, &format!(".agents/{file}")),
+            Linked::Skill,
+        ),
+        (
+            "claude-code",
+            link(&file, "elsewhere/SKILL.md"),
+            Linked::Skill,
+        ),
+        ("codex", None, Linked::Nothing),
+        ("codex", link("", ".codex"), Linked::Account),
+        (
+            "codex",
+            link("hooks.json", ".codex/hooks.json"),
+            Linked::Hook,
+        ),
+        (
+            "codex",
+            link("config.toml", ".codex/config.toml"),
+            Linked::Hook,
+        ),
+        (
+            "codex",
+            link("config.toml", "elsewhere/config.toml"),
+            Linked::Hook,
+        ),
     ];
-    for (at, to, linked) in rows {
-        let row = format!("{at} -> ~/{to}");
-        let mut fixture = Fixture::new();
+    for (kind, linked_at, linked) in rows {
+        let row = match &linked_at {
+            Some((at, to)) => format!("{kind}: {at} -> ~/{to}"),
+            None => format!("{kind}: no link"),
+        };
+        let mut fixture = if kind == "codex" {
+            let fixture = super::codex_trust_cases::with_codex();
+            let home = fixture.home();
+            std::fs::write(home.join(".codex/config.toml"), "model = \"kept\"\n").unwrap();
+            std::fs::create_dir_all(home.join("elsewhere")).unwrap();
+            std::fs::write(home.join("elsewhere/config.toml"), "model = \"outside\"\n").unwrap();
+            // Codex is installed: its program is what says so.
+            executable(&home.join(".local/bin/codex"), "#!/bin/sh\n");
+            fixture
+        } else {
+            Fixture::new()
+        };
         let home = fixture.home().to_path_buf();
         crate::agents::install_skill(crate::agents::SkillDir::Shared, &home, false).unwrap();
         apply(&fixture.target, &Scope::automatic());
-        let to = home.join(&to);
         let folder = fixture.root.join("accounts/work");
-        let link = if at.is_empty() {
-            folder.clone()
-        } else {
-            folder.join(&at)
+        let link = linked_at.as_ref().map(|(at, to)| {
+            let link = if at.is_empty() {
+                hide_platform::fs::private::create_dir_all(folder.parent().unwrap()).unwrap();
+                folder.clone()
+            } else {
+                hide_platform::fs::private::create_dir_all(&folder).unwrap();
+                let link = folder.join(at);
+                std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+                link
+            };
+            std::os::unix::fs::symlink(home.join(to), &link).unwrap();
+            (link, home.join(to))
+        });
+        let profile = Profile {
+            kind: kind.to_owned(),
+            ..claude("p-work", &folder.display().to_string())
         };
-        if linked == Linked::Account {
-            hide_platform::fs::private::create_dir_all(folder.parent().unwrap()).unwrap();
-        } else {
-            hide_platform::fs::private::create_dir_all(&folder).unwrap();
-            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-        }
-        std::os::unix::fs::symlink(&to, &link).unwrap();
-        let profile = claude("p-work", &folder.display().to_string());
         added(&fixture, &profile);
-        let outside = [
-            home.join(".agents"),
-            home.join(".claude"),
-            home.join("elsewhere"),
-        ];
-        let before: Vec<_> = outside.iter().map(|path| tree(path)).collect();
+        let outside = [".agents", ".claude", ".codex", "elsewhere"].map(|name| home.join(name));
+        // The stand-in Codex logs every call of the default account's pass
+        // beside its files.
+        let outside_now = || -> Vec<BTreeMap<PathBuf, Vec<u8>>> {
+            outside
+                .iter()
+                .map(|path| {
+                    let mut found = tree(path);
+                    found.retain(|path, _| {
+                        !path
+                            .file_name()
+                            .is_some_and(|name| name.to_string_lossy().starts_with("fake-"))
+                    });
+                    found
+                })
+                .collect()
+        };
+        let before = outside_now();
 
         with_profiles(&mut fixture, &[&profile], &[]);
         let report = apply(&fixture.target, &Scope::automatic());
 
-        let after: Vec<_> = outside.iter().map(|path| tree(path)).collect();
         assert_eq!(
-            after, before,
+            outside_now(),
+            before,
             "{row}: nothing outside the account is written"
         );
+        if kind == "codex" && linked != Linked::Account {
+            let asked = usize::from(linked == Linked::Nothing);
+            assert_eq!(trust_writes(&folder), asked, "{row}: Codex's trust write");
+        }
+        let state = |piece: Option<&crate::PieceReport>| piece.map(|piece| piece.state);
         match (linked, place(&report.profiles, "p-work")) {
             (Linked::Account, ProfilePlace::Default) => {}
+            (Linked::Nothing, ProfilePlace::Own { hook, skill, .. }) => {
+                assert_eq!(
+                    state(hook.as_ref()),
+                    Some(ComponentState::Installed),
+                    "{row}: {hook:?}"
+                );
+                let skill = state(skill.as_ref());
+                assert!(
+                    skill.is_none_or(|skill| skill == ComponentState::Installed),
+                    "{row}"
+                );
+            }
             (
                 Linked::Hook,
                 ProfilePlace::Own {
                     hook: Some(hook),
-                    skill: Some(skill),
+                    skill,
                     ..
                 },
             ) => {
@@ -679,7 +770,11 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
                     hook.reason.as_deref().unwrap().contains("is a link"),
                     "{row}"
                 );
-                assert_eq!(skill.state, ComponentState::Installed, "{row}");
+                let skill = state(skill.as_ref());
+                assert!(
+                    skill.is_none_or(|skill| skill == ComponentState::Installed),
+                    "{row}"
+                );
             }
             (
                 Linked::Skill,
@@ -707,18 +802,32 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
             &ProfilePlace::Removing { failure: None },
             "{row}"
         );
-        let after: Vec<_> = outside.iter().map(|path| tree(path)).collect();
         assert_eq!(
-            after, before,
+            outside_now(),
+            before,
             "{row}: nothing outside the account is taken out"
         );
-        let kept = std::fs::symlink_metadata(&link).unwrap();
-        assert!(kept.file_type().is_symlink(), "{row}: the link stays");
-        assert_eq!(std::fs::read_link(&link).unwrap(), to, "{row}");
-        match linked {
-            Linked::Account => {}
-            Linked::Hook => assert!(!folder.join("skills").join(guide).exists(), "{row}"),
-            Linked::Skill => assert_eq!(hide_hooks(&folder.join("settings.json")), 0, "{row}"),
+        if let Some((link, to)) = &link {
+            let kept = std::fs::symlink_metadata(link).unwrap();
+            assert!(kept.file_type().is_symlink(), "{row}: the link stays");
+            assert_eq!(&std::fs::read_link(link).unwrap(), to, "{row}");
+        }
+        let hooks = match kind {
+            "codex" => folder.join("hooks.json"),
+            _ => folder.join("settings.json"),
+        };
+        if linked != Linked::Account && linked != Linked::Hook {
+            let left = std::fs::read_to_string(&hooks).unwrap_or_default();
+            assert!(
+                !left.contains("hide-agent-hooks"),
+                "{row}: the hook went: {left}"
+            );
+        }
+        if linked != Linked::Account && linked != Linked::Skill {
+            assert!(
+                !folder.join("skills").join(guide).exists(),
+                "{row}: the stubs went"
+            );
         }
         assert_eq!(recorded_targets(&fixture), Value::Null, "{row}");
     }

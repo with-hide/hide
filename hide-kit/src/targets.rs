@@ -26,6 +26,9 @@
 //! judgment ([`judged`]): it must lie in the account's own folder with no
 //! link from that folder down to it, the file itself included, so it is its
 //! own real place and no write or removal follows a link out of the account.
+//! The paths come from the account's places each piece writes
+//! ([`written_by`], which names every place), the writes it asks the agent
+//! for included, so a refused piece asks the agent for nothing either.
 //! A file is taken out only when no one else keeps its real place: a default
 //! account (the skills folder every agent shares among its places), a target
 //! still in use, or another installation on the account. A piece the
@@ -536,39 +539,85 @@ fn real(path: &Path) -> PathBuf {
     }
 }
 
-/// Every path one hook writes or takes out in the account `at`: the file
-/// its entries go into, or each file of the plugin, under this
-/// installation's name and the app's earlier one.
-fn hook_paths(kind: HookKind, at: AccountAt<'_>, install: &str) -> Vec<PathBuf> {
-    match kind {
-        HookKind::Part(runtime) => vec![runtime.config_path(at)],
-        HookKind::Guidance(agent) => vec![agent.config_path(at)],
-        HookKind::Plugin(dialect) => plugin::of(dialect)
-            .files
-            .iter()
-            .flat_map(|file| [file.path(at, Some(install)), file.path(at, None)])
-            .collect(),
+/// The pieces the kit keeps in an account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PieceKind {
+    Hook,
+    Skill,
+}
+
+/// The piece that writes the account's place `place`, itself or by asking
+/// the agent to (Codex stores its trust of Hide's hooks in its hook trust
+/// file), `None` for a place the kit never writes in a profile account.
+/// Every place is named, so a place an account gains decides here whether
+/// the kit writes it, and [`judged`] then guards it.
+fn written_by(place: AccountPath) -> Option<PieceKind> {
+    match place {
+        AccountPath::Hooks | AccountPath::HookTrust | AccountPath::Plugins => Some(PieceKind::Hook),
+        AccountPath::Skills => Some(PieceKind::Skill),
+        // Hide records folder trust in the default account alone
+        // (docs/agent-hooks.md, Profile accounts).
+        AccountPath::FolderTrust
+        | AccountPath::Sessions
+        | AccountPath::Login
+        | AccountPath::State
+        | AccountPath::Usage => None,
     }
 }
 
-/// The real places of the files the default accounts keep: each agent's
-/// hook file or plugin files and Hide's stubs in each skills folder Hide
-/// writes there, the shared one among them. A profile account's going takes
-/// none of them out, whatever link leads there.
+/// Every path `piece` writes or takes out in `account`, from the places
+/// [`written_by`] gives it: a file place itself, and in a folder place the
+/// entries Hide keeps there (its skill stubs, its plugin's files under this
+/// installation's name and the app's earlier one).
+fn written(
+    account: &Account,
+    piece: PieceKind,
+    hook: Option<HookKind>,
+    install: &str,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for place in AccountPath::ALL {
+        if written_by(place) != Some(piece) {
+            continue;
+        }
+        let Place::At(at) = account.place(place) else {
+            continue;
+        };
+        match (place, hook) {
+            (AccountPath::Skills, _) => paths.extend(skill_files_in(at)),
+            (AccountPath::Plugins, Some(HookKind::Plugin(dialect))) => {
+                paths.extend(plugin::of(dialect).files.iter().flat_map(|file| {
+                    [at.join(file.name(Some(install))), at.join(file.name(None))]
+                }));
+            }
+            _ => paths.push(at.clone()),
+        }
+    }
+    paths
+}
+
+/// The real places of the files the default accounts keep: what each
+/// agent's pieces write there, its hook's own file, and Hide's stubs in
+/// each skills folder Hide writes, the shared one among them. A profile
+/// account's going takes none of them out, whatever link leads there.
 fn default_files(home: &Path, install: &str) -> BTreeSet<PathBuf> {
-    let at = AccountAt::Home(home);
     let skills = SkillDir::ALL
         .iter()
         .flat_map(|dir| skill_files_in(&dir.path(home)));
-    let hooks = ADAPTERS
-        .iter()
-        .filter_map(|adapter| hook_at(adapter, at))
-        .flat_map(|(kind, _, _)| hook_paths(kind, at, install));
-    skills.chain(hooks).map(|path| real(&path)).collect()
+    let pieces = ADAPTERS.iter().flat_map(|adapter| {
+        let account = adapter.declaration().account_in(home);
+        let hook = hook_at(adapter, AccountAt::Home(home));
+        let kind = hook.as_ref().map(|(kind, _, _)| *kind);
+        let mut paths = written(&account, PieceKind::Hook, kind, install);
+        paths.extend(written(&account, PieceKind::Skill, None, install));
+        paths.extend(hook.map(|(_, _, location)| location));
+        paths
+    });
+    skills.chain(pieces).map(|path| real(&path)).collect()
 }
 
 /// One piece of a profile account: where it is, as a report names it, and
-/// every path it writes or takes out.
+/// every path it writes or takes out ([`written`]).
 struct Spot {
     location: PathBuf,
     paths: Vec<PathBuf>,
@@ -583,16 +632,15 @@ struct Places {
 
 impl Places {
     fn of(own: &Own, home: &Path, install: &str) -> Self {
-        let at = own.at(home);
         Self {
-            hook: hook_at(own.adapter, at).map(|(kind, code, location)| {
-                let paths = hook_paths(kind, at, install);
+            hook: hook_at(own.adapter, own.at(home)).map(|(kind, code, location)| {
+                let paths = written(&own.account, PieceKind::Hook, Some(kind), install);
                 (kind, code, Spot { location, paths })
             }),
             skill: match own.account.place(AccountPath::Skills) {
                 Place::At(root) => Some(Spot {
                     location: root.clone(),
-                    paths: skill_files_in(root),
+                    paths: written(&own.account, PieceKind::Skill, None, install),
                 }),
                 Place::Absent | Place::Shared => None,
             },
@@ -601,12 +649,12 @@ impl Places {
 
     /// The real places of every file a pass may write here, which no
     /// going target takes out while this one is in use.
-    fn written(&self, own: &Own) -> Vec<PathBuf> {
+    fn kept(&self, own: &Own) -> Vec<PathBuf> {
         self.hook
             .iter()
             .map(|(_, _, spot)| spot)
             .chain(&self.skill)
-            .filter_map(|spot| judged(own, &spot.paths, Touch::Write).ok())
+            .filter_map(|spot| judged(own, spot, Touch::Write).ok())
             .flatten()
             .collect()
     }
@@ -627,15 +675,27 @@ enum Touch<'a> {
 }
 
 /// The one judgment of every path the kit writes or takes out in the
-/// profile account `own`, a piece's paths at once; the answer is their real
-/// places. Each path must lie in the account's own folder with no link from
+/// profile account `own`, a piece's paths at once ([`Spot::paths`]); the
+/// answer is their real places. A piece whose own place is not among the
+/// paths its places give is refused whole: it would write where nothing
+/// judges. Each path must lie in the account's own folder with no link from
 /// that folder down to it, the path itself included: it is then its own real
 /// place, inside the account, and a write lands there and a removal takes
 /// out exactly that, never a file a link leads to. Taking a file out also
 /// needs no one else to keep its real place. A refusal leaves every path of
-/// the piece as it is, a link included.
-fn judged(own: &Own, paths: &[PathBuf], touch: Touch<'_>) -> Result<Vec<PathBuf>, Reason> {
-    paths
+/// the piece as it is, a link included, and asks the agent for nothing.
+fn judged(own: &Own, spot: &Spot, touch: Touch<'_>) -> Result<Vec<PathBuf>, Reason> {
+    if !spot
+        .paths
+        .iter()
+        .any(|path| path.starts_with(&spot.location))
+    {
+        return Err(Reason::not_changed(format!(
+            "Hide does not judge what it would write at {}, so it writes nothing there",
+            spot.location.display()
+        )));
+    }
+    spot.paths
         .iter()
         .map(|path| {
             let really = real_in(own, path)?;
@@ -735,7 +795,7 @@ fn take_out(
     let touch = Touch::TakeOut { held, record };
     // A path that could not be read is tried again by the next pass; one
     // Hide may not touch stays for good.
-    let may = |spot: &Spot| match judged(own, &spot.paths, touch) {
+    let may = |spot: &Spot| match judged(own, spot, touch) {
         Ok(_) => Ok(true),
         Err(reason) if reason.why.cause == PartCause::Unreadable => Err(reason.text),
         Err(reason) => {
@@ -843,7 +903,7 @@ fn pass_own(
      -> PieceReport {
         let recorded = pieces.contains(code);
         // A piece Hide may not write is left as it is, and said so.
-        if let Err(reason) = judged(own, &spot.paths, Touch::Write) {
+        if let Err(reason) = judged(own, spot, Touch::Write) {
             let observed = match reason.why.cause {
                 PartCause::Unreadable => Observed::Blocked(reason),
                 _ => Observed::Absent(reason),
@@ -990,7 +1050,7 @@ fn pass(
             wanted
                 .values()
                 .filter(|(_, _, _, on)| *on)
-                .flat_map(|(own, _, places, _)| places.written(own)),
+                .flat_map(|(own, _, places, _)| places.kept(own)),
         )
         .collect();
     if matches!(mode, Mode::Apply { .. }) {

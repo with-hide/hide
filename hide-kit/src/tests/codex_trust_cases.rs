@@ -17,7 +17,7 @@ fn fake_codex() -> PathBuf {
 }
 
 /// A fixture whose Codex is the stand-in app-server.
-fn with_codex() -> Fixture {
+pub(super) fn with_codex() -> Fixture {
     let mut fixture = Fixture::new();
     std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
     fixture.use_codex(&fake_codex());
