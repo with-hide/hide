@@ -2543,7 +2543,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Record only your own lines: a worker its node's own lines, check command and defects, a checker its review or verification; Hide records the CI, and the Conductor can only skip"
         }
         "mission_commit_required" => {
-            "Give --commit <sha>, the commit the check command ran on (git rev-parse HEAD in the node's worktree)"
+            "Give --commit <sha>: the commit the check command ran on, or the head of the pull request a review or verification read (git rev-parse HEAD in the worktree it read)"
         }
         "mission_rerun_spent" => {
             "This commit already had its one rerun: fix the failure, commit, and run the check again on the new commit"
@@ -2652,6 +2652,7 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         .flat_map(|node| node.criteria.iter_mut())
     {
         line.carry_spent_rerun();
+        line.count_tally();
     }
     if stored.book.missions.len() > MISSION_LIMIT
         || stored
