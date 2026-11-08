@@ -1534,6 +1534,8 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
 /// with requests that arrive while it waits, is what these tests read.
 struct JudgingNode {
     judged: Option<hide_node_link::ErrorCode>,
+    /// The refusal is the machine's home asked about in its own words.
+    home: bool,
     open: std::sync::Mutex<bool>,
     opened: std::sync::Condvar,
     asked: std::sync::atomic::AtomicUsize,
@@ -1543,7 +1545,19 @@ impl JudgingNode {
     fn new(judged: Option<hide_node_link::ErrorCode>, open: bool) -> Arc<Self> {
         Arc::new(Self {
             judged,
+            home: false,
             open: std::sync::Mutex::new(open),
+            opened: std::sync::Condvar::new(),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// A machine whose home is the folder asked about.
+    fn asking_about_home() -> Arc<Self> {
+        Arc::new(Self {
+            judged: Some(hide_node_link::ErrorCode::NeedsConfirmation),
+            home: true,
+            open: std::sync::Mutex::new(true),
             opened: std::sync::Condvar::new(),
             asked: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -1574,6 +1588,9 @@ impl crate::node_access::NodeLink for JudgingNode {
         match self.judged {
             None => Ok(crate::node_access::LinkAnswer::Parsed(
                 serde_json::json!({"root": path, "is_git": false}),
+            )),
+            Some(_) if self.home => Err(crate::node_access::LinkError::Refused(
+                hide_node_link::HostError::home_needs_confirmation(format!("{path} is home")),
             )),
             Some(code) => Err(crate::node_access::LinkError::Refused(
                 hide_node_link::HostError::new(code, format!("{path} was judged")),
@@ -2944,6 +2961,28 @@ fn a_row_outside_home_is_not_registered_by_a_pin_or_a_closing_pane() {
             .map(|error| error.kind.as_str()),
         Some("workspace.pin_refused.needs_confirmation")
     );
+
+    runtime.snapshot.status.last_error = None;
+    runtime.retain_project_before_last_pane_closes("w1:p1");
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert!(runtime.snapshot.status.last_error.is_none());
+}
+
+/// PRD home-folder-project B6: a pin of a row whose folder is the machine's
+/// home registers nothing and says so in the home folder's own words, which a
+/// closing pane only logs.
+#[test]
+fn a_row_that_is_home_is_not_registered_by_a_pin_and_the_refusal_says_home() {
+    let mut runtime = runtime();
+    runtime.own_node = JudgingNode::asking_about_home();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+
+    assert!(runtime.dispatch_json(&pin_event(&alpha, true)));
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "workspace.pin_refused.needs_confirmation");
+    assert!(error.home);
 
     runtime.snapshot.status.last_error = None;
     runtime.retain_project_before_last_pane_closes("w1:p1");
