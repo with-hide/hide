@@ -28,7 +28,7 @@ import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
 import { Button } from "./components/ui/button";
-import { HumanTurnDone } from "./components/human-turn";
+import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
 
 /** The View menu's turn row mode; absent reads as one line. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
@@ -125,6 +125,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // Before any early return: a hook runs on every render.
   // A raised ask names the device its pane is on; any other band's pane is looked up in the rows.
   const unreachable = useUnreachable(band?.raised ? { device: band.raised.open_device_id ?? null } : band?.action ? { pane: band.action.pane_id } : null);
+  const humanTurn = band ? bandHumanTurn(band, agentsByPane(agents).get(paneId)) : null;
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
   if (off || (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren)) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
@@ -139,6 +140,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
     </>}
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
+    {humanTurn ? <HumanTurnDone turn={humanTurn} actions={actions} variant="outline" reason={unreachable === null} className="shrink-0" /> : null}
   </>;
   const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
   // A working turn with no word beyond its request, or a parent with no turn
@@ -297,9 +299,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
     trigger={<Button variant="text-link" size="inline" data-pane-band-more={paneId} className="shrink-0 px-xs py-xxs text-micro text-muted-foreground underline-offset-2">{t("agentSessions.moreAsks", { count: band.more })}</Button>}
   /> : null;
   const read = !raised && band.read;
-  // A person's turn, the pane's own or raised to it, is settled with Done here too (PRD ask-human B15).
-  const human = raised ? (raised.subject?.cause === "human_turn" ? raised.subject : null) : band.subject?.cause === "human_turn" ? band.subject : null;
-  const humanTurn = human ? { id: human.id, kind: human.kind, place: human.place, device_id: raised ? raised.open_device_id : self?.human_turn?.device_id } : null;
+  const humanTurn = bandHumanTurn(band, self);
   return <>
     <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
       {raised || band.kind === "approval" || band.kind === "answer" ? null : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
@@ -310,8 +310,14 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
     {raised?.unreceived_by && minutes !== null ? <span className="min-w-0 max-w-1/4 flex-1 truncate text-muted-foreground" data-pane-band-unreceived="true">{t("agentSessions.unreceived", { name: raised.unreceived_by, minutes })}</span> : null}
     {raised?.unreceived_by ? null : <Elapsed since={band.since_unix_ms} className={cn("shrink-0 font-mono text-micro text-muted-foreground", read && "opacity-(--opacity-read-status)")} />}
     {more}
-    {humanTurn ? <HumanTurnDone turn={humanTurn} actions={actions} className="shrink-0" /> : null}
   </>;
+}
+
+/** The person's turn a band asks, the pane's own or raised to it, which Done settles after Open (PRD ask-human B15). */
+function bandHumanTurn(band: PaneBand, self: AgentRow | undefined): HumanTurnTarget | null {
+  const raised = band.raised ?? null;
+  const human = raised ? (raised.subject?.cause === "human_turn" ? raised.subject : null) : band.subject?.cause === "human_turn" ? band.subject : null;
+  return human ? { id: human.id, kind: human.kind, place: human.place, device_id: raised ? raised.open_device_id : self?.human_turn?.device_id } : null;
 }
 
 /** Every agent row this page knows, including a device's retained topology; it changes only when a row does. */
@@ -411,7 +417,7 @@ function PaneTreeButton({ paneId, children, agents, actions, connection }: { pan
     triggerLabel={label}
     trigger={<button type="button" aria-label={label} data-pane-tree={paneId} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
       <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-      {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
+      {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
       {count > 1 || marked.length === 0 ? <span aria-hidden="true" className="font-mono" data-pane-tree-count="">{count}</span> : null}
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     </button>}

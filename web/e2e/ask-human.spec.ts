@@ -10,7 +10,7 @@ import type { HideAnswer } from "./agent-pane";
 import { withControl, viewPane } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, showTasks } from "./wire";
+import { enterWorkspace, screenshot, showTasks } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -48,11 +48,13 @@ test("a child's person's turn raises its root with the key, and Done sends the c
     await expect(task.locator('[data-mark-human="true"]')).toHaveCount(1);
     await expect(task.locator("[data-human-turn-place]")).toHaveText("Sign-in · github.com/login");
     await expect(page.locator("body")).not.toContainText("secret-token");
+    await screenshot(page, "ask-human-task-row");
 
     // The child's own pane head says it with Done (B15).
     await withControl(daemon, async (control) => viewPane(control, child));
     const band = page.locator(`[data-pane-header-band="answer"]`).filter({ has: page.locator("[data-human-turn-done]") });
     await expect(band).toContainText("Sign-in · github.com/login");
+    await screenshot(page, "ask-human-pane-head");
 
     // Done from the task list sends one letter and takes the turn down everywhere (B18, B19); a repeat press is the core test's.
     await task.locator("[data-human-turn-done]").click();

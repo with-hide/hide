@@ -19,9 +19,11 @@ export type HumanTurnTarget = { id: string; kind: HumanKind; place: string; devi
  * through the core and the turn goes; while the agent's device is not
  * connected it is disabled with the reason beside it, and the turn stays.
  * A row draws it above its open button (`relative z-10`), so a press never
- * opens the row too.
+ * opens the row too. A surface on the secondary fill, the pane's band, takes
+ * `outline` so the button stands out from it, and one that already says why
+ * the device is away leaves `reason` off.
  */
-export function HumanTurnDone({ turn, actions, className }: { turn: HumanTurnTarget; actions: Pick<Actions, "finishHumanTurn">; className?: string }) {
+export function HumanTurnDone({ turn, actions, variant = "secondary", reason = true, className }: { turn: HumanTurnTarget; actions: Pick<Actions, "finishHumanTurn">; variant?: "secondary" | "outline"; reason?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const unreachable = useUnreachable({ device: turn.device_id ?? null });
   const what = humanTurnText(t, turn);
@@ -29,7 +31,7 @@ export function HumanTurnDone({ turn, actions, className }: { turn: HumanTurnTar
     <span className={cn("relative z-10 flex min-w-0 items-center gap-xs", className)} data-human-turn-done-slot={turn.id}>
       <Button
         type="button"
-        variant="secondary"
+        variant={variant}
         size="sm"
         disabled={unreachable !== null}
         aria-label={t("agents.human.doneName", { what })}
@@ -43,7 +45,7 @@ export function HumanTurnDone({ turn, actions, className }: { turn: HumanTurnTar
       >
         {t("agents.human.done")}
       </Button>
-      {unreachable ? <span className="min-w-0 truncate text-caption text-muted-foreground" title={unreachable} data-human-turn-unreachable={turn.id}>{unreachable}</span> : null}
+      {unreachable && reason ? <span className="min-w-0 truncate text-caption text-muted-foreground" title={unreachable} data-human-turn-unreachable={turn.id}>{unreachable}</span> : null}
     </span>
   );
 }
