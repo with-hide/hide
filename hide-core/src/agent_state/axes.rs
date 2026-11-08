@@ -574,6 +574,14 @@ fn descendant_signals_of(agent: &SidebarAgentSnapshot) -> Vec<crate::model::Desc
             kind: demand.name().to_owned(),
         });
     }
+    // A person's turn, by its declaration, so another one is news again to
+    // the ancestors (PRD ask-human B14).
+    if let Some(declared) = &agent.declared_human_turn {
+        signals.push(crate::model::DescendantSignal {
+            pane_id: agent.pane_id.clone(),
+            kind: format!("human:{}", declared.id),
+        });
+    }
     if activity == AgentActivity::Stopped && agent.completed {
         signals.push(crate::model::DescendantSignal {
             pane_id: agent.pane_id.clone(),
@@ -784,6 +792,10 @@ fn read_fingerprint(agent: &SidebarAgentSnapshot) -> PaneReadRecord {
         server: None,
         unread: false,
         checks_ended: agent.checks_ended,
+        human_turn: agent
+            .declared_human_turn
+            .as_ref()
+            .map(|declared| declared.id.clone()),
     }
 }
 
@@ -840,6 +852,7 @@ fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
             .descendant_signals
             .is_subset(&record.descendant_signals)
         && (current.checks_ended.is_none() || current.checks_ended == record.checks_ended)
+        && (current.human_turn.is_none() || current.human_turn == record.human_turn)
 }
 
 /// Whether a pane first settled on a new server shows something the

@@ -189,9 +189,15 @@ impl Shown {
         match self.found {
             Found::Agent(record, facts) => {
                 let life = super::life(&record, &self.sleeping);
+                let mut state = facts.state(Some(life), record.parent.as_deref());
+                // The declaration is the ledger's, so it is said whether or
+                // not a row shows it now: asleep, or on a device away.
+                if let Some(turn) = self.ledger.human_turns.get(&record.id) {
+                    state.waiting = Some(crate::delivery::answer::Waiting::human(turn));
+                }
                 json!(crate::delivery::answer::AgentShow {
                     agent: super::agent_view(&record, &self.ledger, &self.sleeping),
-                    state: facts.state(Some(life), record.parent.as_deref()),
+                    state,
                 })
             }
             Found::Spawn(spawn, facts) => {
@@ -671,6 +677,24 @@ pub(crate) fn run(
             }))
         }
         Command::Show { id } => show(&client, &actor, &id),
+        Command::AskHuman { kind, place } => {
+            let kind = super::human_turn::HumanKind::parse(&kind)?;
+            let place = super::human_turn::place_of(&place)?;
+            mutate(
+                &client,
+                &authority,
+                &actor,
+                Mutation::AskHuman {
+                    turn: Some((kind, place)),
+                },
+            )
+        }
+        Command::AskHumanClear => mutate(
+            &client,
+            &authority,
+            &actor,
+            Mutation::AskHuman { turn: None },
+        ),
         Command::End {
             id,
             actor: asserted,

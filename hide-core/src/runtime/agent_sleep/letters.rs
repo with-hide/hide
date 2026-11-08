@@ -311,7 +311,7 @@ impl Runtime {
             .iter()
             .filter(|letter| {
                 letter.state == State::Pending
-                    && matches!(letter.kind.as_str(), "request" | "block")
+                    && letter.wakes_a_sleeper()
                     && !self.letter_wakes.failed.contains_key(&letter.id)
                     // A letter whose bell rang or that woke its recipient
                     // once waits for it to look, as one to an awake agent.
@@ -460,15 +460,14 @@ impl Runtime {
         }
     }
 
-    /// The pending `request` and `block` letters to the agent asleep on
-    /// `route`.
+    /// The pending letters that wake the agent asleep on `route` (`Letter::wakes_a_sleeper`).
     fn route_letters(&self, ledger: &Ledger, route: &Route) -> Vec<String> {
         ledger
             .letters
             .iter()
             .filter(|letter| {
                 letter.state == State::Pending
-                    && matches!(letter.kind.as_str(), "request" | "block")
+                    && letter.wakes_a_sleeper()
                     && self
                         .asleep_route(&letter.recipient)
                         .is_some_and(|(sleeps, _)| sleeps == *route)

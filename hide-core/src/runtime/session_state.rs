@@ -283,6 +283,7 @@ impl Runtime {
                     crate::model::AskSubject::MissionDecision { .. } => "mission_decision",
                     crate::model::AskSubject::MissionAttention { .. } => "mission_attention",
                     crate::model::AskSubject::InputUnconfirmed { .. } => "input_unconfirmed",
+                    crate::model::AskSubject::HumanTurn { .. } => "human_turn",
                 }),
             }));
         }

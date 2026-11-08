@@ -170,6 +170,8 @@ type PhoneState = {
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
   inputError: Notice | null;
+  /** Done on a person's turn hided has not answered, or refused (PRD ask-human B19); one at a time, keyed by its declaration. */
+  humanTurn: { declaration: string; requestId: string | null; failed: boolean } | null;
   /** One request or failure at a time, keyed by the stable conversation intent. */
   sleepAction: { sleepId: string; requestId: string | null; error: boolean } | null;
   /** Shown once after pairing: Share › Add to Home Screen (B11). */
@@ -221,6 +223,7 @@ const initial: PhoneState = {
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
+  humanTurn: null,
   sleepAction: null,
   installHint: false,
   startCatalog: null,

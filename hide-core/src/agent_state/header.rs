@@ -189,13 +189,36 @@ pub(crate) fn of(
     let Some(agent) = agent else {
         return Header::default();
     };
-    let own = own_ask(agent);
+    // A person's turn leads whatever else the pane or its descendants ask,
+    // and its own stands on a working or blocked pane too (PRD ask-human
+    // D-07, D-21, B15).
+    let human = agent.human_turn.as_ref();
+    let own = if human.is_some_and(|lead| lead.own) {
+        Some("answer")
+    } else {
+        own_ask(agent)
+    };
     // The pane's own approval, answer or unread block comes before a raised
     // descendant's ask; a block the operator has read and a stop come after
     // it, so a child's new ask is not hidden behind one already seen.
-    let leads = matches!(own, Some("approval" | "answer"))
-        || agent.state.verb == super::RequestVerb::Blocked;
-    if !leads && let Some(lead) = agent.raised.first() {
+    // A person's turn raised below leads a parent between as it leads the
+    // root (PRD ask-human D-21).
+    let leads = match human {
+        Some(lead) => lead.own,
+        None if !agent.human_below.is_empty() => false,
+        None => {
+            matches!(own, Some("approval" | "answer"))
+                || agent.state.verb == super::RequestVerb::Blocked
+        }
+    };
+    // A parent between the root and a declaring descendant draws the
+    // person's turns raised below it, as the root does (PRD ask-human B15).
+    let raised = if agent.raised.is_empty() {
+        &agent.human_below
+    } else {
+        &agent.raised
+    };
+    if !leads && let Some(lead) = raised.first() {
         return Header {
             request: turn_request(agent),
             band: Some(Band {
@@ -207,7 +230,7 @@ pub(crate) fn of(
                     pane_id: lead.open_pane_id.clone(),
                     label: lead.title.clone(),
                 }),
-                more: agent.raised.len() - 1,
+                more: raised.len() - 1,
                 raised: Some(lead.clone()),
                 subject: None,
             }),
@@ -260,6 +283,7 @@ pub(crate) fn of(
             // about the work around it. An Approval has no command the core
             // read, and that line is not one, so it carries no reason.
             reason: match kind {
+                _ if human.is_some() => None,
                 "answer" => agent.detail.clone(),
                 "approval" => None,
                 _ => agent
@@ -267,7 +291,7 @@ pub(crate) fn of(
                     .as_ref()
                     .and_then(|request| request.line.clone()),
             },
-            since_unix_ms: agent.state.request_since,
+            since_unix_ms: human.map_or(agent.state.request_since, |lead| lead.since_unix_ms),
             read: !agent.unread,
             action: None,
             more: if kind == "stopped" {
@@ -276,7 +300,13 @@ pub(crate) fn of(
                 agent.raised.len()
             },
             raised: None,
-            subject: agent.ask_subject.clone().filter(|_| kind == "answer"),
+            subject: match human {
+                Some(lead) if lead.own => agent
+                    .declared_human_turn
+                    .as_ref()
+                    .map(crate::model::DeclaredHumanTurn::subject),
+                _ => agent.ask_subject.clone().filter(|_| kind == "answer"),
+            },
         }),
         ..Header::default()
     }

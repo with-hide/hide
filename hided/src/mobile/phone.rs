@@ -920,6 +920,7 @@ async fn handle(
             None
         }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
+        "human_turn_done" => Some(human_turn_done(mobile, phone_id, message, projection).await),
         "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
         "read_pr" | "merge_pr" | "read_pr_feedback" => {
             Some(pr_request(mobile, phone_id, kind, message).await)
@@ -1407,6 +1408,64 @@ async fn wake_agent(
         Ok(Ok(())) => answer(true, None),
         _ => answer(false, Some("unavailable")),
     }
+}
+
+/// The phone's Done on a person's turn (PRD ask-human B19): admitted only
+/// for the declaration the phone lists on that row, then the same core event
+/// the desktop sends, which settles it once however often it is pressed.
+async fn human_turn_done(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Value {
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "human_turn_result", "request_id": message.get("request_id"),
+            "ok": ok, "reason": reason,
+        })
+    };
+    let Some(bytes) = human_turn_action(message, projection) else {
+        refusal_logged("scope.refused", Some(phone_id), "human_turn_done");
+        return answer(false, Some("unavailable"));
+    };
+    if mobile.still_admitted(phone_id).is_err() {
+        return answer(false, Some("unavailable"));
+    }
+    let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
+        mobile.config.core.dispatch(bytes)
+    })
+    .await;
+    match dispatched {
+        Ok(Ok(())) => answer(true, None),
+        _ => answer(false, Some("unavailable")),
+    }
+}
+
+/// The `human_turn_done` event for the declaration the listed row leads with,
+/// or none for anything the phone does not list.
+fn human_turn_action(message: &Value, projection: &Projection) -> Option<Vec<u8>> {
+    if !message.as_object()?.keys().all(|name| {
+        matches!(
+            name.as_str(),
+            "type" | "request_id" | "device_id" | "pane_id" | "declaration"
+        )
+    }) {
+        return None;
+    }
+    request_id_of(message)?;
+    let declaration = message.get("declaration")?.as_str()?;
+    let listed = projection.find(&key_of(message)?)?.human_turn.as_ref()?;
+    if listed.get("id").and_then(Value::as_str) != Some(declaration) {
+        return None;
+    }
+    let event = json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "human_turn_done",
+        "payload": {"declaration": declaration},
+    });
+    Some(event.to_string().into_bytes())
 }
 
 #[derive(Debug, Eq, PartialEq)]

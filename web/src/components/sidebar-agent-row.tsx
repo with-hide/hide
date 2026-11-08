@@ -25,6 +25,8 @@ import { Elapsed } from "./elapsed";
 import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
+import { HumanTurnDone, HumanTurnLine } from "./human-turn";
+import type { Actions } from "../actions";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
 import { beginAgentDrag } from "../agentReference";
@@ -68,7 +70,7 @@ export type SidebarTreeSlot = {
   open: boolean | null;
   onToggle: () => void;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
-  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void } | null;
+  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn"> } | null;
 };
 
 /**
@@ -109,6 +111,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   menu,
   pulls: listed,
   onOpenMission,
+  actions = null,
 }: {
   agent: AgentRow;
   device: string | null;
@@ -137,6 +140,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   pulls?: SessionPull[];
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
+  /** Done on the person's turn the row carries (PRD ask-human B19); without it the row draws none. */
+  actions?: Pick<Actions, "finishHumanTurn"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);
@@ -215,7 +220,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"
         mark={<>
-          <StatusMark mark={unreachable ? null : agent.mark} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
+          <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
           {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). */}
           <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree ? "sidebar" : null} />
         </>}
@@ -251,7 +256,10 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
             {offline}
           </span>
-        ) : ask && agent.state.ask ? <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} className="flex-1" /></span> : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
+        ) : ask && agent.state.ask ? <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><AskLine ask={agent.state.ask} className="flex-1" /></span> : agent.human_turn ? (
+          // A tree row's person's turn, its own or raised to it, says where in place of its line (PRD ask-human B14).
+          <span aria-hidden="true" className="pointer-events-none flex min-w-0 leading-(--size-sidebar-line-detail)"><HumanTurnLine turn={agent.human_turn} className="flex-1" /></span>
+        ) : ask && agent.hide_ai?.turn && !(line && agent.status_code === "error") ? (
           // What the row's home waits for, after the agent's own ask or block cause (PRD hide-ai-work-home D-14, D-16).
           <span aria-hidden="true" data-agent-home-turn={agent.hide_ai.turn.kind} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-warning">
             {homeTurnLine(t, agent.hide_ai.turn)}
@@ -269,6 +277,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             <DeviceChip label={remote.label} />
           </span>
         ) : null}
+        {agent.human_turn && actions && !offline ? <HumanTurnDone turn={agent.human_turn} actions={actions} className="mt-xxs" /> : null}
         {place ? (
           <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}
@@ -290,7 +299,7 @@ function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: Sideb
   if (!tree.popover || tree.open === null) {
     return <TreeChevron name={agent.identity_label} open={tree.open} onToggle={tree.onToggle} hangs={tree.place.depth > 0} data-tree-chevron={agent.pane_id} />;
   }
-  const { agents, onOpenChild, onTask } = tree.popover;
+  const { agents, onOpenChild, onTask, actions } = tree.popover;
   const label = t("agentSessions.tree.expand", { name: agent.identity_label });
   return (
     <span className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
@@ -300,6 +309,7 @@ function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: Sideb
         agents={agents}
         onOpenChild={onOpenChild}
         onTask={onTask}
+        actions={actions}
         returnFocus={returnFocus}
         triggerLabel={label}
         trigger={

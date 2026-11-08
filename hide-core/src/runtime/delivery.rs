@@ -1924,10 +1924,15 @@ impl Runtime {
         }
         self.hide_started = started;
         let feedback = self.observe_feedback_letters(&ledger);
+        // A person's turn declared, replaced or taken down, or its agent's
+        // registration moved to another pane, lays the rows again (PRD
+        // ask-human).
+        let human_moved = self.read_human_turns(&ledger);
         self.delivery_ledger = Ok(ledger);
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
-        let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
+        let lineage =
+            (waiters_moved || started_moved || human_moved) && self.refresh_agent_lineage();
         // A plan step's child moved by its letters or its end (PRD
         // hide-plan-delegate B16, B17).
         let plans = self.fold_delegations();
@@ -1938,6 +1943,7 @@ impl Runtime {
             | continued
             | lineage
             | plans
+            | (human_moved && self.refresh_pane_read_state())
             | self.sync_session_state()
             | self.refresh_agent_scopes()
     }
@@ -1972,6 +1978,54 @@ impl Runtime {
         target: &str,
         command: crate::delivery::Command,
     ) -> Result<crate::delivery::worker::Prepared, String> {
+        let target = self
+            .delivery_observations
+            .get(target)
+            .cloned()
+            .ok_or("target_unavailable")?;
+        self.operator_prepared(target, command)
+    }
+
+    /// The operator's letter to the agent in `target`, awake or asleep: a
+    /// Done on its person's turn, which wakes it (PRD ask-human B20).
+    pub(super) fn operator_prepare_waking(
+        &self,
+        target: &str,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        let target = match self.delivery_observations.get(target) {
+            Some(observation) => observation.clone(),
+            None => self
+                .delivery_ledger
+                .as_ref()
+                .ok()
+                .and_then(|ledger| {
+                    let registered = crate::coordination::resolve_registered(ledger, target);
+                    self.sleeping_target(ledger, registered, target)
+                })
+                .ok_or("target_unavailable")?,
+        };
+        self.operator_prepared(target, command)
+    }
+
+    fn operator_prepared(
+        &self,
+        target: Observation,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        let (client, authority, actor) = self.operator_authority()?;
+        Ok(crate::delivery::worker::Prepared::new(
+            client,
+            authority,
+            actor,
+            Some(target),
+            command,
+        ))
+    }
+
+    /// The delivery client and the operator's own identity and authority,
+    /// which only the shell's events act with.
+    pub(crate) fn operator_authority(&self) -> Result<(Client, Authority, Actor), String> {
         let actor = Actor::operator(self.node.as_str());
         let context = Context {
             device_id: self.node.as_str().into(),
@@ -1979,12 +2033,7 @@ impl Runtime {
             checkout_id: actor.pane_id.clone(),
             checkout_path: String::new(),
         };
-        let target = self
-            .delivery_observations
-            .get(target)
-            .cloned()
-            .ok_or("target_unavailable")?;
-        Ok(crate::delivery::worker::Prepared::new(
+        Ok((
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: actor.pane_id.clone(),
@@ -1992,8 +2041,6 @@ impl Runtime {
                 also_reads: Vec::new(),
             },
             actor,
-            Some(target),
-            command,
         ))
     }
 

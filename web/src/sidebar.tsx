@@ -728,6 +728,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       menu={context.agentRowMenu}
       pulls={context.familyOf(agent)}
       onOpenMission={(id) => context.actions.openMission(id)}
+      actions={context.actions}
     />
   );
 }
@@ -1621,6 +1622,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             agents: context.agents,
             onOpenChild: (id, label) => context.actions.followRelation(agent.pane_id, id, label),
             onTask: () => context.actions.revealTask(agent.pane_id),
+            actions: context.actions,
           } : null,
         };
         return (
@@ -1642,6 +1644,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             menu={context.agentRowMenu}
             pulls={context.familyOf(agent)}
             onOpenMission={depth === 0 ? (id) => context.actions.openMission(id) : undefined}
+            actions={context.actions}
           />
         );
       })}

@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -1217,6 +1217,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Sleep agent from the pane menu (B15). */
     sleepAgent(paneId: string) {
       dispatch({ schema_version: 2, kind: "agent_sleep", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * Done on a person's turn (PRD ask-human B18): the core sends the agent
+     * that declared `declaration` one letter and takes the declaration down;
+     * a repeat from any surface finds nothing standing and sends nothing.
+     */
+    finishHumanTurn(declaration: string) {
+      dispatch({ schema_version: 2, kind: "human_turn_done", payload: { declaration } satisfies HumanTurnDonePayload });
     },
 
     /**

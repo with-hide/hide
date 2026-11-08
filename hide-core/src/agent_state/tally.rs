@@ -79,6 +79,7 @@ impl RowMark {
             && !agent.blocked
             && agent.raised.is_empty()
             && agent.escalation.is_none()
+            && agent.declared_human_turn.is_none()
         {
             return Self::Look;
         }
@@ -412,6 +413,16 @@ pub mod phone {
         /// carries for the receiver to word. Used only by notice transport.
         #[serde(skip)]
         pub subject: Option<AskSubject>,
+        /// The person's turn the row leads with (`SidebarAgentSnapshot::
+        /// human_turn`, PRD ask-human), which the phone draws with Done.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub human_turn: Option<Value>,
+        /// Every declaration on the row and the ones raised to it, so a new
+        /// one is announced once even while the row already stands in Needs
+        /// You (B5, B17), by declaration id with what each says. Used only by
+        /// notice transport.
+        #[serde(skip)]
+        pub human_turns: std::collections::BTreeMap<String, AskSubject>,
         pub status_code: String,
         pub demand: String,
         /// Present while the agent's process is ended and its pane holds a
@@ -780,6 +791,21 @@ pub mod phone {
         AskSubject::deserialize(subject?).ok()
     }
 
+    /// The person's turn the row's own agent declared, as the question it
+    /// asks (`SidebarAgentSnapshot::declared_human_turn`).
+    fn declared_subject(agent: &Value) -> Option<AskSubject> {
+        let declared = agent.get("declared_human_turn")?;
+        Some(AskSubject::HumanTurn {
+            id: declared.get("id")?.as_str()?.to_owned(),
+            kind: serde_json::from_value(declared.get("kind")?.clone()).ok()?,
+            place: declared.get("place")?.as_str()?.to_owned(),
+            device: declared
+                .get("device")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+    }
+
     fn str_of<'a>(value: &'a Value, field: &str) -> &'a str {
         value.get(field).and_then(Value::as_str).unwrap_or("")
     }
@@ -1021,7 +1047,37 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .filter(|text| !text.is_empty())
                     .map(str::to_owned),
-                subject: subject_of(agent.get("ask_subject")),
+                // The person's turn the row leads with, its own or one a
+                // descendant raised, is what its notice says (B13, B17).
+                subject: match agent.pointer("/human_turn/own").and_then(Value::as_bool) {
+                    Some(true) => declared_subject(agent),
+                    Some(false) => agent
+                        .get("raised")
+                        .and_then(Value::as_array)
+                        .and_then(|raised| raised.first())
+                        .and_then(|lead| subject_of(lead.get("subject"))),
+                    None => None,
+                }
+                .or_else(|| subject_of(agent.get("ask_subject"))),
+                human_turn: agent
+                    .get("human_turn")
+                    .filter(|lead| !lead.is_null())
+                    .cloned(),
+                human_turns: declared_subject(agent)
+                    .into_iter()
+                    .chain(
+                        agent
+                            .get("raised")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|ask| subject_of(ask.get("subject"))),
+                    )
+                    .filter_map(|subject| match &subject {
+                        AskSubject::HumanTurn { id, .. } => Some((id.clone(), subject.clone())),
+                        _ => None,
+                    })
+                    .collect(),
                 status_code: str_of(agent, "status_code").to_owned(),
                 demand: agent
                     .get("demand")

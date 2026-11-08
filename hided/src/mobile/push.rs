@@ -552,6 +552,47 @@ mod tests {
         );
     }
 
+    /// PRD ask-human B5, B13, B17, B23: a person's turn announces once per
+    /// declaration, a new one again while the row already stands in Needs
+    /// You in its own words, a raised one in the root's notice with its
+    /// subject, and the first look after a restart only seeds.
+    #[test]
+    fn each_persons_turn_is_announced_once_with_what_and_where() {
+        let turn = |id: &str| json!({"cause": "human_turn", "id": id, "kind": "auth", "place": "github.com/login", "device": "mini"});
+        let root = |raised: &[&str]| {
+            let mut row = row("w1:p1", "needs_you", "none", None);
+            row["raised"] = json!(
+                raised
+                    .iter()
+                    .map(|id| json!({"subject": turn(id)}))
+                    .collect::<Vec<_>>()
+            );
+            row["human_turn"] = json!({"id": raised[0], "own": false});
+            project(&rest(json!([row])), "local")
+        };
+        let mut transitions = Transitions::default();
+        assert!(
+            transitions.observe(&root(&["agent-3.1"])).0.is_empty(),
+            "a restart only seeds"
+        );
+        assert!(transitions.observe(&root(&["agent-3.1"])).0.is_empty());
+        let (notices, _) = transitions.observe(&root(&["agent-3.1", "agent-4.2"]));
+        assert_eq!(notices.len(), 1, "a second declaration in the lineage");
+        let notice = &notices[0];
+        assert_eq!(notice.state, NoticeState::NeedsYou);
+        assert_eq!(
+            serde_json::to_value(&notice.subject).unwrap(),
+            turn("agent-4.2"),
+            "the new declaration says itself, not the lead"
+        );
+        assert!(
+            transitions.observe(&root(&["agent-4.2"])).0.is_empty(),
+            "one settled"
+        );
+        let (notices, _) = transitions.observe(&root(&["agent-5.3"]));
+        assert_eq!(notices.len(), 1, "a new declaration after a settle");
+    }
+
     /// A View to look at notifies like any Needs You entry
     /// (status-model.md, A View to look at): once per news, as `볼 것` with the newest
     /// View, and taken back when it is seen. A finished turn that has one is

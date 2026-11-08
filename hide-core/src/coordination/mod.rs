@@ -3,6 +3,7 @@
 
 mod end;
 pub(crate) mod executor;
+pub mod human_turn;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
@@ -140,6 +141,15 @@ pub enum Command {
     Show {
         id: String,
     },
+    /// The caller declares that its next step is one only a person can
+    /// take (`hide agent ask-human <kind> <place>`, PRD ask-human): `kind`
+    /// is `auth` or `permission`, `place` where the person acts.
+    AskHuman {
+        kind: String,
+        place: String,
+    },
+    /// The caller takes its declaration down (`hide agent ask-human --clear`).
+    AskHumanClear,
     /// Ends the registration and, unless `keep_pane`, closes the pane its
     /// agent ran in, which ends the pane's holder, its shell, the agent and
     /// everything under it; the agent's conversation is kept in the session
@@ -880,6 +890,16 @@ fn input_authority(caller: &Actor) -> bool {
 }
 
 pub(crate) enum Mutation {
+    /// The caller's own declaration (`human_turn::declare`): a kind and a
+    /// place, or none to clear it.
+    AskHuman {
+        turn: Option<(human_turn::HumanKind, String)>,
+    },
+    /// The operator settled declaration `id` (`human_turn::settle`).
+    SettleHuman {
+        id: String,
+        by: human_turn::Settled,
+    },
     Register {
         record: AgentRecord,
         check: bool,
@@ -1456,6 +1476,8 @@ pub(crate) fn apply(
     now: u64,
 ) -> Result<Value, String> {
     match mutation {
+        Mutation::AskHuman { turn } => human_turn::declare(ledger, caller, turn.as_ref(), now),
+        Mutation::SettleHuman { id, by } => human_turn::settle(ledger, caller, id, *by),
         Mutation::Register { record, check } => {
             validate_registration_name(caller, record)?;
             let callers_own = |id: &String| {
@@ -2359,6 +2381,7 @@ fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
     };
     let live = !std::mem::replace(&mut record.ended, true);
     let target = record.actor.clone();
+    human_turn::end(ledger, id);
     ledger
         .watches
         .retain(|watch| !watch.target.same_identity(&target));

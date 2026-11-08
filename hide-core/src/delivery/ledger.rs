@@ -226,16 +226,17 @@ impl Sleeper {
     }
 
     /// The sleeper whose wake `letter` waits for, its deadline paused (D-13).
-    /// A `request` or `block` whose bell rang, or whose one wake started
-    /// before this sleep, wakes no one now, so its hour runs as it would for
-    /// an awake agent; a `report` or `progress` wakes no one at all and waits
-    /// for the next wake paused, rung or not (B3).
+    /// A letter that wakes (`Letter::wakes_a_sleeper`) whose bell rang, or
+    /// whose one wake started before this sleep, wakes no one now, so its
+    /// hour runs as it would for an awake agent; any other `report` or
+    /// `progress` wakes no one at all and waits for the next wake paused,
+    /// rung or not (B3).
     pub(crate) fn pausing<'a>(
         asleep: &'a Asleep,
         woken: &Woken,
         letter: &Letter,
     ) -> Option<&'a Self> {
-        let wakes = matches!(letter.kind.as_str(), "request" | "block");
+        let wakes = letter.wakes_a_sleeper();
         Self::of(asleep, letter).filter(|sleeper| {
             !(wakes && letter.bell_sent)
                 && woken
@@ -270,6 +271,17 @@ impl Ledger {
 }
 
 impl Letter {
+    /// Whether this letter wakes its recipient when Hide put it to sleep:
+    /// one that asks something of it (`request`, `block`), or the
+    /// operator's Done on its person's turn, which it is to act on now
+    /// though no answer is owed (PRD ask-human B20). Every other report or
+    /// progress waits for the next wake.
+    pub(crate) fn wakes_a_sleeper(&self) -> bool {
+        matches!(self.kind.as_str(), "request" | "block")
+            || (self.sender.operator_owned()
+                && crate::coordination::human_turn::is_done_intent(&self.intent))
+    }
+
     pub fn open(&self) -> bool {
         self.awaiting_intake() || self.waiting_answer
     }
@@ -426,6 +438,11 @@ pub struct Ledger {
     /// letter awaiting intake, so the letters bound them.
     #[serde(default)]
     pub node_clocks: BTreeMap<String, NodeClock>,
+    /// The operator's turn each live registration declared (PRD ask-human),
+    /// by registration id: at most one per agent, so the registrations
+    /// bound it. Left out of the file while there are none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub human_turns: BTreeMap<String, crate::coordination::human_turn::HumanTurn>,
 }
 
 impl Default for Ledger {
@@ -440,6 +457,7 @@ impl Default for Ledger {
             identity_waits: Vec::new(),
             spawn_placement_revision: 0,
             node_clocks: BTreeMap::new(),
+            human_turns: BTreeMap::new(),
         }
     }
 }
