@@ -177,17 +177,88 @@ fn raised_leads(agent: &SidebarAgentSnapshot) -> bool {
     }
 }
 
+/// The person's turn the row leads with: its own declaration, or the lead
+/// raised one (raises sort a person's turn first), whichever was declared
+/// first (PRD ask-human D-20).
+fn human_lead(agent: &SidebarAgentSnapshot) -> Option<crate::model::HumanTurnLead> {
+    use crate::model::{AskSubject, HumanTurnLead};
+    let own = agent
+        .declared_human_turn
+        .as_ref()
+        .map(|declared| HumanTurnLead {
+            id: declared.id.clone(),
+            kind: declared.kind,
+            place: declared.place.clone(),
+            pane_id: agent.pane_id.clone(),
+            title: agent.identity_label.clone(),
+            device_id: crate::address::pane_device(&agent.pane_id).map(str::to_owned),
+            since_unix_ms: Some(declared.since_unix_ms),
+            own: true,
+        });
+    let raised = agent.raised.first().and_then(|lead| match &lead.subject {
+        Some(AskSubject::HumanTurn {
+            id, kind, place, ..
+        }) => Some(HumanTurnLead {
+            id: id.clone(),
+            kind: *kind,
+            place: place.clone(),
+            pane_id: lead.raised_pane_id.clone(),
+            title: lead.origin_title.clone(),
+            device_id: crate::address::pane_device(&lead.raised_pane_id).map(str::to_owned),
+            since_unix_ms: lead.since_unix_ms,
+            own: false,
+        }),
+        _ => None,
+    });
+    match (own, raised) {
+        // Option orders None first, so an unknown time never wins.
+        (Some(own), Some(raised))
+            if matches!(
+                (raised.since_unix_ms, own.since_unix_ms),
+                (Some(raised), Some(own)) if raised < own
+            ) =>
+        {
+            Some(raised)
+        }
+        (Some(own), _) => Some(own),
+        (None, raised) => raised,
+    }
+}
+
 fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
-    // A block is not asked of the operator in a verb: its row draws the
-    // cause instead (agent-blocked-state B1).
-    if !needs_you || (agent.demand == "error" && agent.unread) {
+    if !needs_you {
         return None;
     }
     let own = demand_verb(agent);
+    let declared = agent.declared_human_turn.as_ref();
     // Everything else that waits on the operator under this root is counted
-    // behind the lead, `외 N건` (D-13).
-    let total = agent.raised.len() + usize::from(own.is_some()) + agent.laid_more;
-    if let Some(verb) = own.filter(|_| !raised_leads(agent)) {
+    // behind the lead, `외 N건` (D-13), the row's own question included
+    // while its person's turn leads (PRD ask-human D-21).
+    let total = agent.raised.len()
+        + usize::from(own.is_some())
+        + agent.laid_more
+        + usize::from(declared.is_some());
+    if let Some(declared) =
+        declared.filter(|_| agent.human_turn.as_ref().is_some_and(|lead| lead.own))
+    {
+        return Some(Ask {
+            verb: super::escalation::Verb::Answer,
+            what: first_line_cut(&declared.place),
+            more: total - 1,
+            subject: Some(declared.subject()),
+        });
+    }
+    // A block is not asked of the operator in a verb: its row draws the
+    // cause instead (agent-blocked-state B1).
+    if agent.demand == "error" && agent.unread {
+        return None;
+    }
+    // A person's turn leads whatever else waits (PRD ask-human D-21).
+    let own_leads = match &agent.human_turn {
+        Some(lead) => lead.own,
+        None => !raised_leads(agent),
+    };
+    if let Some(verb) = own.filter(|_| own_leads) {
         return Some(Ask {
             verb,
             what: agent.detail.clone(),
@@ -792,6 +863,11 @@ pub fn group_of(agent: &SidebarAgentSnapshot) -> AgentGroup {
 /// Called again whenever the read axis moves, so the derived values can never
 /// describe a different read state than the row they sit on.
 pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
+    agent.human_turn = human_lead(agent);
+    // A person's turn holds the operator's row in Needs You until it is
+    // settled, read or not, working or not (PRD ask-human D-07, B11); a
+    // delegated child's rises to its root instead.
+    let human = agent.human_turn.is_some() && ownership_of(agent) != Ownership::Delegated;
     let (demand, activity, unread) = axes_of(agent);
     let waiting = agent.wait.is_some();
     let group = agent_group_for(
@@ -804,7 +880,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         waiting,
         !agent.unseen_views.is_empty(),
     );
-    let group = if !agent.raised.is_empty() {
+    let group = if !agent.raised.is_empty() || human {
         AgentGroup::NeedsYou
     } else {
         group
@@ -813,7 +889,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     agent.look = look_of(agent, |agent| {
         // Where the row would stand with nothing to look at, which tells the
         // notifications a View to look at from the row's own ask.
-        if !agent.raised.is_empty() {
+        if !agent.raised.is_empty() || human {
             return AgentGroup::NeedsYou;
         }
         agent_group_for(
@@ -853,13 +929,21 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     };
     let question = native_question_line(agent.user_turn.as_ref());
     // A question the core asks for the agent is said by its subject, never
-    // by the label's sentence about the work around it.
-    let (status_word_visible, detail) = if let Some(subject) = &agent.ask_subject {
+    // by the label's sentence about the work around it; the agent's own
+    // person's turn says where, ahead of its other asks (PRD ask-human D-21).
+    let declared = agent
+        .declared_human_turn
+        .as_ref()
+        .filter(|_| agent.human_turn.as_ref().is_some_and(|lead| lead.own));
+    let (status_word_visible, detail) = if let Some(declared) = declared {
+        (true, first_line_cut(&declared.place))
+    } else if let Some(subject) = &agent.ask_subject {
         // A mission decision's line is also its sentence, which a surface
         // that does not know the subject draws instead (D-12).
         let line = match subject {
             crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
             crate::model::AskSubject::MissionAttention { node, .. } => first_line_cut(node),
+            crate::model::AskSubject::HumanTurn { place, .. } => first_line_cut(place),
             crate::model::AskSubject::PlanReview { .. }
             | crate::model::AskSubject::InputUnconfirmed { .. } => None,
         };
@@ -1136,12 +1220,17 @@ pub mod push {
     /// only seeds it: nothing that was already waiting is announced.
     #[derive(Default)]
     pub struct Transitions {
-        last: Option<BTreeMap<AgentKey, Effective>>,
+        last: Option<BTreeMap<AgentKey, Seen>>,
         /// Agents that left the list, with their state and when: a device that
         /// reconnects, or a list that was briefly empty, brings them back in the
         /// state they had, which is no transition (and no second notice).
-        vanished: BTreeMap<AgentKey, (Effective, std::time::Instant)>,
+        vanished: BTreeMap<AgentKey, (Seen, std::time::Instant)>,
     }
+
+    /// What a root was last seen as: its state and the person's turns
+    /// declared on it or raised to it (PRD ask-human), so a new declaration
+    /// is announced once even while the state stays Needs You.
+    type Seen = (Effective, BTreeSet<String>);
 
     /// How long a vanished agent's state is kept for its return.
     pub const VANISHED_TTL: Duration = Duration::from_secs(10 * 60);
@@ -1167,9 +1256,14 @@ pub mod push {
             at: std::time::Instant,
         ) -> (Vec<Notice>, BTreeSet<AgentKey>) {
             let now = effective(projection);
-            let states: BTreeMap<AgentKey, Effective> = now
+            let states: BTreeMap<AgentKey, Seen> = now
                 .iter()
-                .map(|(key, (state, ..))| (key.clone(), *state))
+                .map(|(key, (state, agent))| {
+                    (
+                        key.clone(),
+                        (*state, agent.human_turns.keys().cloned().collect()),
+                    )
+                })
                 .collect();
             let Some(last) = self.last.replace(states) else {
                 return (Vec::new(), BTreeSet::new());
@@ -1177,12 +1271,20 @@ pub mod push {
             let mut notices = Vec::new();
             let mut seen = BTreeSet::new();
             for (key, (state, agent)) in &now {
-                let before = last
+                let (before, declared) = last
                     .get(key)
-                    .copied()
+                    .cloned()
                     .or_else(|| self.vanished.remove(key).map(|(state, _)| state))
-                    .unwrap_or(Effective::Other);
-                if before == *state {
+                    .unwrap_or((Effective::Other, BTreeSet::new()));
+                // Each declaration not seen before is a notice of its own,
+                // in its own words, also on a row already in Needs You (B17).
+                let declared_now: Vec<_> = agent
+                    .human_turns
+                    .iter()
+                    .filter(|(id, _)| !declared.contains(*id))
+                    .map(|(_, subject)| subject)
+                    .collect();
+                if before == *state && (declared_now.is_empty() || *state != Effective::NeedsYou) {
                     continue;
                 }
                 // The row stays in Needs You, or the View's notice already
@@ -1194,29 +1296,45 @@ pub mod push {
                 let announced = state.announced().filter(|_| !absorbed);
                 if let Some(announced) = announced {
                     let look = *state == Effective::Look;
-                    notices.push(Notice {
-                        key: key.clone(),
-                        title: agent.title.clone(),
-                        state: announced,
-                        // `look` is the eye's word, `볼 것`, and the newest
-                        // View is the sentence (`볼 것 · report.html · app`).
-                        status_code: Some(if look {
-                            "look".to_owned()
-                        } else {
-                            agent.status_code.clone()
-                        }),
-                        detail: if look {
-                            agent.look.clone()
-                        } else {
-                            agent.detail.clone()
-                        },
-                        subject: if look { None } else { agent.subject.clone() },
-                        place: agent
-                            .place
-                            .as_deref()
-                            .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
-                            .unwrap_or_default(),
-                    });
+                    // The row's own notice when it moved, then every new
+                    // declaration it does not already say.
+                    let entered = (before != *state).then(|| agent.subject.clone());
+                    let declarations = declared_now
+                        .iter()
+                        .filter(|subject| {
+                            !look
+                                && *state == Effective::NeedsYou
+                                && entered
+                                    .as_ref()
+                                    .is_none_or(|lead| lead.as_ref() != Some(**subject))
+                        })
+                        .map(|subject| Some((*subject).clone()))
+                        .collect::<Vec<_>>();
+                    for subject in entered.into_iter().chain(declarations) {
+                        notices.push(Notice {
+                            key: key.clone(),
+                            title: agent.title.clone(),
+                            state: announced,
+                            // `look` is the eye's word, `볼 것`, and the newest
+                            // View is the sentence (`볼 것 · report.html · app`).
+                            status_code: Some(if look {
+                                "look".to_owned()
+                            } else {
+                                agent.status_code.clone()
+                            }),
+                            detail: if look {
+                                agent.look.clone()
+                            } else {
+                                agent.detail.clone()
+                            },
+                            subject: if look { None } else { subject },
+                            place: agent
+                                .place
+                                .as_deref()
+                                .map(|place| place.split(" · ").next().unwrap_or(place).to_owned())
+                                .unwrap_or_default(),
+                        });
+                    }
                 } else if (*state == Effective::Seen
                     && matches!(before, Effective::NeedsYou | Effective::Done))
                     || (before == Effective::Look && *state != Effective::NeedsYou)
@@ -1228,11 +1346,11 @@ pub mod push {
             }
             for (key, before) in &last {
                 if !now.contains_key(key) {
-                    self.vanished.insert(key.clone(), (*before, at));
+                    self.vanished.insert(key.clone(), (before.clone(), at));
                 }
             }
             // An agent gone for good: its notification is closed on the next push.
-            self.vanished.retain(|key, (before, since)| {
+            self.vanished.retain(|key, ((before, _), since)| {
                 let expired = at.duration_since(*since) >= VANISHED_TTL;
                 if expired
                     && matches!(

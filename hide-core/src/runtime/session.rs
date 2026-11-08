@@ -3155,6 +3155,7 @@ impl Runtime {
             // Views to look at go to Needs You or up to the ancestors, which
             // the lineage and the read axis decide.
             self.lay_unseen_views(&mut agents);
+            self.lay_human_turns(&mut agents);
             self.lay_start_prompts(&mut agents, local, live_pane_ids.as_ref());
             // The tree takes in the children this machine's agents have on
             // devices, as `refresh_agent_lineage` below and every later read

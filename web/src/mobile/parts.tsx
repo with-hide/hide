@@ -6,7 +6,13 @@ import { ServerIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { StatusMark } from "../components/status-mark";
+import { DeviceChip } from "../components/device-chip";
+import { Button } from "../components/ui/button";
+import { humanTurnText } from "../humanTurn";
+import { useInterfaceTranslation } from "../i18n/client";
+import { finishHumanTurn } from "./connection";
 import type { PhoneAgent } from "./protocol";
+import { usePhone } from "./store";
 
 /** The column a list row's detail lines start in: under the title, after the status mark alone. */
 export const LIST_INSET = "pl-[calc(var(--size-agent-mark)+var(--spacing-sm))]";
@@ -18,7 +24,7 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
   return (
     <span className={`flex min-w-0 gap-sm ${large ? "items-start" : "items-center"}`}>
       {/* The desktop row's mark; a read turn is dimmed as it is there. */}
-      {agent.read ? <StatusMark mark="turn" read data-phone-mark="turn" /> : <StatusMark mark={agent.mark} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />}
+      {agent.read ? <StatusMark mark="turn" read human={agent.human_turn != null} data-phone-mark="turn" /> : <StatusMark mark={agent.mark} human={agent.human_turn != null} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />}
       {large ? <AgentMark kind={agent.agent_kind} /> : null}
       <span
         className={`min-w-0 ${large ? "whitespace-normal break-keep text-title font-medium wrap-anywhere" : "truncate text-title font-medium"} ${
@@ -62,5 +68,43 @@ export function Field({ label, children }: { label: string; children: ReactNode 
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+/**
+ * A person's turn on the phone (PRD ask-human B9, B10, B19, B21): its kind
+ * and place as text the operator can select, the device it waits on, and
+ * Done, which waits while the Mac or that device is away and says when a
+ * press did not land.
+ */
+export function PhoneHumanTurn({ agent, inset }: { agent: PhoneAgent; inset: string }) {
+  const { t } = useInterfaceTranslation();
+  const turn = agent.human_turn;
+  const connected = usePhone((state) => state.connected);
+  const deviceAway = usePhone((state) => state.devices.some((device) => device.device_id === agent.device_id && !device.connected));
+  const pending = usePhone((state) => (turn && state.humanTurn?.declaration === turn.id ? state.humanTurn : null));
+  if (!turn) return null;
+  const what = humanTurnText(t, turn);
+  const away = !connected || deviceAway;
+  return (
+    <div className={`flex min-w-0 flex-col gap-xs ${inset}`} data-phone-human-turn={turn.id}>
+      <span className="flex min-w-0 items-baseline gap-sm text-body">
+        <span className="min-w-0 break-words text-warning select-text" data-phone-human-place={turn.id}>{what}</span>
+        {agent.device_label ? <DeviceChip label={agent.device_label} variant="inline" className="shrink-0" /> : null}
+      </span>
+      <span className="flex min-w-0 items-center gap-sm">
+        <Button
+          variant="secondary"
+          className="min-h-(--size-touch-target) shrink-0 text-body"
+          disabled={away || !!pending?.requestId}
+          aria-label={t("agents.human.doneName", { what })}
+          data-phone-human-done={turn.id}
+          onClick={() => finishHumanTurn(agent)}
+        >
+          {t("agents.human.done")}
+        </Button>
+        {away ? <span className="min-w-0 truncate text-subhead text-muted-foreground">{t("devices.rail.notConnected")}</span> : pending?.failed ? <span role="status" className="min-w-0 break-words text-subhead text-warning">{t("mobile.humanTurn.failed")}</span> : null}
+      </span>
+    </div>
   );
 }

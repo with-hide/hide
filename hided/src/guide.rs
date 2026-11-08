@@ -46,6 +46,22 @@ mod tests {
         assert!(TEXT.contains(crate::pane_cli::USAGE));
     }
 
+    /// The guide teaches a step only a person takes by the command that
+    /// declares it, and parses as the CLI does (PRD ask-human B27).
+    #[test]
+    fn the_guide_teaches_ask_human_in_place_of_leaving_a_login() {
+        assert!(!TEXT.contains("Leave a login to the operator."));
+        for example in [
+            "hide agent ask-human auth https://github.com/login",
+            "hide agent ask-human --clear",
+        ] {
+            assert!(TEXT.contains(example), "{example}");
+            let args: Vec<String> = example.split(' ').skip(1).map(str::to_owned).collect();
+            crate::cli_contract::admit(&args).unwrap();
+            crate::agent_cli::parse(args[1..].iter()).unwrap();
+        }
+    }
+
     #[test]
     fn the_guide_spells_hide_workspace_remove_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::worktree_cli::USAGE));

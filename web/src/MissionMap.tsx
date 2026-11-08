@@ -1,4 +1,4 @@
-import { CogIcon, GitBranchIcon, TriangleAlertIcon } from "lucide-react";
+import { CogIcon, GitBranchIcon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -28,6 +28,8 @@ import { MissionTurn } from "./MissionTurn";
 import { markWord, MissionDevice, MissionNumber, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
 import { STATE_PILL } from "./missionList";
 import { planCount } from "./plans";
+import { humanTurnText } from "./humanTurn";
+import { useWorkerEscalation } from "./missionWorkers";
 import {
   attentionWords,
   defectEdges,
@@ -355,6 +357,10 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   // What its worker does now (hide-private issue 680): a resting or absent worker stops the ring and says so under the title; a working one needs no words.
   const doing = nodeWork(mission, node);
   const doingLine = doing && doing.state !== "working" ? nodeWorkWords(doing, t) : null;
+  // A worker's person's turn is the step's waiting reason, a key and what and where (PRD ask-human D-18, B25); the Conductor's row carries Done.
+  const escalationOf = useWorkerEscalation();
+  const human = node.status === "working" ? escalationOf(node)?.human ?? null : null;
+  const humanLine = human ? humanTurnText(t, human) : null;
   const worker = useNodeRun(node);
   const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
@@ -379,6 +385,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(work ? [node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : t("mission.steps.planned", { count: work.steps.length })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
+        ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
@@ -409,6 +416,12 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       {doingLine ? (
         <span className={cn("min-w-0 truncate text-caption", doing?.state === "no_worker" ? "text-warning" : "text-muted-foreground")} data-node-work={doing?.state}>
           {doingLine}
+        </span>
+      ) : null}
+      {humanLine ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-warning" title={humanLine} data-node-human-turn="true">
+          <KeyRoundIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <span className="min-w-0 truncate">{humanLine}</span>
         </span>
       ) : null}
       {work ? (

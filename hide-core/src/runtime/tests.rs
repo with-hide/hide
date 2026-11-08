@@ -80,6 +80,8 @@ mod herdr_import;
 mod hide_ai_devices;
 #[path = "tests/home.rs"]
 mod home;
+#[path = "tests/human_turn.rs"]
+mod human_turn;
 #[path = "tests/inbound.rs"]
 mod inbound;
 #[path = "tests/issues.rs"]
@@ -689,7 +691,7 @@ fn working_payload() -> SessionSnapshotPayload {
     .expect("session payload")
 }
 
-pub(super) fn pane(id: &str, cwd: &str) -> PaneSnapshot {
+pub(crate) fn pane(id: &str, cwd: &str) -> PaneSnapshot {
     PaneSnapshot {
         device_id: Default::default(),
         device_pane_id: Default::default(),

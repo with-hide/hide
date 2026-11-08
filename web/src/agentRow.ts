@@ -10,7 +10,8 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
 import { askSubjectText } from "./askSubject";
-import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
+import { humanTurnText } from "./humanTurn";
+import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, HumanKind, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
  * Why a row's second line is on screen at rest (the core's `RowLine::mode`).
@@ -209,9 +210,12 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  * 막힘); a working row names nothing more, its line says why. A row of unknown state
  * has no mark and says only `상태 모름`. A sleeping row says its
  * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
- * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27).
+ * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27). A person's turn names
+ * the key and what it asks, `사람 차례 · 인증 · github.com/login`.
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; wait?: AgentWait | null }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; wait?: AgentWait | null; human_turn?: { kind: HumanKind; place: string } | null }): string {
+  // The key's name and what it asks, on the declaring row and its root (PRD ask-human B9).
+  if (agent.human_turn && agent.mark !== "unknown") return [t("agents.human.mark"), humanTurnText(t, agent.human_turn)].join(" · ");
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
   if (agent.mark === "look") return [markName(t, "look"), agent.look?.label].filter(Boolean).join(" · ");
   if (agent.mark === "unknown") return statusText(t, agent.status_code === "starting" ? "starting" : "unknown");

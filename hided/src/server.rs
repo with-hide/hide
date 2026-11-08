@@ -1331,6 +1331,16 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "machine_unknown" => {
             "Use the device id from hide workspace info or hide agent list with --machine, then retry"
         }
+        // `hide agent ask-human` (PRD ask-human B2, B3).
+        "human_kind_unknown" => {
+            "hide agent ask-human takes auth (a sign-in, a re-authentication, an unlock) or permission (an app connection, an OS permission); for a decision or anything else, send your parent a letter with hide request send"
+        }
+        "human_place_required" => {
+            "Name where the person acts: the page's address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"
+        }
+        "human_place_too_long" => {
+            "Name the place in at most 300 characters: the page's address, the app or the setting"
+        }
         "machine_unavailable" => {
             "Check that the device is connected in Settings > Devices and its helper is allowed, then run the same command again"
         }

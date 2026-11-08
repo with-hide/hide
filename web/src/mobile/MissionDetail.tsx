@@ -21,7 +21,7 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { attentionReasonText, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
 import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
@@ -310,7 +310,7 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
       case "attention":
         return attentionReasonText(reason.attention.reason, reason.attention.pr, t);
       case "worker":
-        return reason.escalation.line ?? t(`mission.turn.cause.${reason.escalation.cause}`);
+        return escalationWhy(reason.escalation, t);
       case "decision":
         return t("mobile.mission.waitsDecision");
       default:

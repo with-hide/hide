@@ -978,6 +978,52 @@
                     ],
                     "type": "string"
                 },
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "InputKind": {
                     "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
                     "enum": [
@@ -1087,28 +1133,50 @@
                 },
                 "WaitCause": {
                     "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).",
-                    "enum": [
-                        "unknown",
-                        "question",
-                        "approval",
-                        "blocked",
-                        "plan_review",
-                        "mission_decision",
-                        "mission_attention",
-                        "input_unconfirmed",
-                        "draft",
-                        "parent_blocked",
-                        "bell_exhausted",
-                        "undelivered",
-                        "observer_unconfirmed"
-                    ],
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "unknown",
+                                "question",
+                                "approval",
+                                "blocked",
+                                "plan_review",
+                                "mission_decision",
+                                "mission_attention",
+                                "input_unconfirmed",
+                                "draft",
+                                "parent_blocked",
+                                "bell_exhausted",
+                                "undelivered",
+                                "observer_unconfirmed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The agent declared a step only a person can take (`hide agent ask-human`), its own or, for a delegated child, raised to the operator.",
+                            "enum": [
+                                "human_turn"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "Waiting": {
                     "description": "What an agent waits on, by the core's own cause.",
                     "properties": {
                         "cause": {
                             "$ref": "#/definitions/WaitCause"
+                        },
+                        "human": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/HumanTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "For `human_turn`: the declaration, its kind, place and when it was made (PRD ask-human B7). The device is the agent's `machine`."
                         },
                         "letter_id": {
                             "description": "The letter the wait is about.",
@@ -1153,7 +1221,8 @@
                         "since_unix_ms",
                         "letter_id",
                         "spawn_id",
-                        "text"
+                        "text",
+                        "human"
                     ],
                     "type": "object"
                 },
@@ -1325,6 +1394,135 @@
                 "watch"
             ],
             "title": "AgentShow",
+            "type": "object"
+        },
+        "ask_human": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "description": "What a declaration did (B1, B5, B6).",
+                    "oneOf": [
+                        {
+                            "description": "A new declaration; the operator is told.",
+                            "enum": [
+                                "declared"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same kind and place as the standing one: nothing moved.",
+                            "enum": [
+                                "unchanged"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "A different declaration replaced the standing one; the operator is told again.",
+                            "enum": [
+                                "replaced"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "`--clear` took the standing declaration down.",
+                            "enum": [
+                                "cleared"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "`--clear` found no declaration to take down. Not a failure.",
+                            "enum": [
+                                "nothing_to_clear"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "description": "What `hide agent ask-human` answers.",
+            "properties": {
+                "agent": {
+                    "description": "The caller's registration.",
+                    "type": "string"
+                },
+                "declaration": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/HumanTurn"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The declaration standing after the command; null once cleared."
+                },
+                "machine": {
+                    "description": "The device the agent runs on, which the operator goes to.",
+                    "type": "string"
+                },
+                "operator_notified": {
+                    "description": "Whether the operator was told: a new or replacing declaration.",
+                    "type": "boolean"
+                },
+                "outcome": {
+                    "$ref": "#/definitions/Outcome"
+                }
+            },
+            "required": [
+                "outcome",
+                "agent",
+                "machine",
+                "declaration",
+                "operator_notified"
+            ],
+            "title": "AskHumanAnswer",
             "type": "object"
         },
         "confirmed": {
@@ -2839,6 +3037,52 @@
                     ],
                     "type": "object"
                 },
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "InputKind": {
                     "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
                     "enum": [
@@ -2972,28 +3216,50 @@
                 },
                 "WaitCause": {
                     "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).",
-                    "enum": [
-                        "unknown",
-                        "question",
-                        "approval",
-                        "blocked",
-                        "plan_review",
-                        "mission_decision",
-                        "mission_attention",
-                        "input_unconfirmed",
-                        "draft",
-                        "parent_blocked",
-                        "bell_exhausted",
-                        "undelivered",
-                        "observer_unconfirmed"
-                    ],
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "unknown",
+                                "question",
+                                "approval",
+                                "blocked",
+                                "plan_review",
+                                "mission_decision",
+                                "mission_attention",
+                                "input_unconfirmed",
+                                "draft",
+                                "parent_blocked",
+                                "bell_exhausted",
+                                "undelivered",
+                                "observer_unconfirmed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The agent declared a step only a person can take (`hide agent ask-human`), its own or, for a delegated child, raised to the operator.",
+                            "enum": [
+                                "human_turn"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "Waiting": {
                     "description": "What an agent waits on, by the core's own cause.",
                     "properties": {
                         "cause": {
                             "$ref": "#/definitions/WaitCause"
+                        },
+                        "human": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/HumanTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "For `human_turn`: the declaration, its kind, place and when it was made (PRD ask-human B7). The device is the agent's `machine`."
                         },
                         "letter_id": {
                             "description": "The letter the wait is about.",
@@ -3038,7 +3304,8 @@
                         "since_unix_ms",
                         "letter_id",
                         "spawn_id",
-                        "text"
+                        "text",
+                        "human"
                     ],
                     "type": "object"
                 }
@@ -3475,6 +3742,70 @@
             "refusals": [
                 "agent_pane_required",
                 "caller_identity_conflict",
+                "participant_unavailable",
+                "participant_ended",
+                "participant_session_changed",
+                "ambiguous_participant"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "ask_human"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "where",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent ask-human",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "human_kind_unknown",
+                "human_place_required",
+                "human_place_too_long",
+                "agent_pane_required",
+                "participant_unavailable",
+                "participant_ended",
+                "participant_session_changed",
+                "ambiguous_participant"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "ask_human"
+            ],
+            "arguments": [],
+            "command": "agent ask-human --clear",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
                 "participant_unavailable",
                 "participant_ended",
                 "participant_session_changed",
@@ -5721,7 +6052,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ecaf4eebd54411fa5c69b77b120697a8fe4edd7443bc75cde097bb94cadc27fc",
+    "digest": "sha256:1e0bdc6ec2da5c0d5314d399d3ea78c262f60496ba843f0c8b4462aff38965e5",
     "envelopes": {
         "agent": {
             "answer": "value",

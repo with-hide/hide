@@ -10,7 +10,8 @@ import { agentProductName } from "./agentAdapters";
 import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { AskLine, askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark } from "./components/pr-mark";
@@ -443,7 +444,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read /> : <StatusMark mark={agent.mark} className={markTone(agent)} />}
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} />}
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
             <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
@@ -454,7 +455,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} read={read} />
+        <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -657,7 +658,7 @@ function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
  */
-function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; showProject: boolean; read?: boolean }) {
+function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
   const { agent, card, project } = entry;
@@ -665,11 +666,16 @@ function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; sh
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
   if (!parts && !(showProject && project)) return null;
+  // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
+  const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
-    <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
-      {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-      {parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
-    </div>
+    <>
+      <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
+        {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
+        {human && ask ? <AskLine ask={ask} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+      </div>
+      {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
+    </>
   );
 }
 
@@ -722,7 +728,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            <StatusMark mark={child.mark} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} />
+            <StatusMark mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} />
             <AgentRecordTitle agent={child} className={cn("text-caption", quiet ? "text-subtle-foreground" : "text-foreground")} />
             <AgentForkMark agent={child} />
           </button>
@@ -730,16 +736,23 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
           <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
-        <ChildLine child={child} />
+        <ChildLine child={child} actions={actions} />
         {child.state.branch_badge ? <BranchLine agent={child} branch={child.state.branch_badge} /> : null}
       </div>
     </li>
   );
 }
 
-function ChildLine({ child }: { child: AgentRow }) {
+function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown());
+  // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
+  if (child.human_turn) {
+    return <>
+      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} className="min-w-0 flex-1 text-micro" /></div>
+      <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
+    </>;
+  }
   const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
   const parts: LineParts | null = ask ? askParts(t, ask) : agentLineParts(t, child);
   if (!parts) return null;

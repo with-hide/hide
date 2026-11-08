@@ -24,6 +24,7 @@ import {
   type DetailTab,
   type DetailView,
   type LookRow,
+  type PhoneAgent,
   type PhoneMessage,
   type PhoneMission,
   type QuickKey,
@@ -286,6 +287,10 @@ function connect(): void {
     }
     if (frame.type === "input_result") {
       onInputResult(frame.ok, frame.reason);
+      return;
+    }
+    if (frame.type === "human_turn_result") {
+      onHumanTurnResult(frame.request_id, frame.ok);
       return;
     }
     if (frame.type === "start_result") {
@@ -606,6 +611,27 @@ export function sendKey(key: QuickKey): void {
   const requestId = newRequestId();
   const sent = send({ type: "input", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, key });
   patch(sent ? { pendingInput: { requestId, kind: "key" }, inputError: null } : { inputError: inputFailure("offline") });
+}
+
+/**
+ * Done on the person's turn `agent` leads with (PRD ask-human B18, B19):
+ * hided sends the declaring agent one letter and the turn goes from the
+ * list once the Mac says so; a refusal or a lost link says so under it, and
+ * the operator presses again.
+ */
+export function finishHumanTurn(agent: Pick<PhoneAgent, "device_id" | "pane_id" | "human_turn">): void {
+  const declaration = agent.human_turn?.id;
+  const pending = usePhone.getState().humanTurn;
+  if (!declaration || (pending?.declaration === declaration && pending.requestId)) return;
+  const requestId = newRequestId();
+  const sent = send({ type: "human_turn_done", request_id: requestId, device_id: agent.device_id, pane_id: agent.pane_id, declaration });
+  patch({ humanTurn: { declaration, requestId: sent ? requestId : null, failed: !sent } });
+}
+
+function onHumanTurnResult(requestId: string | undefined, ok: boolean): void {
+  const pending = usePhone.getState().humanTurn;
+  if (!pending || pending.requestId !== requestId) return;
+  patch({ humanTurn: ok ? null : { ...pending, requestId: null, failed: true } });
 }
 
 type ReplyListener = (ok: boolean) => void;
