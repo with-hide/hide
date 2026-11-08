@@ -225,8 +225,9 @@ impl<'a> Forest<'a> {
         result
     }
 
-    /// The order inside each group (B9): Needs You longest waiting first,
-    /// every other group most recent first; and the totals.
+    /// The order inside each group (B9): Needs You the unread asks before
+    /// the read ones, each longest waiting first (operator decision
+    /// 2026-11-08), every other group most recent first; and the totals.
     fn settle(&self, tasks: &mut Tasks) {
         tasks.cards.sort_by(|a, b| {
             a.state.cmp(&b.state).then_with(|| match a.state {
@@ -240,7 +241,7 @@ impl<'a> Forest<'a> {
                             agent.state.request_since
                         }
                     };
-                    since(a).cmp(&since(b))
+                    a.read.cmp(&b.read).then_with(|| since(a).cmp(&since(b)))
                 }
                 // Longest waiting first (PRD revisit-group D-06).
                 TaskState::Revisit => {

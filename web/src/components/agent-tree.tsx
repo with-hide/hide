@@ -5,6 +5,7 @@ import { cn } from "../lib/utils";
 import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
 import type { LineParts } from "../agentRow";
 import { askSubjectText } from "../askSubject";
+import { DeviceChip } from "./device-chip";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
 // D-37 to D-43): a Needs You row's ask line, the one descendant
@@ -33,16 +34,24 @@ export function moreTail(t: TFunction<"translation">, more: number): string | nu
   return more > 0 ? t("agentSessions.moreAsks", { count: more }) : null;
 }
 
-/** A Needs You row's second line: what to do, and the count of the other asks waiting under the same root (B2, needs-you-cleanup B9). */
+/**
+ * A Needs You row's second line: what to do, and the count of the other asks
+ * waiting under the same root (B2, needs-you-cleanup B9). A person's turn
+ * says its kind and place as plain text the operator can select and copy,
+ * never a link, with its device's chip (PRD ask-human B9, B10); the row's
+ * open button stays under every other part of the line.
+ */
 export function AskLine({ ask, className }: { ask: NonNullable<AgentRow["state"]["ask"]>; className?: string }) {
   const { t } = useInterfaceTranslation();
   const what = askWhat(t, ask.verb, ask.what, ask.subject);
   const more = moreTail(t, ask.more);
+  const human = ask.subject?.cause === "human_turn" ? ask.subject : null;
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
-      <span className="min-w-0 truncate text-warning" title={what}>
+      <span className={cn("min-w-0 truncate text-warning", human && "pointer-events-auto cursor-text select-text")} title={what} data-human-turn-place={human ? human.id : undefined}>
         {what}
       </span>
+      {human?.device ? <DeviceChip label={human.device} variant="inline" className="shrink-0 self-center" /> : null}
       {more ? <span className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
     </span>
   );

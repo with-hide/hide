@@ -11,7 +11,7 @@
 import { useEffect } from "react";
 import type { Actions } from "./actions";
 import { statusText } from "./agentStatus";
-import { askSubjectLead, askSubjectText } from "./askSubject";
+import { askSubjectLead, askSubjectNotice } from "./askSubject";
 import { AGENT_NOTICE_PREFIX } from "./firstRun";
 import type { AgentNotice } from "./generated/hided-ws";
 import { hostBridge } from "./host";
@@ -89,7 +89,7 @@ export function useAgentNotifications(actions: Actions) {
         // A View to look at says the eye's word with the View as its sentence (status-model.md, A View to look at).
         const code = notice.status_code;
         const word = askSubjectLead(t, notice.subject) ?? (code === "look" ? t("agents.mark.look") : code ? statusText(t, code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done"));
-        const detail = notice.subject ? askSubjectText(t, notice.subject) : notice.detail;
+        const detail = notice.subject ? askSubjectNotice(t, notice.subject) : notice.detail;
         const state = detail ? `${word} · ${detail}` : word;
         const body = notice.place ? t("firstRun.notice.body", { state, project: notice.place }) : state;
         bridge.notify(`${AGENT_NOTICE_PREFIX}${notice.tag}`, cut(notice.title, TITLE_LIMIT), cut(body, BODY_LIMIT), { unlessFocused: true });

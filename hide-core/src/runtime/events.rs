@@ -407,6 +407,14 @@ pub(super) struct PaneTargetPayload {
     pub(super) pane_id: String,
 }
 
+/// The operator's Done on a person's turn (PRD ask-human B18), by the
+/// declaration it settles.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HumanTurnDonePayload {
+    pub(super) declaration: String,
+}
+
 /// Every agent the phones have open now, by the core's pane id; hided sends
 /// the whole list each time it changes, so a repeat converges.
 #[derive(Debug, Deserialize)]
@@ -1662,6 +1670,7 @@ pub(super) enum Event {
     ResolveSession(PaneTargetPayload),
     RevisitStar(PaneTargetPayload),
     RevisitDone(PaneTargetPayload),
+    HumanTurnDone(HumanTurnDonePayload),
     StrayDismiss(super::strays::StrayPayload),
     StrayRestore(super::strays::StrayPayload),
     StrayHandOff(super::strays::StrayHandOffPayload),
@@ -1964,6 +1973,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
         "revisit_star" => decode!(PaneTargetPayload, RevisitStar),
         "revisit_done" => decode!(PaneTargetPayload, RevisitDone),
+        "human_turn_done" => decode!(HumanTurnDonePayload, HumanTurnDone),
         "stray_dismiss" => decode!(super::strays::StrayPayload, StrayDismiss),
         "stray_restore" => decode!(super::strays::StrayPayload, StrayRestore),
         "stray_hand_off" => decode!(super::strays::StrayHandOffPayload, StrayHandOff),
@@ -2407,6 +2417,7 @@ impl Runtime {
             ),
             Event::RevisitStar(payload) => self.star_session(&payload.pane_id),
             Event::RevisitDone(payload) => self.finish_revisit(&payload.pane_id),
+            Event::HumanTurnDone(payload) => self.human_turn_done(&payload.declaration),
             Event::StrayDismiss(payload) => self.dismiss_stray(payload),
             Event::StrayRestore(payload) => self.restore_stray(payload),
             Event::StrayHandOff(payload) => self.hand_off_stray(payload),

@@ -5,6 +5,11 @@ import type { Catalog, Catalogs } from "../schema";
 // what Hide does not do for an agent is named in the Basic popover.
 export const agentsEnglish = {
   "agents.input.brief": "Brief not confirmed",
+  "agents.human.auth": "Sign-in",
+  "agents.human.permission": "Permission",
+  "agents.human.mark": "A person's turn",
+  "agents.human.done": "Done",
+  "agents.human.doneName": "Done: {{what}}",
   "agents.input.letter": "Letter not confirmed",
   "agents.input.briefHeld": "Brief not received",
   "agents.input.letterHeld": "Letter not received",
@@ -90,6 +95,11 @@ export const agentsEnglish = {
 
 const ko = {
   "agents.input.brief": "브리프 확인 안 됨",
+  "agents.human.auth": "인증",
+  "agents.human.permission": "허용",
+  "agents.human.mark": "사람 차례",
+  "agents.human.done": "다 했어요",
+  "agents.human.doneName": "다 했어요: {{what}}",
   "agents.input.letter": "편지 확인 안 됨",
   "agents.input.briefHeld": "브리프 못 받음",
   "agents.input.letterHeld": "편지 못 받음",
@@ -175,6 +185,11 @@ const ko = {
 
 const zhCN = {
   "agents.input.brief": "简报未确认",
+  "agents.human.auth": "登录",
+  "agents.human.permission": "授权",
+  "agents.human.mark": "需要本人操作",
+  "agents.human.done": "完成",
+  "agents.human.doneName": "完成：{{what}}",
   "agents.input.letter": "信件未确认",
   "agents.input.briefHeld": "未收到简报",
   "agents.input.letterHeld": "未收到信件",
@@ -260,6 +275,11 @@ const zhCN = {
 
 const ja = {
   "agents.input.brief": "ブリーフ未確認",
+  "agents.human.auth": "サインイン",
+  "agents.human.permission": "許可",
+  "agents.human.mark": "本人の操作待ち",
+  "agents.human.done": "完了",
+  "agents.human.doneName": "完了: {{what}}",
   "agents.input.letter": "レター未確認",
   "agents.input.briefHeld": "ブリーフ未受信",
   "agents.input.letterHeld": "レター未受信",

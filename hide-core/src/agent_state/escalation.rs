@@ -22,6 +22,10 @@ pub enum Cause {
     /// recorded it, and its parent did not clear the screen that took it in
     /// time (`delivery::typed`).
     InputUnconfirmed,
+    /// The child declared a step only a person can take (`hide agent
+    /// ask-human`, PRD ask-human D-06): it skips the parent, which cannot
+    /// sign in for it, whatever the child does meanwhile (D-07).
+    HumanTurn,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -62,6 +66,14 @@ pub(crate) fn of(
     let parent = child.lineage_parent_pane_id.as_deref()?;
     if !child.delegated {
         return None;
+    }
+    if let Some(declared) = &child.declared_human_turn {
+        return Some(Escalation {
+            cause: Cause::HumanTurn,
+            letter_id: None,
+            since_unix_ms: Some(declared.since_unix_ms),
+            human_notice: false,
+        });
     }
     if child.blocked {
         return Some(Escalation {
@@ -166,6 +178,16 @@ pub(crate) fn took_up_request_after(child: &SidebarAgentSnapshot, at: u64) -> bo
     })
 }
 
+impl RaisedAsk {
+    /// Whether it is a person's turn a descendant declared.
+    pub(crate) fn human_turn(&self) -> bool {
+        matches!(
+            self.subject,
+            Some(crate::model::AskSubject::HumanTurn { .. })
+        )
+    }
+}
+
 /// What the operator does about one raised descendant, in the order a root
 /// shows them: an approval first, then an answer, a confirmation, a draft.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -183,7 +205,7 @@ impl Cause {
     pub(crate) fn verb(self) -> Option<Verb> {
         match self {
             Cause::ChildBlocked => Some(Verb::Approval),
-            Cause::InputUnconfirmed => Some(Verb::Answer),
+            Cause::InputUnconfirmed | Cause::HumanTurn => Some(Verb::Answer),
             Cause::Undelivered | Cause::BellExhausted => Some(Verb::Answer),
             Cause::ObserverUnconfirmed => Some(Verb::Confirm),
             Cause::Draft => Some(Verb::Draft),
@@ -267,6 +289,7 @@ pub(crate) fn lift(
         chain
     };
     let mut asks: HashMap<usize, Vec<RaisedAsk>> = HashMap::new();
+    let mut human_below: HashMap<usize, Vec<RaisedAsk>> = HashMap::new();
     let mut raised_below: HashMap<usize, usize> = HashMap::new();
     let mut working_below: HashMap<usize, usize> = HashMap::new();
     // The most recently changed working descendant under each ancestor.
@@ -317,6 +340,7 @@ pub(crate) fn lift(
             Verb::Approval | Verb::Confirm => label_line(row),
             // A question the core asks for the child is said by its
             // subject, never by the label's line about the work around it.
+            Verb::Answer if escalation.cause == Cause::HumanTurn => None,
             Verb::Answer
                 if matches!(
                     escalation.cause,
@@ -338,16 +362,19 @@ pub(crate) fn lift(
             .map(|&a| rows[a].identity_label.clone())
             .chain(std::iter::once(named.identity_label.clone()))
             .collect();
-        asks.entry(root).or_default().push(RaisedAsk {
+        let ask = RaisedAsk {
             verb,
             what,
-            subject: row.ask_subject.clone().filter(|_| {
-                verb == Verb::Answer
-                    && matches!(
-                        escalation.cause,
-                        Cause::ChildBlocked | Cause::InputUnconfirmed
-                    )
-            }),
+            subject: match escalation.cause {
+                Cause::HumanTurn => row
+                    .declared_human_turn
+                    .as_ref()
+                    .map(crate::model::DeclaredHumanTurn::subject),
+                Cause::ChildBlocked | Cause::InputUnconfirmed if verb == Verb::Answer => {
+                    row.ask_subject.clone()
+                }
+                _ => None,
+            },
             raised_pane_id: row.pane_id.clone(),
             origin_title: row.identity_label.clone(),
             pane_id: named.pane_id.clone(),
@@ -361,14 +388,20 @@ pub(crate) fn lift(
             unreceived_by: (verb == Verb::Answer
                 && !matches!(
                     escalation.cause,
-                    Cause::ChildBlocked | Cause::InputUnconfirmed
+                    Cause::ChildBlocked | Cause::InputUnconfirmed | Cause::HumanTurn
                 ))
             .then(|| parent.map(|p| p.identity_label.clone()))
             .flatten(),
             path,
             checkout: named.checkout_label.clone(),
             human_notice: escalation.human_notice,
-        });
+        };
+        if ask.human_turn() {
+            for &middle in &chain[..chain.len() - 1] {
+                human_below.entry(middle).or_default().push(ask.clone());
+            }
+        }
+        asks.entry(root).or_default().push(ask);
     }
     let working_lines: HashMap<usize, Option<String>> = latest_working
         .into_iter()
@@ -386,8 +419,13 @@ pub(crate) fn lift(
     for (i, row) in rows.iter_mut().enumerate() {
         row.descendant_line = working_lines.get(&i).cloned().flatten();
         let mut raised = asks.remove(&i).unwrap_or_default();
-        raised.sort_by_key(|ask| (ask.verb, ask.since_unix_ms));
+        // A person's turn leads, oldest first, then the rest by verb (PRD
+        // ask-human D-20, D-21).
+        raised.sort_by_key(|ask| (!ask.human_turn(), ask.verb, ask.since_unix_ms));
         row.raised = raised;
+        let mut below = human_below.remove(&i).unwrap_or_default();
+        below.sort_by_key(|ask| ask.since_unix_ms);
+        row.human_below = below;
         row.descendant_mark = match (raised_below.get(&i), working_below.get(&i)) {
             (Some(&count), _) => Some(DescendantMark {
                 kind: MarkKind::Raised,
@@ -531,6 +569,207 @@ mod tests {
             human_notice: false,
         });
         vec![root, middle, raised]
+    }
+
+    /// Lays `subject`, a person's turn, on `row` as the core does: in its
+    /// own field, the row's own ask left as it is.
+    fn declare(row: &mut SidebarAgentSnapshot, subject: crate::model::AskSubject, since: u64) {
+        let crate::model::AskSubject::HumanTurn {
+            id,
+            kind,
+            place,
+            device,
+        } = subject
+        else {
+            panic!("a person's turn");
+        };
+        row.declared_human_turn = Some(crate::model::DeclaredHumanTurn {
+            id,
+            kind,
+            place,
+            device,
+            since_unix_ms: since,
+        });
+    }
+
+    fn human_turn(id: &str) -> crate::model::AskSubject {
+        crate::model::AskSubject::HumanTurn {
+            id: id.into(),
+            kind: crate::coordination::human_turn::HumanKind::Auth,
+            place: "github.com/login".into(),
+            device: Some("mini".into()),
+        }
+    }
+
+    /// PRD ask-human D-06, D-07: a child's person's turn skips its parent and
+    /// rises to the operator while the child works or is blocked, which no
+    /// other cause does.
+    #[test]
+    fn a_childs_persons_turn_rises_while_it_works_or_is_blocked() {
+        let mut row = child();
+        declare(&mut row, human_turn("agent-3.1"), 42);
+        for (activity, blocked) in [("working", false), ("stopped", true), ("stopped", false)] {
+            row.activity = activity.into();
+            row.blocked = blocked;
+            let raised = of(&row, None, &BTreeMap::new()).expect("it rises");
+            assert_eq!(
+                (raised.cause, raised.since_unix_ms, raised.human_notice),
+                (Cause::HumanTurn, Some(42), false),
+                "{activity} {blocked}"
+            );
+        }
+        assert_eq!(Cause::HumanTurn.verb(), Some(Verb::Answer));
+    }
+
+    /// PRD ask-human D-17, D-20, D-21, B8, B14, B16, B17: the root leads
+    /// with the oldest person's turn ahead of an older approval, counts the
+    /// rest behind it once, wears the key and Done for the declaring child,
+    /// and the parent between them wears only the descendant mark on its
+    /// row, while its pane's head says the person's turns below it (B15).
+    #[test]
+    fn a_persons_turn_leads_the_roots_asks_and_skips_the_parent_between() {
+        let mut rows = raised_lineage(Cause::ChildBlocked);
+        rows[2].blocked = true;
+        rows[2].escalation.as_mut().unwrap().since_unix_ms = Some(5);
+        let mut declared = rows[2].clone();
+        declared.pane_id = "declared".into();
+        declared.identity_label = "Login check".into();
+        declared.blocked = false;
+        declared.activity = "working".into();
+        declare(&mut declared, human_turn("agent-4.10"), 10);
+        declared.escalation = of(&declared, None, &BTreeMap::new());
+        let mut later = declared.clone();
+        later.pane_id = "later".into();
+        declare(&mut later, human_turn("agent-5.20"), 20);
+        later.escalation = of(&later, None, &BTreeMap::new());
+        rows.extend([declared, later]);
+        lift(&mut rows, |_| None);
+        let causes: Vec<_> = rows[0]
+            .raised
+            .iter()
+            .map(|ask| (ask.raised_pane_id.as_str(), ask.human_turn()))
+            .collect();
+        assert_eq!(
+            causes,
+            [("declared", true), ("later", true), ("raised", false)]
+        );
+        for row in &mut rows {
+            super::super::turn::derive_from_axes(row);
+        }
+        let root = &rows[0];
+        assert_eq!(root.group, "needs_you");
+        assert_eq!(root.mark, super::super::tally::RowMark::Turn);
+        let lead = root.human_turn.as_ref().expect("the root leads with it");
+        assert_eq!(
+            (lead.id.as_str(), lead.pane_id.as_str(), lead.own),
+            ("agent-4.10", "declared", false)
+        );
+        let ask = root.state.ask.clone().unwrap();
+        assert_eq!((ask.subject, ask.more), (Some(human_turn("agent-4.10")), 2));
+        // The parent between holds no key and stays its own group; the
+        // declaring child holds its own.
+        let middle = &rows[1];
+        assert_eq!(middle.human_turn, None);
+        assert_ne!(middle.group, "needs_you");
+        assert_eq!(
+            middle.descendant_mark.map(|mark| (mark.kind, mark.count)),
+            Some((MarkKind::Raised, 3))
+        );
+        let below: Vec<_> = middle
+            .human_below
+            .iter()
+            .map(|ask| ask.raised_pane_id.as_str())
+            .collect();
+        assert_eq!(below, ["declared", "later"], "only the person's turns");
+        let band = super::super::header::of(
+            &crate::runtime::tests::pane("middle", "/work"),
+            Some(middle),
+            None,
+            None,
+        )
+        .band
+        .expect("the middle pane's head says it");
+        let raised = band.raised.expect("as the root's does");
+        assert_eq!(
+            (band.kind.as_str(), band.more, raised.subject),
+            ("raised", 1, Some(human_turn("agent-4.10")))
+        );
+        assert!(
+            rows[0].human_below.is_empty(),
+            "the root draws its own asks"
+        );
+        let declared = &rows[3];
+        assert!(declared.human_turn.as_ref().is_some_and(|lead| lead.own));
+        assert_ne!(declared.group, "needs_you", "counted once, on its root");
+        assert_eq!(declared.mark, super::super::tally::RowMark::Turn);
+    }
+
+    /// PRD ask-human B17: each person's turn raised to a root is announced
+    /// once, in its own words, not the lead's, also when the root already
+    /// stands in Needs You and when two arrive at once.
+    #[test]
+    fn a_second_persons_turn_on_a_waiting_root_is_announced_in_its_own_words() {
+        let second = crate::model::AskSubject::HumanTurn {
+            id: "agent-5.20".into(),
+            kind: crate::coordination::human_turn::HumanKind::Permission,
+            place: "System Settings".into(),
+            device: None,
+        };
+        let projected = |declared: &[(&str, crate::model::AskSubject, u64)]| {
+            let mut root = child();
+            root.pane_id = "root".into();
+            root.delegated = false;
+            root.lineage_parent_pane_id = None;
+            let mut rows = vec![root];
+            for (pane, subject, at) in declared {
+                let mut row = child();
+                row.pane_id = (*pane).into();
+                row.lineage_parent_pane_id = Some("root".into());
+                row.activity = "working".into();
+                declare(&mut row, subject.clone(), *at);
+                row.escalation = of(&row, None, &BTreeMap::new());
+                rows.push(row);
+            }
+            lift(&mut rows, |_| None);
+            for row in &mut rows {
+                super::super::turn::derive_from_axes(row);
+            }
+            crate::agent_state::phone::project(
+                &json!({"navigator": {"agents": rows}}),
+                crate::labels::store::LOCAL_TARGET,
+            )
+        };
+        let mut notices = crate::agent_state::push::Transitions::default();
+        notices.observe(&projected(&[]));
+        let (first, _) = notices.observe(&projected(&[("first", human_turn("agent-4.10"), 10)]));
+        assert_eq!(
+            first
+                .iter()
+                .map(|notice| notice.subject.clone())
+                .collect::<Vec<_>>(),
+            [Some(human_turn("agent-4.10"))]
+        );
+        let third = crate::model::AskSubject::HumanTurn {
+            id: "agent-6.30".into(),
+            kind: crate::coordination::human_turn::HumanKind::Auth,
+            place: "vpn.example".into(),
+            device: None,
+        };
+        let both = [
+            ("first", human_turn("agent-4.10"), 10),
+            ("second", second.clone(), 20),
+            ("third", third.clone(), 30),
+        ];
+        let (again, _) = notices.observe(&projected(&both));
+        assert_eq!(
+            again
+                .iter()
+                .map(|notice| notice.subject.clone())
+                .collect::<Vec<_>>(),
+            [Some(second), Some(third)]
+        );
+        let (same, _) = notices.observe(&projected(&both));
+        assert!(same.is_empty(), "announced once");
     }
 
     // agent-hierarchy-screens B3: a descendant blocked on a native question

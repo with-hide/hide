@@ -1472,6 +1472,67 @@ pub enum AskSubject {
         spent: bool,
         held: bool,
     },
+    /// The agent declared that its next step is one only a person can take
+    /// (`hide agent ask-human`, PRD ask-human): the declaration's id, which
+    /// Done names, its kind, where the person acts, and the name of the
+    /// device the agent runs on (none for the core's own machine), which a
+    /// notification says.
+    HumanTurn {
+        id: String,
+        kind: crate::coordination::human_turn::HumanKind,
+        place: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+    },
+}
+
+/// A person's turn a row's own agent declared, as the row carries it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeclaredHumanTurn {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The device the agent runs on, by its name; absent for the core's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub since_unix_ms: u64,
+}
+
+impl DeclaredHumanTurn {
+    /// The question it asks of the operator, as a surface words it.
+    pub fn subject(&self) -> AskSubject {
+        AskSubject::HumanTurn {
+            id: self.id.clone(),
+            kind: self.kind,
+            place: self.place.clone(),
+            device: self.device.clone(),
+        }
+    }
+}
+
+/// The person's turn a row leads with (PRD ask-human D-09, D-17, D-20):
+/// on the agent that declared it and on its lineage root, never on a
+/// parent between them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HumanTurnLead {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The agent that declared it: this row's own pane, or the raised
+    /// descendant's, which Open goes to.
+    pub pane_id: String,
+    /// That agent's title, for a root's band and hover.
+    pub title: String,
+    /// The device that pane is on, read by the one address owner
+    /// (`crate::address`); absent for the core's own node. Done is disabled
+    /// while it is not connected (D-21).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    /// Whether this row's own agent declared it.
+    pub own: bool,
 }
 
 /// A published value the core derives from other fields of its row before
@@ -1543,6 +1604,25 @@ pub struct SidebarAgentSnapshot {
     pub letters_waiting: Option<u32>,
     /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
     pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// On a parent between a declaring descendant and its lineage root: the
+    /// person's turns raised below it, oldest first, which its pane's head
+    /// draws as the root's does (PRD ask-human B15). Its row stays as it was;
+    /// only the head reads this.
+    #[serde(skip)]
+    pub human_below: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// The person's turn this row's own agent declared (PRD ask-human D-07),
+    /// laid from the ledger in a field of its own: the row's own question,
+    /// `ask_subject` and demand stay as they are, and every reading of the
+    /// row looks here first and counts them behind it. Absent while none
+    /// stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declared_human_turn: Option<DeclaredHumanTurn>,
+    /// Derived: the person's turn this row leads with (PRD ask-human), its
+    /// own declaration or the oldest one its descendants raised to it, which
+    /// draws the key, the `<kind> · <place>` line and Done. Absent from the
+    /// wire while there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_turn: Option<HumanTurnLead>,
     /// The pull requests this row's session holds or made and every
     /// descendant's, live or ended (`agent_state::work::family`): the one
     /// list every PR mark of the row draws. Laid with the lineage pass.
@@ -4720,6 +4800,10 @@ pub struct PaneReadRecord {
     /// since is the pane moving on, which its own change already says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks_ended: Option<ChecksEnded>,
+    /// The person's turn the pane's agent had declared when it was read
+    /// (PRD ask-human): another declaration is news, as a new demand is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_turn: Option<String>,
 }
 
 /// A pane whose last stop finished work, as Hide last saw it. A
@@ -8329,13 +8413,20 @@ mod wire_enum_tests {
                 spent: false,
                 held: false,
             },
+            AskSubject::HumanTurn {
+                id: "agent-1.1".into(),
+                kind: crate::coordination::human_turn::HumanKind::Auth,
+                place: "github.com/login".into(),
+                device: Some("mini".into()),
+            },
         ];
         for variant in &subjects {
             match variant {
                 AskSubject::PlanReview { .. }
                 | AskSubject::MissionDecision { .. }
                 | AskSubject::MissionAttention { .. }
-                | AskSubject::InputUnconfirmed { .. } => {}
+                | AskSubject::InputUnconfirmed { .. }
+                | AskSubject::HumanTurn { .. } => {}
             }
         }
         let causes = subjects
@@ -8344,6 +8435,16 @@ mod wire_enum_tests {
             .collect::<Vec<_>>();
         assert_wire(&contract, "ask_subject_cause", &causes);
         checked.insert("ask_subject_cause");
+
+        use crate::coordination::human_turn::HumanKind;
+        let human_kinds = [HumanKind::Auth, HumanKind::Permission];
+        for variant in human_kinds {
+            match variant {
+                HumanKind::Auth | HumanKind::Permission => {}
+            }
+        }
+        assert_wire(&contract, "human_kind", &human_kinds);
+        checked.insert("human_kind");
 
         let statuses = [
             ChangedFileStatus::Modified,

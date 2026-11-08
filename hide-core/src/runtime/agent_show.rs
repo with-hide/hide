@@ -242,7 +242,26 @@ impl Waiting {
             letter_id: None,
             spawn_id: None,
             text: None,
+            human: None,
         }
+    }
+
+    /// The person's turn `turn` the agent declared, which outranks
+    /// whatever else it waits on (PRD ask-human D-21, B7).
+    pub(crate) fn human(turn: &crate::coordination::human_turn::HumanTurn) -> Self {
+        let mut waiting = Self::on(
+            WaitCause::HumanTurn,
+            Some(OPERATOR),
+            Some(turn.declared_at_unix_ms),
+        );
+        waiting.text = Some(
+            format!("{} · {}", turn.kind.as_str(), turn.place)
+                .chars()
+                .take(TEXT_CHARS)
+                .collect(),
+        );
+        waiting.human = Some(turn.clone());
+        waiting
     }
 }
 
@@ -271,6 +290,7 @@ fn waiting(
         let cause = match escalation.cause {
             Cause::ChildBlocked => demand().unwrap_or(WaitCause::Approval),
             Cause::InputUnconfirmed => WaitCause::InputUnconfirmed,
+            Cause::HumanTurn => WaitCause::HumanTurn,
             Cause::Draft => WaitCause::Draft,
             Cause::ParentBlocked => WaitCause::ParentBlocked,
             Cause::BellExhausted => WaitCause::BellExhausted,
@@ -280,6 +300,22 @@ fn waiting(
         let mut waiting = Waiting::on(cause, Some(OPERATOR), escalation.since_unix_ms);
         waiting.letter_id = escalation.letter_id.clone();
         waiting.text = line().filter(|_| escalation.letter_id.is_none());
+        return Some(waiting);
+    }
+    // The agent's own person's turn outranks the rest it waits on (PRD
+    // ask-human D-21, B7).
+    if let Some(declared) = &row.declared_human_turn {
+        let mut waiting = Waiting::on(
+            WaitCause::HumanTurn,
+            Some(OPERATOR),
+            Some(declared.since_unix_ms),
+        );
+        waiting.text = Some(
+            format!("{} · {}", declared.kind.as_str(), declared.place)
+                .chars()
+                .take(TEXT_CHARS)
+                .collect(),
+        );
         return Some(waiting);
     }
     if let Some(subject) = &row.ask_subject {
@@ -304,6 +340,16 @@ fn waiting(
                     .iter()
                     .find_map(|(input, _)| input.request_id.clone())
                     .filter(|_| waiting.spawn_id.is_none());
+                waiting
+            }
+            AskSubject::HumanTurn { place, kind, .. } => {
+                let mut waiting = Waiting::on(WaitCause::HumanTurn, None, None);
+                waiting.text = Some(
+                    format!("{} · {place}", kind.as_str())
+                        .chars()
+                        .take(TEXT_CHARS)
+                        .collect(),
+                );
                 waiting
             }
         };
@@ -432,7 +478,7 @@ mod tests {
         assert_eq!(
             unread["state"]["waiting"],
             json!({"cause": "unknown", "on": null, "since_unix_ms": null, "letter_id": null,
-                "spawn_id": null, "text": null})
+                "spawn_id": null, "text": null, "human": null})
         );
         let mut row = child_row();
         row.telemetry_stale = true;
@@ -473,7 +519,7 @@ mod tests {
         assert_eq!(
             state["waiting"],
             json!({"cause": "unknown", "on": null, "since_unix_ms": null, "letter_id": null,
-                "spawn_id": null, "text": null})
+                "spawn_id": null, "text": null, "human": null})
         );
     }
 

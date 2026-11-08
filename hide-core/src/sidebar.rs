@@ -805,6 +805,8 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         escalation: None,
         letters_waiting: None,
         raised: Vec::new(),
+        human_below: Vec::new(),
+        declared_human_turn: None,
         pulls: None,
         descendant_mark: None,
         descendant_line: None,
@@ -849,6 +851,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         ask_subject: None,
         laid_since_unix_ms: None,
         laid_more: 0,
+        human_turn: None,
         status_word_visible: true,
         changed_at_unix_ms: agent.changed_at_unix_ms,
         last_prompt_at_unix_ms: agent.facts.as_ref().and_then(|facts| {
@@ -1917,6 +1920,7 @@ mod tests {
                 server: Some(SERVER.to_owned()),
                 unread: false,
                 checks_ended: None,
+                human_turn: None,
             },
         );
         apply_read_state(
@@ -2917,6 +2921,7 @@ mod tests {
             server: None,
             unread: false,
             checks_ended: None,
+            human_turn: None,
         };
         for (saved, unread, what) in [
             (40, false, "the same sequence is still read"),

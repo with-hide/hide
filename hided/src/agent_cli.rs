@@ -3,7 +3,7 @@
 use crate::env::Env;
 use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
@@ -63,6 +63,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
     let mut check = false;
     let mut beside = false;
     let mut keep_pane = false;
+    let mut clear = false;
+    let mut words: Vec<String> = Vec::new();
     let mut id = None;
     let mut native = Vec::new();
     while let Some(arg) = args.next() {
@@ -80,6 +82,12 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                     return Err("--keep-pane is given twice".into());
                 }
                 keep_pane = true;
+            }
+            "--clear" if verb == "ask-human" => {
+                if clear {
+                    return Err("--clear is given twice".into());
+                }
+                clear = true;
             }
             "--" if verb == "spawn" => {
                 native.extend(args.cloned());
@@ -137,6 +145,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                 flags.insert(flag.to_owned(), value);
             }
             _ if matches!(verb, "show" | "end") && id.is_none() => id = Some(arg.clone()),
+            // The kind, then the place, which may be several words.
+            _ if verb == "ask-human" => words.push(arg.clone()),
             _ => return Err(USAGE.into()),
         }
     }
@@ -225,6 +235,21 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
             });
         }
         "list" => Command::List,
+        // The core judges the kind and the place, so its refusals say what
+        // to do (`human_kind_unknown`, `human_place_required`).
+        "ask-human" if clear => {
+            if !words.is_empty() {
+                return Err("hide agent ask-human --clear takes nothing else".into());
+            }
+            Command::AskHumanClear
+        }
+        "ask-human" => match <[String; 2]>::try_from(words) {
+            Ok([kind, place]) => Command::AskHuman { kind, place },
+            Err(words) if words.len() > 2 => {
+                return Err("hide agent ask-human takes the kind and one place; quote a place of several words".into());
+            }
+            Err(_) => return Err("hide agent ask-human needs the kind (auth or permission) and where the person acts, or --clear".into()),
+        },
         "show" => Command::Show {
             id: id.ok_or(USAGE)?,
         },

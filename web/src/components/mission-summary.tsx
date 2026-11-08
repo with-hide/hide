@@ -4,7 +4,7 @@ import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { planNowLine } from "../plans";
 import type { TFunction } from "i18next";
-import { attentionReasonText, cardLine, holdReason, missionOpen, missionPulls, missionResultCounts, stageWord, summaryGroups, type HoldReason } from "../missions";
+import { attentionReasonText, cardLine, escalationWhy, holdReason, missionOpen, missionPulls, missionResultCounts, stageWord, summaryGroups, type HoldReason } from "../missions";
 import { useWorkerEscalation } from "../missionWorkers";
 import type { Mission, MissionAttentionTo, MissionNode } from "../snapshot";
 import { formatElapsed } from "./elapsed";
@@ -99,7 +99,7 @@ function holdWords(reason: HoldReason, t: TFunction<"translation">): { to: Missi
     case "attention":
       return { to: reason.attention.to, who: t(`mission.attention.to.${reason.attention.to}`), why: attentionReasonText(reason.attention.reason, reason.attention.pr, t) };
     case "worker":
-      return { to: "operator", who: t("mission.attention.to.operator"), why: reason.escalation.line ?? t(`mission.turn.cause.${reason.escalation.cause}`) };
+      return { to: "operator", who: t("mission.attention.to.operator"), why: escalationWhy(reason.escalation, t) };
     case "decision":
       return { to: "operator", who: t("mission.attention.to.operator"), why: t("missionScreen.pill.decision") };
   }

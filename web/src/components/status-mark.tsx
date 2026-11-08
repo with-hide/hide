@@ -10,7 +10,8 @@ import { Hint } from "./ui/tooltip";
  * lists agents (docs/status-model.md, One meaning across surfaces). The core
  * names the mark; this draws it. The shapes differ without their
  * colours: the operator's turn is a `!` in a warning badge, a View to look
- * at the same badge with an eye (PRD unseen-agent-views D-15), in progress is a
+ * at the same badge with an eye (PRD unseen-agent-views D-15), a person's turn
+ * the agent declared the same badge with a key (`human`, PRD ask-human D-09), in progress is a
  * static three-quarter ring (dashed while it waits on proven work, D-25), to read is a small dot (green only when the label
  * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
  * smaller and thinner than the in-progress one (sidebar-quiet-mark-indent D-02).
@@ -22,16 +23,24 @@ import { Hint } from "./ui/tooltip";
  * `label`, the mark's words, so its hover and accessible name tell a waiting
  * ring from a working one (B36).
  */
-export function StatusMark({ mark, label, read = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+export function StatusMark({ mark, label, read = false, human = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean; human?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   const shape = (
     <span
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
       data-mark={mark ?? undefined}
       data-mark-read={read ? "true" : undefined}
+      data-mark-human={human && mark !== null ? "true" : undefined}
       className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}
       {...rest}
     >
-      {mark === "turn" && read ? (
+      {human && mark !== null ? (
+        <svg viewBox="0 0 12 12" className="size-full">
+          {/* A step only a person can take: the same badge, a key in place of the `!`, on the declaring row whatever its own mark (PRD ask-human D-09, B14); read, it is hollow as a read `!` is. */}
+          {read ? <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" /> : <circle cx="6" cy="6" r="6" className="fill-warning" />}
+          <circle cx="4.3" cy="6" r="1.7" fill="none" strokeWidth="1.2" className={read ? "stroke-warning" : "stroke-status-foreground"} />
+          <path d="M5.9 5.4h3.9v1.2h-.6v1.4H8.1V6.6H5.9z" className={read ? "fill-warning" : "fill-status-foreground"} />
+        </svg>
+      ) : mark === "turn" && read ? (
         <svg viewBox="0 0 12 12" className="size-full">
           {/* An ask the operator read and has not answered: the same `!`, hollow (needs-you-cleanup B10). */}
           <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" />

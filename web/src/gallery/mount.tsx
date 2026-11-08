@@ -10,6 +10,7 @@ import { ServerSessionScene } from "./ServerSessionScene";
 import { MissionScreenScene, missionScreenSceneParams } from "./MissionScreenScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
 import { GroupTabsScene } from "./GroupTabsScene";
+import { StartPanelScene } from "./StartPanelScene";
 import { ViewFeedbackScene, viewFeedbackSceneParams } from "./ViewFeedbackScene";
 import { sceneParams, SidebarScene } from "./SidebarScene";
 import { AreaFocusScene } from "./AreaFocusScene";
@@ -60,6 +61,11 @@ export function mountGallery(root: Root) {
     if (scene === "group-tabs") {
       document.title = "hide · Group tabs scene";
       root.render(<StrictMode><GroupTabsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "start-panel") {
+      document.title = "hide · Start panel scene";
+      root.render(<StrictMode><StartPanelScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "project-settings") {

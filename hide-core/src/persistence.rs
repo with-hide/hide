@@ -1254,6 +1254,7 @@ mod tests {
                 server: Some("server-7".to_owned()),
                 unread: true,
                 checks_ended: None,
+                human_turn: None,
             },
         );
         state.pane_completions.insert(

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, type EscalationCause } from "./missions";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -418,6 +418,17 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     expect(items[2]).toMatchObject({ node: { key: "api" }, cause: "child_blocked", line: "Login expired" });
     const raisedOnly = { ...rows.p2!, request: undefined };
     expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => workerEscalation(raisedOnly as AgentRow))[0]).toMatchObject({ kind: "worker_blocked", line: null });
+  });
+
+  it("keeps a worker's person's turn off 내 차례 and says it on its step, what and where (PRD ask-human D-18, B25)", () => {
+    const ko = initializeInterfaceI18n("ko").getFixedT(null, "translation");
+    const working = node("api", { status: "working", pane_id: "p2" });
+    const declared = { escalation: { cause: "human_turn", letter_id: null, since_unix_ms: 1, human_notice: false }, human_turn: { id: "w.1", kind: "auth", place: "github.com/login", pane_id: "p2", title: "w", since_unix_ms: 1, own: true } } as unknown as AgentRow;
+    const escalation = workerEscalation(declared);
+    expect(escalation).toMatchObject({ cause: "human_turn", human: { kind: "auth", place: "github.com/login" } });
+    expect(turnItems(mission("m", { nodes: [working] }), () => escalation)).toEqual([]);
+    expect(holdReason(mission("m", { nodes: [working] }), working, () => escalation)).toEqual({ kind: "worker", escalation });
+    expect(escalationWhy(escalation!, ko)).toBe("인증 · github.com/login");
   });
 
   it("lists what waits for main in the Conductor's merge order while the mission waits to merge, a branch-only one as a join", () => {
