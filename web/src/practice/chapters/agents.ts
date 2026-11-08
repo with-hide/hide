@@ -16,7 +16,7 @@ const say = (pane: string, text: string) => ({ type: { pane, text } });
 export default chapter<AgentsModel>({
   id: "agents",
   number: 2,
-  version: 1,
+  version: 2,
   world: AGENTS_WORLD,
   quest: true,
   preview: "rows",
@@ -36,6 +36,8 @@ export default chapter<AgentsModel>({
     { id: "switch", quest: true, target: "[data-agent-area]", side: "inside", command: "recent_area_tab", done: (model) => model.switched && !inReviewer(model) },
     // The row marked 볼 것 brings the agent and the file it opened forward in the lane.
     { id: "look", quest: true, target: REVIEWER_ROW, side: "right", gesture: { click: true }, done: (model) => model.viewed },
+    // Pressing the row opened what the agent opened in Documents; the step names it and what it can show.
+    { id: "viewer", target: '[data-lane-tool="documents"]', side: "left" },
     { id: "changes", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: showsExplorer },
   ],
 });
