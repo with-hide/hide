@@ -820,11 +820,11 @@ pub enum Call {
         profile: hide_agent_adapter::ProfileId,
     },
     /// How a start of the agent `kind` with the profile `profile` runs on
-    /// this machine (`crate::profiles::ProfileStart`): refused when the
-    /// profile is gone, being removed or another agent's, when its account or
-    /// variables no longer resolve here, or when its program is not found.
-    /// The built-in default profile is never asked: it starts as the agent
-    /// always has.
+    /// this machine (`crate::profiles::ProfileLaunch`): ready, gone, or
+    /// refused when the profile is being removed or another agent's, when its
+    /// account or variables no longer resolve here, or when its program is
+    /// not found. The built-in default profile is never asked: it starts as
+    /// the agent always has.
     ProfileLaunch {
         kind: String,
         profile: hide_agent_adapter::ProfileId,

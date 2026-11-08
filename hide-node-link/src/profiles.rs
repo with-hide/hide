@@ -138,9 +138,22 @@ pub enum ProfileField {
     Profile,
 }
 
-/// How a start of one profile's agent runs on its machine
-/// ([`crate::protocol::Call::ProfileLaunch`]), as that machine's node checked
-/// it just now: what the start line of `hide agent exec` carries.
+/// A node's answer to [`crate::protocol::Call::ProfileLaunch`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProfileLaunch {
+    /// The start runs so.
+    Ready(ProfileStart),
+    /// This machine has no such profile any more.
+    Gone,
+    /// The profile cannot start now; `text` says why, naming the profile and,
+    /// when it is the cause, its program.
+    Refused { text: String },
+}
+
+/// How a start of one profile's agent runs on its machine, as that
+/// machine's node checked it just now: what the start line of `hide agent
+/// exec` carries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileStart {
     /// The profile's name, which the start line and its failures name.
