@@ -2,11 +2,13 @@
 //!
 //! Hide no longer keeps a Home. A store the release before wrote still has a
 //! registration flagged as a device's Home; `persistence` reads that flag once
-//! and leaves an ordinary pinned project plus a `HomeRetirement` per device.
+//! and records a `HomeRetirement` per device, leaving the registration, an
+//! ordinary pinned project, exactly as stored.
 //! The device's helper is asked once to remove what Hide's marker lists in its
-//! `~/hide`, and its answer settles the registration: the folder still there
-//! (the operator's files, or a session or pane recorded in it) keeps the
-//! project, named `hide`; an empty folder takes the registration with it.
+//! `~/hide`, and its answer settles the registration: a folder Hide made that
+//! still holds something (the operator's files, or a session or pane recorded
+//! in it) keeps the project, renamed `hide`; a folder that is gone takes the
+//! registration with it; a folder with no marker changes nothing (B8).
 //!
 //! A device whose helper has not updated is not asked (D-06); it is asked when
 //! its updated helper becomes ready. A failure reaches the diagnostic log only
@@ -17,6 +19,11 @@
 use super::*;
 use crate::node_access::LinkError;
 use hide_node_link::home::HomeRetired;
+
+/// The name the old Home registration carried, and the one it takes as an
+/// ordinary project named for its folder.
+const OLD_HOME_LABEL: &str = "Home";
+const OLD_HOME_FOLDER_LABEL: &str = "hide";
 
 impl Runtime {
     /// Asks the helper of every device with a pending retirement whose helper
@@ -174,6 +181,14 @@ impl Runtime {
             .home_retire
             .retain(|retirement| retirement.device_id != device);
         if retired.kept {
+            // A folder Hide made that holds more than its own entries stays as
+            // the ordinary project it already is, named for its folder; one
+            // Hide did not make (no marker) is left exactly as it was (B8).
+            if retired.marked {
+                for registration_id in &settled {
+                    self.rename_old_home(registration_id);
+                }
+            }
             self.persist_ui_state();
             return;
         }
@@ -184,6 +199,26 @@ impl Runtime {
         if !removed {
             self.persist_ui_state();
         }
+    }
+
+    /// The old Home registration, still named `Home`, becomes the project
+    /// `hide`; a name the operator gave it since stays.
+    fn rename_old_home(&mut self, registration_id: &str) {
+        let Some(registration) = self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter_mut()
+            .find(|registration| registration.id == registration_id)
+        else {
+            return;
+        };
+        if registration.label != OLD_HOME_LABEL {
+            return;
+        }
+        registration.label = OLD_HOME_FOLDER_LABEL.to_owned();
+        let (device, path) = (registration.device_id.clone(), registration.path.clone());
+        self.rename_project(&device, &path);
     }
 
     fn log_home_retire_failure(&self, device: &str, kind: &str, message: &str) {

@@ -2923,7 +2923,7 @@ Local sleeping conversations appear as separate rows in the core-selected group,
 Those controls are disabled while disconnected or while one sleep request is waiting; a refused request keeps the row and asks the operator to check connection and session status before trying again.
 With no agents the list is one line, 실행 중인 에이전트가 없어요.
 The header's `+`, 에이전트 시작, opens the start sheet: a text box for what to do, the target (This Mac's checkouts, then each device's checkouts, or `컴퓨터에서 프로젝트를 먼저 추가하세요` when the machine has no project, a device that is not connected disabled with 연결 안 됨), the shared kind and model menus, both preselected from the desktop's remembered choice, and 시작.
-The target names the core's machine as its system does in the phone's language (`이 Mac · 홈`, `이 PC · 홈`), and reads `홈` alone until the targets arrive.
+Each target reads the machine as its system does in the phone's language, then the project and branch (`이 Mac · app · main`); the menu is empty until the targets arrive.
 시작 starts the agent there; once it appears in the list the phone opens its detail.
 The desktop does not follow a phone start: the visible tab and the keyboard stay where the operator has them, and the new agent only appears in the sidebar and the lists like any other.
 Pressing 시작 again for the same text and choice after a lost answer sends the same request id, and hided starts one agent for it.

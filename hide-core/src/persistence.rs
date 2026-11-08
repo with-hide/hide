@@ -281,8 +281,9 @@ struct StoredUiState {
 
 /// A registration as stored. `home` is only ever read: the release before
 /// the retirement of Home (PRD retire-hide-home) flagged a device's Home
-/// registration with it, and `decode` turns that into an ordinary pinned
-/// registration plus a pending retirement; the next save drops it.
+/// registration with it, and `decode` records one pending retirement for it
+/// and leaves the registration exactly as stored (B8, B13); the next save
+/// drops the flag.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoredRegistration {
     #[serde(flatten)]
@@ -291,15 +292,11 @@ struct StoredRegistration {
     home: bool,
 }
 
-/// The label the old Home registration carried, and the one it keeps as an
-/// ordinary project named for its folder.
-const OLD_HOME_LABEL: &str = "Home";
-const OLD_HOME_FOLDER_LABEL: &str = "hide";
-
 /// The registrations as an ordinary list, and one pending retirement per
-/// registration the older store flagged as its device's Home. The folder
-/// stays a pinned project until its helper answers, so nothing it holds is
-/// out of reach in between (D-04, D-08).
+/// registration the older store flagged as its device's Home. The registration
+/// stays as it was (name and pin) until its helper answers what `~/hide`
+/// holds, so nothing is decided before the folder has been looked at; it is
+/// an ordinary pinned project meanwhile (D-04, D-08).
 fn read_registrations(
     stored: Vec<StoredRegistration>,
 ) -> (
@@ -310,18 +307,13 @@ fn read_registrations(
     let registrations = stored
         .into_iter()
         .map(|stored| {
-            let mut registration = stored.registration;
             if stored.home {
-                if registration.label == OLD_HOME_LABEL {
-                    registration.label = OLD_HOME_FOLDER_LABEL.to_owned();
-                }
-                registration.pinned = true;
                 retirements.push(crate::model::HomeRetirement {
-                    device_id: registration.device_id.clone(),
-                    registration_id: registration.id.clone(),
+                    device_id: stored.registration.device_id.clone(),
+                    registration_id: stored.registration.id.clone(),
                 });
             }
-            registration
+            stored.registration
         })
         .collect();
     (registrations, retirements)
@@ -1679,8 +1671,8 @@ mod tests {
     }
 
     /// PRD retire-hide-home D-04, D-08: a store the release before wrote, with
-    /// a registration flagged `home`, loads that registration as an ordinary
-    /// pinned project named `hide` and one pending retirement for its device;
+    /// a registration flagged `home`, loads that registration as it was stored
+    /// (an ordinary pinned project) and one pending retirement for its device;
     /// the next save carries neither the flag nor a second entry, and the
     /// pending entry survives a relaunch until the helper answers.
     #[test]
@@ -1699,7 +1691,7 @@ mod tests {
             .iter()
             .map(|registration| (registration.label.as_str(), registration.pinned))
             .collect();
-        assert_eq!(registered, [("hide", true), ("Alpha", false)]);
+        assert_eq!(registered, [("Home", true), ("Alpha", false)]);
         assert_eq!(
             state.home_retire,
             [crate::model::HomeRetirement {

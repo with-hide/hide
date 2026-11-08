@@ -378,7 +378,16 @@ fn old_home(machine: &Machine) -> String {
         json!({"version": 1, "links": links}).to_string(),
     )
     .unwrap();
-    std::fs::write(home.join("AGENTS.md"), "# Hide Home\n\n- work -> /x\n").unwrap();
+    // The guide as the earlier build's generator wrote it for these links.
+    let mut guide = String::from(
+        "# Hide Home\n\nThis folder is Hide's Home on this device.\nEach entry is a link to a project registered in Hide.\n\n",
+    );
+    for project in &machine.projects {
+        let name = Path::new(project).parent().unwrap().file_name().unwrap();
+        guide.push_str(&format!("- {} -> {project}\n", name.to_string_lossy()));
+    }
+    guide.push_str("\nWork inside a project follows that project's own AGENTS.md or CLAUDE.md.\nWork that belongs to no project can live here.\nHide rewrites this file when projects change, so edits here are not kept.\n");
+    std::fs::write(home.join("AGENTS.md"), guide).unwrap();
     home.to_string_lossy().into_owned()
 }
 
@@ -394,7 +403,7 @@ fn runtime_with_old_home(
     let shared = local_runtime(&fake, machine);
     let node = crate::node::TEST_NODE;
     let mut home = registration(home_path, node);
-    home.label = "hide".to_owned();
+    home.label = "Home".to_owned();
     home.pinned = true;
     let id = home.id.clone();
     {
@@ -411,7 +420,7 @@ fn runtime_with_old_home(
         let pane = with_pane.then(|| super::pane("w9:p1", home_path));
         let row = workspace(
             &id,
-            "hide",
+            "Home",
             home_path,
             vec![checkout(&id, &format!("{id}:checkout"), home_path, pane)],
         );
@@ -505,6 +514,30 @@ fn an_old_home_with_an_open_pane_stays_as_the_hide_project() {
     assert!(!Path::new(&home).join(".hide-home.json").exists());
 }
 
+/// B8: a `~/hide` with no marker is not Hide's: nothing on disk or in the
+/// registration changes, and the answer settles the pending entry.
+#[test]
+fn a_folder_without_the_marker_leaves_its_registration_as_it_was() {
+    let machine = machine();
+    let home = old_home(&machine);
+    std::fs::remove_file(Path::new(&home).join(".hide-home.json")).unwrap();
+    let (shared, id) = runtime_with_old_home(&machine, &home, false);
+    shared.lock().unwrap().request_home_retirements();
+    wait(&shared, "the retirement's answer", |runtime| {
+        runtime.snapshot.ui_state.home_retire.is_empty()
+    });
+    let runtime = shared.lock().unwrap();
+    let kept = runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .iter()
+        .find(|registration| registration.id == id)
+        .unwrap();
+    assert!(kept.pinned && kept.label == "Home");
+    assert!(Path::new(&home).join("AGENTS.md").exists());
+}
+
 /// B11: a marker that cannot be read changes nothing on disk or on screen,
 /// the project stays pending for the next launch, and the log is the only
 /// place that hears of it; the refusal is not asked again this launch.
@@ -545,7 +578,7 @@ fn a_device_without_a_ready_helper_is_asked_once_it_is() {
         runtime.device_hosts.get_mut(DEVICE).unwrap().phase =
             hosts::HostPhase::Unavailable("the helper is updating".to_owned());
         let mut registration = registration(&home, DEVICE);
-        registration.label = "hide".to_owned();
+        registration.label = "Home".to_owned();
         runtime
             .snapshot
             .ui_state
@@ -559,7 +592,7 @@ fn a_device_without_a_ready_helper_is_asked_once_it_is() {
                 device_id: DEVICE.to_owned(),
                 registration_id: id.clone(),
             });
-        let mut project = workspace(&id, "hide", &home, vec![]);
+        let mut project = workspace(&id, "Home", &home, vec![]);
         project.remote_target_id = Some(DEVICE.to_owned());
         project.device_id = DEVICE.to_owned();
         runtime.snapshot.status.remote.push(RemoteStatusSnapshot {

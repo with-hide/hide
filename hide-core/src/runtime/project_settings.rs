@@ -385,7 +385,7 @@ impl Runtime {
     /// settles: this machine's rows are relabelled where they stand, a
     /// device's catalog is derived again, and the agents placed in either
     /// read the new name. A name cleared gives back the catalog's own label.
-    fn rename_project(&mut self, device: &str, root: &str) {
+    pub(super) fn rename_project(&mut self, device: &str, root: &str) {
         if device != self.node.as_str() {
             self.refresh_device_catalog(device);
             return;
