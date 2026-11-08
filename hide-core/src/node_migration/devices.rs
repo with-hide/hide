@@ -838,6 +838,74 @@ mod tests {
                             "machine_id": machine, "host_key_sha256": ""}})
     }
 
+    /// The raw pane of the device's own engine its sleeping fork came from.
+    const FORK_SOURCE: &str = "w1:p9";
+    const MOVE: &str = "move-1";
+
+    fn session(device: &str) -> crate::links::ledger::SessionIdentity {
+        crate::links::ledger::SessionIdentity {
+            device_id: device.into(),
+            agent: "claude".into(),
+            session_id: "s".into(),
+        }
+    }
+
+    /// A receipt of a pane moved on `device`, as the core saves it: the
+    /// request names the public ids, the result the engine's raw ones.
+    fn pane_move(device: &str) -> Value {
+        let receipt: crate::runtime::pane_move::Intent = serde_json::from_value(json!({
+            "request": {
+                "request_id": MOVE, "group_id": null,
+                "workspace": {"device_id": device, "checkout_path": ROOT},
+                "source": {"pane_id": pane(device), "tab_id": tab(device), "area_id": "a1"},
+                "destination": {"type": "pane", "tab_id": format!("remote:{device}:tab:w1:t2"),
+                                "pane_id": format!("remote:{device}:pane:w1:p2"),
+                                "area_id": "a2", "edge": "right"},
+            },
+            "terminal_id": "term_1", "workspace_id": "w1", "phase": "completed",
+            "started_at": 1, "message": null, "target_terminal": "term_2", "new_tab_slot": false,
+            "result_pane": "w1:p1", "result_tab": "w1:t3",
+        }))
+        .unwrap();
+        serde_json::to_value(receipt).unwrap()
+    }
+
+    /// A mission conducted on `device`, with the fields that name a machine
+    /// beyond its own: a node's check folder on it and a handover from its
+    /// Conductor.
+    fn mission(device: &str, workspace: &str) -> Value {
+        let actor = crate::delivery::Actor {
+            pane_id: pane(device),
+            name: "conductor".into(),
+            kind: "claude".into(),
+            device_id: device.into(),
+            session: None,
+        };
+        let mut mission = crate::missions::tests::mission();
+        mission.device_id = device.into();
+        mission.workspace_id = workspace.into();
+        mission.project = ROOT.into();
+        mission.checkout_path = ROOT.into();
+        mission.conductor = crate::missions::Conductor {
+            actor: actor.clone(),
+            session: Some(session(device)),
+            agent_id: None,
+        };
+        mission.nodes = vec![
+            serde_json::from_value(json!({
+                "key": "a", "title": "node a", "kind": "change", "status": "planned",
+                "remote_folder": [device, "/srv/p-review"],
+            }))
+            .unwrap(),
+        ];
+        mission.handover = Some(crate::missions::Handover {
+            token: "0123456789abcdef0123".into(),
+            from: actor,
+            at_unix_ms: 1,
+        });
+        serde_json::to_value(mission).unwrap()
+    }
+
     fn write_json(state: &Path, file: &str, value: Value) {
         std::fs::write(state.join(file), serde_json::to_vec(&value).unwrap()).unwrap();
     }
@@ -875,8 +943,20 @@ mod tests {
                 "project_settings": {
                     crate::project_settings::key(ALIAS, ROOT): {"device_id": ALIAS, "root": ROOT}
                 },
+                // A sleeping agent of the device, a fork whose source ran on
+                // the device's own engine.
+                "agent_sleep": {"records": {pane(ALIAS): {
+                    "parent_pane_id": pane(ALIAS), "fork_source": [FORK_SOURCE, null],
+                }}},
             }),
         );
+        // The 보기 slot's `남은 것`, as the core saves a detail item.
+        let mut core = read(state, CORE_STATE);
+        core["detail"] = json!({"items": [crate::model::DetailItem::Remains {
+            workspace_id: registered.clone(),
+            checkout_id: checkout(ALIAS),
+        }], "shown": true});
+        write_json(state, CORE_STATE, core);
         let actor = |device: &str, pane: &str| json!({"pane_id": pane, "name": "a", "kind": "claude", "device_id": device});
         write_json(
             state,
@@ -894,6 +974,16 @@ mod tests {
                 "node_clocks": {ALIAS: {"connected_ms": 60_000, "since": null}},
             }),
         );
+        // A spawn made for a step of the plan of a session on the device.
+        let mut ledger = read(state, DELIVERY_LEDGER);
+        ledger["spawns"][0]["plan"] = serde_json::to_value(crate::coordination::PlanLink {
+            plan: "1000".into(),
+            step: "a".into(),
+            attempt: 1,
+            parent_session: session(ALIAS),
+        })
+        .unwrap();
+        write_json(state, DELIVERY_LEDGER, ledger);
         write_json(
             state,
             LABELS,
@@ -906,15 +996,13 @@ mod tests {
             json!({"schema_version": 3, "workspaces": [{
                 "device_id": ALIAS, "path": ROOT, "tab_views": {tab(ALIAS): "d1"},
                 "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": ALIAS, "terminal_id": "t1"}}]}}},
+                "pane_moves": {MOVE: pane_move(ALIAS)},
             }]}),
         );
         write_json(
             state,
             MISSIONS,
-            json!({"schema_version": 1, "next": 2, "missions": [{
-                "id": "mission-1", "device_id": ALIAS, "workspace_id": registered, "project": ROOT,
-                "conductor": {"actor": actor(ALIAS, &pane(ALIAS)), "session": {"device_id": ALIAS, "agent": "claude", "session_id": "s"}},
-            }]}),
+            json!({"schema_version": 1, "next": 2, "missions": [mission(ALIAS, &registered)]}),
         );
         write_json(
             state,
@@ -1186,6 +1274,31 @@ mod tests {
             missions["missions"][0]["conductor"]["actor"]["pane_id"],
             json!(pane(MACHINE))
         );
+        // A receipt of a pane moved on the device, a node's check folder on
+        // it and a handover from its Conductor, whole as the core saves them.
+        assert_eq!(
+            views["workspaces"][0]["pane_moves"],
+            json!({MOVE: pane_move(MACHINE)})
+        );
+        assert_eq!(missions["missions"][0], mission(MACHINE, &project(MACHINE)));
+        assert_eq!(
+            ledger["spawns"][0]["plan"]["parent_session"],
+            json!(session(MACHINE))
+        );
+        assert_eq!(
+            core["detail"]["items"][0],
+            json!(crate::model::DetailItem::Remains {
+                workspace_id: project(MACHINE),
+                checkout_id: checkout(MACHINE),
+            })
+        );
+        // A sleeping fork of the device keeps the raw pane it was forked from.
+        assert_eq!(
+            core["agent_sleep"]["records"],
+            json!({pane(MACHINE): {
+                "parent_pane_id": pane(MACHINE), "fork_source": [FORK_SOURCE, null],
+            }})
+        );
         assert_eq!(
             read(state, LOCAL_ISSUES)["devices"],
             json!({MACHINE: {ROOT: []}})
@@ -1397,6 +1510,65 @@ mod tests {
             hide_kit::layout::device_engine_dir(state, ALIAS)
                 .unwrap()
                 .exists()
+        );
+    }
+
+    /// An opener with every field its store keeps, on `device`.
+    fn opener(device: &str, terminal: &str) -> crate::view_feedback::Opener {
+        crate::view_feedback::Opener {
+            device_id: device.to_owned(),
+            terminal_id: terminal.to_owned(),
+            session: Some(format!("session-{terminal}")),
+            resume: Some(format!("resume-{terminal}")),
+            resume_path: Some(format!("/home/me/.claude/{terminal}.jsonl")),
+            provider: "claude".to_owned(),
+            name: "worker".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_device_whose_agents_opened_a_view_takes_its_machine_id_in_every_opener() {
+        // The View store as the core writes it: two agents on the device and
+        // one on the core opened the same file, so the View keeps a mark and
+        // a list of openers.
+        let dir = folder();
+        let state = dir.path();
+        let mut views = crate::workspace_views::WorkspaceViews::default();
+        let view = views.entry_at(ALIAS, ROOT, 1);
+        let mut display =
+            view.layout
+                .new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
+        display.opened_by(opener(ALIAS, "t1"));
+        display.opened_by(opener(NODE, "t2"));
+        display.opened_by(opener(ALIAS, "t3"));
+        view.layout.insert("a1", display, 0).unwrap();
+        crate::workspace_views::save(&state.join(WORKSPACE_VIEWS), &views).unwrap();
+
+        let outcome = name_devices(state, &node()).unwrap();
+        assert_eq!(
+            outcome.renamed,
+            vec![(ALIAS.to_owned(), MACHINE.to_owned())]
+        );
+        assert!(outcome.held.is_empty(), "{outcome:?}");
+
+        let (loaded, _) = crate::workspace_views::load(&state.join(WORKSPACE_VIEWS), 2);
+        assert!(loaded.get(ALIAS, ROOT).is_none());
+        let display = loaded
+            .get(MACHINE, ROOT)
+            .unwrap()
+            .layout
+            .displays()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(display.opener, Some(opener(MACHINE, "t3")));
+        assert_eq!(
+            display.openers,
+            vec![
+                opener(MACHINE, "t1"),
+                opener(NODE, "t2"),
+                opener(MACHINE, "t3")
+            ]
         );
     }
 
