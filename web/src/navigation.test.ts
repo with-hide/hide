@@ -153,7 +153,8 @@ describe("another device's Needs You (operator decision 2026-11-08)", () => {
     });
     const rest = {
       navigator: { devices: [
-        { id: "local", kind: "local", label: "This Mac", agent_scope: scope([{ pane_id: "here", device_id: "local", remote: false, index: 0 }], ["here"]) },
+        // The platform names this machine, so the name never follows the system the test runs on.
+        { id: "local", kind: "local", label: "This Mac", host: { platform: "macos" }, agent_scope: scope([{ pane_id: "here", device_id: "local", remote: false, index: 0 }], ["here"]) },
         { id: "mini", kind: "remote", label: "Mac mini", agent_scope: scope([{ pane_id: "m1", device_id: "mini", remote: true, index: 0 }, { pane_id: "m2", device_id: "mini", remote: true, index: 1 }], ["m1"], ["m2"]) },
         { id: "old", kind: "remote", label: "Old", agent_scope: scope([{ pane_id: "o1", device_id: "old", remote: true, index: 0 }], ["o1"]) },
       ] },
