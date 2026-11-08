@@ -4158,7 +4158,8 @@
                 "profile_gone",
                 "profiles_unsupported",
                 "profile_refused",
-                "profile_unanswered"
+                "profile_unanswered",
+                "profile_unconfirmed"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -4682,7 +4683,8 @@
             "refusals": [
                 "composer_not_empty",
                 "composer_unconfirmed",
-                "force_target_asleep"
+                "force_target_asleep",
+                "intent_conflict"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6063,7 +6065,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:2cde29d06ea32e013a095cad9406db2ba20c7943b2d648fac4b365bcb1825bbc",
+    "digest": "sha256:e2bc5f751f1d28c731d60ef0e85d0100287189700c024c2b2d2d0cf8e6429d7d",
     "envelopes": {
         "agent": {
             "answer": "value",

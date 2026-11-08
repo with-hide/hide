@@ -502,6 +502,7 @@ pub const COMMANDS: &[Spec] = &[
             "profiles_unsupported",
             "profile_refused",
             "profile_unanswered",
+            "profile_unconfirmed",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.
@@ -800,6 +801,7 @@ pub const COMMANDS: &[Spec] = &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
+            "intent_conflict",
         ],
     },
     spec(
