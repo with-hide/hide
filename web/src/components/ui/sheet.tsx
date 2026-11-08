@@ -36,7 +36,7 @@ function SheetContent({
         data-slot="sheet-content"
         data-side={side}
         className={cn(
-          "fixed z-50 flex flex-col bg-popover text-body text-popover-foreground shadow-lg outline-none",
+          "fixed z-50 flex flex-col bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg outline-none",
           side === "right" && "inset-y-0 right-0 w-(--size-panel-ideal) max-w-full border-l border-border",
           side === "left" && "inset-y-0 left-0 w-(--size-panel-ideal) max-w-full border-r border-border",
           side === "top" && "inset-x-0 top-0 h-auto border-b border-border",
