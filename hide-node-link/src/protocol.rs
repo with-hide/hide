@@ -368,7 +368,10 @@ use crate::error::HostError;
 /// starts it (`hide agent exec`); a helper on 86 would refuse the call, so
 /// it upgrades, and a node the core still admits on an older protocol
 /// answers it unrun, which the core reads as a machine that starts only each
-/// agent's built-in default profile.
+/// agent's built-in default profile. The same step lets the core read one
+/// process of a pane fresh (`holders::PaneCall::Process`) and carries the
+/// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
+/// `executor`), by which the core decides what came of that start.
 pub const PROTOCOL_VERSION: u32 = 87;
 
 /// How a start of an agent's CLI carries its arguments on the machine that

@@ -14,8 +14,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use hide_node::ssh::{PaneEvents, RemoteHost};
 use hide_node_link::panes::{
-    HookRequest, MAX_CHUNK, MAX_PENDING_CHUNKS, MAX_STREAMS, NodeEvent, PaneIdentity, ProofAnswer,
-    StreamCaller,
+    ExecProcess, HookRequest, MAX_CHUNK, MAX_PENDING_CHUNKS, MAX_STREAMS, NodeEvent, PaneIdentity,
+    ProofAnswer, StreamCaller,
 };
 use hide_node_link::protocol::Call;
 use serde_json::json;
@@ -325,11 +325,16 @@ impl PaneEvents for Events {
                 nonce: _,
                 one_shot,
                 hook,
+                executor,
             } => panes.proof(
                 node,
                 link,
                 request,
-                Proof::Pane { pane_id, identity },
+                Proof::Pane {
+                    pane_id,
+                    identity,
+                    executor,
+                },
                 one_shot,
                 hook,
             ),
@@ -383,10 +388,13 @@ impl PaneEvents for Events {
 
 /// What a node proved about a caller.
 enum Proof {
-    /// The caller descends from the shell of `pane_id`.
+    /// The caller descends from the shell of `pane_id`; `executor` is the
+    /// caller's process as the node's kernel names it when it sent a
+    /// start's report (`HookCommand::AgentExec`).
     Pane {
         pane_id: String,
         identity: PaneIdentity,
+        executor: Option<ExecProcess>,
     },
     /// The caller is in no pane, and its working directory is `path`.
     Checkout { path: String, nonce: String },
@@ -405,8 +413,14 @@ fn answer_hook(
     hook: HookRequest,
     received: std::time::Instant,
 ) -> ProofAnswer {
+    let executor = match &proof {
+        Proof::Pane { executor, .. } => *executor,
+        Proof::Checkout { .. } => None,
+    };
     let attested = match &proof {
-        Proof::Pane { pane_id, identity } => Some(pane_auth::StreamAttestation {
+        Proof::Pane {
+            pane_id, identity, ..
+        } => Some(pane_auth::StreamAttestation {
             node: node.to_owned(),
             link: link.clone(),
             caller: StreamCaller {
@@ -453,6 +467,7 @@ fn answer_hook(
             &state.core,
             &cap,
             &hook,
+            executor,
             state
                 .desktop_renderers
                 .load(std::sync::atomic::Ordering::SeqCst)
@@ -482,9 +497,9 @@ fn issue(
     one_shot: bool,
 ) -> ProofAnswer {
     let attested = match &proof {
-        Proof::Pane { pane_id, identity } => {
-            pane_auth::attest_remote(&state.core, node, pane_id, identity)
-        }
+        Proof::Pane {
+            pane_id, identity, ..
+        } => pane_auth::attest_remote(&state.core, node, pane_id, identity),
         Proof::Checkout { .. } if !link.dialed_by_node() => Err("caller_not_in_pane"),
         Proof::Checkout { path, nonce } => {
             pane_auth::attest_remote_checkout(&state.core, node, nonce, path)
@@ -713,6 +728,7 @@ mod tests {
                         nonce: "fixture".to_owned(),
                         one_shot: false,
                         hook: None,
+                        executor: None,
                     },
                 );
             })

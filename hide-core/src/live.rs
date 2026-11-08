@@ -634,14 +634,7 @@ pub(crate) fn start_agent_checked(
             detail,
         })?;
     match crate::agent_start::start_at_shell_within(
-        engine,
-        node,
-        request_id,
-        shell,
-        &start,
-        Duration::from_secs(5),
-        shell_wait,
-        check,
+        engine, node, request_id, shell, &start, shell_wait, check,
     ) {
         Ok(started) => Ok(Started {
             pane_id: started.pane_id,

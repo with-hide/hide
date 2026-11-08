@@ -966,7 +966,7 @@ fn start_or_degrade_agent(
         args.extend(launch.iter().cloned());
         // A resume line is a session id, far under every terminal's line
         // limit, so the restore asks the node only for the agent's profile.
-        let result = start_agent(
+        let result = crate::live::start_agent_checked(
             engine,
             node,
             &format!("hide-core:{key}:agent:{index}:resume"),
@@ -978,7 +978,24 @@ fn start_or_degrade_agent(
             args,
             codex_daemon,
             program.clone(),
+            &|| Ok(()),
         );
+        // A profile's program that did not start would not start a new
+        // conversation either, and one whose result is unknown may run:
+        // neither starts again (PRD agent-profiles B22).
+        if let Err(crate::agent_start::StartError::Engine(crate::engine::EngineError::Refused {
+            code,
+            message,
+        })) = &result
+            && crate::launch::ends_a_start(code)
+        {
+            notices.push(if code == crate::launch::PROFILE_UNCONFIRMED {
+                format!("Agent was typed but did not confirm it started; nothing was started again: {message}")
+            } else {
+                format!("Agent could not be started; the shell was kept: {message}")
+            });
+            return None;
+        }
         if result.is_ok() || (pane_was_clear && agent_is_running(engine, pane_id, &agent.kind)) {
             return Some(started(agent.session_id.as_ref()));
         }

@@ -78,24 +78,166 @@ pub enum HookCommand {
     Status {
         report: HookStatusReport,
     },
-    /// What `hide agent exec` did with the profile's start the pane's shell
-    /// ran (PRD agent-profiles B22): it hands the pane to the agent's program
-    /// now (`failure` absent), or that program could not start, and
-    /// `failure` is the sentence that names the profile and the program. The
-    /// engine ends the start's wait with it; metadata only, like `Status`.
+    /// What `hide agent exec` says of the profile's start it runs (PRD
+    /// agent-profiles B22), for the start `attempt` names
+    /// ([`AGENT_EXEC_ATTEMPT`] on its line). The service that takes it
+    /// answers only a caller whose own arguments are that attempt's
+    /// executor, and hands on that caller's process ([`ExecProcess`]); the
+    /// engine decides what came of the start from a read of that process,
+    /// never from this report alone. Metadata only, like `Status`.
     AgentExec {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        failure: Option<String>,
+        attempt: String,
+        event: AgentExecEvent,
     },
 }
 
-/// The longest sentence an [`HookCommand::AgentExec`] failure carries.
+/// What `hide agent exec` tells of the start it runs.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentExecEvent {
+    /// It is about to hand the pane to the program, and does only when
+    /// this report is answered ok: an attempt that has ended is refused, so
+    /// its line does not run the program after its start was answered.
+    Ready,
+    /// Its check before any start refused the program: `failure` names the
+    /// profile and the program.
+    Refused { failure: String },
+    /// Starting the program failed after the check (`exec` on Unix;
+    /// creating the process, its job or its resume on Windows).
+    Failed { failure: String },
+    /// Windows, where the executor stays the program's parent: the program
+    /// runs as `child`, in the executor's job and resumed. Unix sends none,
+    /// since `exec` leaves nothing of the executor to send it.
+    Spawned { child: ExecProcess },
+}
+
+impl AgentExecEvent {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Ready | Self::Spawned { .. } => true,
+            Self::Refused { failure } | Self::Failed { failure } => {
+                failure.len() <= AGENT_EXEC_FAILURE_LIMIT
+            }
+        }
+    }
+}
+
+/// The longest sentence an [`AgentExecEvent`] failure carries.
 pub const AGENT_EXEC_FAILURE_LIMIT: usize = 1024;
+
+/// The flag of `hide agent exec` that names its start's attempt: the first
+/// words after `agent exec`, so a bounded read of its arguments always has
+/// it ([`is_attempt_executor`]).
+pub const AGENT_EXEC_ATTEMPT: &str = "--attempt";
+
+/// A process as the system keeps it apart from any later one with the same
+/// pid: the pid and when it started (`hide_platform::process::start_time`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ExecProcess {
+    pub pid: u32,
+    pub started: u64,
+}
+
+/// Whether `attempt` is one an engine gave a start
+/// ([`fresh_request_id`]'s shape), which bounds what a report may name.
+pub fn valid_attempt(attempt: &str) -> bool {
+    attempt.split_once('-').is_some_and(|(time, random)| {
+        (1..=20).contains(&time.len())
+            && time.bytes().all(|byte| byte.is_ascii_digit())
+            && random.len() == 32
+            && random
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+/// Whether `argv`, a process's arguments with its program first, is the
+/// `hide agent exec` of `attempt`.
+pub fn is_attempt_executor(argv: &[String], attempt: &str) -> bool {
+    matches!(
+        argv,
+        [_, agent, exec, flag, named, ..]
+            if agent == "agent" && exec == "exec" && flag == AGENT_EXEC_ATTEMPT && named == attempt
+    )
+}
+
+/// The process `peer`, which sent a report of `attempt`, as the system
+/// says it is now: refused `attempt_mismatch` unless its arguments are that
+/// attempt's executor, read between two reads of its start so a pid that
+/// changed hands in between is not taken for it.
+pub fn executor_process(peer: u32, attempt: &str) -> Result<ExecProcess, &'static str> {
+    use hide_platform::process;
+    let started = process::start_time(peer).map_err(|_| "caller_unavailable")?;
+    let argv = process::argv_of(peer).map_err(|_| "caller_unavailable")?;
+    if process::start_time(peer).ok() != Some(started) {
+        return Err("caller_unavailable");
+    }
+    if !is_attempt_executor(&argv, attempt) {
+        return Err("attempt_mismatch");
+    }
+    Ok(ExecProcess { pid: peer, started })
+}
+
+/// What a fresh read of a start's process says of it: the program ran,
+/// nothing is known yet, or the process the start ran as is gone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecSeen {
+    Ran,
+    Waiting,
+    Ended,
+}
+
+/// What a fresh read (`read`: when the process started and its arguments,
+/// `None` when no such process is in the pane) of the executor's own pid
+/// says: on Unix the program runs in the executor's process, so a read of
+/// that same process (its start unchanged) whose arguments are no longer
+/// the attempt's executor is one taken after `exec` replaced it. Empty
+/// arguments, which a process in the middle of `exec` reads as, are
+/// nothing yet.
+pub fn seen_executor(
+    read: Option<(u64, &[String])>,
+    executor: ExecProcess,
+    attempt: &str,
+) -> ExecSeen {
+    match read {
+        None => ExecSeen::Ended,
+        Some((started, _)) if started != executor.started => ExecSeen::Ended,
+        Some((_, argv)) if argv.is_empty() || is_attempt_executor(argv, attempt) => {
+            ExecSeen::Waiting
+        }
+        Some(_) => ExecSeen::Ran,
+    }
+}
+
+/// What a fresh read (`read`: when the process started and its parent)
+/// of the child a Windows executor said it runs (`child`) says: that
+/// process, still the executor's child.
+pub fn seen_child(
+    read: Option<(u64, Option<u32>)>,
+    child: ExecProcess,
+    executor: ExecProcess,
+) -> ExecSeen {
+    match read {
+        Some((started, parent)) if started == child.started && parent == Some(executor.pid) => {
+            ExecSeen::Ran
+        }
+        _ => ExecSeen::Ended,
+    }
+}
 
 impl HookCommand {
     /// Only session guidance keeps a reference for the commands it advertises.
     pub fn one_shot(&self) -> bool {
         !matches!(self, Self::WorkspaceInfo {})
+    }
+
+    /// Whether an [`Self::AgentExec`] names a well-formed attempt and
+    /// carries a bounded failure; every other command is.
+    pub fn agent_exec_valid(&self) -> bool {
+        match self {
+            Self::AgentExec { attempt, event } => valid_attempt(attempt) && event.valid(),
+            _ => true,
+        }
     }
 }
 
@@ -717,5 +859,139 @@ mod tests {
                 Err((expected, Some(kind)))
             );
         }
+    }
+
+    /// A report names only an attempt an engine could have given, so its
+    /// size is bounded, and a sender is that attempt's executor only when
+    /// its own first words after `agent exec` name it.
+    #[test]
+    fn a_report_names_an_attempt_of_the_engines_shape_and_its_executor_names_it_first() {
+        let attempt = fresh_request_id().unwrap();
+        assert!(valid_attempt(&attempt));
+        for refused in [
+            "",
+            "1-",
+            "x-0123456789abcdef0123456789abcdef",
+            "1-0123456789ABCDEF0123456789ABCDEF",
+            "1-0123456789abcdef0123456789abcde",
+            "123456789012345678901-0123456789abcdef0123456789abcdef",
+        ] {
+            assert!(!valid_attempt(refused), "{refused}");
+        }
+        let line = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let executor = line(&[
+            "/bin/hide",
+            "agent",
+            "exec",
+            "--attempt",
+            &attempt,
+            "--profile",
+            "p",
+        ]);
+        assert!(is_attempt_executor(&executor, &attempt));
+        assert!(!is_attempt_executor(
+            &executor,
+            "1-0123456789abcdef0123456789abcdef"
+        ));
+        // The attempt named anywhere but first is not this executor's.
+        let later = line(&[
+            "/bin/hide",
+            "agent",
+            "exec",
+            "--profile",
+            "p",
+            "--attempt",
+            &attempt,
+        ]);
+        assert!(!is_attempt_executor(&later, &attempt));
+        assert!(!is_attempt_executor(&line(&["/bin/cat", "-"]), &attempt));
+        assert!(!is_attempt_executor(&[], &attempt));
+    }
+
+    /// A process whose arguments are not the attempt's executor is refused
+    /// as its sender: this test's own, here.
+    #[test]
+    fn a_report_from_a_process_that_is_not_its_executor_is_refused() {
+        let attempt = fresh_request_id().unwrap();
+        assert_eq!(
+            executor_process(std::process::id(), &attempt),
+            Err("attempt_mismatch")
+        );
+    }
+
+    /// What a fresh read of the executor's pid says: the program, once the
+    /// same process (same start) has other arguments than the executor's;
+    /// nothing yet while it is the executor or in the middle of `exec`; and
+    /// gone when the pid is not in the pane or names a later process.
+    #[test]
+    fn a_read_of_the_executors_pid_counts_only_the_same_process_with_other_arguments() {
+        let attempt = fresh_request_id().unwrap();
+        let executor = ExecProcess {
+            pid: 40,
+            started: 7,
+        };
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let own = words(&["/bin/hide", "agent", "exec", "--attempt", &attempt]);
+        let program = words(&["claude", "--resume"]);
+        let none: &[String] = &[];
+        assert_eq!(
+            seen_executor(Some((7, program.as_slice())), executor, &attempt),
+            ExecSeen::Ran
+        );
+        assert_eq!(
+            seen_executor(Some((7, own.as_slice())), executor, &attempt),
+            ExecSeen::Waiting
+        );
+        assert_eq!(
+            seen_executor(Some((7, none)), executor, &attempt),
+            ExecSeen::Waiting
+        );
+        // The pid under another start is another process, whatever it runs.
+        assert_eq!(
+            seen_executor(Some((8, program.as_slice())), executor, &attempt),
+            ExecSeen::Ended
+        );
+        assert_eq!(seen_executor(None, executor, &attempt), ExecSeen::Ended);
+    }
+
+    /// Windows: the child the executor reported runs only while a read of
+    /// it finds the same process, still the executor's child.
+    #[test]
+    fn a_read_of_a_windows_child_counts_only_the_same_process_under_its_executor() {
+        let executor = ExecProcess {
+            pid: 40,
+            started: 7,
+        };
+        let child = ExecProcess {
+            pid: 41,
+            started: 9,
+        };
+        assert_eq!(
+            seen_child(Some((9, Some(40))), child, executor),
+            ExecSeen::Ran
+        );
+        assert_eq!(
+            seen_child(Some((10, Some(40))), child, executor),
+            ExecSeen::Ended
+        );
+        assert_eq!(
+            seen_child(Some((9, Some(39))), child, executor),
+            ExecSeen::Ended
+        );
+        assert_eq!(
+            seen_child(Some((9, None)), child, executor),
+            ExecSeen::Ended
+        );
+        assert_eq!(seen_child(None, child, executor), ExecSeen::Ended);
     }
 }

@@ -181,6 +181,9 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
         PaneCall::Processes { pane } => holders
             .processes(&pane, hide_node_link::link_panes::ASK_WAIT)
             .and_then(value),
+        PaneCall::Process { pane, pid } => holders
+            .process(&pane, pid, hide_node_link::link_panes::ASK_WAIT)
+            .and_then(value),
         PaneCall::Proof { pane } => holders.proof(&pane).and_then(value),
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
         PaneCall::SleeperInput { pane, input } => {
@@ -414,6 +417,14 @@ mod tests {
             unreachable!()
         }
         fn processes(&self, _: &str, _: Duration) -> Result<HolderProcesses, HolderError> {
+            unreachable!()
+        }
+        fn process(
+            &self,
+            _: &str,
+            _: u32,
+            _: Duration,
+        ) -> Result<Option<hide_node_link::holders::HolderProcess>, HolderError> {
             unreachable!()
         }
         fn proof(&self, _: &str) -> Result<HolderProof, HolderError> {

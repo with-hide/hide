@@ -511,7 +511,6 @@ pub(crate) fn start_launched(
         &correlation,
         shell,
         &start,
-        crate::agent_start::START_ANSWER_WAIT,
         &|| Ok(()),
     ) {
         Ok(_) => {

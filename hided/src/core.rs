@@ -111,7 +111,7 @@ enum Command {
     AgentExec {
         device_id: String,
         pane_id: String,
-        failure: Option<String>,
+        report: hide_core::engine::AgentExecReport,
         reply: Sender<Result<(), &'static str>>,
     },
     /// A read of the operator's agent definition folder, made off the owner
@@ -581,14 +581,14 @@ impl CoreHandle {
         &self,
         device: &str,
         pane: &str,
-        failure: Option<String>,
+        report: hide_core::engine::AgentExecReport,
     ) -> Result<(), &'static str> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::AgentExec {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
-                failure,
+                report,
                 reply,
             })
             .map_err(|_| "agent_exec_unavailable")?;
@@ -1528,10 +1528,10 @@ fn owner_loop(
             Command::AgentExec {
                 device_id,
                 pane_id,
-                failure,
+                report,
                 reply,
             } => {
-                let _ = reply.send(core.agent_exec(&device_id, &pane_id, failure));
+                let _ = reply.send(core.agent_exec(&device_id, &pane_id, report));
             }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
             Command::AgentCatalog {

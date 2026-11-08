@@ -331,7 +331,6 @@ fn start_dormant(
         )
     };
     let correlation = format!("hide:{}:resume", work.id.as_str());
-    let answer_timeout = crate::agent_start::START_ANSWER_WAIT;
     // The old pane closed a moment ago, and the engine refuses its agent's name
     // until it has forgotten that agent.
     let started = if work.record.registration.is_some() {
@@ -341,7 +340,6 @@ fn start_dormant(
             &correlation,
             crate::agent_start::ShellStart::Plain,
             &start,
-            answer_timeout,
             &confirm,
         )
     } else {
@@ -351,7 +349,6 @@ fn start_dormant(
             &correlation,
             crate::agent_start::ShellStart::Plain,
             &start,
-            answer_timeout,
             &confirm,
         )
     };

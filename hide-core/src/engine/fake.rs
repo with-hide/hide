@@ -774,7 +774,8 @@ impl<'g> Engine for FakeEngine<'g> {
                 std::iter::once(kind)
                     .chain(launch.args.iter().cloned())
                     .collect(),
-            )
+            )?
+            .words
             .iter()
             .map(|word| word.len() + 1)
             .sum::<usize>()

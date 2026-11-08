@@ -21,10 +21,10 @@ use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded,
-    PaneFactsSink, PaneHolders, PaneInput, RENEWAL_BUSY, RENEWAL_LOST, RENEWAL_PANE_CLOSED,
-    RENEWAL_UNSETTLED, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderForeground, HolderIntent, HolderProcess, HolderProcesses, HolderProof,
+    HolderRecovery, HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart,
+    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, RENEWAL_BUSY, RENEWAL_LOST,
+    RENEWAL_PANE_CLOSED, RENEWAL_UNSETTLED, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -513,6 +513,37 @@ impl PaneHolders for LocalPanes {
         }
     }
 
+    fn process(
+        &self,
+        pane: &str,
+        pid: u32,
+        _within: std::time::Duration,
+    ) -> Result<Option<HolderProcess>, HolderError> {
+        use hide_platform::process;
+        // The pane's program as its record names it, which no holder
+        // answer can vouch for; the process is read only while it runs under
+        // that program, and only as one process: its start read on both
+        // sides of the other reads, so a pid that changed hands in between
+        // reads as none.
+        let shell = self.proof(pane)?.program;
+        let Ok(started) = process::start_time(pid) else {
+            return Ok(None);
+        };
+        if !process::descends_from(pid, shell) {
+            return Ok(None);
+        }
+        let parent = process::parent_of(pid).ok();
+        let argv = process::argv_of(pid).unwrap_or_default();
+        if process::start_time(pid).ok() != Some(started) {
+            return Ok(None);
+        }
+        Ok(Some(HolderProcess {
+            started,
+            parent,
+            argv: bounded_arguments(argv),
+        }))
+    }
+
     fn proof(&self, pane: &str) -> Result<HolderProof, HolderError> {
         let record = self
             .holders
@@ -692,6 +723,21 @@ fn ask_error(error: OpenError) -> HolderError {
             message: error.to_string(),
         },
     }
+}
+
+/// The first [`MAX_FOREGROUND_ARGS`] arguments that fit in
+/// [`MAX_FOREGROUND_ARGV_BYTES`], as a pane's foreground program carries
+/// them.
+fn bounded_arguments(argv: Vec<String>) -> Vec<String> {
+    use hide_node_link::holders::{MAX_FOREGROUND_ARGS, MAX_FOREGROUND_ARGV_BYTES};
+    let mut total = 0;
+    argv.into_iter()
+        .take(MAX_FOREGROUND_ARGS)
+        .take_while(|argument| {
+            total += argument.len();
+            total <= MAX_FOREGROUND_ARGV_BYTES
+        })
+        .collect()
 }
 
 #[cfg(test)]

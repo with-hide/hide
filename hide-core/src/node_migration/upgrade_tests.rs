@@ -589,7 +589,11 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
         let argv = vec![kind.to_owned(), "--resume".to_owned()];
         let start = crate::launch::resolve(None, &crate::launch::Request::recorded(kind, profile))
             .map(|launch| (launch.record(), launch.line(argv.clone())));
-        if profile.is_some() || start != Ok((None, argv)) {
+        let default_line = Ok(crate::launch::StartLine {
+            words: argv,
+            attempt: None,
+        });
+        if profile.is_some() || start != Ok((None, default_line)) {
             failures.push(format!(
                 "a released {kind} record does not start with the built-in default: {profile:?} {start:?}"
             ));

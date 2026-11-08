@@ -1680,7 +1680,6 @@ fn launch_agent(
         &format!("hide-core:task:{id}:agent"),
         shell,
         &start,
-        crate::agent_start::START_ANSWER_WAIT,
         check,
     ) {
         Ok(_) => match typed.map_or(Launch::Started(None), |prompt| {

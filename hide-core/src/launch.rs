@@ -138,17 +138,26 @@ impl Launch {
     }
 
     /// `argv`, the agent's own start, as the pane's shell runs it: itself
-    /// for the built-in default; else the `hide` beside the pane's node,
-    /// `agent exec`, the profile's variables and program, and `argv` after
-    /// `--` (`hided::agent_exec`).
-    pub(crate) fn line(&self, argv: Vec<String>) -> Vec<String> {
+    /// for the built-in default, with no attempt; else the `hide` beside the
+    /// pane's node, `agent exec`, a new attempt
+    /// (`hide_agent_hooks::hook_request::AGENT_EXEC_ATTEMPT`) first, the
+    /// profile's variables and program, and `argv` after `--`
+    /// (`hided::agent_exec`).
+    pub(crate) fn line(&self, argv: Vec<String>) -> Result<StartLine, String> {
         let Some((_, start)) = &self.profile else {
-            return argv;
+            return Ok(StartLine {
+                words: argv,
+                attempt: None,
+            });
         };
+        let attempt = hide_agent_hooks::hook_request::fresh_request_id()
+            .map_err(|why| format!("the start's attempt could not be named: {why}"))?;
         let mut line = vec![
             start.exec.clone(),
             "agent".to_owned(),
             "exec".to_owned(),
+            hide_agent_hooks::hook_request::AGENT_EXEC_ATTEMPT.to_owned(),
+            attempt.clone(),
             "--profile".to_owned(),
             format!("{} · {}", label(&self.kind), start.name),
         ];
@@ -166,7 +175,10 @@ impl Launch {
         }
         line.push("--".to_owned());
         line.extend(argv);
-        line
+        Ok(StartLine {
+            words: line,
+            attempt: Some(attempt),
+        })
     }
 
     /// A start of `kind` with the built-in default profile, as a test's
@@ -188,6 +200,15 @@ impl Launch {
             profile: Some((ProfileId(id.to_owned()), start)),
         }
     }
+}
+
+/// A start's line as the pane's shell runs it, and the attempt a profile's
+/// start runs under (`engine::own::attempt`); none for the built-in
+/// default, which waits on nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StartLine {
+    pub(crate) words: Vec<String>,
+    pub(crate) attempt: Option<String>,
 }
 
 /// Why a start with a profile was refused before anything was typed: a
@@ -224,6 +245,18 @@ pub(crate) const PROFILES_UNSUPPORTED: &str = "profiles_unsupported";
 pub(crate) const PROFILE_REFUSED: &str = "profile_refused";
 /// The machine did not answer for the profile.
 pub(crate) const PROFILE_UNANSWERED: &str = "profile_unanswered";
+/// A profile's start was typed and nothing says whether its program runs
+/// (`engine::own::attempt`): neither that it ran nor that it did not, and
+/// nothing starts again on it.
+pub(crate) const PROFILE_UNCONFIRMED: &str = "profile_unconfirmed";
+
+/// Whether an engine's refusal `code` is what came of a profile's typed
+/// start ([`PROFILE_REFUSED`] from its executor, [`PROFILE_UNCONFIRMED`]):
+/// a caller that would otherwise start again in another way (a reopen's new
+/// conversation) does not.
+pub(crate) fn ends_a_start(code: &str) -> bool {
+    code == PROFILE_REFUSED || code == PROFILE_UNCONFIRMED
+}
 
 /// Resolves `request` on the machine `node` runs, with the runtime lock
 /// released: the built-in default at once, another profile as its machine

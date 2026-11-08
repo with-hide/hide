@@ -193,6 +193,18 @@ pub struct HolderForeground {
     pub folders: Option<Vec<String>>,
 }
 
+/// One process in a pane as its machine's kernel says it is now, read
+/// afresh for the call ([`PaneHolders::process`]): when it started, the
+/// process that started it, and its arguments, the program first, bounded
+/// as a [`ForegroundProgram`]'s are and empty when the system cannot read
+/// them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderProcess {
+    pub started: u64,
+    pub parent: Option<u32>,
+    pub argv: Vec<String>,
+}
+
 /// A key the engine presses by name, which the pane's holder encodes for
 /// its program's keyboard modes when it is written.
 pub use hide_holder_protocol::Key as HolderKey;
@@ -492,6 +504,18 @@ pub trait PaneHolders: Send + Sync {
         pane: &str,
         within: std::time::Duration,
     ) -> Result<HolderProcesses, HolderError>;
+    /// The process `pid` as the kernel of the pane's machine says it is
+    /// now, read afresh and never from what the pane's watch last said;
+    /// `None` when no such process runs under the pane's program, waiting at
+    /// most `within` for the pane's program. What a start with a profile
+    /// is decided by (`hide agent exec`); a node that predates the ask
+    /// refuses it, which leaves that start's result unknown.
+    fn process(
+        &self,
+        pane: &str,
+        pid: u32,
+        within: std::time::Duration,
+    ) -> Result<Option<HolderProcess>, HolderError>;
     /// Which start of the pane runs now and the program it runs, as the
     /// pane's record says (PRD engine-bundle-3-core-owns D-9): what a
     /// process that names the pane is proved against. Read from the record
@@ -605,6 +629,11 @@ pub enum PaneCall {
     /// [`PaneHolders::processes`]; answers [`HolderProcesses`].
     Processes {
         pane: String,
+    },
+    /// [`PaneHolders::process`]; answers an optional [`HolderProcess`].
+    Process {
+        pane: String,
+        pid: u32,
     },
     /// [`PaneHolders::proof`]; answers a [`HolderProof`].
     Proof {

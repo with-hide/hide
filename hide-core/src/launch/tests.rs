@@ -71,19 +71,32 @@ fn picked(request: &Request) -> Option<String> {
 fn the_built_in_default_starts_with_the_line_every_agent_always_had() {
     let line = argv(&["claude", "--resume", "abc"]);
     let launch = Launch::default_of("claude");
-    assert_eq!(launch.line(line.clone()), line);
+    assert_eq!(
+        launch.line(line.clone()),
+        Ok(StartLine {
+            words: line,
+            attempt: None,
+        })
+    );
     assert_eq!(launch.record(), None);
 }
 
 #[test]
 fn a_profiles_line_runs_hide_agent_exec_with_its_variables_and_the_agents_words() {
     let launch = Launch::answered("claude", "p1", start("work"));
+    let line = launch.line(argv(&["claude", "--resume", "abc"])).unwrap();
+    let attempt = line
+        .attempt
+        .expect("a profile's start runs under an attempt");
+    assert!(hide_agent_hooks::hook_request::valid_attempt(&attempt));
     assert_eq!(
-        launch.line(argv(&["claude", "--resume", "abc"])),
+        line.words,
         argv(&[
             "/opt/hide/hide",
             "agent",
             "exec",
+            "--attempt",
+            &attempt,
             "--profile",
             "Claude · work",
             "--env",
@@ -115,12 +128,21 @@ fn a_profiles_own_program_runs_in_place_of_the_agents_with_its_leading_words() {
         leading: vec!["C:/tools/gw.js".to_owned()],
     });
     let launch = Launch::answered("codex", "p2", answered);
+    let line = launch.line(argv(&["codex", "--no-daemon"])).unwrap();
+    let attempt = line.attempt.clone().unwrap();
+    // Every start runs under an attempt of its own.
+    assert_ne!(
+        launch.line(argv(&["codex"])).unwrap().attempt,
+        Some(attempt.clone())
+    );
     assert_eq!(
-        launch.line(argv(&["codex", "--no-daemon"])),
+        line.words,
         argv(&[
             "/opt/hide/hide",
             "agent",
             "exec",
+            "--attempt",
+            &attempt,
             "--profile",
             "Codex · gateway",
             "--program",

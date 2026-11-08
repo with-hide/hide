@@ -20,6 +20,7 @@ use hide_node_link::holders::PaneFacts;
 use serde_json::Value;
 
 use super::agents::{self, PaneAgent, PaneLive, Status};
+use super::attempt::{Attempt, Look, Outcome};
 use super::ids;
 use super::layout::{
     contains, first_leaf, lay_out, remove_leaf, resized, set_nearest_split_ratio, split_leaf_at,
@@ -1913,15 +1914,20 @@ impl Topology {
         }
     }
 
-    /// Reserves the metadata of a start while its input is being delivered.
+    /// Reserves the metadata of a start while its input is being delivered,
+    /// and keeps `attempt`, a start with a profile's, with the pane under
+    /// the same claim (`super::attempt`).
     pub(super) fn start_agent(
         &mut self,
         pane: &str,
         mut agent: PaneAgent,
+        attempt: Option<String>,
     ) -> Result<AgentStart, EngineError> {
         let held = self.pane_mut(pane)?;
         let now = Instant::now();
-        if held.agent.as_ref().is_some_and(|agent| agent.starting(now)) {
+        if held.agent.as_ref().is_some_and(|agent| agent.starting(now))
+            || held.live.attempt.as_ref().is_some_and(Attempt::pending)
+        {
             return Err(EngineError::Refused {
                 code: "agent_pane_busy".to_owned(),
                 message: format!("pane {pane} is already starting an agent"),
@@ -1929,6 +1935,7 @@ impl Topology {
         }
         let claim = Arc::new(());
         agent.live.start_claim = Some(Arc::clone(&claim));
+        held.live.attempt = attempt.map(|id| Attempt::new(id, Arc::clone(&claim)));
         let previous = AgentStart {
             claim,
             // An expired provisional record must not regain its old claim
@@ -1951,24 +1958,92 @@ impl Topology {
         Ok(previous)
     }
 
-    /// Ends the start typed in `pane` whose program could not start (`hide
-    /// agent exec`'s report, PRD agent-profiles B22): its provisional agent
-    /// goes now rather than at its deadline, so its name is free for the
-    /// next start. An agent whose program showed is the pane's facts' to
-    /// end. Whether one went.
-    pub(super) fn end_unstarted(&mut self, pane: &str) -> bool {
-        let Ok(held) = self.pane_mut(pane) else {
-            return false;
-        };
-        if !held
-            .agent
+    /// Takes `report` of the attempt `pane` keeps: refused, changing
+    /// nothing, when it names no attempt running there or does not come
+    /// from that attempt's executor (`super::attempt::Attempt::report`).
+    pub(super) fn attempt_report(
+        &mut self,
+        pane: &str,
+        report: &crate::engine::AgentExecReport,
+    ) -> Result<(), &'static str> {
+        self.pane_mut(pane)
+            .ok()
+            .and_then(|held| held.live.attempt.as_mut())
+            .ok_or(crate::engine::ATTEMPT_UNKNOWN)?
+            .report(report)
+    }
+
+    /// What the attempt `id` of `pane` is now; `None` once the pane is gone
+    /// or keeps another attempt.
+    pub(super) fn look_attempt(&self, pane: &str, id: &str) -> Option<Look> {
+        self.pane(pane)
+            .ok()?
+            .live
+            .attempt
             .as_ref()
-            .is_some_and(|agent| agent.starting(Instant::now()))
+            .filter(|attempt| attempt.id == id)
+            .map(Attempt::look)
+    }
+
+    /// Ends the attempt `id` of `pane` with `outcome` unless something
+    /// ended it first.
+    pub(super) fn settle_attempt(&mut self, pane: &str, id: &str, outcome: Outcome) {
+        if let Some(attempt) = self
+            .pane_mut(pane)
+            .ok()
+            .and_then(|held| held.live.attempt.as_mut())
+            .filter(|attempt| attempt.id == id)
         {
-            return false;
+            attempt.settle(outcome);
         }
-        held.agent = None;
-        true
+    }
+
+    /// Ends every attempt still running (`why`, the engine stopping).
+    #[cfg(test)]
+    pub(super) fn settle_attempts(&mut self, why: &'static str) {
+        let held = self
+            .workspaces
+            .iter_mut()
+            .flat_map(|workspace| workspace.tabs.iter_mut())
+            .flat_map(|tab| tab.panes.values_mut());
+        for attempt in held.filter_map(|held| held.live.attempt.as_mut()) {
+            attempt.settle(Outcome::Unconfirmed { why });
+        }
+    }
+
+    /// Takes the attempt `id` out of `pane`, settled `abandoned` if nothing
+    /// settled it, and answers what came of it, with whether a failure
+    /// withdrew the provisional agent of its own start: only that start's
+    /// (its claim), and only while its program has not shown, so its name
+    /// is free for the next start. `None` when the pane is gone or keeps
+    /// another attempt.
+    pub(super) fn take_attempt(&mut self, pane: &str, id: &str) -> Option<(Outcome, bool)> {
+        let held = self.pane_mut(pane).ok()?;
+        if held.live.attempt.as_ref()?.id != id {
+            return None;
+        }
+        let mut attempt = held.live.attempt.take()?;
+        let outcome = attempt.settle(Outcome::Unconfirmed {
+            why: super::attempt::ABANDONED,
+        });
+        let owned = held.agent.as_ref().is_some_and(|agent| {
+            agent
+                .live
+                .start_claim
+                .as_ref()
+                .is_some_and(|claim| Arc::ptr_eq(claim, &attempt.claim))
+        });
+        let withdrawn = matches!(outcome, Outcome::Failed { .. })
+            && owned
+            && held.agent.as_ref().is_some_and(|agent| !agent.live.shown);
+        if withdrawn {
+            held.agent = None;
+        } else if owned && let Some(agent) = held.agent.as_mut() {
+            // The start is settled: its metadata is no longer withdrawable.
+            agent.live.start_claim = None;
+            agent.live.start_previous_name = None;
+        }
+        Some((outcome, withdrawn))
     }
 
     /// A definite non-delivery withdraws only its own, still unconfirmed
@@ -1997,9 +2072,26 @@ impl Topology {
             .as_mut()
             .expect("the claim belongs to this agent");
         if !not_delivered || !agent.starting(Instant::now()) {
-            agent.live.start_claim = None;
-            agent.live.start_previous_name = None;
+            // A start with a profile keeps its claim until its attempt ends
+            // (`Self::take_attempt`), which withdraws a failed one.
+            let attempting = held
+                .live
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| Arc::ptr_eq(&attempt.claim, &start.claim));
+            if !attempting {
+                agent.live.start_claim = None;
+                agent.live.start_previous_name = None;
+            }
             return false;
+        }
+        if held
+            .live
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| Arc::ptr_eq(&attempt.claim, &start.claim))
+        {
+            held.live.attempt = None;
         }
         held.agent = start.agent;
         held.pending_session = start.pending_session;
@@ -2469,7 +2561,7 @@ mod tests {
         assert_eq!(saved_agent.session.as_deref(), Some("s-2"));
 
         let start = topology
-            .start_agent(&pane, PaneAgent::started("codex", None, None))
+            .start_agent(&pane, PaneAgent::started("codex", None, None), None)
             .unwrap();
         assert!(named(&topology).is_empty(), "the start is the pane's agent");
         assert!(topology.finish_agent_start(&pane, start, true));

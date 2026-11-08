@@ -1541,7 +1541,6 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
             &format!("contract:{name}"),
             ShellStart::Plain,
             &start,
-            SHOWN_WITHIN,
             &|| Ok(()),
         )
         .unwrap_or_else(|error| panic!("{kind} starts: {error:?}"));
@@ -1674,7 +1673,6 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         "contract:sleep",
         ShellStart::Plain,
         &start,
-        SHOWN_WITHIN,
         &|| Ok(()),
     )
     .unwrap_or_else(|error| panic!("the agent starts: {error:?}"));

@@ -43,8 +43,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use hide_agent_adapter::definition::Catalog;
 use hide_node_link::holders::HolderRecovery;
@@ -182,6 +182,29 @@ pub(super) struct Resume {
     /// The profile its pane's launch record keeps, which the resume runs it
     /// with (PRD agent-profiles D-27); `None` for the built-in default.
     profile: Option<crate::launch::LaunchProfile>,
+}
+
+#[cfg(test)]
+impl Resume {
+    /// A restore's resume of the `kind` agent of `pane` into `session`, with
+    /// a profile.
+    pub(super) fn of_profile(pane: &str, kind: &str, session: &str) -> Self {
+        Self {
+            pane: pane.to_owned(),
+            kind: kind.to_owned(),
+            shown: kind.to_owned(),
+            name: None,
+            session: Some(session.to_owned()),
+            argv: vec![kind.to_owned()],
+            cut: false,
+            new_tab: None,
+            profile: Some(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p1".to_owned()),
+                name: "gw".to_owned(),
+                account: hide_agent_adapter::AccountKey::Default,
+            }),
+        }
+    }
 }
 
 /// Where a conversation an import gave back resumes when its pane runs
@@ -1088,7 +1111,8 @@ impl OwnEngine<'static> {
             agents::named_by_file(resume.argv.clone(), launch.agent_file(file.as_ref().ok()));
         let by_name = (argv.first() == resume.argv.first())
             .then(|| file.as_ref().err().copied().unwrap_or(ByName::AsNamed));
-        let argv = launch.line(argv);
+        let line = launch.line(argv)?;
+        let argv = line.words;
         // The longest of the shells' lines, as a start is bounded.
         let longest =
             shell_line::longest(|shell| shell_line::resume_command(&argv, &resume.shown, shell))
@@ -1113,16 +1137,88 @@ impl OwnEngine<'static> {
             .map_err(|error| error.to_string())?;
         let shell = shell_line::shell_of(group.shell_name(), self.shared.windows)
             .ok_or_else(|| "the pane's shell is cmd.exe, which takes no resume line".to_owned())?;
-        let line = shell_line::resume_command(&argv, &resume.shown, shell)
+        let typed = shell_line::resume_command(&argv, &resume.shown, shell)
             .ok_or_else(|| "the resume names no program".to_owned())?;
+        // A profile's resume ends with what came of its attempt, read on a
+        // thread of its own so the restore goes on to the next pane; until
+        // that thread has it, whatever ends this call ends the attempt.
+        let finish = line
+            .attempt
+            .as_deref()
+            .map(|id| super::attempt::Finish::new(self, &resume.pane, id));
         self.type_agent_start(
             &resume.pane,
             PaneAgent::resumed(&resume.kind, resume.name.as_deref(), resume.session.clone()),
-            &line,
+            &typed,
             false,
+            line.attempt.clone(),
         )
         .map_err(|error| error.to_string())?;
+        if let Some(finish) = finish {
+            self.observe_resume(resume, finish);
+        }
         Ok(by_name)
+    }
+
+    /// Reads what came of the attempt of `resume`'s profile start until the
+    /// start's deadline, on a thread of its own, and leaves a failure as the
+    /// restore's result for the pane: a program its executor could not start
+    /// is named as not resumed, with the executor's sentence. A result that
+    /// stays unknown starts nothing again; the pane's facts decide, as for
+    /// any typed start.
+    pub(super) fn observe_resume(&self, resume: &Resume, finish: super::attempt::Finish<'_, '_>) {
+        let (pane, id) = finish.hand_off();
+        let shared = Arc::clone(&self.shared);
+        let watched = resume.clone();
+        let (thread_pane, thread_id) = (pane.clone(), id.clone());
+        let spawned = std::thread::Builder::new()
+            .name("hide-resume-attempt".to_owned())
+            .spawn(move || {
+                let engine = OwnEngine {
+                    shared,
+                    gates: Vec::new(),
+                    saver: None,
+                };
+                let finish = super::attempt::Finish::new(&engine, &thread_pane, &thread_id);
+                let outcome = engine.await_attempt(finish, Instant::now() + agents::START_DEADLINE);
+                engine.resumed(&watched, outcome);
+            });
+        if let Err(error) = spawned {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "agent.resume_unobserved",
+                "pane_id": pane,
+                "message": error.to_string(),
+            }));
+            let outcome = self.finish_attempt(&pane, &id);
+            self.resumed(resume, outcome);
+        }
+    }
+
+    /// What a profile's resume came to, for the restore.
+    fn resumed(&self, resume: &Resume, outcome: super::attempt::Outcome) {
+        match outcome {
+            super::attempt::Outcome::Started => {}
+            super::attempt::Outcome::Failed { failure, .. } => {
+                let left = NotResumed {
+                    pane_id: resume.pane.clone(),
+                    agent: resume.kind.clone(),
+                    session: resume.session.clone(),
+                    why: format!("its profile's program did not start ({failure})"),
+                };
+                if self.topology().not_resumed(&resume.pane, left.clone()) {
+                    self.say_not_resumed(&left);
+                    self.changed();
+                }
+            }
+            super::attempt::Outcome::Unconfirmed { why } => crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "agent.resume_unconfirmed",
+                "pane_id": resume.pane,
+                "agent": resume.kind,
+                "why": why,
+            })),
+        }
     }
 
     /// Where a saved pane whose folder was `cwd` starts again: there, or in

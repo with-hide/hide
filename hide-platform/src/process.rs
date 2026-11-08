@@ -226,19 +226,21 @@ pub fn exec_login_shell(shell: &Path) -> io::Result<std::convert::Infallible> {
 /// the program in its console group as before, waits for the program, and
 /// answers its exit code for the caller to exit with.
 ///
-/// `handing` runs once the program is about to have the process: on Unix
-/// right before the replacement, which can still fail after it, and on
-/// Windows once the program runs.
-pub fn hand_over(mut command: Command, handing: impl FnOnce()) -> io::Result<i32> {
+/// `spawned` runs on Windows alone, with the program's pid, once the program
+/// is in the job and resumed, the point past which nothing of its start can
+/// fail; while it runs the program's process is held, so the pid is still
+/// the program's. Unix never runs it: what follows a successful
+/// replacement is the program, never this caller.
+pub fn hand_over(mut command: Command, spawned: impl FnOnce(u32)) -> io::Result<i32> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        handing();
+        let _ = spawned;
         Err(command.exec())
     }
     #[cfg(windows)]
     {
-        sys::hand_over(&mut command, handing)
+        sys::hand_over(&mut command, spawned)
     }
 }
 
@@ -5279,7 +5281,7 @@ mod sys {
     /// cannot start a process of its own before it is in the job, in a
     /// kill-on-close job only this process holds, in this process's console
     /// group, waited for.
-    pub(super) fn hand_over(command: &mut Command, handing: impl FnOnce()) -> io::Result<i32> {
+    pub(super) fn hand_over(command: &mut Command, spawned: impl FnOnce(u32)) -> io::Result<i32> {
         use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
         // SAFETY: an all-zero limit structure is a valid value.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
@@ -5319,7 +5321,7 @@ mod sys {
             let _ = child.wait();
             return Err(error);
         }
-        handing();
+        spawned(child.id());
         let status = child.wait()?;
         // Windows always has a code; the job closes with this process.
         Ok(status.code().unwrap_or(1))
