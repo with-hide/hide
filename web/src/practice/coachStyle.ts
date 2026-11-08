@@ -21,6 +21,8 @@ export const COACH_CSS = `
 .pc-zone{position:absolute;border-radius:var(--radius-xl);border:var(--size-tab-indicator) dashed;animation:pc-zone .5s ${EASE} both}
 ${ZONES}
 .pc-tag{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);padding:var(--spacing-md) var(--spacing-lg);border-radius:var(--radius-xl);font-weight:700;font-size:var(--text-headline);white-space:nowrap;box-shadow:${SHADOW};text-align:center;line-height:1.35;color:var(--practice-ink)}
+/* The project zone is the tool rail alone while the lane is closed, narrower than its tag, so the tag ends where the screen does. */
+.pc-zone.project .pc-tag{left:auto;right:0;transform:translate(0,-50%)}
 .pc-tag small{display:block;font-size:var(--text-body);font-weight:500;opacity:.8}
 @keyframes pc-zone{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
 @keyframes pc-in{from{opacity:0}to{opacity:1}}

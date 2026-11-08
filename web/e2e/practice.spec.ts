@@ -331,7 +331,7 @@ test("the chapter list leads back to Hide, and a finished chapter stops on its e
     await practice.keyboard.press("Enter");
     const end = practice.locator('[data-practice-chapter="overview"] [data-practice-end]');
     await expect(end).toBeVisible();
-    await expect(end.locator("li")).toHaveCount(2);
+    await expect(end.locator("li")).toHaveCount(3);
     await end.locator("[data-practice-end-hub]").click();
     await expect(practice.locator('[data-practice-hub-chapter="overview"]')).toHaveAttribute("data-status", "done");
   });
