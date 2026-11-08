@@ -1513,9 +1513,15 @@ export class DesktopHost {
     });
   }
 
+  /** The practice window's bounds against the main window, on the screen the main window is on. */
+  private practiceBounds() {
+    const main = this.window && !this.window.isDestroyed() ? this.window.getNormalBounds() : undefined;
+    return practiceBounds(main, (main ? screen.getDisplayMatching(main) : screen.getPrimaryDisplay()).workArea);
+  }
+
   private openPractice(url: string): void {
     const window = new BrowserWindow({
-      ...practiceBounds(this.window?.getNormalBounds()),
+      ...this.practiceBounds(),
       minWidth: MIN_SIZE.width,
       minHeight: MIN_SIZE.height,
       show: false,
