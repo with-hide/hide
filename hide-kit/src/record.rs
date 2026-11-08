@@ -267,10 +267,10 @@ impl Record {
             .or_insert_with(make)
     }
 
-    /// Whether another installation on the account holds Hide's skill stubs
-    /// in the folder `root` (`TargetRecord::skill_root`), so this one's going
-    /// leaves them.
-    pub(crate) fn skill_held_elsewhere(&self, root: &Path) -> bool {
+    /// Whether another installation on the account keeps Hide's skill stubs
+    /// in a folder (`TargetRecord::skill_root`) that holds the real place
+    /// `path`, so this one's going leaves it.
+    pub(crate) fn skill_kept_elsewhere(&self, path: &Path) -> bool {
         let others = std::iter::once((hide_agent_hooks::route::APP_INSTALL, &self.app))
             .chain(
                 self.installs
@@ -284,7 +284,10 @@ impl Record {
         others
             .flat_map(|(_, part)| part.targets.values())
             .any(|target| {
-                target.skill_root.as_deref() == Some(root)
+                target
+                    .skill_root
+                    .as_deref()
+                    .is_some_and(|root| path.starts_with(root))
                     && target
                         .pieces
                         .iter()

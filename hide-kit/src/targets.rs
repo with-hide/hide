@@ -22,14 +22,17 @@
 //! are the ones the node's file holds while it writes: a change of the file
 //! made meanwhile is followed by a pass of its own, which reads it.
 //!
-//! A piece belongs to the file or folder it really is. A target whose
-//! hook file or skills folder is, through a link, the default account's or
-//! the skills folder every agent shares has no such piece of its own; a
-//! piece another target in use holds is never taken out with the target
-//! that goes; and skill stubs another installation on the account recorded
-//! in the same folder stay until it goes too. The record keeps each target's
-//! account as the file system names it, so taking its pieces out reaches the
-//! folder they went into, whatever a link the profile spelled leads to now.
+//! Every path the kit writes or takes out in a profile account passes one
+//! judgment ([`judged`]): it must lie in the account's own folder with no
+//! link from that folder down to it, the file itself included, so it is its
+//! own real place and no write or removal follows a link out of the account.
+//! A file is taken out only when no one else keeps its real place: a default
+//! account (the skills folder every agent shares among its places), a target
+//! still in use, or another installation on the account. A piece the
+//! judgment refuses stays as it is, a link included, and the log says why.
+//! The record keeps each target's account as the file system names it, so
+//! taking its pieces out reaches the folder they went into, whatever a link
+//! the profile spelled leads to now.
 //!
 //! Every rule of the default account holds here too: only Hide's marked
 //! entries and unedited files are written or taken out, through the same
@@ -42,7 +45,8 @@
 //! `~/.claude` is group-writable is not refused by an update.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use hide_agent_adapter::{
@@ -61,7 +65,7 @@ use crate::agent_kit::{
 };
 use crate::agents::{
     ADAPTERS, AgentAdapter, Detection, HookSupport, PieceReport, SkillDir, SkillObserved,
-    install_skill_in, observe_skill_in, remove_skill_in, too_old,
+    install_skill_in, observe_skill_in, remove_skill_in, skill_files_in, too_old,
 };
 use crate::record::{Record, TargetRecord};
 use crate::{
@@ -151,7 +155,7 @@ pub(crate) fn key(agent: &str, folder: &Path) -> String {
 enum Located {
     /// The agent's default account.
     Default,
-    Own(Own),
+    Own(Box<Own>),
 }
 
 /// A profile account of its own.
@@ -164,6 +168,9 @@ struct Own {
     /// The agent's own folder in the account (`AccountPath::State`), as the
     /// file system names it.
     folder: PathBuf,
+    /// The same folder as the account spells it, which every path of its
+    /// pieces starts with.
+    spelled: PathBuf,
     /// The folder the profile named, as the file system names it: every
     /// folder from it down to [`Self::folder`] must be the account's own.
     root: PathBuf,
@@ -204,14 +211,15 @@ fn locate(home: &Path, agent: &str, spelled: &AccountRef) -> Result<Located, Rea
         }
         AccountRef::Name(name) => (folder.clone(), AccountRef::Name(name.clone())),
     };
-    Ok(Located::Own(Own {
+    Ok(Located::Own(Box::new(Own {
         key: key(adapter.id, &folder),
         adapter,
         account,
         physical,
         folder,
+        spelled: state,
         root,
-    }))
+    })))
 }
 
 /// The account of a profile of `adapter` in `spelled`, its other settings
@@ -528,46 +536,170 @@ fn real(path: &Path) -> PathBuf {
     }
 }
 
-/// The places of the default accounts, as the file system names them: each
-/// skills folder Hide writes there (the shared one among them) and each
-/// agent's hook file or plugin folder. A profile account's piece that is
-/// one of them is that account's, not the profile's.
-fn default_places(home: &Path) -> BTreeSet<PathBuf> {
-    let skills = SkillDir::ALL.iter().map(|dir| real(&dir.path(home)));
-    let hooks = ADAPTERS
-        .iter()
-        .filter_map(|adapter| hook_at(adapter, AccountAt::Home(home)))
-        .map(|(_, _, location)| real(&location));
-    skills.chain(hooks).collect()
+/// Every path one hook writes or takes out in the account `at`: the file
+/// its entries go into, or each file of the plugin, under this
+/// installation's name and the app's earlier one.
+fn hook_paths(kind: HookKind, at: AccountAt<'_>, install: &str) -> Vec<PathBuf> {
+    match kind {
+        HookKind::Part(runtime) => vec![runtime.config_path(at)],
+        HookKind::Guidance(agent) => vec![agent.config_path(at)],
+        HookKind::Plugin(dialect) => plugin::of(dialect)
+            .files
+            .iter()
+            .flat_map(|file| [file.path(at, Some(install)), file.path(at, None)])
+            .collect(),
+    }
 }
 
-/// The pieces a profile account has of its own: its hook and its skills
-/// folder, each left out when it really is one of `defaults`, and the
-/// skills folder also when the agent keeps its skills in the shared folder.
+/// The real places of the files the default accounts keep: each agent's
+/// hook file or plugin files and Hide's stubs in each skills folder Hide
+/// writes there, the shared one among them. A profile account's going takes
+/// none of them out, whatever link leads there.
+fn default_files(home: &Path, install: &str) -> BTreeSet<PathBuf> {
+    let at = AccountAt::Home(home);
+    let skills = SkillDir::ALL
+        .iter()
+        .flat_map(|dir| skill_files_in(&dir.path(home)));
+    let hooks = ADAPTERS
+        .iter()
+        .filter_map(|adapter| hook_at(adapter, at))
+        .flat_map(|(kind, _, _)| hook_paths(kind, at, install));
+    skills.chain(hooks).map(|path| real(&path)).collect()
+}
+
+/// One piece of a profile account: where it is, as a report names it, and
+/// every path it writes or takes out.
+struct Spot {
+    location: PathBuf,
+    paths: Vec<PathBuf>,
+}
+
+/// The pieces of a profile account: its hook, and its skills folder unless
+/// the agent keeps its skills in the shared one.
 struct Places {
-    hook: Option<(HookKind, String, PathBuf)>,
-    skill: Option<PathBuf>,
+    hook: Option<(HookKind, String, Spot)>,
+    skill: Option<Spot>,
 }
 
 impl Places {
-    fn of(own: &Own, home: &Path, defaults: &BTreeSet<PathBuf>) -> Self {
-        let own_place = |path: &Path| !defaults.contains(&real(path));
+    fn of(own: &Own, home: &Path, install: &str) -> Self {
+        let at = own.at(home);
         Self {
-            hook: hook_at(own.adapter, own.at(home)).filter(|(_, _, location)| own_place(location)),
+            hook: hook_at(own.adapter, at).map(|(kind, code, location)| {
+                let paths = hook_paths(kind, at, install);
+                (kind, code, Spot { location, paths })
+            }),
             skill: match own.account.place(AccountPath::Skills) {
-                Place::At(root) if own_place(root) => Some(root.clone()),
-                Place::At(_) | Place::Absent | Place::Shared => None,
+                Place::At(root) => Some(Spot {
+                    location: root.clone(),
+                    paths: skill_files_in(root),
+                }),
+                Place::Absent | Place::Shared => None,
             },
         }
     }
 
-    /// Where each piece really is.
-    fn real(&self) -> impl Iterator<Item = PathBuf> + '_ {
+    /// The real places of every file a pass may write here, which no
+    /// going target takes out while this one is in use.
+    fn written(&self, own: &Own) -> Vec<PathBuf> {
         self.hook
             .iter()
-            .map(|(_, _, location)| real(location))
-            .chain(self.skill.iter().map(|root| real(root)))
+            .map(|(_, _, spot)| spot)
+            .chain(&self.skill)
+            .filter_map(|spot| judged(own, &spot.paths, Touch::Write).ok())
+            .flatten()
+            .collect()
     }
+}
+
+/// What the kit does to a path in a profile account.
+#[derive(Clone, Copy)]
+enum Touch<'a> {
+    /// Writes Hide's file there.
+    Write,
+    /// Takes Hide's file out, unless another keeps it: a default account or
+    /// a target in use (`held`, real places), or another installation on the
+    /// account (`record`).
+    TakeOut {
+        held: &'a BTreeSet<PathBuf>,
+        record: &'a Record,
+    },
+}
+
+/// The one judgment of every path the kit writes or takes out in the
+/// profile account `own`, a piece's paths at once; the answer is their real
+/// places. Each path must lie in the account's own folder with no link from
+/// that folder down to it, the path itself included: it is then its own real
+/// place, inside the account, and a write lands there and a removal takes
+/// out exactly that, never a file a link leads to. Taking a file out also
+/// needs no one else to keep its real place. A refusal leaves every path of
+/// the piece as it is, a link included.
+fn judged(own: &Own, paths: &[PathBuf], touch: Touch<'_>) -> Result<Vec<PathBuf>, Reason> {
+    paths
+        .iter()
+        .map(|path| {
+            let really = real_in(own, path)?;
+            if let Touch::TakeOut { held, record } = touch {
+                if held.contains(&really) {
+                    return Err(Reason::not_changed(format!(
+                        "{} is also a default account's or another profile's, so it stays",
+                        really.display()
+                    )));
+                }
+                if record.skill_kept_elsewhere(&really) {
+                    return Err(Reason::not_changed(format!(
+                        "another installation of Hide keeps {}, so it stays",
+                        really.display()
+                    )));
+                }
+            }
+            Ok(really)
+        })
+        .collect()
+}
+
+/// The real place of `path` in the account `own`: the account's own folder
+/// with the rest of the path, once nothing on the way is a link. A part that
+/// is not there yet is made by the write as a plain folder or file.
+fn real_in(own: &Own, path: &Path) -> Result<PathBuf, Reason> {
+    let rest = path.strip_prefix(&own.spelled).map_err(|_| {
+        Reason::not_changed(format!(
+            "{} is not in the account's folder {}, so Hide writes nothing there",
+            path.display(),
+            own.spelled.display()
+        ))
+    })?;
+    let mut at = own.folder.clone();
+    let mut there = true;
+    for part in rest.components() {
+        let Component::Normal(name) = part else {
+            return Err(Reason::not_changed(format!(
+                "{} is not a plain path, so Hide writes nothing there",
+                path.display()
+            )));
+        };
+        at.push(name);
+        if !there {
+            continue;
+        }
+        match std::fs::symlink_metadata(&at) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(Reason::not_changed(format!(
+                    "{} is a link, so Hide neither writes nor takes out anything through it",
+                    at.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => there = false,
+            Err(error) => {
+                return Err(Reason::new(
+                    PartCause::Unreadable,
+                    format!("{} could not be read: {error}", at.display()),
+                ));
+            }
+        }
+    }
+    Ok(at)
 }
 
 fn observe_hook(target: &KitTarget, own: &Own, kind: HookKind, detection: &Detection) -> Observed {
@@ -589,23 +721,33 @@ fn install_hook(target: &KitTarget, own: &Own, kind: HookKind) -> Result<(), Str
 }
 
 /// Takes Hide's pieces out of a profile account: its marked hook entries or
-/// unedited script, and its unedited skill stubs. A piece whose real place
-/// is in `kept` (a default account's, or one a target in use holds) stays,
-/// and so do skill stubs another installation recorded in the same folder.
-/// True when one went.
+/// unedited script, and its unedited skill stubs, each piece only once
+/// [`judged`] lets it go; one it does not stays, and the log says why. True
+/// when one went.
 fn take_out(
     target: &KitTarget,
     own: &Own,
     places: &Places,
-    kept: &BTreeSet<PathBuf>,
+    held: &BTreeSet<PathBuf>,
     record: &Record,
 ) -> Result<bool, String> {
     checked(&own.root, &own.folder).map_err(|reason| reason.text)?;
+    let touch = Touch::TakeOut { held, record };
+    // A path that could not be read is tried again by the next pass; one
+    // Hide may not touch stays for good.
+    let may = |spot: &Spot| match judged(own, &spot.paths, touch) {
+        Ok(_) => Ok(true),
+        Err(reason) if reason.why.cause == PartCause::Unreadable => Err(reason.text),
+        Err(reason) => {
+            log("profile_target.left", Some(&own.key), &reason.text);
+            Ok(false)
+        }
+    };
     let at = own.at(&target.home);
     let install = Some(target.install.as_str());
     let mut removed = false;
-    if let Some((kind, _, location)) = &places.hook
-        && !kept.contains(&real(location))
+    if let Some((kind, _, spot)) = &places.hook
+        && may(spot)?
     {
         removed |= match *kind {
             HookKind::Part(runtime) => match crate::hooks::remove(target, runtime, at) {
@@ -624,11 +766,10 @@ fn take_out(
             HookKind::Plugin(dialect) => plugin::of(dialect).remove(at, install)?,
         };
     }
-    if let Some(root) = &places.skill {
-        let really = real(root);
-        if !kept.contains(&really) && !record.skill_held_elsewhere(&really) {
-            removed |= remove_skill_in(root)?;
-        }
+    if let Some(spot) = &places.skill
+        && may(spot)?
+    {
+        removed |= remove_skill_in(&spot.location)?;
     }
     Ok(removed)
 }
@@ -664,16 +805,12 @@ fn pass_own(
     kept: &BTreeSet<PathBuf>,
     record: &Record,
 ) -> Pieces {
-    let hook = places
-        .hook
-        .as_ref()
-        .map(|(kind, code, location)| (*kind, code.clone(), location.display().to_string()));
+    let hook = places.hook.as_ref();
     let skill = places.skill.as_ref();
+    let at = |spot: &Spot| Some(spot.location.display().to_string());
     let all = |state: ComponentState, reason: Option<Reason>| Pieces {
-        hook: hook
-            .as_ref()
-            .map(|(_, _, location)| piece(state, reason.clone(), Some(location.clone()))),
-        skill: skill.map(|root| piece(state, reason.clone(), Some(root.display().to_string()))),
+        hook: hook.map(|(_, _, spot)| piece(state, reason.clone(), at(spot))),
+        skill: skill.map(|spot| piece(state, reason.clone(), at(spot))),
     };
     let turning_off =
         matches!(mode, Mode::Apply { scope, .. } if scope.agent_off.contains(own.adapter.id));
@@ -691,9 +828,7 @@ fn pass_own(
     }
     if !detection.installed(own.adapter) {
         return Pieces {
-            hook: hook
-                .as_ref()
-                .map(|_| piece(ComponentState::Absent, Some(not_found(own.adapter)), None)),
+            hook: hook.map(|_| piece(ComponentState::Absent, Some(not_found(own.adapter)), None)),
             skill: skill.map(|_| piece(ComponentState::Absent, Some(not_found(own.adapter)), None)),
         };
     }
@@ -702,11 +837,20 @@ fn pass_own(
     }
     let writes = matches!(mode, Mode::Apply { .. });
     let mut decide = |code: &str,
+                      spot: &Spot,
                       observe: &dyn Fn() -> Observed,
-                      install: &dyn Fn() -> Result<(), String>,
-                      location: String|
+                      install: &dyn Fn() -> Result<(), String>|
      -> PieceReport {
         let recorded = pieces.contains(code);
+        // A piece Hide may not write is left as it is, and said so.
+        if let Err(reason) = judged(own, &spot.paths, Touch::Write) {
+            let observed = match reason.why.cause {
+                PartCause::Unreadable => Observed::Blocked(reason),
+                _ => Observed::Absent(reason),
+            };
+            let (state, reason) = state_of(observed, recorded, None);
+            return piece(state, reason, at(spot));
+        }
         let observed = observe();
         let install_now = writes
             && match &observed {
@@ -728,28 +872,28 @@ fn pass_own(
             pieces.insert(code.to_owned());
         }
         let (state, reason) = state_of(after, pieces.contains(code), failure);
-        piece(state, reason, Some(location))
+        piece(state, reason, at(spot))
     };
-    let mut hook_report = hook.as_ref().map(|(kind, code, location)| {
+    let mut hook_report = hook.map(|(kind, code, spot)| {
         decide(
             code,
+            spot,
             &|| observe_hook(target, own, *kind, detection),
             &|| install_hook(target, own, *kind),
-            location.clone(),
         )
     });
-    let skill_report = skill.map(|root| {
+    let skill_report = skill.map(|spot| {
         decide(
             &skill_code(own.adapter.skill_dir),
-            &|| observe_skill_at(root),
-            &|| install_skill_in(root, restore),
-            root.display().to_string(),
+            spot,
+            &|| observe_skill_at(&spot.location),
+            &|| install_skill_in(&spot.location, restore),
         )
     });
     // Codex asks the operator to review a hook it has not trusted, in each
     // account's own `config.toml`; a read repeats what the last pass found.
     if let (Some((HookKind::Part(AgentRuntime::Codex), _, _)), Some(report)) =
-        (&hook, hook_report.as_mut())
+        (hook, hook_report.as_mut())
         && report.state == ComponentState::Installed
     {
         let untrusted = if writes {
@@ -803,7 +947,7 @@ fn pass(
         }
     };
     let home = &target.home;
-    let defaults = default_places(home);
+    let defaults = default_files(home, &target.install);
     let mut changed = false;
     let mut failures: BTreeMap<String, String> = BTreeMap::new();
     let mut placed: Vec<(&Profile, Result<Option<String>, Reason>)> = Vec::new();
@@ -819,7 +963,7 @@ fn pass(
                 placed.push((profile, Ok(Some(own.key.clone()))));
                 wanted
                     .entry(own.key.clone())
-                    .or_insert_with(|| (own, BTreeSet::new()))
+                    .or_insert_with(|| (*own, BTreeSet::new()))
                     .1
                     .insert(profile.id.clone());
             }
@@ -833,21 +977,20 @@ fn pass(
     let wanted: BTreeMap<String, (Own, BTreeSet<ProfileId>, Places, bool)> = wanted
         .into_iter()
         .map(|(key, (own, refs))| {
-            let places = Places::of(&own, home, &defaults);
+            let places = Places::of(&own, home, &target.install);
             let on = enabled(record, &scope_now, own.adapter);
             (key, (own, refs, places, on))
         })
         .collect();
-    // What no going target may take out: the default accounts' places and
-    // every piece a target that stays in use holds.
+    // What no going target may take out: the default accounts' files and
+    // every file a target that stays in use holds.
     let kept: BTreeSet<PathBuf> = defaults
-        .iter()
-        .cloned()
+        .into_iter()
         .chain(
             wanted
                 .values()
                 .filter(|(_, _, _, on)| *on)
-                .flat_map(|(_, _, places, _)| places.real()),
+                .flat_map(|(own, _, places, _)| places.written(own)),
         )
         .collect();
     if matches!(mode, Mode::Apply { .. }) {
@@ -855,7 +998,7 @@ fn pass(
             if wanted.contains_key(&key) {
                 continue;
             }
-            match release(target, record, &key, &gone, &defaults, &kept) {
+            match release(target, record, &key, &gone, &kept) {
                 Ok(()) => changed |= record.forget_target(&key),
                 Err(reason) => {
                     log("profile_target.remove_failed", Some(&key), &reason);
@@ -900,7 +1043,7 @@ fn pass(
                 .skill
                 .as_ref()
                 .filter(|_| pieces.contains(&skill_code(own.adapter.skill_dir)))
-                .map(|root| real(root));
+                .map(|spot| real(&spot.location));
             let kept_record = record.target_mut(key, || TargetRecord {
                 agent: own.adapter.id.to_owned(),
                 account: own.physical.clone(),
@@ -986,12 +1129,11 @@ fn release(
     record: &Record,
     key: &str,
     gone: &TargetRecord,
-    defaults: &BTreeSet<PathBuf>,
     kept: &BTreeSet<PathBuf>,
 ) -> Result<(), String> {
     match locate(&target.home, &gone.agent, &gone.account) {
         Ok(Located::Own(own)) if own.key == key => {
-            let places = Places::of(&own, &target.home, defaults);
+            let places = Places::of(&own, &target.home, &target.install);
             take_out(target, &own, &places, kept, record).map(drop)
         }
         Ok(Located::Own(_) | Located::Default) => {
@@ -1032,14 +1174,14 @@ pub(crate) fn status(
 /// recorded, for a machine leaving Hide (`crate::remove`): one outcome per
 /// account, named by its key.
 pub(crate) fn remove(target: &KitTarget, record: &Record) -> Vec<(String, RemoveOutcome)> {
-    let defaults = default_places(&target.home);
+    let defaults = default_files(&target.home, &target.install);
     record
         .targets()
         .iter()
         .map(|(key, known)| {
             let outcome = match locate(&target.home, &known.agent, &known.account) {
                 Ok(Located::Own(own)) if own.key == *key => {
-                    let places = Places::of(&own, &target.home, &defaults);
+                    let places = Places::of(&own, &target.home, &target.install);
                     match take_out(target, &own, &places, &defaults, record) {
                         Ok(true) => RemoveOutcome::Removed,
                         Ok(false) => RemoveOutcome::Absent,

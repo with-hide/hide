@@ -4,7 +4,7 @@
 use super::*;
 use crate::{KitProfiles, ProfilePlace, ProfileReport, prepare_account};
 use hide_agent_adapter::{AccountRef, Profile, ProfileId};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 
 fn claude(id: &str, folder: &str) -> Profile {
@@ -212,29 +212,6 @@ fn a_profile_hide_refuses_makes_no_folder() {
         assert!(refused.contains(says), "{}: {refused}", profile.id.0);
     }
     assert!(!folder.exists());
-}
-
-#[test]
-fn another_spelling_of_the_default_folder_is_the_default_account() {
-    let mut fixture = Fixture::new();
-    let link = fixture.root.join("claude-link");
-    std::os::unix::fs::symlink(fixture.home().join(".claude"), &link).unwrap();
-    let profile = claude("p-link", &link.display().to_string());
-    added(&fixture, &profile);
-    with_profiles(&mut fixture, &[&profile], &[]);
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    assert_eq!(place(&report.profiles, "p-link"), &ProfilePlace::Default);
-    assert_eq!(recorded_targets(&fixture), Value::Null);
-
-    with_profiles(&mut fixture, &[], &[&profile]);
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        place(&report.profiles, "p-link"),
-        &ProfilePlace::Removing { failure: None }
-    );
-    assert!(hide_hooks(&fixture.home().join(".claude/settings.json")) > 0);
 }
 
 #[test]
@@ -553,42 +530,6 @@ fn skill_stubs_another_installation_holds_stay_until_it_lets_go() {
     assert_eq!(hide_hooks(&settings), 0);
 }
 
-/// A profile account whose skills folder is a link to the folder every
-/// agent shares has no skills piece of its own: nothing of it is written
-/// or taken out there.
-#[test]
-fn a_skills_folder_linked_to_the_shared_one_stays_the_shared_ones() {
-    let mut fixture = Fixture::new();
-    let folder = fixture.root.join("accounts/work");
-    let profile = claude("p-work", &folder.display().to_string());
-    added(&fixture, &profile);
-    let shared = crate::agents::SkillDir::Shared.path(fixture.home());
-    crate::agents::install_skill(crate::agents::SkillDir::Shared, fixture.home(), false).unwrap();
-    std::os::unix::fs::symlink(&shared, folder.join("skills")).unwrap();
-    let stub = shared.join(crate::agents::GUIDE_SKILL.name);
-    assert!(stub.is_dir());
-    with_profiles(&mut fixture, &[&profile], &[]);
-
-    let report = apply(&fixture.target, &Scope::automatic());
-
-    assert!(
-        matches!(
-            place(&report.profiles, "p-work"),
-            ProfilePlace::Own {
-                skill: None,
-                hook: Some(_),
-                ..
-            }
-        ),
-        "{report:?}"
-    );
-    with_profiles(&mut fixture, &[], &[&profile]);
-    apply(&fixture.target, &Scope::automatic());
-
-    assert!(stub.is_dir(), "the shared folder's stubs stay");
-    assert_eq!(hide_hooks(&folder.join("settings.json")), 0);
-}
-
 /// A profile that named its account through a link: when the link is moved
 /// to another account a profile in use holds, the old account's pieces come
 /// out of the folder they went into, and the other account keeps its own.
@@ -630,5 +571,155 @@ fn moving_a_link_takes_out_the_old_accounts_pieces_and_keeps_the_new_ones() {
     );
     for id in ["p-linked", "p-direct"] {
         assert_eq!(hook_state(&report.profiles, id), ComponentState::Installed);
+    }
+}
+
+/// Every file and folder under `path` with its bytes, links followed; the
+/// path alone when it is a file, nothing when it is not there.
+fn tree(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = BTreeMap::new();
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            found.insert(path.to_path_buf(), Vec::new());
+            for entry in std::fs::read_dir(path).unwrap() {
+                found.extend(tree(&entry.unwrap().path()));
+            }
+        }
+        Ok(_) => {
+            found.insert(path.to_path_buf(), std::fs::read(path).unwrap());
+        }
+        Err(_) => {}
+    }
+    found
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Linked {
+    Account,
+    Hook,
+    Skill,
+}
+
+/// A link on each layer of a profile account's paths, to a place the
+/// default account keeps, to the shared skills folder, or to nothing yet:
+/// nothing outside the account is written or taken out through it, the link
+/// stays, and the account's other piece comes and goes as usual.
+#[test]
+fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it() {
+    let guide = crate::agents::GUIDE_SKILL.name;
+    // Where the link is, relative to the account's folder ("" is the folder
+    // itself); where it leads, relative to the home; the piece it is on.
+    let stub = format!("skills/{guide}");
+    let file = format!("skills/{guide}/SKILL.md");
+    let rows = [
+        (String::new(), ".claude".to_owned(), Linked::Account),
+        (
+            "settings.json".to_owned(),
+            ".claude/settings.json".to_owned(),
+            Linked::Hook,
+        ),
+        (
+            "skills".to_owned(),
+            ".agents/skills".to_owned(),
+            Linked::Skill,
+        ),
+        (stub.clone(), format!(".agents/{stub}"), Linked::Skill),
+        (file.clone(), format!(".agents/{file}"), Linked::Skill),
+        (file.clone(), "elsewhere/SKILL.md".to_owned(), Linked::Skill),
+    ];
+    for (at, to, linked) in rows {
+        let row = format!("{at} -> ~/{to}");
+        let mut fixture = Fixture::new();
+        let home = fixture.home().to_path_buf();
+        crate::agents::install_skill(crate::agents::SkillDir::Shared, &home, false).unwrap();
+        apply(&fixture.target, &Scope::automatic());
+        let to = home.join(&to);
+        let folder = fixture.root.join("accounts/work");
+        let link = if at.is_empty() {
+            folder.clone()
+        } else {
+            folder.join(&at)
+        };
+        if linked == Linked::Account {
+            hide_platform::fs::private::create_dir_all(folder.parent().unwrap()).unwrap();
+        } else {
+            hide_platform::fs::private::create_dir_all(&folder).unwrap();
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        }
+        std::os::unix::fs::symlink(&to, &link).unwrap();
+        let profile = claude("p-work", &folder.display().to_string());
+        added(&fixture, &profile);
+        let outside = [
+            home.join(".agents"),
+            home.join(".claude"),
+            home.join("elsewhere"),
+        ];
+        let before: Vec<_> = outside.iter().map(|path| tree(path)).collect();
+
+        with_profiles(&mut fixture, &[&profile], &[]);
+        let report = apply(&fixture.target, &Scope::automatic());
+
+        let after: Vec<_> = outside.iter().map(|path| tree(path)).collect();
+        assert_eq!(
+            after, before,
+            "{row}: nothing outside the account is written"
+        );
+        match (linked, place(&report.profiles, "p-work")) {
+            (Linked::Account, ProfilePlace::Default) => {}
+            (
+                Linked::Hook,
+                ProfilePlace::Own {
+                    hook: Some(hook),
+                    skill: Some(skill),
+                    ..
+                },
+            ) => {
+                assert_eq!(hook.state, ComponentState::Absent, "{row}: {hook:?}");
+                assert!(
+                    hook.reason.as_deref().unwrap().contains("is a link"),
+                    "{row}"
+                );
+                assert_eq!(skill.state, ComponentState::Installed, "{row}");
+            }
+            (
+                Linked::Skill,
+                ProfilePlace::Own {
+                    hook: Some(hook),
+                    skill: Some(skill),
+                    ..
+                },
+            ) => {
+                assert_eq!(skill.state, ComponentState::Absent, "{row}: {skill:?}");
+                assert!(
+                    skill.reason.as_deref().unwrap().contains("is a link"),
+                    "{row}"
+                );
+                assert_eq!(hook.state, ComponentState::Installed, "{row}");
+            }
+            (_, other) => panic!("{row}: {other:?}"),
+        }
+
+        with_profiles(&mut fixture, &[], &[&profile]);
+        let report = apply(&fixture.target, &Scope::automatic());
+
+        assert_eq!(
+            place(&report.profiles, "p-work"),
+            &ProfilePlace::Removing { failure: None },
+            "{row}"
+        );
+        let after: Vec<_> = outside.iter().map(|path| tree(path)).collect();
+        assert_eq!(
+            after, before,
+            "{row}: nothing outside the account is taken out"
+        );
+        let kept = std::fs::symlink_metadata(&link).unwrap();
+        assert!(kept.file_type().is_symlink(), "{row}: the link stays");
+        assert_eq!(std::fs::read_link(&link).unwrap(), to, "{row}");
+        match linked {
+            Linked::Account => {}
+            Linked::Hook => assert!(!folder.join("skills").join(guide).exists(), "{row}"),
+            Linked::Skill => assert_eq!(hide_hooks(&folder.join("settings.json")), 0, "{row}"),
+        }
+        assert_eq!(recorded_targets(&fixture), Value::Null, "{row}");
     }
 }

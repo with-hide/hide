@@ -754,6 +754,16 @@ pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
     Ok(retire_in(root)? || removed)
 }
 
+/// Every file [`install_skill_in`] and [`remove_skill_in`] write or take out
+/// in the skills folder `root`: each stub, and each retired one.
+pub(crate) fn skill_files_in(root: &Path) -> Vec<PathBuf> {
+    SKILLS
+        .iter()
+        .map(|skill| skill.file_in(root))
+        .chain(RETIRED_SKILLS.iter().map(|skill| skill.file_in(root)))
+        .collect()
+}
+
 /// The skills folder the stubs are in.
 pub(crate) fn skill_location(dir: SkillDir, home: &Path) -> String {
     dir.path(home).display().to_string()
