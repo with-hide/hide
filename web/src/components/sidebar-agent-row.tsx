@@ -57,7 +57,8 @@ export type AgentRowMenu = {
 /**
  * The fold slot of a sidebar row with nothing to fold. Every row, agent,
  * checkout or project, ends in its time and then this slot, so the times and
- * the chevrons of the whole list stand in one column each (D-3).
+ * the chevrons of checkout and project rows stand in one column (D-3); an
+ * agent root's chevron stands at its left instead, as a task's does.
  */
 export function FoldLane() {
   return <span aria-hidden="true" data-fold-slot="true" className="w-(--size-lineage-chevron) shrink-0" />;
@@ -69,6 +70,8 @@ export type SidebarTreeSlot = {
   /** Null for a row with no children; a grandchild's chevron opens the popover instead. */
   open: boolean | null;
   onToggle: () => void;
+  /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
+  fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
   popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn"> } | null;
 };
@@ -81,7 +84,7 @@ export type SidebarTreeSlot = {
  * parent's, the device chip, the row's own PR icon, the mission chip, and
  * the elapsed time; a raised descendant shows on the root's line, not as a
  * count (needs-you-cleanup B7). In a drawn tree (`tree`) the rails and
- * the chevron lane stand left of the marks, and a tree row is one line but
+ * the chevrons stand left of the marks, a root's on its tab's guide, and a tree row is one line but
  * for a child on another device, whose second line names that device. A
  * Needs You row (`ask`) has no PR icon, and a mission chip only when its ask
  * is that mission's decision: its second line is the verb and what to do. Elsewhere a request or news takes the second line; a quiet
@@ -284,9 +287,15 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           </span>
         ) : null}
       </SessionRowBody>
-      {tree && depth === 0 && tree.open !== null ? <button type="button" tabIndex={-1} aria-expanded={tree.open} aria-label={t(tree.open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name: agent.identity_label })} data-tree-chevron={agent.pane_id} className="absolute top-xs right-xs flex h-(--size-sidebar-line) w-(--size-lineage-chevron) items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={tree.onToggle}>
-        {tree.open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
-      </button> : null}
+      {tree && depth === 0 && tree.open !== null ? (
+        // A root's chevron stands left of its mark, as a task's does in the 태스크 list; it sits on its tab's guide, so it masks the guide
+        // with the row's own fill: the sidebar, then the row's hover or selection over it.
+        <span className="absolute top-xs z-20 h-(--size-sidebar-line) w-(--size-lineage-chevron) -translate-x-1/2 bg-sidebar" style={{ left: tree.fold }}>
+          <button type="button" tabIndex={-1} aria-expanded={tree.open} aria-label={t(tree.open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name: agent.identity_label })} data-tree-chevron={agent.pane_id} className={cn("flex size-full items-center justify-center text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring", selected ? "bg-secondary" : "group-hover/row:bg-accent")} onClick={tree.onToggle}>
+            {tree.open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+          </button>
+        </span>
+      ) : null}
       {number !== null ? <Keycap number={number} /> : null}
     </li>
     </EntryContextMenu>
