@@ -4,7 +4,11 @@
 //!
 //! One file in the node's state folder (`hide_kit::layout::agent_profiles`)
 //! holds every profile of the machine and each agent's default one, and only
-//! this module reads or writes it, one call at a time, replacing it whole.
+//! this module reads or writes it, one read or change at a time, replacing it
+//! whole. The kit reads it through [`source`] once a pass holds the account's
+//! lock, so a pass installs and takes out by the file as it is then; this
+//! module never holds the file while it waits on the kit, and every change is
+//! followed by a pass of its own.
 //! A change names the file's version it was made against, so two screens
 //! editing at once never overwrite each other. Adding a profile checks it
 //! (`hide_agent_adapter::resolve`), makes its account's folder private when
@@ -20,7 +24,7 @@ use std::sync::Mutex;
 
 use hide_agent_adapter::account::Refusal;
 use hide_agent_adapter::{AccountRef, NodeEnv, Profile, ProfileId};
-use hide_kit::{KitProfiles, ProfilePlace, ProfileReport};
+use hide_kit::{KitProfiles, ProfilePlace, ProfileReport, ProfileSource};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorCode, HostError, HostResult};
@@ -38,8 +42,9 @@ const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 64;
 const MAX_PROGRAM_BYTES: usize = 4096;
 
-/// One change, list or install at a time per process; the node is the
-/// file's only writer.
+/// One read or change of the file at a time per process; the node is the
+/// file's only writer. Never held while the kit runs: a pass takes it inside
+/// the account's lock to read the file ([`source`]).
 static FILE: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -80,21 +85,30 @@ fn place(env: &Env) -> HostResult<Place> {
 }
 
 fn load(path: &Path) -> HostResult<File> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    use std::io::Read;
+    let unread = |error: std::io::Error| {
+        HostError::new(
+            ErrorCode::Io,
+            format!("{} could not be read: {error}", path.display()),
+        )
+    };
+    let opened = match std::fs::File::open(path) {
+        Ok(opened) => opened,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(File {
                 format: FORMAT,
                 ..File::default()
             });
         }
-        Err(error) => {
-            return Err(HostError::new(
-                ErrorCode::Io,
-                format!("{} could not be read: {error}", path.display()),
-            ));
-        }
+        Err(error) => return Err(unread(error)),
     };
+    // Read no more than the cap, whatever the file's length says: it may
+    // grow between the look and the read.
+    let mut bytes = Vec::new();
+    opened
+        .take(MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unread)?;
     if bytes.len() > MAX_FILE_BYTES {
         return Err(HostError::new(
             ErrorCode::TooLarge,
@@ -151,9 +165,8 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 /// The machine's profiles, each with its pieces as the kit judges them.
 pub fn list(env: &Env, values: bool) -> HostResult<ProfileList> {
     let place = place(env)?;
-    let _file = lock();
-    let file = load(&place.file)?;
-    let judged = judge(env, &file, None);
+    let judged = judge(env, None);
+    let file = read(&place.file)?;
     Ok(listed(&file, judged, values))
 }
 
@@ -161,33 +174,38 @@ pub fn list(env: &Env, values: bool) -> HostResult<ProfileList> {
 /// installs or takes out the pieces of the accounts it touches.
 pub fn apply(env: &Env, op: ProfileOp, expected_version: u64) -> HostResult<ProfileApplied> {
     let place = place(env)?;
-    let _file = lock();
-    let mut file = load(&place.file)?;
-    if file.version != expected_version {
-        return Err(HostError::new(
-            ErrorCode::Conflict,
-            "The profiles changed since they were read; read them again",
-        ));
-    }
-    let changed = match change(&place.home, &file, op) {
+    let changed = {
+        let _file = lock();
+        let file = load(&place.file)?;
+        if file.version != expected_version {
+            return Err(HostError::new(
+                ErrorCode::Conflict,
+                "The profiles changed since they were read; read them again",
+            ));
+        }
+        match change(&place.home, &file, op) {
+            Ok(changed) => {
+                save(&place.file, &changed.file)?;
+                Ok(changed)
+            }
+            Err(refused) => Err((refused, file)),
+        }
+    };
+    let changed = match changed {
         Ok(changed) => changed,
-        Err(refused) => {
-            let judged = judge(env, &file, None);
+        Err((refused, file)) => {
             return Ok(ProfileApplied {
                 refused: Some(refused),
                 added: None,
-                list: listed(&file, judged, false),
+                list: listed(&file, judge(env, None), false),
             });
         }
     };
-    let added = changed.added.clone();
-    file = changed.file;
-    save(&place.file, &file)?;
-    let judged = judge(env, &file, changed.install.then(BTreeSet::new));
-    settle(&place.file, &mut file, &judged)?;
+    let judged = judge(env, changed.install.then(BTreeSet::new));
+    let file = settle(&place.file, &judged)?;
     Ok(ProfileApplied {
         refused: None,
-        added,
+        added: changed.added,
         list: listed(&file, judged, false),
     })
 }
@@ -196,8 +214,7 @@ pub fn apply(env: &Env, op: ProfileOp, expected_version: u64) -> HostResult<Prof
 /// took out of its account.
 pub fn install(env: &Env, id: ProfileId) -> HostResult<ProfileList> {
     let place = place(env)?;
-    let _file = lock();
-    let file = load(&place.file)?;
+    let file = read(&place.file)?;
     if !file
         .profiles
         .iter()
@@ -208,24 +225,22 @@ pub fn install(env: &Env, id: ProfileId) -> HostResult<ProfileList> {
             format!("This machine has no profile {}", id.0),
         ));
     }
-    let judged = judge(env, &file, Some(BTreeSet::from([id])));
+    let judged = judge(env, Some(BTreeSet::from([id])));
+    let file = settle(&place.file, &judged)?;
     Ok(listed(&file, judged, false))
 }
 
-/// The profiles a kit pass of this node installs into and takes out of
-/// (`hide_kit::KitTarget::profiles`). A node that keeps none, or whose file
-/// cannot be read, passes none, and the kit leaves every profile account as
-/// it is; the reason goes to the log.
-pub(crate) fn for_kit(env: &Env) -> Option<KitProfiles> {
-    let place = place(env).ok()?;
-    let _file = lock();
-    match load(&place.file) {
-        Ok(file) => Some(kit_profiles(&file)),
-        Err(error) => {
-            log("profiles.unread", &error.message);
-            None
-        }
-    }
+/// Where a kit pass of this node reads the profiles
+/// (`hide_kit::KitTarget::profiles`): the file, read when the pass holds
+/// the account's lock. A node that keeps none has no source, and a file that
+/// cannot be read leaves every profile account as it is; the kit logs why.
+pub(crate) fn source(env: &Env) -> Option<ProfileSource> {
+    let file = place(env).ok()?.file;
+    Some(ProfileSource::new(move || {
+        read(&file)
+            .map(|file| kit_profiles(&file))
+            .map_err(|error| error.message)
+    }))
 }
 
 /// Drops the profiles being removed whose accounts a kit pass found free of
@@ -234,17 +249,19 @@ pub(crate) fn settle_after_kit(env: &Env, reports: &[ProfileReport]) {
     let Ok(place) = place(env) else {
         return;
     };
-    let _file = lock();
-    let outcome = load(&place.file).and_then(|mut file| {
-        let judged = Judged {
-            reports: Some(reports.to_vec()),
-            unjudged: None,
-        };
-        settle(&place.file, &mut file, &judged)
-    });
-    if let Err(error) = outcome {
+    let judged = Judged {
+        reports: Some(reports.to_vec()),
+        unjudged: None,
+    };
+    if let Err(error) = settle(&place.file, &judged) {
         log("profiles.settle_failed", &error.message);
     }
+}
+
+/// The file as it is now.
+fn read(path: &Path) -> HostResult<File> {
+    let _file = lock();
+    load(path)
 }
 
 /// What the kit found for the profiles.
@@ -253,9 +270,10 @@ struct Judged {
     unjudged: Option<String>,
 }
 
-/// The kit's judgment of every profile: a pass when `reinstall` is given,
-/// with those profiles' pieces put back, a read otherwise.
-fn judge(env: &Env, file: &File, reinstall: Option<BTreeSet<ProfileId>>) -> Judged {
+/// The kit's judgment of every profile in the file as the kit reads it: a
+/// pass when `reinstall` is given, with those profiles' pieces put back, a
+/// read otherwise.
+fn judge(env: &Env, reinstall: Option<BTreeSet<ProfileId>>) -> Judged {
     let mut target = match crate::kit::profile_target(env) {
         Ok(target) => target,
         Err(error) => {
@@ -265,7 +283,7 @@ fn judge(env: &Env, file: &File, reinstall: Option<BTreeSet<ProfileId>>) -> Judg
             };
         }
     };
-    target.profiles = Some(kit_profiles(file));
+    target.profiles = source(env);
     let answer = match reinstall {
         Some(reinstall) => hide_kit::apply_profiles(&target, &reinstall).map(|applied| {
             if let Some(unsaved) = &applied.unsaved {
@@ -287,10 +305,13 @@ fn judge(env: &Env, file: &File, reinstall: Option<BTreeSet<ProfileId>>) -> Judg
     }
 }
 
-/// Forgets the profiles being removed that the kit reported free to go.
-fn settle(path: &Path, file: &mut File, judged: &Judged) -> HostResult<()> {
+/// Forgets the profiles being removed that the kit reported free to go, and
+/// answers the file as it is then.
+fn settle(path: &Path, judged: &Judged) -> HostResult<File> {
+    let _file = lock();
+    let mut file = load(path)?;
     let Some(reports) = &judged.reports else {
-        return Ok(());
+        return Ok(file);
     };
     let free: BTreeSet<(&ProfileId, u64)> = reports
         .iter()
@@ -301,11 +322,11 @@ fn settle(path: &Path, file: &mut File, judged: &Judged) -> HostResult<()> {
     file.profiles.retain(|stored| {
         !(stored.removing && free.contains(&(&stored.profile.id, stored.profile.version)))
     });
-    if file.profiles.len() == before {
-        return Ok(());
+    if file.profiles.len() != before {
+        file.version += 1;
+        save(path, &file)?;
     }
-    file.version += 1;
-    save(path, file)
+    Ok(file)
 }
 
 fn kit_profiles(file: &File) -> KitProfiles {
@@ -954,7 +975,7 @@ mod tests {
         assert!(removed.list.profiles.is_empty(), "{removed:?}");
         assert!(removed.list.defaults.is_empty());
         assert_eq!(node.list(false).profiles, Vec::new());
-        let gone = node.call(Call::ProfileInstall { id }).unwrap_err();
+        let gone = node.call(Call::ProfileInstall { profile: id }).unwrap_err();
         assert_eq!(gone.code, ErrorCode::NotFound);
     }
 

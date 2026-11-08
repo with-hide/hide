@@ -807,9 +807,10 @@ pub enum Call {
         expected_version: u64,
     },
     /// Reinstall of one profile's pieces, even those the operator took out;
-    /// answers the list.
+    /// answers the list. Named `profile` because a request's own `id` sits
+    /// beside a call's fields on the wire.
     ProfileInstall {
-        id: hide_agent_adapter::ProfileId,
+        profile: hide_agent_adapter::ProfileId,
     },
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
@@ -1720,6 +1721,75 @@ mod tests {
             assert!(call.answered_by_device());
             assert!(!call.runs_until_stopped() && !call.is_control() && !call.is_background());
         }
+    }
+
+    /// The profile calls cross the link as whole requests: a call's fields
+    /// sit beside the request's own `id` and `op`, so none may be named
+    /// either, and each one reads back as it was sent.
+    #[test]
+    fn the_profile_calls_round_trip_as_requests_and_a_device_answers_them() {
+        use crate::profiles::ProfileOp;
+        use hide_agent_adapter::{AccountRef, ProfileId};
+        let calls = [
+            Call::ProfileList { values: true },
+            Call::ProfileList { values: false },
+            Call::ProfileApply {
+                change: ProfileOp::Add {
+                    kind: "claude-code".into(),
+                    name: "work".into(),
+                    account: Some(AccountRef::Folder("~/work/".into())),
+                    program: Some("claude-gw".into()),
+                    env: vec![("ANTHROPIC_BASE_URL".into(), "https://gw.example".into())],
+                    default: true,
+                },
+                expected_version: 3,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Edit {
+                    id: ProfileId("p-1".into()),
+                    name: "office".into(),
+                    program: None,
+                    env: Vec::new(),
+                },
+                expected_version: 4,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Default {
+                    kind: "omp".into(),
+                    id: ProfileId::default_profile(),
+                },
+                expected_version: 5,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Remove {
+                    id: ProfileId("p-1".into()),
+                },
+                expected_version: 6,
+            },
+            Call::ProfileInstall {
+                profile: ProfileId("p-wire-probe".into()),
+            },
+        ];
+        for call in calls {
+            let request = Request { id: 991, call };
+            let text = serde_json::to_string(&request).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Request>(&text).unwrap(),
+                request,
+                "{text}"
+            );
+            assert!(request.call.answered_by_device());
+        }
+        assert_eq!(
+            serde_json::to_value(Request {
+                id: 991,
+                call: Call::ProfileInstall {
+                    profile: ProfileId("p-wire-probe".into()),
+                },
+            })
+            .unwrap(),
+            serde_json::json!({"id": 991, "op": "profile_install", "profile": "p-wire-probe"})
+        );
     }
 
     #[test]

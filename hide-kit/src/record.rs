@@ -59,12 +59,19 @@ struct InstallRecord {
 pub(crate) struct TargetRecord {
     /// The agent's adapter id.
     pub(crate) agent: String,
-    /// The account as the profile that first referred to it spelled it,
-    /// which resolves it again once no profile does.
+    /// The account as the file system names it (a folder with every link
+    /// resolved, or omp's name), which reaches the folder the pieces went
+    /// into once no profile names it, whatever a link it was spelled
+    /// through leads to by then.
     pub(crate) account: AccountRef,
     /// The pieces put there, by the codes `installed` uses.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) pieces: BTreeSet<String>,
+    /// The skills folder Hide's stubs went into, as the file system names
+    /// it: another installation's target holding the same folder keeps the
+    /// stubs when this one goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skill_root: Option<PathBuf>,
     /// The profiles that run in it. A target with none is one whose pieces
     /// could not all be taken out yet.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -258,6 +265,31 @@ impl Record {
             .targets
             .entry(key.to_owned())
             .or_insert_with(make)
+    }
+
+    /// Whether another installation on the account holds Hide's skill stubs
+    /// in the folder `root` (`TargetRecord::skill_root`), so this one's going
+    /// leaves them.
+    pub(crate) fn skill_held_elsewhere(&self, root: &Path) -> bool {
+        let others = std::iter::once((hide_agent_hooks::route::APP_INSTALL, &self.app))
+            .chain(
+                self.installs
+                    .iter()
+                    .flatten()
+                    .map(|(install, part)| (install.as_str(), part)),
+            )
+            .filter(|(install, _)| {
+                !(is_app(install) && is_app(&self.install)) && *install != self.install
+            });
+        others
+            .flat_map(|(_, part)| part.targets.values())
+            .any(|target| {
+                target.skill_root.as_deref() == Some(root)
+                    && target
+                        .pieces
+                        .iter()
+                        .any(|piece| piece.starts_with("skill:"))
+            })
     }
 
     /// Forgets the profile account `key`; true when it was recorded.

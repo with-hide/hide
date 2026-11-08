@@ -65,7 +65,7 @@ pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
-pub use targets::{KitProfiles, ProfilePlace, ProfileReport, prepare_account};
+pub use targets::{KitProfiles, ProfilePlace, ProfileReport, ProfileSource, prepare_account};
 
 /// What a retirement took off one machine.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -320,10 +320,11 @@ pub struct KitTarget {
     /// Raised by the kit's owner when it is going away: a child the kit is
     /// waiting on is ended and no further part is started.
     pub stop: Arc<AtomicBool>,
-    /// The machine's profiles, as its node's profile file holds them, whose
-    /// accounts get the agents' pieces (`targets`). `None` leaves every
-    /// profile account as the record has it: a caller with no profile file.
-    pub profiles: Option<KitProfiles>,
+    /// Where the machine's profiles are read from, the node's profile file,
+    /// whose accounts get the agents' pieces (`targets`); a pass reads it
+    /// once it holds the account's lock. `None` leaves every profile account
+    /// as the record has it: a caller with no profile file.
+    pub profiles: Option<ProfileSource>,
 }
 
 /// What an apply is allowed to do. The launch or connection pass is the

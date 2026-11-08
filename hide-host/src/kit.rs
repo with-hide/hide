@@ -65,7 +65,7 @@ pub fn handle(
                 cli_dir,
                 retirement_projects,
                 Arc::clone(&env.stop),
-                crate::profiles::for_kit(env),
+                crate::profiles::source(env),
             );
             return settled(env, answer);
         }
@@ -106,7 +106,7 @@ pub fn handle(
         cli_dir,
         retirement_projects,
         Arc::clone(&env.stop),
-        crate::profiles::for_kit(env),
+        crate::profiles::source(env),
     );
     settled(env, answer)
 }
@@ -176,7 +176,7 @@ fn bundled(
     let mut target = hide_kit::local_target(kit_dir, &home, Arc::clone(&env.stop));
     target.cli_dir = inputs.cli_dir;
     target.retirement_projects = inputs.projects;
-    target.profiles = crate::profiles::for_kit(env);
+    target.profiles = crate::profiles::source(env);
     let mut report = match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
             hide_kit::apply(&target, &scope_of(action))
@@ -211,7 +211,7 @@ pub fn run_build(
     cli_dir: &str,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
-    profiles: Option<hide_kit::KitProfiles>,
+    profiles: Option<hide_kit::ProfileSource>,
 ) -> HostResult<Value> {
     let home = &placement.home;
     let Inputs { projects, cli_dir } = Inputs::read(home, cli_dir, retirement_projects)?;
@@ -369,7 +369,7 @@ fn run_for_projects(
     cli_dir: &str,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
-    profiles: Option<hide_kit::KitProfiles>,
+    profiles: Option<hide_kit::ProfileSource>,
 ) -> HostResult<Value> {
     let home = &placement.home;
     let Inputs { projects, cli_dir } = Inputs::read(home, cli_dir, retirement_projects)?;

@@ -1492,7 +1492,7 @@ Decided in #2271.
 Each machine's profiles are its node's, in one file in that node's state folder (`agent-profiles.json`, `hide_kit::layout::agent_profiles`), so a device's profiles name the device's own folders and stay with it (PRD agent-profiles D-04).
 Only `hide-host/src/profiles.rs` reads or writes it, one call at a time, replacing it whole with the private access every state file has.
 It holds each profile (`Profile`, with `removing` while it is being removed), each agent's default profile where that is not the built-in one, and the file's `version`, which every change raises.
-At most 64 profiles, besides the built-in ones, and a file of at most 4 MiB are kept; a profile's own caps are `resolve`'s.
+At most 64 profiles, besides the built-in ones, and a file of at most 4 MiB are kept, and no more than that is ever read of it; a profile's own caps are `resolve`'s.
 A file written by a newer Hide, or one that cannot be read, is refused and left as it is, and a kit pass then leaves every profile account as it is.
 
 The core asks the node through three calls (`hide-node-link/src/profiles.rs`, protocol 86):
@@ -1501,12 +1501,12 @@ The core asks the node through three calls (`hide-node-link/src/profiles.rs`, pr
 | --- | --- | --- |
 | `ProfileList { values }` | the list, each profile with its variables' names (their values only with `values`, for the screen that edits it) and its pieces as the kit judges them | nothing |
 | `ProfileApply { change, expected_version }` | the list after the change, the id an `add` made, or a refusal under the field it is about (`kind`, `name`, `account`, `program`, `env` with the variable's name, or `profile`) with nothing saved | `add`, `edit` (name, program and variables only: an account is fixed once added, D-24), `default`, `remove`; a list that moved since `expected_version` is refused as `conflict` and read again |
-| `ProfileInstall { id }` | the list | Reinstall of that profile's pieces, even those the operator took out |
+| `ProfileInstall { profile }` | the list | Reinstall of that profile's pieces, even those the operator took out |
 
 Adding a profile expands a `~` at the start of its folder once, keeping a final separator, has `resolve` check it, then makes the folder it names and the agent's own folder in it private when they are missing and checks that each folder between them is a real folder of this account that no other can change (`hide_kit::prepare_account`, D-20, D-28); only then is it saved and its pieces installed.
 A name is unique among the agent's profiles regardless of case, and no profile takes the built-in one's name.
 Removing one marks it `removing`, which the list carries so a start can refuse it, and drops it as the agent's default; the kit takes Hide's pieces out of its account once no other profile runs there, and the profile leaves the file when the kit reports that, in the same call or in a later kit pass.
-Every kit pass of the node passes the profiles to the kit, so the agent's switch, a Reinstall, an update and the device's removal reach every profile account ([agent-hooks.md](agent-hooks.md#profile-accounts)).
+Every kit pass of the node hands the kit the file to read once the pass holds the account's lock (`profiles::source`), so the agent's switch, a Reinstall, an update and the device's removal reach every profile account as the file holds it then ([agent-hooks.md](agent-hooks.md#profile-accounts)); the module never holds the file while it waits on the kit, so the two locks are always taken in that order.
 
 The core reads the list after each kit pass and after a kit read until it has one, with the runtime lock released (`crate::kit::read_profiles`), and keeps it on the machine's kit snapshot (`KitSnapshot::profiles`): names, accounts, programs and variable names, never a value.
 Each later kit read carries the kit's judgment of every profile, which the snapshot takes only for the version it holds, so a late answer about an earlier version is dropped (D-30).

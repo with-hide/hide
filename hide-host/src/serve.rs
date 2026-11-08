@@ -1161,7 +1161,7 @@ pub fn handle_with_progress(
             change,
             expected_version,
         } => to_value(crate::profiles::apply(env, change, expected_version)?),
-        Call::ProfileInstall { id } => to_value(crate::profiles::install(env, id)?),
+        Call::ProfileInstall { profile } => to_value(crate::profiles::install(env, profile)?),
         Call::WorktreesRegistered { root } => to_value(
             worktrees::registered(&absolute(&root)?)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,

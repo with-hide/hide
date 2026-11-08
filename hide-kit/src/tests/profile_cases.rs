@@ -18,10 +18,10 @@ fn claude(id: &str, folder: &str) -> Profile {
 }
 
 fn with_profiles(fixture: &mut Fixture, live: &[&Profile], going: &[&Profile]) {
-    fixture.target.profiles = Some(KitProfiles {
+    fixture.target.profiles = Some(crate::ProfileSource::fixed(KitProfiles {
         live: live.iter().map(|profile| (*profile).clone()).collect(),
         going: going.iter().map(|profile| (*profile).clone()).collect(),
-    });
+    }));
 }
 
 fn place<'a>(reports: &'a [ProfileReport], id: &str) -> &'a ProfilePlace {
@@ -371,4 +371,264 @@ fn record_of(fixture: &Fixture) -> Value {
         &std::fs::read_to_string(fixture.home().join(".hide/kit/installed.json")).unwrap(),
     )
     .unwrap()
+}
+
+/// Profiles a test changes as the node changes its file, read by every
+/// pass the way the node's source reads the file.
+#[derive(Clone, Default)]
+struct ProfileFile(Arc<std::sync::Mutex<KitProfiles>>);
+
+impl ProfileFile {
+    fn set(&self, live: &[&Profile], going: &[&Profile]) {
+        *self.0.lock().unwrap() = KitProfiles {
+            live: live.iter().map(|profile| (*profile).clone()).collect(),
+            going: going.iter().map(|profile| (*profile).clone()).collect(),
+        };
+    }
+
+    fn source(&self) -> crate::ProfileSource {
+        let file = self.clone();
+        crate::ProfileSource::new(move || Ok(file.0.lock().unwrap().clone()))
+    }
+
+    /// A source that waits for `go` before it reads, while its pass holds
+    /// the account's lock.
+    fn held_source(&self, go: std::sync::mpsc::Receiver<()>) -> crate::ProfileSource {
+        let file = self.clone();
+        let go = std::sync::Mutex::new(Some(go));
+        crate::ProfileSource::new(move || {
+            if let Some(go) = go.lock().unwrap().take() {
+                go.recv().unwrap();
+            }
+            Ok(file.0.lock().unwrap().clone())
+        })
+    }
+}
+
+/// Whether another holder has the account's kit lock now.
+fn account_lock_held(home: &Path) -> bool {
+    use hide_platform::fs::lock::{Mode, Waited, lock_file};
+    let path = home.join(".hide/kit/.lock");
+    let file = hide_platform::fs::private::open_or_create_file(&path).unwrap();
+    matches!(
+        lock_file(file, Mode::Exclusive, std::time::Duration::ZERO, &|| false).unwrap(),
+        Waited::TimedOut
+    )
+}
+
+#[test]
+fn a_pass_reads_the_profiles_only_while_it_holds_the_accounts_lock() {
+    let mut fixture = Fixture::new();
+    let home = fixture.home().to_path_buf();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&seen);
+    fixture.target.profiles = Some(crate::ProfileSource::new(move || {
+        observed.lock().unwrap().push(account_lock_held(&home));
+        Ok(KitProfiles::default())
+    }));
+
+    apply(&fixture.target, &Scope::automatic());
+    crate::apply_profiles(&fixture.target, &BTreeSet::new()).unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), [true, true]);
+}
+
+/// A kit pass that waited for the account's lock while a profile was added
+/// and installed reads the profile once it has the lock: it keeps the
+/// account's pieces rather than taking out what the add just put in.
+#[test]
+fn a_pass_that_waited_through_an_add_keeps_the_new_accounts_pieces() {
+    let mut fixture = Fixture::new();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    let file = ProfileFile::default();
+    let (go, wait) = std::sync::mpsc::channel();
+    let mut adding = fixture.target.clone();
+    adding.profiles = Some(file.held_source(wait));
+    fixture.target.profiles = Some(file.source());
+
+    std::thread::scope(|threads| {
+        // The add's own pass holds the lock until the add has saved.
+        let add = threads.spawn(|| crate::apply_profiles(&adding, &BTreeSet::new()).unwrap());
+        while !account_lock_held(fixture.home()) {
+            std::thread::yield_now();
+        }
+        let waited = threads.spawn(|| apply(&fixture.target, &Scope::automatic()));
+        file.set(&[&profile], &[]);
+        go.send(()).unwrap();
+        add.join().unwrap();
+        waited.join().unwrap();
+    });
+
+    let settings = folder.join("settings.json");
+    assert!(hide_hooks(&settings) > 0);
+    let targets = recorded_targets(&fixture);
+    assert_eq!(
+        targets.as_object().unwrap().values().next().unwrap()["refs"],
+        serde_json::json!(["p-work"])
+    );
+}
+
+/// The mirror: a pass that waited through a removal does not put the
+/// removed account's pieces back.
+#[test]
+fn a_pass_that_waited_through_a_removal_puts_nothing_back() {
+    let mut fixture = Fixture::new();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    let file = ProfileFile::default();
+    file.set(&[&profile], &[]);
+    fixture.target.profiles = Some(file.source());
+    apply(&fixture.target, &Scope::automatic());
+    let settings = folder.join("settings.json");
+    assert!(hide_hooks(&settings) > 0);
+    let (go, wait) = std::sync::mpsc::channel();
+    let mut removing = fixture.target.clone();
+    removing.profiles = Some(file.held_source(wait));
+
+    std::thread::scope(|threads| {
+        let remove = threads.spawn(|| crate::apply_profiles(&removing, &BTreeSet::new()).unwrap());
+        while !account_lock_held(fixture.home()) {
+            std::thread::yield_now();
+        }
+        let waited = threads.spawn(|| apply(&fixture.target, &Scope::automatic()));
+        file.set(&[], &[&profile]);
+        go.send(()).unwrap();
+        remove.join().unwrap();
+        waited.join().unwrap();
+    });
+
+    assert_eq!(hide_hooks(&settings), 0);
+    assert_eq!(recorded_targets(&fixture), Value::Null);
+    apply(&fixture.target, &Scope::automatic());
+    assert_eq!(hide_hooks(&settings), 0);
+}
+
+/// Two installations on the account, the app and a device helper, put
+/// their hooks into one profile account and share its skill stubs: the
+/// first to let the profile go takes out only its own hook, and the stubs
+/// leave with the last.
+#[test]
+fn skill_stubs_another_installation_holds_stay_until_it_lets_go() {
+    let mut fixture = Fixture::new();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    let app = ProfileFile::default();
+    let helper = ProfileFile::default();
+    app.set(&[&profile], &[]);
+    helper.set(&[&profile], &[]);
+    fixture.target.profiles = Some(app.source());
+    let mut device = fixture.target.clone();
+    device.install = hide_agent_hooks::route::install_of_root(&fixture.root.join("helper-root"));
+    device.profiles = Some(helper.source());
+    let stub = folder.join("skills").join(crate::agents::GUIDE_SKILL.name);
+
+    apply(&fixture.target, &Scope::automatic());
+    let device_pass = crate::apply_profiles(&device, &BTreeSet::new()).unwrap();
+    assert_eq!(
+        hook_state(&device_pass.profiles, "p-work"),
+        ComponentState::Installed
+    );
+    let settings = folder.join("settings.json");
+    let both = hide_hooks(&settings);
+    assert!(stub.is_dir());
+
+    app.set(&[], &[&profile]);
+    apply(&fixture.target, &Scope::automatic());
+
+    assert!(stub.is_dir(), "the helper still holds the stubs");
+    let left = hide_hooks(&settings);
+    assert!(
+        left > 0 && left < both,
+        "{left} of {both}: only the app's hook went"
+    );
+
+    helper.set(&[], &[&profile]);
+    crate::apply_profiles(&device, &BTreeSet::new()).unwrap();
+
+    assert!(!stub.exists());
+    assert_eq!(hide_hooks(&settings), 0);
+}
+
+/// A profile account whose skills folder is a link to the folder every
+/// agent shares has no skills piece of its own: nothing of it is written
+/// or taken out there.
+#[test]
+fn a_skills_folder_linked_to_the_shared_one_stays_the_shared_ones() {
+    let mut fixture = Fixture::new();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    let shared = crate::agents::SkillDir::Shared.path(fixture.home());
+    crate::agents::install_skill(crate::agents::SkillDir::Shared, fixture.home(), false).unwrap();
+    std::os::unix::fs::symlink(&shared, folder.join("skills")).unwrap();
+    let stub = shared.join(crate::agents::GUIDE_SKILL.name);
+    assert!(stub.is_dir());
+    with_profiles(&mut fixture, &[&profile], &[]);
+
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert!(
+        matches!(
+            place(&report.profiles, "p-work"),
+            ProfilePlace::Own {
+                skill: None,
+                hook: Some(_),
+                ..
+            }
+        ),
+        "{report:?}"
+    );
+    with_profiles(&mut fixture, &[], &[&profile]);
+    apply(&fixture.target, &Scope::automatic());
+
+    assert!(stub.is_dir(), "the shared folder's stubs stay");
+    assert_eq!(hide_hooks(&folder.join("settings.json")), 0);
+}
+
+/// A profile that named its account through a link: when the link is moved
+/// to another account a profile in use holds, the old account's pieces come
+/// out of the folder they went into, and the other account keeps its own.
+#[test]
+fn moving_a_link_takes_out_the_old_accounts_pieces_and_keeps_the_new_ones() {
+    let mut fixture = Fixture::new();
+    let first = fixture.root.join("accounts/first");
+    let second = fixture.root.join("accounts/second");
+    let link = fixture.root.join("accounts/current");
+    let linked = claude("p-linked", &link.display().to_string());
+    let direct = claude("p-direct", &second.display().to_string());
+    added(&fixture, &direct);
+    hide_platform::fs::private::create_dir_all(&first).unwrap();
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    added(&fixture, &linked);
+    with_profiles(&mut fixture, &[&linked, &direct], &[]);
+    apply(&fixture.target, &Scope::automatic());
+    assert!(hide_hooks(&first.join("settings.json")) > 0);
+    assert!(hide_hooks(&second.join("settings.json")) > 0);
+
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&second, &link).unwrap();
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(hide_hooks(&first.join("settings.json")), 0, "{report:?}");
+    assert!(hide_hooks(&second.join("settings.json")) > 0);
+    assert!(
+        second
+            .join("skills")
+            .join(crate::agents::GUIDE_SKILL.name)
+            .is_dir()
+    );
+    let targets = recorded_targets(&fixture);
+    let targets = targets.as_object().unwrap();
+    assert_eq!(targets.len(), 1, "{targets:?}");
+    assert_eq!(
+        targets.values().next().unwrap()["refs"],
+        serde_json::json!(["p-direct", "p-linked"])
+    );
+    for id in ["p-linked", "p-direct"] {
+        assert_eq!(hook_state(&report.profiles, id), ComponentState::Installed);
+    }
 }
