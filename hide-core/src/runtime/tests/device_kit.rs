@@ -20,6 +20,9 @@ pub(super) struct KitDevice {
     /// When set, an apply or status call waits here until the test lets it
     /// answer, as a slow device would.
     gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    /// What it answers for its profiles; with none it refuses the call, as a
+    /// node that keeps no profiles does.
+    profiles: Mutex<Option<serde_json::Value>>,
 }
 
 impl KitDevice {
@@ -30,6 +33,7 @@ impl KitDevice {
             answer: Mutex::new(answer),
             closed: Mutex::new(None),
             gate: Mutex::new(None),
+            profiles: Mutex::new(None),
         })
     }
 
@@ -49,6 +53,15 @@ impl KitDevice {
 
 impl NodeLink for KitDevice {
     fn call(&self, call: Call, _timeout: Duration) -> Result<LinkAnswer, LinkError> {
+        if let Call::ProfileList { .. } = call {
+            return match &*self.profiles.lock().unwrap() {
+                Some(list) => Ok(LinkAnswer::Parsed(list.clone())),
+                None => Err(LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::Unsupported,
+                    "This node keeps no agent profiles",
+                ))),
+            };
+        }
         let Call::Kit {
             action,
             cli_dir,
@@ -1941,6 +1954,13 @@ fn local_hook_diagnosis_and_merged_installs_have_one_ordered_owner() {
     reply
         .send(Ok(serde_json::to_value(report(&[])).unwrap()))
         .unwrap();
+    // The pass may have settled a profile's removal, so the list is read.
+    let (call, reply) = calls.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        matches!(call, Call::ProfileList { values: false }),
+        "{call:?}"
+    );
+    reply.send(Ok(serde_json::json!({"version": 0}))).unwrap();
     let (call, reply) = calls.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(matches!(call, Call::HookDiagnosis));
     let after = diagnosis_status(hide_agent_hooks::HookStatus::Off);
@@ -2925,4 +2945,95 @@ fn a_connected_device_link_ends_when_the_core_stops() {
     assert_eq!(helper.closed_reason(), None);
     drop(core);
     assert_eq!(helper.closed_reason().as_deref(), Some("core stopping"));
+}
+
+/// A device's profiles reach its row with their variables' names only, and
+/// each pass's judgment of a profile counts only for the version the row
+/// holds (PRD agent-profiles D-04, D-30).
+#[test]
+fn a_devices_profiles_reach_its_row_and_a_judgment_of_an_older_version_is_dropped() {
+    let helper = KitDevice::answering(Ok(report(&[(ComponentId::Cli, ComponentState::Installed)])));
+    *helper.profiles.lock().unwrap() = Some(serde_json::json!({
+        "version": 4,
+        "profiles": [{
+            "id": "p-1",
+            "kind": "claude-code",
+            "name": "work",
+            "account": {"folder": "/home/me/work/"},
+            "env_keys": ["ANTHROPIC_BASE_URL"],
+            "version": 3,
+            "place": {
+                "kind": "own",
+                "folder": "/home/me/work",
+                "hook": {"state": "installed", "reason": null, "location": "/home/me/work/settings.json"}
+            }
+        }],
+        "defaults": {"claude-code": "p-1"}
+    }));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+
+    shared
+        .lock()
+        .unwrap()
+        .queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    settle(&shared);
+
+    let profiles = kit(&shared).profiles.expect("the profiles were read");
+    assert_eq!(profiles.state, crate::model::ProfilesState::Listed);
+    assert_eq!(profiles.version, 4);
+    assert_eq!(
+        profiles.defaults.get("claude-code").map(String::as_str),
+        Some("p-1")
+    );
+    let row = &profiles.profiles[0];
+    assert_eq!(row.account.as_deref(), Some("/home/me/work/"));
+    assert_eq!(row.env_keys, ["ANTHROPIC_BASE_URL"]);
+    assert_eq!(row.install, Some(crate::model::ProfileInstall::Own));
+    assert_eq!(
+        row.hook.as_ref().map(|hook| hook.state),
+        Some(ComponentState::Installed)
+    );
+
+    let judged = |version: u64| {
+        let mut answer = report(&[(ComponentId::Cli, ComponentState::Installed)]);
+        answer.profiles = vec![hide_kit::ProfileReport {
+            id: hide_agent_adapter::ProfileId("p-1".to_owned()),
+            version,
+            place: hide_kit::ProfilePlace::Own {
+                folder: "/home/me/work".to_owned(),
+                hook: Some(hide_kit::PieceReport {
+                    state: ComponentState::Failed,
+                    reason: None,
+                    why: None,
+                    location: None,
+                }),
+                skill: None,
+            },
+        }];
+        shared.lock().unwrap().ingest_kit_report(DEVICE, &answer);
+        kit(&shared).profiles.unwrap().profiles[0]
+            .hook
+            .as_ref()
+            .map(|hook| hook.state)
+    };
+    assert_eq!(judged(2), Some(ComponentState::Installed), "a late answer");
+    assert_eq!(judged(3), Some(ComponentState::Failed));
+}
+
+/// A device whose node keeps no profiles, or predates them, offers only each
+/// agent's built-in default profile.
+#[test]
+fn a_device_that_keeps_no_profiles_reads_as_unsupported() {
+    let helper = KitDevice::answering(Ok(report(&[(ComponentId::Cli, ComponentState::Installed)])));
+    let shared = with_consent(Some(Arc::clone(&helper)));
+
+    shared
+        .lock()
+        .unwrap()
+        .queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    settle(&shared);
+
+    let profiles = kit(&shared).profiles.expect("the profiles were asked");
+    assert_eq!(profiles.state, crate::model::ProfilesState::Unsupported);
+    assert!(profiles.profiles.is_empty());
 }

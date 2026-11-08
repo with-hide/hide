@@ -1087,6 +1087,171 @@ pub struct KitSnapshot {
     /// what stopped it, for one line with Try again. The parts and agents
     /// are then empty, and the kit's own words are in the log.
     pub refused: Option<KitRefusalSnapshot>,
+    /// The machine's agent profiles as its node lists them (PRD
+    /// agent-profiles D-04); `None` until they were first read.
+    pub profiles: Option<ProfilesSnapshot>,
+}
+
+/// A machine's agent profiles: what its node lists, never a variable's
+/// value, each with its pieces as the kit last judged them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfilesSnapshot {
+    pub state: ProfilesState,
+    /// The list's version, which a change names (`ProfileApply`).
+    pub version: u64,
+    pub profiles: Vec<ProfileSnapshot>,
+    /// Each agent's default profile where it is not the built-in one, by
+    /// agent id.
+    pub defaults: BTreeMap<String, String>,
+}
+
+/// Whether the machine's profiles could be read
+/// (`contracts/snapshot-wire-enums.json`: `profiles_state`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfilesState {
+    Listed,
+    /// The machine's node predates profiles: only each agent's built-in
+    /// default profile runs there.
+    Unsupported,
+    /// The list could not be read; the last list read stays, and why is in
+    /// the log.
+    Unreadable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfileSnapshot {
+    pub id: String,
+    /// The agent's id.
+    pub kind: String,
+    pub name: String,
+    /// The folder or omp name it runs in; `None` for the agent's default
+    /// account.
+    pub account: Option<String>,
+    pub program: Option<String>,
+    /// The names of the variables it adds; their values stay on the node.
+    pub env_keys: Vec<String>,
+    pub version: u64,
+    /// Where its pieces are; `None` until the kit judged this version.
+    pub install: Option<ProfileInstall>,
+    /// The account's own folder, for a profile whose account is its own.
+    pub folder: Option<String>,
+    pub hook: Option<KitPieceSnapshot>,
+    pub skill: Option<KitPieceSnapshot>,
+}
+
+/// Where a profile's pieces are (`contracts/snapshot-wire-enums.json`:
+/// `profile_install`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileInstall {
+    /// The agent's default account: its pieces are the agent's own row.
+    Default,
+    /// An account of its own, with its pieces in `hook` and `skill`.
+    Own,
+    /// Nothing can be judged or put in its account; why is in the log.
+    Refused,
+    /// Being removed.
+    Removing,
+    /// Being removed, and Hide's pieces could not all leave its account;
+    /// why is in the log, and the next pass tries again.
+    RemoveFailed,
+}
+
+impl ProfilesSnapshot {
+    pub fn unsupported() -> Self {
+        Self {
+            state: ProfilesState::Unsupported,
+            version: 0,
+            profiles: Vec::new(),
+            defaults: BTreeMap::new(),
+        }
+    }
+
+    pub fn from_list(list: &hide_node_link::profiles::ProfileList) -> Self {
+        let mut snapshot = Self {
+            state: ProfilesState::Listed,
+            version: list.version,
+            profiles: list
+                .profiles
+                .iter()
+                .map(|profile| ProfileSnapshot {
+                    id: profile.id.0.clone(),
+                    kind: profile.kind.clone(),
+                    name: profile.name.clone(),
+                    account: profile.account.as_ref().map(|account| match account {
+                        hide_agent_adapter::AccountRef::Folder(text)
+                        | hide_agent_adapter::AccountRef::Name(text) => text.clone(),
+                    }),
+                    program: profile.program.clone(),
+                    env_keys: profile.env_keys.clone(),
+                    version: profile.version,
+                    install: profile.removing.then_some(ProfileInstall::Removing),
+                    folder: None,
+                    hook: None,
+                    skill: None,
+                })
+                .collect(),
+            defaults: list
+                .defaults
+                .iter()
+                .map(|(kind, id)| (kind.clone(), id.0.clone()))
+                .collect(),
+        };
+        let places: Vec<hide_kit::ProfileReport> = list
+            .profiles
+            .iter()
+            .filter_map(|profile| {
+                Some(hide_kit::ProfileReport {
+                    id: profile.id.clone(),
+                    version: profile.version,
+                    place: profile.place.clone()?,
+                })
+            })
+            .collect();
+        snapshot.judged(&places);
+        snapshot
+    }
+
+    /// Takes the kit's judgment of each profile, where it is about the
+    /// profile's version this list holds; one about an older version is a
+    /// late answer and is dropped (D-30).
+    pub fn judged(&mut self, reports: &[hide_kit::ProfileReport]) {
+        for profile in &mut self.profiles {
+            let Some(report) = reports
+                .iter()
+                .find(|report| report.id.0 == profile.id && report.version == profile.version)
+            else {
+                continue;
+            };
+            let (install, folder, hook, skill) = match &report.place {
+                hide_kit::ProfilePlace::Default => (ProfileInstall::Default, None, None, None),
+                hide_kit::ProfilePlace::Own {
+                    folder,
+                    hook,
+                    skill,
+                } => (
+                    ProfileInstall::Own,
+                    Some(folder.clone()),
+                    hook.as_ref().map(Into::into),
+                    skill.as_ref().map(Into::into),
+                ),
+                hide_kit::ProfilePlace::Refused { .. } => {
+                    (ProfileInstall::Refused, None, None, None)
+                }
+                hide_kit::ProfilePlace::Removing { failure: None } => {
+                    (ProfileInstall::Removing, None, None, None)
+                }
+                hide_kit::ProfilePlace::Removing { failure: Some(_) } => {
+                    (ProfileInstall::RemoveFailed, None, None, None)
+                }
+            };
+            profile.install = Some(install);
+            profile.folder = folder;
+            profile.hook = hook;
+            profile.skill = skill;
+        }
+    }
 }
 
 /// Why a machine's kit pass stopped, as the screen words it (`hide_kit::KitRefusal`
@@ -1305,6 +1470,7 @@ impl KitSnapshot {
             checking: false,
             check_failed: None,
             refused: report.refused.as_deref().map(Into::into),
+            profiles: None,
         }
     }
 
@@ -8902,6 +9068,38 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "kit_component_state", &kit_states);
         checked.insert("kit_component_state");
+
+        let profiles_states = [
+            ProfilesState::Listed,
+            ProfilesState::Unsupported,
+            ProfilesState::Unreadable,
+        ];
+        for variant in profiles_states {
+            match variant {
+                ProfilesState::Listed | ProfilesState::Unsupported | ProfilesState::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "profiles_state", &profiles_states);
+        checked.insert("profiles_state");
+
+        let installs = [
+            ProfileInstall::Default,
+            ProfileInstall::Own,
+            ProfileInstall::Refused,
+            ProfileInstall::Removing,
+            ProfileInstall::RemoveFailed,
+        ];
+        for variant in installs {
+            match variant {
+                ProfileInstall::Default
+                | ProfileInstall::Own
+                | ProfileInstall::Refused
+                | ProfileInstall::Removing
+                | ProfileInstall::RemoveFailed => {}
+            }
+        }
+        assert_wire(&contract, "profile_install", &installs);
+        checked.insert("profile_install");
 
         let onboarding = [AgentOnboarding::Pending, AgentOnboarding::Done];
         for variant in onboarding {

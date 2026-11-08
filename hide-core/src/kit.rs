@@ -28,7 +28,9 @@ use serde_json::json;
 
 use crate::handle::ChangeNotifier;
 use crate::node_access::{NodeLink, call_as};
-use crate::runtime::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, Runtime};
+use crate::runtime::{
+    DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead, Runtime,
+};
 
 const PUMP_TICK: Duration = Duration::from_millis(250);
 
@@ -78,9 +80,10 @@ impl KitPump {
                     };
                     let now = Instant::now();
                     let Ok((job, diagnosis_due)) = core.lock().map(|mut locked| {
-                        let job = locked
-                            .take_local_kit_job(now)
-                            .map(|job| (job, locked.retirement_projects(node.as_str())));
+                        let job = locked.take_local_kit_job(now).map(|job| {
+                            let profiles = locked.profiles_due(node.as_str(), &job);
+                            (job, locked.retirement_projects(node.as_str()), profiles)
+                        });
                         let due = next_diagnosis.is_none()
                             || (locked.ui_attached()
                                 && locked.settings_observed()
@@ -91,7 +94,9 @@ impl KitPump {
                     };
                     drop(core);
                     let mut applied = false;
-                    let report = job.map(|(job, retirement_projects)| {
+                    let mut profiles_due = false;
+                    let report = job.map(|(job, retirement_projects, profiles)| {
+                        profiles_due = profiles;
                         let kit = hide_node_link::protocol::Call::Kit {
                             action: action_of(&job),
                             cli_dir: LOCAL_CLI_DIR.to_owned(),
@@ -109,6 +114,8 @@ impl KitPump {
                     if cancelled.load(Ordering::Acquire) || link.closed_reason().is_some() {
                         break;
                     }
+                    let profiles = (profiles_due && matches!(report, Some(Ok(_))))
+                        .then(|| read_profiles(link.as_ref()));
                     // The hook diagnosis reads the same files, so it is read
                     // again here: Memory's "update hooks" and the agent rows
                     // follow what the kit just wrote.
@@ -136,6 +143,9 @@ impl KitPump {
                             }
                             None => false,
                         };
+                        if let Some(profiles) = profiles {
+                            changed |= locked.ingest_profiles(node.as_str(), profiles);
+                        }
                         match diagnosis {
                             Some(Some(diagnosis)) => {
                                 changed |= locked.ingest_hook_diagnosis(diagnosis);
@@ -277,17 +287,24 @@ pub(crate) fn spawn_device_worker(
                 let Some(core) = runtime.upgrade() else {
                     return;
                 };
-                let Ok(call) = core
-                    .lock()
-                    .map(|mut locked| locked.take_device_kit_call(&device_id))
-                else {
+                let Ok(call) = core.lock().map(|mut locked| {
+                    locked.take_device_kit_call(&device_id).map(|call| {
+                        let profiles = match &call.work {
+                            DeviceKitWork::Job(job) => locked.profiles_due(&device_id, job),
+                            DeviceKitWork::Remove => false,
+                        };
+                        (call, profiles)
+                    })
+                }) else {
                     return;
                 };
                 drop(core);
-                let Some(call) = call else {
+                let Some((call, profiles_due)) = call else {
                     return;
                 };
                 let answer = call_device(&call);
+                let profiles = (profiles_due && matches!(answer, DeviceKitAnswer::Report(Ok(_))))
+                    .then(|| read_profiles(call.channel.as_ref()));
                 if let (
                     DeviceKitAnswer::Report(Ok(report)),
                     DeviceKitWork::Job(KitJob::Apply(scope)),
@@ -311,7 +328,12 @@ pub(crate) fn spawn_device_worker(
                             report,
                         );
                     }
-                    locked.ingest_device_kit_answer(&device_id, answer, call.daemon_off_run)
+                    let mut changed =
+                        locked.ingest_device_kit_answer(&device_id, answer, call.daemon_off_run);
+                    if let Some(profiles) = profiles {
+                        changed |= locked.ingest_profiles(&device_id, profiles);
+                    }
+                    changed
                 }) else {
                     return;
                 };
@@ -344,6 +366,30 @@ fn call_device(call: &DeviceKitCall) -> DeviceKitAnswer {
         DeviceKitAnswer::Report(
             call_as(call.channel.as_ref(), kit, KIT_TIMEOUT).map_err(|error| error.to_string()),
         )
+    }
+}
+
+/// A list of profiles is a file read and the kit's judgment of each.
+const PROFILE_LIST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The node's profiles (`Call::ProfileList`), with the runtime lock
+/// released. A node that predates them answers the call unrun: one that
+/// knows the call and keeps none (`Unsupported`), or one on an older
+/// protocol that cannot read it.
+pub(crate) fn read_profiles(link: &dyn NodeLink) -> ProfilesRead {
+    use crate::node_access::LinkError;
+    use hide_node_link::ErrorCode;
+    let call = hide_node_link::protocol::Call::ProfileList { values: false };
+    match call_as::<hide_node_link::profiles::ProfileList>(link, call, PROFILE_LIST_TIMEOUT) {
+        Ok(list) => ProfilesRead::Listed(list),
+        Err(LinkError::Refused(refusal))
+            if refusal.code == ErrorCode::Unsupported
+                || (refusal.code == ErrorCode::InvalidRequest
+                    && link.predates_current_protocol()) =>
+        {
+            ProfilesRead::Unsupported
+        }
+        Err(error) => ProfilesRead::Unreadable(error.to_string()),
     }
 }
 
@@ -386,5 +432,63 @@ impl Drop for KitPump {
         {
             crate::diagnostic!(json!({"component":"kit", "kind":"worker.join_failed"}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_access::LinkError;
+    use hide_node_link::protocol::Call;
+    use hide_node_link::{ErrorCode, HostError, LinkAnswer};
+
+    /// A node that answers every call the same way, on the current protocol
+    /// or an older one the core still admits.
+    struct Answering {
+        answer: Result<serde_json::Value, ErrorCode>,
+        older: bool,
+    }
+
+    impl NodeLink for Answering {
+        fn call(&self, call: Call, _: Duration) -> Result<LinkAnswer, LinkError> {
+            assert!(
+                matches!(call, Call::ProfileList { values: false }),
+                "{call:?}"
+            );
+            match &self.answer {
+                Ok(value) => Ok(value.clone().into()),
+                Err(code) => Err(LinkError::Refused(HostError::new(*code, "refused"))),
+            }
+        }
+
+        fn predates_current_protocol(&self) -> bool {
+            self.older
+        }
+    }
+
+    fn read(answer: Result<serde_json::Value, ErrorCode>, older: bool) -> ProfilesRead {
+        read_profiles(&Answering { answer, older })
+    }
+
+    #[test]
+    fn a_node_that_predates_profiles_reads_as_keeping_none() {
+        assert!(matches!(
+            read(Err(ErrorCode::InvalidRequest), true),
+            ProfilesRead::Unsupported
+        ));
+        assert!(matches!(
+            read(Err(ErrorCode::Unsupported), false),
+            ProfilesRead::Unsupported
+        ));
+        // A current node that could not read the call is a failure, not a
+        // machine with no profiles.
+        assert!(matches!(
+            read(Err(ErrorCode::InvalidRequest), false),
+            ProfilesRead::Unreadable(_)
+        ));
+        assert!(matches!(
+            read(Ok(json!({"version": 3})), false),
+            ProfilesRead::Listed(list) if list.version == 3
+        ));
     }
 }

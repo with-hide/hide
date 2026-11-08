@@ -104,6 +104,14 @@ impl NodeLink for Node {
                     "no such ref",
                 )));
             }
+            // The device's profiles, read after its kit pass: a node that
+            // keeps none.
+            Call::ProfileList { .. } => {
+                return Err(LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::Unsupported,
+                    "This node keeps no agent profiles",
+                )));
+            }
             // The catalog's reads of the device's folders, which a session
             // pass of the device asks for, are no part of a spawn.
             Call::Project { .. } | Call::Worktrees { .. } => {
