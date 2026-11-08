@@ -657,6 +657,15 @@ mod tests {
     }
 
     #[test]
+    fn workspace_info_names_every_page_command() {
+        let named: Vec<String> = VERBS.iter().map(|verb| format!("browser.{verb}")).collect();
+        assert_eq!(
+            named,
+            hide_core::workspace_control::BROWSER_PAGE_CAPABILITIES
+        );
+    }
+
+    #[test]
     fn page_text_cannot_steer_the_terminal() {
         assert_eq!(
             printable("@1 button \"Go\u{1b}]52;c;x\u{7}\"\n\u{202e}gnp.exe\tok\u{9b}2J"),
