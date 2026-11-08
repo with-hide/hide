@@ -47,6 +47,11 @@ export type PracticeStep<M = unknown> = {
    * stays done, however the learner closes it afterwards.
    */
   shown?: string;
+  /**
+   * With `done`: the step is over only once the palette its result opened has closed again, ⏎ on a row or Esc. While
+   * it is up the guide stays on this step and says only how to use the palette, never the next step's card.
+   */
+  afterClose?: true;
   /** Done by the world on its own (`PracticeWorld.later`), an agent finishing its turn: ⏎ does nothing and the button says it waits. */
   wait?: true;
   /**
