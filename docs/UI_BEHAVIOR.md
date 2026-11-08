@@ -1068,8 +1068,9 @@ It opens as a centered modal over a mounted Workspace, as large as the window al
 Its head is the title `Overview` and the device switch: every connected device as its rail tile and name, a device that does not answer marked `연결 안 됨`, and every other device's tooltip carrying `내 차례 N` (B2).
 With This Mac alone there is no switch, since there is nothing to choose.
 Choosing a device changes only what the Overview shows; the rail, the sidebar and the Workspace in front stay, and a project chip that was set clears.
-The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows.
-A device that does not answer dims the live Work, Projects and Backlog tabs, and their body holds `<device>에서 응답이 없어요 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows; a count is drawn only once the device has answered, so a device on its way or not answering shows the tabs' names alone.
+A device that does not answer, the core's `not_connected` among them, which the sidebar and the title row call `연결 안 됨`, dims the live Work, Projects and Backlog tabs, and their body holds `<device>에서 응답이 없어요 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
+A device on its way (no status from it yet, its projects being read, or this machine's terminal engine connecting) holds in those tabs' place only a spinner and what it waits for, never an empty map or list drawn from records nobody has read.
 History keeps searching the core's retained requests for that device and marks its disconnected state in the view.
 Usage stays available because choosing a different device does not change the core machine that owns its ledger.
 The project chip at the row's right filters the four device views; changing the device clears it.
@@ -1085,9 +1086,9 @@ Native browser displays use the existing dialog still rules without reloading.
 Every tab, the device switch, the project chip, a row, a fold line and every button of the panel take the keyboard with a visible focus ring and an accessible name, and a state is written as a word (`묻는 중`, `일하는 중`) as well as drawn in its colour (B64).
 The Overview draws its first screen from the snapshot without waiting for any disk or GitHub read, and a closed Overview adds nothing to terminal output or key input (B63).
 
-The Home with no project shows `Add a project to start an agent.` and Add project with its chord (⇧⌘N); a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the button stands alone there.
+The Home with no project shows the factory owl, `일할 프로젝트를 추가하세요` (Add a project to work in) over `폴더나 Git 저장소를 고르면 에이전트가 그 안에서 일해요.`, and Add project with its chord (⇧⌘N); a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the button stands alone there (`EmptyWelcome`, `web/src/components/empty-welcome.tsx`).
 Under it a quiet `Try it on a practice screen first` opens the [Practice window](#practice-window).
-With projects and no agent, Work shows its empty state and the existing New agent route; the backlog remains available.
+With projects and no agent awake, Work shows the welcome described under [Work](#work); the backlog remains available.
 Before the first snapshot the shell's own connecting state shows instead.
 
 ### A device's tasks
@@ -1109,7 +1110,8 @@ Both views share All, My turn, Working and Unread results, with counts from cano
 Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
 The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
 A filter dims the sessions it does not match instead of removing them, so a filter never moves a circle; an excluded ancestor of a present session stays as dimmed context, and dimmed sessions never increase match counts.
-A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
+A filter with no match shows Show all sessions, distinct from no session awake and layout failure.
+With no session awake (none at all, or only sleeping ones while Include sleeping is off) there is nothing to filter or arrange, so the toolbar, the chips and the map give their place to the welcome: the agents owl, `에이전트에게 일을 맡겨 보세요` (Hand an agent some work), `<project>에서 시작` when exactly one project is in scope, and New agent with its chord (⌘N), which opens the start panel on that project, or on the panel's own default with several; with sleeping sessions, a quiet `잠든 세션 N개 보기` under it shows every session, as Show all sessions does, and a mission waiting on the operator stays listed under the welcome.
 A team folds into its root, and a project folds into one circle (PRD overview-main-map D-19).
 A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice.
 

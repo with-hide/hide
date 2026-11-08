@@ -36,6 +36,18 @@ describe("All projects", () => {
   });
 });
 
+describe("a device that is not connected", () => {
+  it("is not connected with Reconnect, as the sidebar and title row say, and loads only before its first status", () => {
+    const rest = (remote: unknown[]) => ({
+      navigator: { devices: [{ id: "local", kind: "local", label: "This Mac" }, { id: "window", kind: "remote", label: "window" }], workspaces: [] },
+      status: { remote },
+    }) as unknown as SnapshotRest;
+    expect(mainSections(rest([{ target_id: "window", state: "not_connected", message: "Reconnecting to the device" }]))[1]?.availability).toMatchObject({ state: "unavailable", retry: "connect" });
+    expect(mainSections(rest([]))[1]?.availability.state).toBe("loading");
+    expect(mainSections(rest([{ target_id: "window", state: "connected", catalog: { state: "resolving" } }]))[1]?.availability.state).toBe("loading");
+  });
+});
+
 describe("All projects while this machine's Herdr does not answer", () => {
   it("shows why instead of counting no agents", () => {
     const rest = {

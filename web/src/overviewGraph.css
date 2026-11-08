@@ -1,4 +1,6 @@
 .overview-graph { position: relative; min-width: 0; color: var(--foreground); }
+/* With nothing awake the welcome fills the page, and a waiting mission stays under it. */
+.overview-graph:has(> [data-graph-welcome]) { display: flex; flex-direction: column; min-height: 100%; }
 .og-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg); }
 .og-toolbar h2 { margin: 0 0 var(--spacing-sm); font-size: var(--text-headline); font-weight: 600; }
 .og-toolbar-actions, .og-toolbar-actions > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
