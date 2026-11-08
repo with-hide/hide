@@ -352,7 +352,12 @@ use crate::error::HostError;
 /// hooks could not send in time (`hide_agent_hooks::owed::take`), which the
 /// core asks once the pane rests (`docs/delivery.md`, A confirmation that
 /// missed its hook); a helper on 83 would refuse it, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 84;
+/// 85: the home folder is a project (PRD home-folder-project). `Registrable`
+/// asks about it instead of refusing it (`HostError::home`), `Index` carries
+/// the other projects of the node (`others`) so the home project's walk
+/// skips them, and Home never links it; a helper on 84 would refuse the
+/// home folder as a project, so it upgrades.
+pub const PROTOCOL_VERSION: u32 = 85;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -515,8 +520,14 @@ pub enum Call {
     },
     /// Every file under the root the ignore files admit, capped
     /// (`hide_host::index::walk`), for the ⌘P palette.
+    ///
+    /// When the root is the node's home folder the walk leaves out its
+    /// top-level hidden names and app-data folder and every folder in
+    /// `others`, the other projects registered on the node.
     Index {
         root: RootRef,
+        #[serde(default)]
+        others: Vec<String>,
     },
     OpenDocument {
         root: RootRef,
@@ -1494,6 +1505,14 @@ pub struct Hello {
     /// The home directory of the account the helper runs as, the boundary
     /// the device's own registration listing applies (PRD S5.5 B24).
     pub home: Option<String>,
+    /// The same folder as the node's filesystem names it (every link
+    /// resolved, on-disk case), so a registered folder, which a node
+    /// answers resolved the same way, is the home folder when the two
+    /// are equal; the core measures no size for it (PRD home-folder-project
+    /// D-06). Absent from a node older than protocol 85, or when the home
+    /// cannot be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_real: Option<String>,
     /// Read once when this connection starts; a failure leaves lineage
     /// unresolved without making the file helper unavailable.
     pub machine_identity: MachineIdentity,

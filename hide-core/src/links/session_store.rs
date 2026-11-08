@@ -97,7 +97,8 @@ impl LinkStore {
             })
             .map_err(failed)?;
         let owned = |device: &str, place: &str| {
-            super::deepest_owner(&places, device, place).is_some_and(|key| keys.contains(key))
+            super::deepest_owner(&places, device, place)
+                .is_some_and(|key| keys.contains(key.as_str()))
         };
         let mut members = BTreeSet::new();
         for row in rows {

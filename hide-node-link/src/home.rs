@@ -42,6 +42,7 @@ pub struct HomeSkip {
     pub target: String,
     /// `missing` (not a folder now), `name_taken` (something of the
     /// operator's holds the link's name), `link_failed` (the disk refused the
-    /// link), `not_absolute`, or `no_name` (the path has no final component).
+    /// link), `not_absolute`, `no_name` (the path has no final component), or
+    /// `home_folder` (the account's home folder, which Home never holds).
     pub reason: String,
 }

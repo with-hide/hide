@@ -168,6 +168,7 @@ fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() 
         &raw,
         &answered(&[&t.main, &t.linked, &t.other]),
         None,
+        &[],
     );
 
     let mut shape = layout(&grouped);
@@ -227,7 +228,7 @@ fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() 
         &t.main,
         &[("t1", &t.main)],
     )]);
-    let studio = device_catalog::group("studio", &elsewhere, &answered(&[&t.main]), None);
+    let studio = device_catalog::group("studio", &elsewhere, &answered(&[&t.main]), None, &[]);
     assert_ne!(studio.workspaces[0].id, main.id);
 }
 
@@ -260,7 +261,7 @@ fn a_windows_devices_folders_group_by_the_wire_spelling_its_helper_answers() {
         .collect(),
         ..DeviceFacts::default()
     };
-    let grouped = device_catalog::group("pc", &raw, &answered, None);
+    let grouped = device_catalog::group("pc", &raw, &answered, None, &[]);
 
     assert_eq!(
         layout(&grouped),
@@ -312,12 +313,13 @@ fn a_devices_removed_worktree_stays_a_missing_checkout_of_the_repository_the_eng
         worktree_workspace("w2", &gone, &t.main),
     ]);
 
-    let unanswered = device_catalog::group(TARGET, &raw, &answered(&[&t.main]), None);
+    let unanswered = device_catalog::group(TARGET, &raw, &answered(&[&t.main]), None, &[]);
     let grouped = device_catalog::group(
         TARGET,
         &raw,
         &with_refused(answered(&[&t.main]), &[&gone]),
         None,
+        &[],
     );
 
     assert!(
@@ -369,6 +371,7 @@ fn a_devices_removed_worktree_its_git_still_lists_stays_under_its_repository() {
         &raw,
         &with_refused(answered(&[&t.main]), &[&gone]),
         Some(&worktrees),
+        &[],
     );
 
     assert_eq!(grouped.workspaces.len(), 1);
@@ -390,11 +393,65 @@ fn a_devices_removed_folder_nothing_places_stays_a_row_of_its_own() {
         &[("t3", &gone)],
     )]);
 
-    let grouped = device_catalog::group(TARGET, &raw, &with_refused(answered(&[]), &[&gone]), None);
+    let grouped = device_catalog::group(
+        TARGET,
+        &raw,
+        &with_refused(answered(&[]), &[&gone]),
+        None,
+        &[],
+    );
 
     assert_eq!(grouped.workspaces.len(), 1);
     assert_eq!(grouped.workspaces[0].path, gone);
     assert!(grouped.workspaces[0].checkouts[0].unconfirmed);
+}
+
+// A pane in a folder no repository places is the registered folder's above it,
+// not a row of its own (PRD home-folder-project D-07, B16).
+#[test]
+fn a_device_pane_below_a_registered_folder_is_that_folders_not_a_row_of_its_own() {
+    let t = tree();
+    let below = format!("{}/notes", t.other);
+    std::fs::create_dir_all(&below).unwrap();
+    let raw = session(vec![engine_workspace(
+        TARGET,
+        "w3",
+        &below,
+        &[("t3", &below)],
+    )]);
+    let facts = answered(&[&below]);
+
+    let alone = device_catalog::group(TARGET, &raw, &facts, None, &[]);
+    assert_eq!(layout(&alone)[0].0, below);
+
+    let held = device_catalog::group(TARGET, &raw, &facts, None, &[PathBuf::from(&t.other)]);
+    let rows = layout(&held);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, t.other);
+    assert_eq!(rows[0].1[0].0, t.other);
+    // Every reference follows the folded row: the tab names the project and
+    // the checkout it now sits in, and the engine workspace stays attached.
+    let project = &held.workspaces[0];
+    let checkout = &project.checkouts[0];
+    assert_eq!(checkout.workspace_id, project.id);
+    assert_eq!(
+        project.id,
+        device_catalog::project_id(TARGET, Path::new(&t.other))
+    );
+    assert_eq!(checkout.id, device_catalog::checkout_id(TARGET, &t.other));
+    assert!(checkout.tabs.iter().all(|tab| {
+        tab.workspace_id.as_deref() == Some(project.id.as_str())
+            && tab.checkout_id.as_deref() == Some(checkout.id.as_str())
+    }));
+    assert_eq!(project.session_workspace_ids, vec!["w3".to_owned()]);
+    assert_eq!(
+        held.active_tab_ids.get(&checkout.id),
+        alone.active_tab_ids.values().next()
+    );
+
+    // Another device with the same folder is never joined to this one's row.
+    let other = device_catalog::group("studio", &raw, &facts, None, &[]);
+    assert_ne!(other.workspaces[0].id, project.id);
 }
 
 #[test]
@@ -405,7 +462,7 @@ fn a_directory_the_helper_has_not_confirmed_is_shown_as_its_workspace_and_says_w
         engine_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
     ]);
     let mut facts = answered(&[&t.main]);
-    let grouped = device_catalog::group(TARGET, &raw, &facts, None);
+    let grouped = device_catalog::group(TARGET, &raw, &facts, None, &[]);
     assert!(
         grouped
             .workspaces
@@ -2472,7 +2529,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         grouped.workspaces[0].checkouts[0].clone()
     };
     for facts in [DeviceFacts::default(), answered(&[&t.main])] {
-        let checkout = row(&device_catalog::group(TARGET, &raw(), &facts, None));
+        let checkout = row(&device_catalog::group(TARGET, &raw(), &facts, None, &[]));
         assert_eq!(checkout.id, device_catalog::checkout_id(TARGET, &t.main));
         assert_eq!(checkout.path, t.main);
         assert_eq!(checkout.owner_workspace_id.as_deref(), Some("w5N"));
@@ -2489,7 +2546,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     }
     // The tab brought forward: the engine's focused tab when it is in the
     // checkout, else the owner's active tab.
-    let grouped = device_catalog::group(TARGET, &raw(), &answered(&[&t.main]), None);
+    let grouped = device_catalog::group(TARGET, &raw(), &answered(&[&t.main]), None, &[]);
     let id = device_catalog::checkout_id(TARGET, &t.main);
     assert_eq!(
         grouped.active_tab_ids.get(&id).map(String::as_str),
@@ -2497,7 +2554,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     );
     let mut focused = raw();
     focused.focused_tab_id = Some("remote:mini:tab:c".to_owned());
-    let grouped = device_catalog::group(TARGET, &focused, &answered(&[&t.main]), None);
+    let grouped = device_catalog::group(TARGET, &focused, &answered(&[&t.main]), None, &[]);
     assert_eq!(
         grouped.active_tab_ids.get(&id).map(String::as_str),
         Some("remote:mini:tab:c")

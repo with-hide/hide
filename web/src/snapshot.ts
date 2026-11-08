@@ -3343,7 +3343,7 @@ export type SnapshotRest = {
     /** The adds that named a request id (Add a project's importable list), oldest first and bounded, each with its own outcome (PRD device-add-project B25). */
     project_adds?: ProjectAddReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
-    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
+    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null; home?: true } | null;
   };
   recent_closed?: RecentClosed;
   explorer_operation?: ExplorerOperation | null;

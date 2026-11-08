@@ -5366,7 +5366,19 @@ impl Runtime {
                 } else {
                     super::device_catalog::registration_refusal_kind(&error)
                 };
-                return self.refuse_row_registration(&registration, why, kind, error.to_string());
+                // Home itself is asked about in its own words, so a pin of
+                // it says it is added from Add a project (PRD
+                // home-folder-project B6).
+                let home = matches!(
+                    &error,
+                    crate::node_access::LinkError::Refused(refused) if refused.home
+                );
+                let changed =
+                    self.refuse_row_registration(&registration, why, kind, error.to_string());
+                if home && let Some(last) = self.snapshot.status.last_error.as_mut() {
+                    last.home = true;
+                }
+                return changed;
             }
         }
         let registered = self

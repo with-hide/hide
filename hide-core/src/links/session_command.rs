@@ -423,6 +423,26 @@ fn masked(text: &str) -> String {
     session_excerpt::mask(text)
 }
 
+/// The project of `device` whose deepest folder holds `cwd`: a project under
+/// another (one inside the home folder) is not labelled by the outer one (PRD
+/// home-folder-project D-07).
+fn project_holding<'a>(
+    projects: &'a [ScopeProject],
+    device: &str,
+    cwd: &str,
+) -> Option<&'a ScopeProject> {
+    let places = projects
+        .iter()
+        .enumerate()
+        .flat_map(|(index, project)| {
+            std::iter::once(&project.root)
+                .chain(&project.checkouts)
+                .map(move |owner| (index, (project.device_id.clone(), owner.clone())))
+        })
+        .collect::<Vec<_>>();
+    super::store::deepest_owner(&places, device, cwd).map(|&index| &projects[index])
+}
+
 fn project_value(project: &ScopeProject) -> Value {
     json!({
         "label": project.label,
@@ -620,17 +640,10 @@ fn record(
     );
     let mut facts = host.facts(asked).ok_or_else(core_gone)?.into_iter();
     let own = facts.next().unwrap_or_default();
-    let project = scope
-        .projects
-        .iter()
-        .find(|project| {
-            project.device_id == session.device_id
-                && record.cwd.as_deref().is_some_and(|cwd| {
-                    std::iter::once(&project.root)
-                        .chain(&project.checkouts)
-                        .any(|owner| super::within(cwd, owner))
-                })
-        })
+    let project = record
+        .cwd
+        .as_deref()
+        .and_then(|cwd| project_holding(&scope.projects, &session.device_id, cwd))
         .map(project_value);
     let summaries = scope.summaries;
     let (title_text, title_source) = title(
@@ -1701,6 +1714,31 @@ mod tests {
         let ids = ids(&list(&scope, None, None));
         assert!(!ids.contains(&"s-sub".to_owned()), "{ids:?}");
         assert!(ids.contains(&"s-vendor".to_owned()), "{ids:?}");
+    }
+
+    #[test]
+    fn a_session_is_labelled_by_the_deepest_project_holding_its_folder() {
+        let scope_project = |key: &str, device: &str, root: &str| ScopeProject {
+            key: key.into(),
+            workspace_id: format!("ws-{key}"),
+            label: key.into(),
+            root: root.into(),
+            device_id: device.into(),
+            checkouts: vec![root.into()],
+        };
+        // The outer project is listed first, as the home folder's would be.
+        let projects = [
+            scope_project("home", "local", "/home/me"),
+            scope_project("app", "local", "/home/me/work/app"),
+            scope_project("other", "mini", "/home/me/work/app"),
+        ];
+        let label = |device: &str, cwd: &str| {
+            project_holding(&projects, device, cwd).map(|project| project.key.as_str())
+        };
+        assert_eq!(label("local", "/home/me/work/app/src"), Some("app"));
+        assert_eq!(label("local", "/home/me/notes"), Some("home"));
+        assert_eq!(label("mini", "/home/me/work/app"), Some("other"));
+        assert_eq!(label("local", "/elsewhere"), None);
     }
 
     #[test]

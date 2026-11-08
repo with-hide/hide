@@ -263,24 +263,24 @@ impl<'a> CheckoutFacts<'a> {
     /// Whether the checkout has a file with this name anywhere the index
     /// lists, one walk per `CheckoutFacts`.
     fn name_fact(&mut self, name: &str) -> EvidenceFact {
-        let names = self
-            .names
-            .get_or_insert_with(|| match index_root(self.node, self.root) {
-                Ok(walked) => {
-                    let set = walked
-                        .paths
-                        .iter()
-                        .filter_map(|path| path.rsplit('/').next())
-                        .map(str::to_owned)
-                        .collect::<HashSet<_>>();
-                    if walked.truncated {
-                        Names::Truncated(set)
-                    } else {
-                        Names::Complete(set)
+        let names =
+            self.names
+                .get_or_insert_with(|| match index_root(self.node, self.root, Vec::new()) {
+                    Ok(walked) => {
+                        let set = walked
+                            .paths
+                            .iter()
+                            .filter_map(|path| path.rsplit('/').next())
+                            .map(str::to_owned)
+                            .collect::<HashSet<_>>();
+                        if walked.truncated {
+                            Names::Truncated(set)
+                        } else {
+                            Names::Complete(set)
+                        }
                     }
-                }
-                Err(_) => Names::Unreadable,
-            });
+                    Err(_) => Names::Unreadable,
+                });
         match names {
             Names::Complete(set) if set.contains(name) => EvidenceFact::Found { fingerprint: None },
             Names::Complete(_) => EvidenceFact::Missing,

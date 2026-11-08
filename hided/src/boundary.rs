@@ -100,8 +100,8 @@ pub enum Refusal {
     OutsideHome,
     /// The real path is not under a registered checkout root.
     OutsideCheckout,
-    /// The path is the home directory itself, or a folder holding it; a
-    /// workspace is a subdirectory.
+    /// The path is a folder holding the home directory (the home directory
+    /// itself is asked about, `Unregistrable::ConfirmHome`).
     HomeRoot,
     /// The path is in a Git repository that holds home (dotfiles kept in
     /// `~/.git`), so its project would be home.
@@ -146,6 +146,9 @@ impl Refusal {
 pub enum Unregistrable {
     Refused(Refusal),
     ConfirmProject(PathBuf),
+    /// The folder is the home directory itself, which the operator is asked
+    /// about in its own words and confirms as that same path.
+    ConfirmHome,
 }
 
 impl From<Refusal> for Unregistrable {
@@ -744,11 +747,16 @@ impl Boundary {
     /// The comparison is component-wise, so a sibling whose name merely starts
     /// with a root's path (`/repo-other` beside `/repo`) is not inside it.
     fn strip_root<'a>(&self, path: &'a Path) -> Option<(PathBuf, &'a Path)> {
-        self.roots_for_read().iter().find_map(|root| {
-            path.strip_prefix(&root.source.path)
-                .ok()
-                .map(|rest| (root.source.path.clone(), rest))
-        })
+        self.roots_for_read()
+            .iter()
+            .filter_map(|root| {
+                path.strip_prefix(&root.source.path)
+                    .ok()
+                    .map(|rest| (root.source.path.clone(), rest))
+            })
+            // The deepest root, so the home folder as a project does not
+            // hold a nested project's files (PRD home-folder-project D-07).
+            .min_by_key(|(_, rest)| rest.components().count())
     }
 
     /// The canonical directory for `raw` when it is home or under home.
@@ -899,7 +907,9 @@ impl Boundary {
     /// that one path as the request spells it, and whose project is that
     /// folder. A folder in a project outside home is answered with the
     /// question about the project's root (`Unregistrable::ConfirmProject`).
-    /// Home and a folder holding it are never a workspace (`home_root`), nor
+    /// Home itself is asked about (`Unregistrable::ConfirmHome`) and a
+    /// workspace only when the request confirms that same path; a folder
+    /// holding it is never a workspace (`home_root`), nor
     /// is a folder of a repository that holds home (`project_holds_home`), and
     /// a network share, written or reached through a link, is no project's
     /// identity (PRD wsl-device D-15).
@@ -936,6 +946,7 @@ impl Boundary {
         .map(|judged| judged.real)
         .map_err(|refusal| match refusal {
             Judged::NeedsConfirmation(Some(root)) => Unregistrable::ConfirmProject(root),
+            Judged::ConfirmHome => Unregistrable::ConfirmHome,
             Judged::NeedsConfirmation(None) => Refusal::NeedsConfirmation.into(),
             Judged::InvalidPath => Refusal::InvalidPath.into(),
             Judged::HomeRoot => Refusal::HomeRoot.into(),
@@ -1042,7 +1053,9 @@ impl Boundary {
             .map_err(|_| Refusal::OutsideCheckout)?;
         let checkout = cap_std::fs::Dir::from_std_file(anchor);
         let listed = hide_host::list::require_directory(&checkout, relative)
-            .and_then(|()| hide_host::list::list(&checkout, relative, &registered.real_path))
+            .and_then(|()| {
+                hide_host::list::list(&checkout, relative, &registered.real_path, Some(&self.home))
+            })
             .map_err(|error| match error.code {
                 hide_host::ErrorCode::NotADirectory => Refusal::NotADirectory,
                 hide_host::ErrorCode::OutsideRoot | hide_host::ErrorCode::InvalidPath => {
@@ -1082,7 +1095,9 @@ mod windows_tests {
             .resolve_registration(raw, confirmed)
             .map_err(|refused| match refused {
                 Unregistrable::Refused(refusal) => refusal,
-                Unregistrable::ConfirmProject(_) => Refusal::NeedsConfirmation,
+                Unregistrable::ConfirmProject(_) | Unregistrable::ConfirmHome => {
+                    Refusal::NeedsConfirmation
+                }
             })
     }
 
@@ -1162,7 +1177,9 @@ mod tests {
             .resolve_registration(raw, confirmed)
             .map_err(|refused| match refused {
                 Unregistrable::Refused(refusal) => refusal,
-                Unregistrable::ConfirmProject(_) => Refusal::NeedsConfirmation,
+                Unregistrable::ConfirmProject(_) | Unregistrable::ConfirmHome => {
+                    Refusal::NeedsConfirmation
+                }
             })
     }
     use std::os::unix::fs::symlink;
@@ -1497,7 +1514,7 @@ mod tests {
             "a symlink under home that leaves it is not confirmable"
         );
         let parent = f.home.parent().unwrap().to_path_buf();
-        for holder in [s(&f.home), s(&parent), "/".to_owned()] {
+        for holder in [s(&parent), "/".to_owned()] {
             assert_eq!(
                 workspace(&f.boundary, &holder, Some(&holder)),
                 Err(Refusal::HomeRoot),
@@ -1730,7 +1747,77 @@ mod tests {
             );
         }
         assert_eq!(Refusal::ProjectHoldsHome.code(), "project_holds_home");
-        assert_eq!(workspace(&f.boundary, "~", None), Err(Refusal::HomeRoot));
+        // Home itself is a repository here: refused even confirmed.
+        for confirmed in [None, Some(s(&f.home))] {
+            assert_eq!(
+                workspace(&f.boundary, "~", confirmed.as_deref()),
+                Err(Refusal::ProjectHoldsHome)
+            );
+        }
+    }
+
+    /// PRD home-folder-project D-02: home is a project only when the request
+    /// confirms it, spelled as the path it names.
+    #[test]
+    fn home_itself_is_asked_about_and_registered_when_confirmed() {
+        let f = fixture();
+        let home = s(&f.home);
+        for spelled in [home.as_str(), "~"] {
+            assert!(matches!(
+                f.boundary.resolve_registration(spelled, None),
+                Err(Unregistrable::ConfirmHome)
+            ));
+            // Another folder's confirmation is none for home.
+            let other = s(&f.home.join("projects/alpha"));
+            assert!(matches!(
+                f.boundary.resolve_registration(spelled, Some(&other)),
+                Err(Unregistrable::ConfirmHome)
+            ));
+        }
+        assert_eq!(
+            workspace(&f.boundary, &home, Some(&home)),
+            Ok(f.home.clone())
+        );
+        assert_eq!(workspace(&f.boundary, "~", Some("~")), Ok(f.home.clone()));
+    }
+
+    /// PRD home-folder-project B18: a registered home is a root like any other,
+    /// so a save or an edit under it is inside the boundary (`explorer_save`
+    /// asks `is_under_root`), a path beside it is not, and a project inside it
+    /// keeps its own root.
+    #[test]
+    fn a_registered_home_folder_holds_the_paths_under_it_and_a_nested_project_keeps_its_own() {
+        let f = fixture();
+        let nested = f.home.join("projects/alpha");
+        fs::create_dir_all(f.home.join("Documents")).unwrap();
+        fs::write(f.home.join("Documents/note.md"), "x").unwrap();
+        f.boundary.set_roots(vec![
+            Root {
+                workspace_id: "home".into(),
+                checkout_id: "home".into(),
+                path: f.home.clone(),
+            },
+            Root {
+                workspace_id: "alpha".into(),
+                checkout_id: "alpha".into(),
+                path: nested.clone(),
+            },
+        ]);
+        assert!(
+            f.boundary
+                .is_under_root(&s(&f.home.join("Documents/note.md")))
+        );
+        assert!(
+            f.boundary
+                .is_under_root(&s(&f.home.join("Documents/new.md")))
+        );
+        assert!(!f.boundary.is_under_root(&s(f.home.parent().unwrap())));
+        assert_eq!(
+            f.boundary
+                .strip_root(&nested.join("src/main.rs"))
+                .map(|(root, _)| root),
+            Some(nested)
+        );
     }
 
     #[test]
@@ -1779,17 +1866,12 @@ mod tests {
             workspace(&f.boundary, &missing, None),
             Err(Refusal::NotFound)
         );
-        assert_eq!(
-            workspace(&f.boundary, &s(&f.home), None),
-            Err(Refusal::HomeRoot)
-        );
         assert_eq!(f.boundary.resolve_dir(&s(&f.home)), Ok(f.home.clone()));
         assert_eq!(f.boundary.resolve_dir("~"), Ok(f.home.clone()));
         assert_eq!(
             workspace(&f.boundary, "~/projects/alpha", None).unwrap(),
             f.home.join("projects/alpha")
         );
-        assert_eq!(workspace(&f.boundary, "~", None), Err(Refusal::HomeRoot));
         assert_eq!(
             workspace(&f.boundary, "~user/x", None),
             Err(Refusal::InvalidPath)

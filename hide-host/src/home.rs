@@ -105,7 +105,7 @@ pub fn sync(user_home: &Path, projects: &[String]) -> HostResult<HomeSynced> {
     let existing = read_marker(&home_path)?;
 
     let mut skipped = Vec::new();
-    let candidates = candidates(projects, &mut skipped)?;
+    let candidates = candidates(user_home, projects, &mut skipped)?;
     let named = name_projects(candidates, &mut skipped);
     // Where Home holds no link, every project is listed and none linked.
     let (desired, listed) = if LINKS {
@@ -303,7 +303,11 @@ fn read_marker(home_path: &Path) -> HostResult<Option<Marker>> {
 
 /// The absolute, normalized, deduplicated projects worth a look, in path
 /// order. A path that cannot be linked is answered as skipped.
-fn candidates(projects: &[String], skipped: &mut Vec<HomeSkip>) -> HostResult<BTreeSet<PathBuf>> {
+fn candidates(
+    user_home: &Path,
+    projects: &[String],
+    skipped: &mut Vec<HomeSkip>,
+) -> HostResult<BTreeSet<PathBuf>> {
     let requested: BTreeSet<&String> = projects.iter().collect();
     let mut found = BTreeSet::new();
     for project in requested {
@@ -321,6 +325,16 @@ fn candidates(projects: &[String], skipped: &mut Vec<HomeSkip>) -> HostResult<BT
             skipped.push(HomeSkip {
                 target: to_wire_lossy(path),
                 reason: "control_character".to_owned(),
+            });
+            continue;
+        }
+        // The home folder as a project is never linked or listed here: its
+        // link `~/hide/<user>` would lead back to the folder that holds Home
+        // (PRD home-folder-project D-09).
+        if crate::register::is_home(path, user_home) {
+            skipped.push(HomeSkip {
+                target: to_wire_lossy(path),
+                reason: "home_folder".to_owned(),
             });
             continue;
         }
@@ -558,6 +572,40 @@ mod tests {
             assert!(removed.dropped.is_empty());
         }
         assert!(removed.links.is_empty());
+    }
+
+    /// PRD home-folder-project B15: the home folder as a project gets no link
+    /// in Home and no line in its guide, in any spelling of it.
+    #[test]
+    fn the_home_folder_is_neither_linked_nor_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = identity::canonical(dir.path()).unwrap();
+        let project = home.join("project");
+        std::fs::create_dir(&project).unwrap();
+        let asked = [
+            home.to_string_lossy().into_owned(),
+            format!("{}/./", home.display()),
+            project.to_string_lossy().into_owned(),
+        ];
+        let synced = sync(&home, &asked).unwrap();
+        assert_eq!(synced.links.len(), 1, "{synced:?}");
+        assert!(synced.links[0].target.ends_with("/project"));
+        let reasons: Vec<&str> = synced
+            .skipped
+            .iter()
+            .map(|skip| skip.reason.as_str())
+            .collect();
+        assert!(reasons.contains(&"home_folder"), "{synced:?}");
+        let guide = std::fs::read_to_string(Path::new(&synced.home).join(AGENTS_FILE)).unwrap();
+        assert!(
+            !guide.contains(&format!("-> {}\n", home.display())),
+            "{guide}"
+        );
+        assert!(
+            !Path::new(&synced.home)
+                .join(home.file_name().unwrap())
+                .exists()
+        );
     }
 
     /// with-hide/hide-private#596: Windows' Home makes no link, and the

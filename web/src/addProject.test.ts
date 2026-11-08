@@ -209,6 +209,11 @@ describe("Add a project", () => {
       expect(refusalText("needs_confirmation", ko)).toBe("홈 밖 폴더예요. 이 폴더를 프로젝트로 추가할까요?");
     });
 
+    it("asks about the whole home folder in its own words, in each language (PRD home-folder-project B1)", () => {
+      expect(refusalText("needs_confirmation", t, true)).toBe("This is your whole home folder. Add it as a project?");
+      expect(refusalText("needs_confirmation", ko, true)).toBe("홈 폴더 전체예요. 이 폴더를 프로젝트로 추가할까요?");
+    });
+
     it("tells a folder in a repository holding home apart from home itself", () => {
       expect(refusalText("project_holds_home", ko)).toBe("홈 폴더 전체를 담은 Git 저장소 안의 폴더라 프로젝트로 추가할 수 없어요.");
       expect(refusalText("project_holds_home", ko)).not.toBe(refusalText("home_root", ko));

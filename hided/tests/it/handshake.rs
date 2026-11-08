@@ -920,7 +920,10 @@ async fn registration_refusals_are_answered_by_hided() {
         // confirmation before anything there is read (PRD wsl-device B15).
         (wire(outside.path()), "needs_confirmation"),
         (wire(&outside.path().join("nope")), "needs_confirmation"),
-        (wire(&home), "home_root"),
+        // Home itself is asked about too, in its own words (PRD
+        // home-folder-project D-02); a folder holding home never registers.
+        (wire(&home), "needs_confirmation"),
+        (wire(home.parent().unwrap()), "home_root"),
         ("relative/path".to_owned(), "invalid_path"),
     ];
     for (path, reason) in cases {
@@ -933,6 +936,12 @@ async fn registration_refusals_are_answered_by_hided() {
         assert_eq!(refused["type"], "path_refused", "{path}");
         assert_eq!(refused["payload"]["reason"], reason, "{path}");
         assert_eq!(refused["payload"]["kind"], "create_workspace");
+        // Only home itself is flagged as home.
+        assert_eq!(
+            refused["payload"].get("home") == Some(&json!(true)),
+            path == wire(&home),
+            "{path}"
+        );
     }
     // A confirmation names one path: another path's is no confirmation, and
     // a confirmed path is then answered by what is there (B18). A confirmed
@@ -2043,7 +2052,8 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
     for (path, reason) in [
         (wire(&home.join("projects").join("gone")), "not_found"),
         (wire(outside.path()), "needs_confirmation"),
-        (wire(&home), "home_root"),
+        // An agent's `hide <home>` is never the operator's answer.
+        (wire(&home), "needs_confirmation"),
         // The dialog's own registration, refused by the core: no pane
         // holder can start for its first pane here.
         (
@@ -2068,6 +2078,95 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
         health["clients"], 1,
         "each command's connection left; the window stays"
     );
+    running.stop();
+}
+
+/// PRD home-folder-project B5: once the operator registered the home folder,
+/// `hide ~` (or its path) only brings that project forward, never adds one.
+#[tokio::test]
+async fn hide_path_brings_a_registered_home_folder_forward() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    std::fs::create_dir_all(home.join("projects/alpha")).unwrap();
+    seed_registration(&env.state_dir, "w-home", &home);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let open = |path: String| {
+        let (port, token) = (running.port, running.token.clone());
+        tokio::task::spawn_blocking(move || {
+            hided::workspace_cli::request_project_open_with_token(port, &token, &path)
+        })
+    };
+    let answer = open(wire(&home)).await.unwrap().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["path"], json!(wire(&home)), "{answer}");
+    assert_eq!(answer["result"]["added"], false);
+    running.stop();
+}
+
+/// A registered home folder is a root like any other (PRD home-folder-project
+/// B18): a file under it streams its bytes, a file is created in it, and a path
+/// beside it, outside the folder, is still refused.
+#[tokio::test]
+async fn files_under_a_registered_home_folder_are_read_and_created_like_any_project() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    std::fs::create_dir_all(home.join("Documents")).unwrap();
+    std::fs::write(home.join("Documents/note.md"), b"hello").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.txt"), b"x").unwrap();
+    seed_registration(&env.state_dir, "w-home", &home);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+
+    let path = wire(&home.join("Documents/note.md"));
+    socket
+        .send(Message::Text(
+            json!({
+                "schema_version": 2,
+                "kind": "file_bytes",
+                "payload": {"request_id": "r1", "path": path, "offset": 0, "length": Value::Null},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let (header, payload) = recv_binary(&mut socket).await;
+    assert_eq!(
+        (header["type"].as_str(), header["total"].as_u64()),
+        (Some("file_bytes"), Some(5))
+    );
+    assert_eq!(payload, b"hello");
+
+    let root = wire(&home);
+    socket
+        .send(Message::Text(
+            json!({
+                "schema_version": 2,
+                "kind": "file_create",
+                "payload": {"root": root, "parent": root, "name": "written.txt"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !home.join("written.txt").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the file created in the home folder");
+
+    let refused = send_event_expecting(
+        &mut socket,
+        "file_list",
+        json!({"root": root, "path": wire(outside.path())}),
+        never,
+    )
+    .await;
+    assert_eq!(refused["type"], "path_refused");
     running.stop();
 }
 

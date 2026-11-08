@@ -2251,6 +2251,7 @@ pub(super) fn node_ready(
             os: "macos".to_owned(),
             arch: "aarch64".to_owned(),
             home: None,
+            home_real: None,
             machine_identity: hide_node_link::protocol::MachineIdentity::Unavailable {
                 reason: "test".to_owned(),
             },

@@ -1300,6 +1300,13 @@ pub struct Runtime {
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
     device_facts: HashMap<String, crate::device_catalog::DeviceFacts>,
+    /// The home folder each connected device's helper reported at its Hello
+    /// as its filesystem names it (`Hello::home_real`), the one project whose
+    /// size is never measured (PRD home-folder-project D-06). This machine's
+    /// is `home_real`.
+    device_homes: HashMap<String, String>,
+    /// This machine's home as its filesystem names it, read once at launch.
+    home_real: Option<PathBuf>,
     /// Each device checkout's last tab the device's engine had in focus, by
     /// device then checkout id: what opening the row brings forward (PRD
     /// checkout-workspace-binding B5, D-13), as `visible_tab_ids` is here.
@@ -2363,6 +2370,10 @@ impl Runtime {
             unresolved_machine_lineage: HashSet::new(),
             file_roots: None,
             state_path,
+            home_real: environment
+                .home_path
+                .as_deref()
+                .and_then(|home| hide_platform::fs::identity::canonical(home).ok()),
             home_path: environment.home_path,
             codex_home: environment.codex_home,
             remote_connections: HashMap::new(),
@@ -2380,6 +2391,7 @@ impl Runtime {
             fetch: fetch::State::default(),
             device_raw_sessions: HashMap::new(),
             device_facts: HashMap::new(),
+            device_homes: HashMap::new(),
             device_recent_tabs: HashMap::new(),
             device_worktrees: HashMap::new(),
             device_ports: HashMap::new(),
@@ -2885,6 +2897,7 @@ impl Runtime {
             occurred_at: unix_milliseconds(),
             request_id: None,
             confirm: None,
+            home: false,
         });
     }
 
@@ -3127,42 +3140,57 @@ fn find_workspace_for_context<'a>(
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    if let Some(index) = carrying
-        .iter()
-        .copied()
-        .find(|index| {
-            workspaces[*index]
-                .checkouts
-                .iter()
-                .any(|checkout| path_is_within_checkout(paths, raw_path, &checkout.path))
-        })
+    // When several registered folders hold the path (a project under a
+    // project, such as one inside the home folder), the deepest one places
+    // it, and the one the engine workspace belongs to wins between equals
+    // (PRD home-folder-project D-07).
+    if let Some(index) = deepest_holder(workspaces, paths, raw_path, &normalized, &carrying)
         .or_else(|| carrying.first().copied())
     {
-        return workspaces.get_mut(index);
-    }
-    if let Some(index) = workspaces.iter().position(|workspace| {
-        workspace
-            .checkouts
-            .iter()
-            .any(|checkout| workspace::comparison_by_names(Path::new(&checkout.path)) == normalized)
-    }) {
-        return workspaces.get_mut(index);
-    }
-    if let Some(index) = workspaces.iter().position(|workspace| {
-        workspace::comparison_by_names(Path::new(&workspace.path)) == normalized
-    }) {
-        return workspaces.get_mut(index);
-    }
-    if let Some(index) = workspaces.iter().position(|workspace| {
-        let workspace_path = workspace::comparison_by_names(Path::new(&workspace.path));
-        normalized.starts_with(&format!("{workspace_path}/"))
-    }) {
         return workspaces.get_mut(index);
     }
     let mut temporary = workspace::inspect_temporary(&root, node.as_str(), paths);
     temporary.session_workspace_ids = vec![session_workspace_id.to_owned()];
     workspaces.push(temporary);
     workspaces.last_mut()
+}
+
+/// The workspace whose checkout or project folder is the deepest one holding
+/// the pane's folder (`raw_path`, `normalized` once the index placed it); of
+/// equals, one in `carrying` (the workspaces the pane's engine workspace
+/// belongs to), then the first.
+fn deepest_holder(
+    workspaces: &[crate::model::WorkspaceSnapshot],
+    paths: &workspace::PathIndex,
+    raw_path: &str,
+    normalized: &str,
+    carrying: &[usize],
+) -> Option<usize> {
+    let project_holds = |root: &str| {
+        let root = workspace::comparison_by_names(Path::new(root));
+        (normalized == root || normalized.starts_with(&format!("{}/", root.trim_end_matches('/'))))
+            .then_some(root.len())
+    };
+    let checkout_holds = |root: &str| {
+        path_is_within_checkout(paths, raw_path, root)
+            .then(|| workspace::comparison_by_names(Path::new(root)).len())
+    };
+    workspaces
+        .iter()
+        .enumerate()
+        .filter_map(|(index, workspace)| {
+            let depth = workspace
+                .checkouts
+                .iter()
+                .filter_map(|checkout| {
+                    checkout_holds(&checkout.path).or_else(|| project_holds(&checkout.path))
+                })
+                .chain(project_holds(&workspace.path))
+                .max()?;
+            Some((index, depth))
+        })
+        .max_by_key(|&(index, depth)| (depth, carrying.contains(&index), std::cmp::Reverse(index)))
+        .map(|(index, _)| index)
 }
 
 fn path_is_within_checkout(paths: &workspace::PathIndex, path: &str, checkout_path: &str) -> bool {
@@ -3320,3 +3348,41 @@ impl Drop for Runtime {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// PRD home-folder-project D-07: a path held by a project and by a project
+/// under it is placed by the deeper one.
+#[cfg(test)]
+mod deepest_holder_tests {
+    use super::*;
+
+    fn space(path: &str) -> crate::model::WorkspaceSnapshot {
+        workspace::inspect_temporary(path, "node", &workspace::PathIndex::NONE)
+    }
+
+    #[test]
+    fn a_folder_inside_a_nested_project_is_placed_by_the_nested_project() {
+        let none = &workspace::PathIndex::NONE;
+        let spaces = [
+            space("/home/me"),
+            space("/home/me/work/app"),
+            space("/home/me/other"),
+        ];
+        let at = |path: &str, carrying: &[usize]| {
+            deepest_holder(&spaces, none, path, none.root(path).as_str(), carrying)
+        };
+        // Whichever is listed first, the deepest holder wins.
+        assert_eq!(at("/home/me/work/app/src", &[]), Some(1));
+        assert_eq!(at("/home/me/work/app", &[]), Some(1));
+        assert_eq!(at("/home/me/work/notes", &[]), Some(0));
+        assert_eq!(at("/home/me", &[]), Some(0));
+        assert_eq!(at("/elsewhere", &[]), None);
+        // Of equal holders the one the engine workspace belongs to wins; a
+        // deeper holder wins over a carrying one that holds less.
+        let twins = [space("/home/me/work"), space("/home/me/work")];
+        let twin = |carrying: &[usize]| {
+            deepest_holder(&twins, none, "/home/me/work/x", "/home/me/work/x", carrying)
+        };
+        assert_eq!((twin(&[]), twin(&[1])), (Some(0), Some(1)));
+        assert_eq!(at("/home/me/work/app/src", &[0]), Some(1));
+    }
+}
