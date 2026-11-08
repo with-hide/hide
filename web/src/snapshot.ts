@@ -1295,7 +1295,6 @@ export type StrayHandOff = { request_id: string; checkout_id: string; state: "se
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
-  | { kind: "mission"; mission: string }
   /** A project's worktrees and their disk use, from the Project tool's Git tile (PRD lane-two-columns B30). */
   | { kind: "worktrees"; workspace_id: string }
   /** A project's last seven days of cost, from the Project tool's cost tile (B31). */
@@ -1312,7 +1311,6 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
   switch (a.kind) {
     case "pull_request": return b.kind === "pull_request" && a.workspace_id === b.workspace_id && a.number === b.number;
     case "record": return b.kind === "record" && a.session.device_id === b.session.device_id && a.session.agent === b.session.agent && a.session.session_id === b.session.session_id;
-    case "mission": return b.kind === "mission" && a.mission === b.mission;
     case "worktrees": return b.kind === "worktrees" && a.workspace_id === b.workspace_id;
     case "cost": return b.kind === "cost" && a.workspace_id === b.workspace_id;
     case "remains": return b.kind === "remains" && a.workspace_id === b.workspace_id && a.checkout_id === b.checkout_id;
@@ -3255,7 +3253,7 @@ export type SnapshotRest = {
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
     practice_invite_closed?: boolean;
-    /** The lane's 보기 slot (D-50), one per window. */
+    /** The lane's 보기 slot (D-50) of the Agent tab in front; each tab keeps its own in the core. */
     detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
     overview_graph?: OverviewGraphChoices;

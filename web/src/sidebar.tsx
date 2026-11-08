@@ -26,6 +26,7 @@ import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
+import { useMissionTurnCount } from "./MissionScreen";
 import { TreeRails } from "./components/agent-tree";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
@@ -100,6 +101,9 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
   const overviewCount = useOverviewCount();
   const overviewSelected = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main");
+  const missionsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "missions");
+  const missionsCount = useMissionTurnCount();
+  const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
   const storedWidth = useShellStore((s) => s.rest?.ui_state?.sidebar_width ?? null);
   const columns = useSidebarColumns();
   // A drag draws the nav alone at the width under the pointer, over the
@@ -151,6 +155,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
+            missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}

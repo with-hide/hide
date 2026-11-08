@@ -12,7 +12,7 @@ import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
 import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
 import { missionsCatalogs, missionsEnglish } from "./resources/missions";
-import { missionToolCatalogs, missionToolEnglish } from "./resources/missionTool";
+import { missionScreenCatalogs, missionScreenEnglish } from "./resources/missionScreen";
 import { kindsCatalogs, kindsEnglish } from "./resources/kinds";
 import { plansCatalogs, plansEnglish } from "./resources/plans";
 import { deskCatalogs, deskEnglish } from "./resources/desk";
@@ -33,6 +33,7 @@ import { removalReasonsCatalogs, removalReasonsEnglish } from "./resources/remov
 import { diffReasonsCatalogs, diffReasonsEnglish } from "./resources/diffReasons";
 import { wakeReasonsCatalogs, wakeReasonsEnglish } from "./resources/wakeReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
+import { agentProfilesCatalogs, agentProfilesEnglish } from "./resources/agentProfiles";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
 import { historyCatalogs, historyEnglish } from "./resources/history";
@@ -84,7 +85,7 @@ export const english = {
   ...agentSessionsEnglish,
   ...taskLensEnglish,
   ...missionsEnglish,
-  ...missionToolEnglish,
+  ...missionScreenEnglish,
   ...plansEnglish,
   ...kindsEnglish,
   ...deskEnglish,
@@ -124,6 +125,7 @@ export const english = {
   ...issueSettingsEnglish,
   ...hideAiEnglish,
   ...agentsEnglish,
+  ...agentProfilesEnglish,
   ...requestsEnglish,
   ...issuesEnglish,
   ...prWorkEnglish,
@@ -161,7 +163,7 @@ export const catalogs = {
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
     ...missionsCatalogs.ko,
-    ...missionToolCatalogs.ko,
+    ...missionScreenCatalogs.ko,
     ...plansCatalogs.ko,
     ...kindsCatalogs.ko,
     ...deskCatalogs.ko,
@@ -201,6 +203,7 @@ export const catalogs = {
     ...issueSettingsCatalogs.ko,
     ...hideAiCatalogs.ko,
     ...agentsCatalogs.ko,
+    ...agentProfilesCatalogs.ko,
     ...requestsCatalogs.ko,
     ...issuesCatalogs.ko,
     ...prWorkCatalogs.ko,
@@ -233,7 +236,7 @@ export const catalogs = {
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
     ...missionsCatalogs["zh-CN"],
-    ...missionToolCatalogs["zh-CN"],
+    ...missionScreenCatalogs["zh-CN"],
     ...plansCatalogs["zh-CN"],
     ...kindsCatalogs["zh-CN"],
     ...deskCatalogs["zh-CN"],
@@ -273,6 +276,7 @@ export const catalogs = {
     ...issueSettingsCatalogs["zh-CN"],
     ...hideAiCatalogs["zh-CN"],
     ...agentsCatalogs["zh-CN"],
+    ...agentProfilesCatalogs["zh-CN"],
     ...requestsCatalogs["zh-CN"],
     ...issuesCatalogs["zh-CN"],
     ...prWorkCatalogs["zh-CN"],
@@ -305,7 +309,7 @@ export const catalogs = {
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
     ...missionsCatalogs.ja,
-    ...missionToolCatalogs.ja,
+    ...missionScreenCatalogs.ja,
     ...plansCatalogs.ja,
     ...kindsCatalogs.ja,
     ...deskCatalogs.ja,
@@ -345,6 +349,7 @@ export const catalogs = {
     ...issueSettingsCatalogs.ja,
     ...hideAiCatalogs.ja,
     ...agentsCatalogs.ja,
+    ...agentProfilesCatalogs.ja,
     ...requestsCatalogs.ja,
     ...issuesCatalogs.ja,
     ...prWorkCatalogs.ja,

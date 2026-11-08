@@ -151,7 +151,7 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
   });
 
   it("reads what the viewing column shows: the 보기 slot in front, else the documents while there are any (D-04, B12)", () => {
-    const detail = { shown: true, items: [{ kind: "mission", mission: "m1" }] } as unknown as DetailSlot;
+    const detail = { shown: true, items: [{ kind: "pr", repo: "/repo", number: 1 }] } as unknown as DetailSlot;
     expect(laneViewOf({ documents: true }, detail, true)).toBe("detail");
     expect(laneViewOf({ documents: true }, { ...detail, shown: false }, true)).toBe("documents");
     expect(laneViewOf({ documents: true }, { shown: true, items: [] } as unknown as DetailSlot, true)).toBe("documents");
@@ -272,6 +272,6 @@ describe("readCalls", () => {
 
 describe("the rail's tool scopes (PRD work-tab-pr-lens D-37)", () => {
   it("lists the Project's tools before the checkout's, so the rail draws one boundary", () => {
-    expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "project", "project", "checkout", "checkout"]);
+    expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "project", "checkout", "checkout"]);
   });
 });

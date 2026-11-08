@@ -22,6 +22,7 @@ import {
 } from "./search";
 import { checkoutPlaces } from "./navigation";
 import type { Checkout, SnapshotRest, Workspace } from "./snapshot";
+import type { Screen } from "./ui";
 
 /** One checkout's group: its head and the rows under it, in the order they are drawn. */
 export type RelationGroup = { head: SearchEntry; rows: SearchEntry[] };
@@ -133,7 +134,7 @@ export function relationRows(relations: Relations): SearchEntry[] {
  */
 export function frontTarget(
   rest: SnapshotRest | null,
-  screen: "main" | "overview" | "workspace" | "desk" | null,
+  screen: Screen["kind"] | "overview" | null,
   over: boolean,
   focusedPaneId: string | null,
   fromAgent: boolean,

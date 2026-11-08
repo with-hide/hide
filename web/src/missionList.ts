@@ -1,13 +1,14 @@
-// The rail's Mission tool (PRD mission-tool D-01, D-08, D-09, B2, B5-B7):
-// which missions it lists, the group each stands in and the rail's number.
-// Every state is the core's mission record; this module only sorts it, and
-// what waits on the operator is `turnItems`, the same rule the map's
-// `내 차례` draws, so the list, the number and the map never disagree.
+// The mission screen (PRD mission-screen D-06, B1, B3-B5, B10; PRD
+// mission-tool B5-B7): which missions a device lists, the group each stands
+// in, the project chips and the sidebar row's number. Every state is the
+// core's mission record; this module only sorts it, and what waits on the
+// operator is `turnItems`, the same rule the map's `내 차례` draws, so the
+// table, the number and the map never disagree.
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { attentionReasonText, heldLettersText, liveNodes, missionCounts, missionOpen, turnItems, type EscalationCause, type TurnItem, type WorkerEscalation } from "./missions";
-import type { DetailSlot, Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
+import type { Mission, MissionHeldLetters, MissionBrief, MissionNodeBrief, MissionStatus, Workspace } from "./snapshot";
 
 /** The list's groups, top down (B5); a group with no mission is not drawn. */
 export const MISSION_GROUPS = ["turn", "running", "merge_wait", "closed"] as const;
@@ -16,13 +17,35 @@ export type MissionGroup = (typeof MISSION_GROUPS)[number];
 /** How many closed missions the list shows before `모두 ›` (B7). */
 export const CLOSED_SHOWN = 3;
 
+/** The missions a device works on (D-06), every project of it. */
+export function deviceMissions<M extends Pick<Mission, "device_id">>(missions: readonly M[], deviceId: string): M[] {
+  return missions.filter((mission) => mission.device_id === deviceId);
+}
+
+/** A project chip (B3): the catalog project a mission belongs to, by its id, and the name it shows. */
+export type MissionProject = { id: string; label: string };
+
 /**
- * The missions of the front Workspace's project (D-09): those whose catalog
- * project is it, or that were made in its main worktree on its device, in
- * any of its checkouts.
+ * The chips over the table (B3): each project one of `missions` belongs to,
+ * once, by name. A mission whose project the catalog does not hold is named
+ * by its path's last folder, so its chip still narrows to it.
  */
-export function projectMissions(missions: readonly Mission[], project: Pick<Workspace, "id" | "path" | "device_id">): Mission[] {
-  return missions.filter((mission) => mission.workspace_id === project.id || (mission.device_id === project.device_id && mission.project === project.path));
+export function missionProjects(missions: readonly Pick<Mission, "workspace_id" | "project">[], catalog: readonly Pick<Workspace, "id" | "label">[]): MissionProject[] {
+  const seen = new Map<string, MissionProject>();
+  for (const mission of missions) {
+    if (seen.has(mission.workspace_id)) continue;
+    const label = catalog.find((row) => row.id === mission.workspace_id)?.label ?? mission.project.split(/[\\/]/).filter(Boolean).at(-1) ?? mission.project;
+    seen.set(mission.workspace_id, { id: mission.workspace_id, label });
+  }
+  return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/**
+ * The missions the list shows in its order (B10, B11): the groups top down,
+ * 끝남 cut to its newest three until `모두 ›`, so ↑ and ↓ walk what is drawn.
+ */
+export function listedMissions<M extends MissionBrief>(groups: readonly { group: MissionGroup; entries: MissionEntry<M>[] }[], closedAll: boolean): MissionEntry<M>[] {
+  return groups.flatMap(({ group, entries }) => (group === "closed" && !closedAll ? entries.slice(0, CLOSED_SHOWN) : entries));
 }
 
 /** One mission as the list draws it: its group and, open, what waits on the operator. The phone's trimmed mission is one too (`MissionBrief`). */
@@ -30,7 +53,7 @@ export type MissionEntry<M extends MissionBrief = Mission> = { mission: M; group
 
 /**
  * A mission's group (B5): an open mission with anything in its `내 차례`
- * stands there, so the group's count is the rail's number (D-08); else a
+ * stands there, so the group's count is the sidebar row's number (B1); else a
  * plan or a running mission is 진행 중, a merge wait with nothing for the
  * operator is 머지 기다림, and a finished or cancelled one is 끝남.
  */
@@ -55,30 +78,24 @@ export function groupMissions<M extends MissionBrief>(entries: readonly MissionE
   });
 }
 
-/** The rail's number (D-08, B2): open missions with anything in their `내 차례`. */
+/** The sidebar row's number (B1): open missions with anything in their `내 차례`. */
 export function turnCount(entries: readonly Pick<MissionEntry<MissionBrief>, "group">[]): number {
   return entries.filter((entry) => entry.group === "turn").length;
 }
 
-/** The mission the 보기 slot shows now, whichever place opened it (B6, B23); null while it shows anything else. */
-export function shownMission(detail: DetailSlot | null | undefined): string | null {
-  const top = detail?.shown ? detail.items.at(-1) : null;
-  return top?.kind === "mission" ? top.mission : null;
-}
-
 /** The state pill's word (B6): what waits on the operator, `!` in the decision colour, else the mission's own state. */
 export function missionPillKey(mission: Pick<Mission, "status">, turn: Pick<TurnItem<MissionNodeBrief>, "kind"> & { git?: boolean } | null): MessageKey {
-  if (turn) return turn.kind === "landing" && turn.git ? "missionTool.pill.join" : TURN_PILL[turn.kind];
+  if (turn) return turn.kind === "landing" && turn.git ? "missionScreen.pill.join" : TURN_PILL[turn.kind];
   return STATE_PILL[mission.status];
 }
 
 const TURN_PILL: Record<TurnItem["kind"], MessageKey> = {
-  decision: "missionTool.pill.decision",
-  takeover: "missionTool.pill.takeover",
-  letters: "missionTool.pill.letters",
+  decision: "missionScreen.pill.decision",
+  takeover: "missionScreen.pill.takeover",
+  letters: "missionScreen.pill.letters",
   attention: "mission.attention",
-  worker_blocked: "missionTool.pill.blocked",
-  landing: "missionTool.pill.merge",
+  worker_blocked: "missionScreen.pill.blocked",
+  landing: "missionScreen.pill.merge",
 };
 
 /** A mission state's pill word, the same on the map's head and in both lists. */
@@ -92,7 +109,7 @@ export const STATE_PILL: Record<MissionStatus, MessageKey> = {
 
 /**
  * The row's one line (B6): what waits on the operator, else the node at work,
- * else the plan being made. The desktop's Mission tool and the phone's list
+ * else the plan being made. The desktop's mission screen and the phone's list
  * word and draw the same decision, so a mission never reads one way on one
  * screen and another on the other.
  */
@@ -142,7 +159,7 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
       return line.text;
     // The pill already says no Conductor holds it; the line says what is left for the one who takes it.
     case "takeover":
-      return line.left > 0 ? t("missionTool.takeoverLeft", { count: line.left }) : t("missionTool.takeoverReport");
+      return line.left > 0 ? t("missionScreen.takeoverLeft", { count: line.left }) : t("missionScreen.takeoverReport");
     case "letters":
       return heldLettersText(line.letters, t);
     case "worker_blocked":
@@ -154,6 +171,6 @@ export function rowLineText<N extends MissionNodeBrief>(line: RowLine<N>, t: TFu
     case "planning":
       return t("mission.planning");
     case "now":
-      return t("missionTool.now", { title: line.others > 0 ? t("mission.line.others", { title: line.first.title, count: line.others }) : line.first.title });
+      return t("missionScreen.now", { title: line.others > 0 ? t("mission.line.others", { title: line.first.title, count: line.others }) : line.first.title });
   }
 }

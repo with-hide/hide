@@ -285,8 +285,7 @@ impl SessionCatalog {
     /// when that agent has one here.
     fn agent_store(&self, agent: Agent) -> Option<PathBuf> {
         match agent {
-            Agent::Claude => Some(self.home.join(crate::CLAUDE_SESSIONS)),
-            Agent::Codex => Some(self.home.join(crate::CODEX_SESSIONS)),
+            Agent::Claude | Agent::Codex => crate::session_root(&self.home, agent),
             Agent::Pi | Agent::Omp | Agent::Grok | Agent::Cursor => {
                 crate::native_file::root(&self.home, agent).ok()
             }
@@ -1088,7 +1087,7 @@ mod tests {
         // folder should, which fails the same listing a folder without
         // read permission does, on every system and under any user).
         fs::create_dir_all(home.join(".claude")).unwrap();
-        fs::write(home.join(crate::CLAUDE_SESSIONS), "").unwrap();
+        fs::write(home.join(".claude/projects"), "").unwrap();
         codex_session(&home, "codex-1", &beta);
         // A Codex file that is no file cannot be read and is said, once.
         #[cfg(unix)]
@@ -1130,7 +1129,7 @@ mod tests {
         let home = root.path().join("home");
         let beta = root.path().join("beta");
         fs::create_dir_all(&beta).unwrap();
-        let claude = home.join(crate::CLAUDE_SESSIONS);
+        let claude = home.join(".claude/projects");
         fs::create_dir_all(&claude).unwrap();
         for index in 0..=SESSION_DISCOVERY_LIMIT {
             fs::write(claude.join(format!("entry-{index}")), "").unwrap();
@@ -1160,7 +1159,7 @@ mod tests {
         fs::create_dir_all(&beta).unwrap();
         // Claude's store can never be listed; Codex's is pruned all the same.
         fs::create_dir_all(home.join(".claude")).unwrap();
-        fs::write(home.join(crate::CLAUDE_SESSIONS), "").unwrap();
+        fs::write(home.join(".claude/projects"), "").unwrap();
         let first = codex_session(&home, "one", &beta);
         codex_session(&home, "two", &beta);
         let catalog = SessionCatalog::new(&home, "local");

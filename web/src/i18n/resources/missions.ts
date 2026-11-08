@@ -3,7 +3,6 @@ import type { Catalog, Catalogs } from "../schema";
 // A Conductor's mission (PRD software-factory-conductor): the map in the
 // lane's 보기 slot, the Conductor row's mark, and Settings › Mission.
 export const missionsEnglish = {
-  "detail.mission": "Mission · {{title}}",
   "mission.planning": "Planning",
   "mission.scope.pr": "Up to ready PRs",
   "mission.scope.merge": "Through the merge",
@@ -357,7 +356,6 @@ export const missionsEnglish = {
 } as const;
 
 const ko: Catalog<typeof missionsEnglish> = {
-  "detail.mission": "미션 · {{title}}",
   "mission.planning": "계획 중",
   "mission.scope.pr": "PR 준비까지",
   "mission.scope.merge": "머지까지",
@@ -711,7 +709,6 @@ const ko: Catalog<typeof missionsEnglish> = {
 };
 
 const zh: Catalog<typeof missionsEnglish> = {
-  "detail.mission": "任务 · {{title}}",
   "mission.planning": "规划中",
   "mission.scope.pr": "到 PR 就绪",
   "mission.scope.merge": "到合并",
@@ -1065,7 +1062,6 @@ const zh: Catalog<typeof missionsEnglish> = {
 };
 
 const ja: Catalog<typeof missionsEnglish> = {
-  "detail.mission": "ミッション · {{title}}",
   "mission.planning": "計画中",
   "mission.scope.pr": "PR の準備まで",
   "mission.scope.merge": "マージまで",

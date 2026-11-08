@@ -15,6 +15,25 @@ hooks = "grok"
 [resume]
 session = ["--resume", "{session}"]
 
+# Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts).
+[account]
+by = "folder"
+
+[account.vars]
+GROK_HOME = { default = "~/.grok", profile = "{account}" }
+
+[account.paths]
+hooks = "{GROK_HOME}/hooks/hide.json"
+hook_trust = false
+plugins = false
+skills = "shared"
+folder_trust = "{GROK_HOME}/trusted_folders.toml"
+sessions = "{GROK_HOME}/sessions"
+login = "{GROK_HOME}/auth.json"
+state = "{GROK_HOME}"
+usage = false
+
 [screen]
 version = "2026.10.05.1"
 min_engine_version = 3

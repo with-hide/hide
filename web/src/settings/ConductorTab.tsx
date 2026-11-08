@@ -8,9 +8,9 @@ import { CandidateAdd, CandidateRows, CapControl, CleanMergedControl, ConductorE
 // many agents a mission runs at once, how far a mission goes when it does not
 // say, whether a merged node's worktree is cleaned up (operator decision
 // 2026-11-02, every mission at once), the candidates a Conductor chooses its workers and checkers from, and
-// how strongly a new mission is checked. The controls are the Mission tool's
-// defaults' too (`ConductorControls.tsx`, PRD mission-tool D-03); this page
-// lays them out as settings rows.
+// how strongly a new mission is checked. The controls live in
+// `ConductorControls.tsx`; this page lays them out as settings rows, and the
+// mission screen's ⚙ opens it (PRD mission-screen B10).
 
 export function ConductorTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();

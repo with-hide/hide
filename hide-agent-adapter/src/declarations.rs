@@ -1,14 +1,5 @@
 use super::*;
-use crate::definition::{Builtin, builtin as defs};
-
-/// The agent's own folder, from its built-in definition's `home`; a
-/// definition with Hide's features always names one, or the build fails.
-const fn folder(definition: &Builtin) -> &'static [&'static str] {
-    match definition.home {
-        Some(home) => home,
-        None => panic!("a built-in agent with Hide's features names its home"),
-    }
-}
+use crate::definition::builtin as defs;
 use composer::{Composer, LineCount, PasteMark, Placeholder, Region, Style};
 const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Grok discards SessionStart and UserPromptSubmit output; the installed path cannot inject guidance or Memory.",
@@ -249,7 +240,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: Some("Claude"),
         aliases: defs::CLAUDE_CODE.aliases,
         executables: defs::CLAUDE_CODE.executables,
-        folder: folder(&defs::CLAUDE_CODE),
         minimum: Some(MinimumVersion {
             version: "2.1.278",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
@@ -258,7 +248,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
         engine_kind: "claude",
-        home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "claude",
             requests: Support::Supported(()),
@@ -354,7 +343,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: Some("Codex"),
         aliases: defs::CODEX.aliases,
         executables: defs::CODEX.executables,
-        folder: folder(&defs::CODEX),
         minimum: Some(MinimumVersion {
             version: "0.155.1",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
@@ -363,7 +351,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Runtime(HookDialect::Codex),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
         engine_kind: "codex",
-        home_variable: Some("CODEX_HOME"),
         ai: Support::Supported(AiProvider {
             id: "codex",
             requests: Support::Supported(()),
@@ -447,7 +434,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: None,
         aliases: defs::GROK.aliases,
         executables: defs::GROK.executables,
-        folder: folder(&defs::GROK),
         minimum: Some(MinimumVersion {
             // The journey ran on 1.0.52 on all three systems; 1.0.50 is a
             // reading of Grok's source, not a run.
@@ -458,7 +444,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
         guidance: Support::Unsupported(GROK_CONTEXT_ABSENCE),
         engine_kind: "grok",
-        home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "grok",
             requests: Support::Supported(()),
@@ -569,7 +554,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: Some("OpenCode"),
         aliases: defs::OPENCODE.aliases,
         executables: defs::OPENCODE.executables,
-        folder: folder(&defs::OPENCODE),
         minimum: Some(MinimumVersion {
             // Windows loaded the plugin on 1.18.35; 1.18.30's shapes are
             // proven on macOS and Linux only.
@@ -580,7 +564,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
         engine_kind: "opencode",
-        home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "opencode",
             requests: Support::Unsupported(OPENCODE_AI_ABSENCE),
@@ -688,7 +671,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: None,
         aliases: defs::PI.aliases,
         executables: defs::PI.executables,
-        folder: folder(&defs::PI),
         minimum: Some(MinimumVersion {
             version: "1.0.4",
             evidence: "hide-agent-hooks/tests/fixtures/pi-extension/pi-1.0.4.json",
@@ -697,7 +679,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Plugin(PluginDialect::Pi),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
         engine_kind: "pi",
-        home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "pi",
             requests: Support::Supported(()),
@@ -799,7 +780,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: None,
         aliases: defs::OMP.aliases,
         executables: defs::OMP.executables,
-        folder: folder(&defs::OMP),
         minimum: Some(MinimumVersion {
             version: "18.7.0",
             evidence: "hide-agent-hooks/tests/fixtures/pi-extension/omp-18.7.0.json",
@@ -808,7 +788,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Plugin(PluginDialect::Omp),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
         engine_kind: "omp",
-        home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "omp",
             requests: Support::Supported(()),
@@ -908,7 +887,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         sidebar_label: Some("Antigravity"),
         aliases: defs::ANTIGRAVITY.aliases,
         executables: defs::ANTIGRAVITY.executables,
-        folder: folder(&defs::ANTIGRAVITY),
         minimum: Some(MinimumVersion {
             // The Windows guard was proven on 1.4.2; 1.4.0 on macOS only.
             version: "1.4.2",
@@ -918,7 +896,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
         guidance: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
         engine_kind: "agy",
-        home_variable: None,
         ai: Support::Supported(AiProvider {
             id: "antigravity",
             requests: Support::Supported(()),
@@ -1027,13 +1004,11 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     sidebar_label: None,
     aliases: defs::CURSOR.aliases,
     executables: defs::CURSOR.executables,
-    folder: folder(&defs::CURSOR),
     minimum: None,
     skill_location: SkillLocation::Shared,
     hook: HookInstall::None,
     guidance: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     engine_kind: "cursor",
-    home_variable: None,
     ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     default_on: false,
     prompt_hook: None,

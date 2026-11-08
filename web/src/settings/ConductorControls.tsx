@@ -23,9 +23,8 @@ import { useErrorSince } from "../errorSince";
 import { composingKey } from "../keys";
 
 // The Conductor defaults' controls (PRD software-factory-conductor D-31, B48,
-// B49), shared by Settings › Mission and the Mission tool's defaults (PRD
-// mission-tool D-03, B9): one value, the same edit events and the same
-// refusal words, each place laying the controls out at its own width. Every
+// B49), laid out by Settings › Mission: one value, the same edit events and
+// the same refusal words. Every
 // edit sends the field it changes; the core checks the result and keeps it,
 // and a mission already created keeps its own.
 

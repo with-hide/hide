@@ -121,6 +121,7 @@ export type CommandId =
   | "open_file"
   | "toggle_left_sidebar"
   | "overview"
+  | "open_missions"
   | "sidebar_projects"
   | "add_backlog"
   | "toggle_device_rail"
@@ -179,7 +180,7 @@ export type AreaCommandId = (typeof AREA_COMMANDS)[number];
  * D-19, D-29): the lane opens on that tool, or closes when it already shows
  * it, as pressing the icon does. The checkout's tools take a letter of their
  * name (⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the same letter elsewhere
- * (PRD lane-two-columns D-08); the Project, Memory and Mission tools have no chord
+ * (PRD lane-two-columns D-08); the Project and Memory tools have no chord
  * until one is bound, because ⇧⌘L opens Memory without closing it
  * (`open_project_memory`) and ⇧⌘R the sidebar's PR list (`open_sidebar_prs`, B25).
  */
@@ -188,14 +189,12 @@ export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool)
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
   toggle_lane_project: "Toggle Project tool",
   toggle_lane_memory: "Toggle Hide AI tool",
-  toggle_lane_mission: "Toggle Mission tool",
   toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };
 const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; electron: Chord | null; moved: boolean }> = {
   toggle_lane_project: { browser: null, electron: null, moved: false },
   toggle_lane_memory: { browser: null, electron: null, moved: false },
-  toggle_lane_mission: { browser: null, electron: null, moved: false },
   toggle_lane_explorer: { browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
   toggle_lane_changes: { browser: { code: "KeyG", meta: true, shift: true }, electron: { code: "KeyG", meta: true, shift: true }, moved: false },
 };
@@ -289,6 +288,8 @@ export const REGISTRY: readonly Command[] = [
   // Chrome keeps ⇧⌘B (bookmarks bar), so a browser tab turns the lens with ⌥⇧B (PRD sidebar-task-lens D-32).
   { id: "toggle_sidebar_lens", title: "Switch sidebar list", group: "Panels", browser: { code: "KeyB", alt: true, shift: true }, electron: { code: "KeyB", meta: true, shift: true }, moved: true },
   { id: "overview", title: "Overview", group: "Navigate", browser: { code: "KeyO", meta: true, shift: true }, electron: { code: "KeyO", meta: true, shift: true }, moved: false },
+  // No chord until the operator binds one, so no chord already taken moves (PRD mission-screen non-goals).
+  { id: "open_missions", title: "Open missions", group: "Navigate", browser: null, electron: null, moved: false },
   // Chrome keeps ⌘⇧M for the profile menu, so the browser form is ⌥⇧M (PRD overview-device-tasks B37).
   { id: "add_backlog", title: "Add to backlog", group: "Navigate", browser: { code: "KeyM", alt: true, shift: true }, electron: { code: "KeyM", meta: true, shift: true }, moved: true },
   { id: "sidebar_projects", title: "Focus sidebar", group: "Panels", browser: { code: "KeyP", meta: true, shift: true }, electron: { code: "KeyP", meta: true, shift: true }, moved: false },
@@ -516,7 +517,7 @@ export function matchHost(event: KeyEventLike, registry: readonly Command[], hos
 // honours the operator's existing shortcut settings).
 export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
-  "overview", "sidebar_projects",
+  "overview", "open_missions", "sidebar_projects",
   "toggle_device_rail",
   "toggle_sidebar_lens",
   ...LANE_TOOL_COMMANDS,
@@ -751,10 +752,13 @@ const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", 
  * became the sidebar's PR list, and a chord the operator bound to it keeps
  * doing what it did, now there (PRD lane-two-columns B25). The new name, once
  * stored, wins over the old. `toggle_lane_memory` is a live command again,
- * so a chord stored under it toggles the Memory tool as it did before.
+ * so a chord stored under it toggles the Memory tool as it did before. The
+ * Mission tool became the mission screen, and a chord bound to it opens that
+ * screen (PRD mission-screen D-12, B21).
  */
 const RENAMED_KEYS: Readonly<Record<string, CommandId>> = {
   toggle_lane_prs: "open_sidebar_prs",
+  toggle_lane_mission: "open_missions",
 };
 
 /** The stored set with each renamed key under its command's own key on `host`. */

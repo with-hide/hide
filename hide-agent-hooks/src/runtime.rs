@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use hide_agent_adapter::AccountPath;
+
 use serde::{Deserialize, Serialize};
 
 /// The marker Hide stamps into every hook entry it installs.
@@ -348,44 +350,40 @@ impl AgentRuntime {
     }
 
     /// The directory whose presence means this runtime is set up on this Mac:
-    /// the agent's folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), whatever `CODEX_HOME` the
-    /// launching shell carries.
+    /// the default account's own folder (`AccountPath::State`) for a node
+    /// that honours no variable, whatever `CODEX_HOME` the launching shell
+    /// carries.
     ///
     /// Hide installs nothing for a runtime the operator does not use: writing
     /// `~/.codex/hooks.json` on a machine with no Codex would create a file
     /// for a tool that is not there.
     pub fn home_directory(self, home: &Path) -> PathBuf {
-        self.dialect().adapter().install_home(home)
+        self.dialect().adapter().place_in(home, AccountPath::State)
     }
 
     /// The file whose `hooks` object Hide appends to.
     pub fn config_path(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => self.home_directory(home).join("settings.json"),
-            Self::Codex => self.home_directory(home).join("hooks.json"),
-        }
+        self.dialect().adapter().place_in(home, AccountPath::Hooks)
     }
 
     /// The file that keeps this runtime's folder trust, found from the same
     /// folder as [`Self::config_path`], so the trust Hide records and its
     /// hooks are always read from one place (`crate::folder_trust`).
     ///
-    /// Claude Code's is its global config, `~/.claude.json`, or the older
-    /// `.config.json` in its folder while that file has content, which Claude
-    /// Code then reads instead (its `getGlobalClaudeFile`); Codex's is the
-    /// `config.toml` in its folder, which only Codex writes.
+    /// Claude Code's is its global config (`AccountPath::FolderTrust`), or
+    /// the older `.config.json` in its folder while that file has content,
+    /// which Claude Code then reads instead (its `getGlobalClaudeFile`);
+    /// Codex's is the `config.toml` in its folder, which only Codex writes.
     pub fn trust_path(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => {
-                let legacy = self.home_directory(home).join(".config.json");
-                if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
-                    return legacy;
-                }
-                home.join(".claude.json")
+        if self == Self::ClaudeCode {
+            let legacy = self.home_directory(home).join(".config.json");
+            if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
+                return legacy;
             }
-            Self::Codex => self.home_directory(home).join("config.toml"),
         }
+        self.dialect()
+            .adapter()
+            .place_in(home, AccountPath::FolderTrust)
     }
 }
 
