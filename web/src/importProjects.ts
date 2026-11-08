@@ -1,7 +1,7 @@
 // What Add a project's importable list shows (PRD device-add-project D-09 to
 // D-13): the projects a machine's node found worth adding, less those
-// registered there or added from the list since, and the name each source
-// chip carries.
+// registered there or added from the list since, the name each source goes
+// by, and the source chips that filter the rows.
 
 import { agentProductName } from "./agentAdapters";
 import { alreadyRegistered } from "./addProject";
@@ -34,4 +34,29 @@ export function importRows(
 ): ImportableProject[] {
   if (!answer || answer.seq <= after || !answer.projects) return [];
   return answer.projects.filter((project) => !alreadyRegistered(project.path, device, registrations));
+}
+
+/** One source chip above the rows: the source and how many rows it named. */
+export type ImportFilter = { source: ImportSource; count: number };
+
+/**
+ * The source chips for `rows`, the most rows first and the order the node named them in a tie; none
+ * when every row came from one source, since a chip would then hide nothing.
+ */
+export function importFilters(rows: readonly ImportableProject[]): ImportFilter[] {
+  const counts = new Map<ImportSource, number>();
+  for (const row of rows) for (const source of row.sources) counts.set(source, (counts.get(source) ?? 0) + 1);
+  if (counts.size < 2) return [];
+  return [...counts].map(([source, count]) => ({ source, count })).sort((a, b) => b.count - a.count);
+}
+
+/** The rows a chip shows: every row for `null`, else the rows that source named. */
+export function filterRows(rows: readonly ImportableProject[], source: ImportSource | null): ImportableProject[] {
+  return source === null ? [...rows] : rows.filter((row) => row.sources.includes(source));
+}
+
+/** The folder a row's project sits in, `~/projects` for `~/projects/app`: the row's name already says the last part. */
+export function parentLabel(label: string): string {
+  const cut = label.lastIndexOf("/");
+  return cut <= 0 ? label : label.slice(0, cut);
 }

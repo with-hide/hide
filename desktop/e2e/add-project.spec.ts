@@ -166,10 +166,10 @@ test("Create new project makes a Git repository and adds it; a name already take
     const problem = view.locator("[data-create-project-problem]");
     const submit = view.locator("[data-create-project-submit]");
 
-    // Under Browse folder, Create new project opens its own view with the name field focused;
+    // Beside Browse folder, Create new project opens its own view with the name field focused;
     // with no project yet the folder goes in home.
     await page.keyboard.press(chord("new_workspace", "electron"));
-    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Other ways to add");
+    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Create new project");
     await dialog.locator('[data-add-project-way="create"]').click();
     await expect(view.getByRole("heading", { name: "Create a new project" })).toBeVisible();
     await expect(name).toBeFocused();
@@ -251,7 +251,7 @@ test("Clone from URL clones a repository into a folder under home and adds it as
     const dialog = page.locator("[data-add-project]");
     // With no project registered the Projects title keeps its + (B51).
     await page.locator("[data-sidebar-new-workspace]").click();
-    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Other ways to add");
+    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Create new project");
     await dialog.locator('[data-add-project-way="clone"]').click();
 
     // The sub-view: Back, its own title, the URL field holding the keyboard, and home as the parent.

@@ -408,6 +408,12 @@ it("shows a device that is not connected as one that cannot be chosen, and opens
 
 const importAsks = (events: Sent[]) => events.filter((event) => event.kind === "importable_projects").map((event) => event.payload);
 const importRows = () => [...document.querySelectorAll("[data-add-project-import-row]")].map((row) => row.getAttribute("data-add-project-import-row"));
+const sourcesOf = (path: string) => [...document.querySelectorAll(`[data-add-project-import-row="${path}"] [data-add-project-import-source]`)].map((mark) => mark.getAttribute("data-add-project-import-source"));
+const chips = () => [...document.querySelectorAll("[data-add-project-import-filter]")].map((chip) => chip.getAttribute("data-add-project-import-filter"));
+/** Checks the row of `path`, or every row shown. */
+const check = (path?: string) => act(async () => find(path ? `[data-add-project-import-check="${path}"]` : "[data-add-project-import-check-all]")!.click());
+/** Presses Add under the rows. */
+const addChecked = () => act(async () => find("[data-add-project-import-add]")!.click());
 
 /** What hided answers an `importable_projects` with, through the frame handler. */
 const answerImport = (device: string, projects: { path: string; name: string; sources: string[] }[] | null, reason: string | null = null) =>
@@ -472,7 +478,7 @@ const found = [
   { path: "/home/me/old", name: "old", sources: ["opencode"] },
 ];
 
-it("shows the projects a machine's node found once it answers, without the ones added there, each with its sources (PRD device-add-project B20, B21, B29)", async () => {
+it("shows the projects a machine's node found once it answers, without the ones added there, each with its sources and a chip per source (PRD device-add-project B20, B21, B29)", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
   const { events, unmount } = await mount(state(null, "ubuntu"));
   expect(importAsks(events)).toEqual([{ device_id: "ubuntu" }]);
@@ -481,9 +487,16 @@ it("shows the projects a machine's node found once it answers, without the ones 
 
   await answerImport("ubuntu", found);
   expect(importRows()).toEqual(["/home/me/app", "/home/me/site"]);
-  expect([...document.querySelectorAll('[data-add-project-import-row="/home/me/app"] [data-add-project-import-source]')].map((chip) => chip.textContent)).toEqual(["Claude Code", "Codex"]);
-  expect([...document.querySelectorAll('[data-add-project-import-row="/home/me/site"] [data-add-project-import-source]')].map((chip) => chip.textContent)).toEqual(["Paseo", "Herdr"]);
-  expect(find("[data-add-project-import-all]")?.getAttribute("data-add-project-import-all")).toBe("2");
+  expect(sourcesOf("/home/me/app")).toEqual(["claude", "codex"]);
+  expect(sourcesOf("/home/me/site")).toEqual(["paseo", "herdr"]);
+  // A chip per source says how many rows it found, and shows those rows alone; pressed again it shows every row.
+  expect(chips()).toEqual(["all", "claude", "codex", "paseo", "herdr"]);
+  await act(async () => find('[data-add-project-import-filter="paseo"]')!.click());
+  expect(importRows()).toEqual(["/home/me/site"]);
+  await act(async () => find('[data-add-project-import-filter="paseo"]')!.click());
+  expect(importRows()).toEqual(["/home/me/app", "/home/me/site"]);
+  // Nothing is checked to begin with, so Add waits.
+  expect((find("[data-add-project-import-add]") as HTMLButtonElement).disabled).toBe(true);
   await unmount();
 });
 
@@ -497,18 +510,20 @@ it("shows nothing when the node found nothing or could not be asked (PRD device-
   await unmount();
 });
 
-it("adds a row, then every row one at a time, keeping a refused row with its reason and the dialog open (PRD device-add-project B24, B25)", async () => {
+it("adds a checked row, then every row one at a time, keeping a refused row with its reason and the dialog open (PRD device-add-project B24, B25)", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
   const { events, unmount } = await mount(state(null, "ubuntu"));
   await answerImport("ubuntu", [...found, { path: "/home/me/blog", name: "blog", sources: ["herdr"] }]);
 
-  await act(async () => find('[data-add-project-import-add="/home/me/app"]')!.click());
+  await check("/home/me/app");
+  await addChecked();
   expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false, request_id: expect.any(String) }]);
   await added(events, 8, "/home/me/app");
   expect(importRows()).toEqual(["/home/me/site", "/home/me/blog"]);
   expect(useUiStore.getState().overlay).toBe("add_project");
 
-  await act(async () => find("[data-add-project-import-all]")!.click());
+  await check();
+  await addChecked();
   // One add at a time: the next waits for the answer to the one before it.
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
   await refuseAdd(events, "/home/me/site", "not_found");
@@ -517,9 +532,10 @@ it("adds a row, then every row one at a time, keeping a refused row with its rea
   expect(importRows()).toEqual(["/home/me/site"]);
   expect(find('[data-add-project-import-failed="/home/me/site"]')?.textContent).toContain("This folder does not exist.");
 
-  // The refused row can be pressed again; it is sent once more, not twice.
-  await act(async () => find('[data-add-project-import-add="/home/me/site"]')!.click());
-  await act(async () => find('[data-add-project-import-add="/home/me/site"]')!.click());
+  // The refused row stays checked and can be added again; it is sent once more, not twice.
+  expect(find("[data-add-project-import-add]")?.getAttribute("data-add-project-import-add")).toBe("1");
+  await addChecked();
+  await addChecked();
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site", "/home/me/blog", "/home/me/site"]);
   expect(find('[data-add-project-import-failed="/home/me/site"]')).toBeNull();
   expect(useUiStore.getState().overlay).toBe("add_project");
@@ -531,7 +547,8 @@ it("reads a row's answer only from its own receipt, not from a project another w
   const { events, unmount } = await mount(state(null, "ubuntu"));
   await answerImport("ubuntu", found);
 
-  await act(async () => find("[data-add-project-import-all]")!.click());
+  await check();
+  await addChecked();
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app"]);
   // Another window registers another project on the machine, and another add is refused: neither answers app.
   await register(10, "/home/me/elsewhere", "ubuntu");
@@ -559,12 +576,13 @@ it("shows an add the core could not take while others wait as refused, and moves
   const { events, unmount } = await mount(state(null, "ubuntu"));
   await answerImport("ubuntu", found);
 
-  await act(async () => find("[data-add-project-import-all]")!.click());
+  await check();
+  await addChecked();
   await receipt(requestOf(events, "/home/me/app"), "/home/me/app", { state: "refused", kind: "workspace.create_busy", message: "32 projects are already being added" });
   await coreRefusalCleared();
   expect(find('[data-add-project-import-failed="/home/me/app"]')).not.toBeNull();
-  // No longer Adding: its own button can be pressed again.
-  expect((find('[data-add-project-import-add="/home/me/app"]') as HTMLButtonElement).disabled).toBe(false);
+  // No longer Adding: it is checked still, and Add can send it again.
+  expect(find("[data-add-project-import-add]")?.getAttribute("data-add-project-import-add")).toBe("1");
   expect(creates(events).map((payload) => payload.path)).toEqual(["/home/me/app", "/home/me/site"]);
   await unmount();
 });
