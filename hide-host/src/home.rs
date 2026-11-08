@@ -233,9 +233,17 @@ fn staging_name() -> String {
 }
 
 /// A rename that never replaces what is at the new name: the platform's own
-/// where it has one, a look first where the system does not replace a folder
-/// anyway.
+/// primitive, whose refusal (`Unsupported`, a filesystem without it) is an
+/// error of the call and never a look followed by a plain rename, which a
+/// file that arrives in between would be replaced by.
 fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    hide_platform::fs::atomic::rename_no_replace_path(from, to)
+}
+
+/// The same for a name Hide chose a moment ago from a random token, where
+/// nobody can have put anything yet: where the system has no no-replace
+/// rename, a look first and a plain rename.
+fn rename_to_fresh_name(from: &Path, to: &Path) -> std::io::Result<()> {
     match hide_platform::fs::atomic::rename_no_replace_path(from, to) {
         Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
             if std::fs::symlink_metadata(to).is_ok() {
@@ -273,7 +281,7 @@ fn record_path(user_home: &Path) -> PathBuf {
 fn set_aside(user_home: &Path, home_path: &Path) -> HostResult<()> {
     let staging = staging_name();
     write_record(user_home, home_path, &staging)?;
-    if let Err(error) = rename_no_replace(home_path, &user_home.join(&staging)) {
+    if let Err(error) = rename_to_fresh_name(home_path, &user_home.join(&staging)) {
         let _ = std::fs::remove_file(record_path(user_home));
         return Err(io_error(&error, "~/hide could not be set aside"));
     }
