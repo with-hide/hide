@@ -1324,7 +1324,7 @@ Authenticated reader facts distinguish an intermediate Pi-only protocol25 helper
 OpenCode 1.18.30 and 2.0.29 are read from their own database through `hide-session::opencode`, with no session file: every read opens it read-only and proves, inside the read's one transaction, that the id names a root session (no `parent_id`) whose recorded `directory` is the exact checkout.
 All OpenCode reads, including link discovery and usage, share that guarded connection.
 OpenCode 1.x keeps a session in `session`, `message` and `part`; 2.x, a rewrite, keeps it in `session_v2` and `session_message`, a message's whole content in its one row, and a database 2.x migrated from a 1.x one holds both sets of tables.
-OpenCode takes its data folder from `XDG_DATA_HOME` when that is set (its `xdg-basedir`, in 1.x and 2.x; proven live on 2.0.29), so every Hide read of its database follows the node's own `XDG_DATA_HOME` the way it follows `CODEX_HOME`, captured and validated once at startup by `hide-session::environment` and named by one function, `opencode::database_path`.
+OpenCode takes its data folder from `XDG_DATA_HOME` when that is set (its `xdg-basedir`, in 1.x and 2.x; proven live on 2.0.29), so every Hide read of its database follows the node's own `XDG_DATA_HOME` the way it follows `CODEX_HOME`, captured and validated once at startup by `hide-session::environment` and handed to the default account's `sessions` place ([Agent profiles and accounts](#agent-profiles-and-accounts)), named by one function, `opencode::database_path`.
 A read is confined to that folder: `$XDG_DATA_HOME/opencode` when the variable is absolute, free of parent components and not blank, otherwise `~/.local/share/opencode`.
 An unusable value (relative, a parent component, a control character) refuses every OpenCode read as `opencode_data_home_invalid` (`usage_read_Environment` for usage), never a fall back to the home folder, and the value is never in the message.
 Every read names the schema its database holds once, inside its transaction, from the tables and columns Hide reads (`Schema::detect` in `hide-session/src/opencode/schema.rs`), and runs that schema's queries; when both are there the 2.x tables are read, because 2.x holds the migrated sessions and keeps writing only them.
@@ -1389,10 +1389,10 @@ The adapter lookup on projection and hook paths performs only a scan of the fixe
 
 ### Agent definition files
 
-Every agent Hide knows has one definition file, TOML of schema 1 (PRD engine-bundle-3-core-owns D-16): `id`, `name`, `executables`, optional `packages`, `aliases`, `home`, `hooks`, `[start] args` and `ready` (the id of an idle `[screen]` rule a start waits for, [Agents on the core's own engine](#agents-on-the-cores-own-engine)), `[resume] session` (one `{session}`) and `last`, and `[screen]`, the screen rules in Herdr's agent detection grammar; `based_on` is for the operator's files only.
+Every agent Hide knows has one definition file, TOML of schema 1 (PRD engine-bundle-3-core-owns D-16): `id`, `name`, `executables`, optional `packages`, `aliases`, `home`, `hooks`, `[account]` (where an account keeps the agent's folders, [Agent profiles and accounts](#agent-profiles-and-accounts)), `[start] args` and `ready` (the id of an idle `[screen]` rule a start waits for, [Agents on the core's own engine](#agents-on-the-cores-own-engine)), `[resume] session` (one `{session}`) and `last`, and `[screen]`, the screen rules in Herdr's agent detection grammar; `based_on` is for the operator's files only.
 The built-in files are `hide-agent-adapter/agents/*.toml`: the seven agents with Hide's own features and the sixteen others Herdr v0.9.5 had screen rules for, their rules copied unchanged (omp has none; its extension reports its state).
 `hooks` names which of Hide's own code reads an agent (`claude`, `codex`, `grok`, `opencode`, `pi`, `omp`, `agy`), or `none` for an agent whose state only its screen shows; a new value comes only with the code for it.
-The seven agents' identity is the file's: `hide-agent-adapter/build.rs` turns each built-in file into constants, `AgentAdapter`'s `id`, `label`, `aliases`, `executables` and `folder` and `LaunchDialect::resume_flag` read them, and a built-in file goes through the same field checks as the operator's (`src/definition/file.rs`), so one that fails a check fails the build, while its screen rules are compiled at first use and a built-in that fails to compile is caught by the crate's tests; everything else on the adapter row is Hide's own feature, kept in Rust.
+The seven agents' identity is the file's: `hide-agent-adapter/build.rs` turns each built-in file into constants, `AgentAdapter`'s `id`, `label`, `aliases` and `executables` and `LaunchDialect::resume_flag` read them, and its account's places come from the file's `[account]`, and a built-in file goes through the same field checks as the operator's (`src/definition/file.rs`), so one that fails a check fails the build, while its screen rules are compiled at first use and a built-in that fails to compile is caught by the crate's tests; everything else on the adapter row is Hide's own feature, kept in Rust.
 `hide_agent_adapter::definition` is the one reader of a definition, for built-in files and the operator's alike: it parses a file, checks every field it carries (an id of lowercase letters, digits and dashes; programs that are file names, the first a plain command name; start and resume words without control characters or apostrophes, at most 63 words and 8 KiB, Herdr's resume command limits; a home under `~/`), and compiles its rules with `hide-screen-rules`.
 
 `hide-screen-rules` is Herdr's `src/detect/manifest.rs` cut to the grammar, its limits (128 rules, 512 gates, 1024 matchers, 32 per gate, 512 characters each, gates eight deep), the compiler and the evaluator; its `ENGINE_VERSION` is Herdr's 3, and a rule set that asks for a newer one is refused.
@@ -1412,6 +1412,78 @@ A file that fails any check is left out alone, with one line that starts with it
 The daemon reads the folder at start and on every `hide agent catalog`, on its own thread, and the core's worker reads it again when Settings › Agents opens (`agent_definitions_read`); the core only swaps the result in under its lock (`runtime/agent_definitions.rs`), logs each file left out once per reason (`agent_definitions.file_left_out`), and publishes them in `status.agent_definitions`, which Settings › Agents draws as one dimmed line per file.
 There is no watch: an edited file is read on the next ask.
 The catalog adds every other definition with `source`, `based_on`, `hooks`, `screen` (its source and version) and `spawn: false`, since starting such an agent comes with the new engine's agent start, and `definitions_rejected` beside the items.
+
+### Agent profiles and accounts
+
+An operator can run one agent in several accounts or connection setups: another `CLAUDE_CONFIG_DIR`, a gateway wrapper, a shell alias (PRD agent-profiles).
+A profile is one way of running one agent: its account (a folder, or omp's own profile name), a program to run instead (a wrapper), and extra variables, none of them secret.
+Where an account keeps its folders is computed in one place, from data in the agent's definition, and every reader and installer of an agent's folders uses only that answer.
+
+The data model lives in `hide-agent-adapter/src/account.rs`:
+
+| Type | What it is |
+| --- | --- |
+| `Profile` | `id` (a stable `ProfileId`, kept across a rename), `kind` (the definition id), `name` (unique within the agent), `account` (`AccountRef::Folder` or `AccountRef::Name`, fixed when added, `None` for the agent's default account), `program`, `env`, `version` (raised by every change) |
+| `ProfileId` | `default` is the built-in default profile every agent has: no account, no program, no variable |
+| `LaunchTarget` | `kind` and `profile`: what a start carries and an agent's record keeps |
+| `AccountKey` | the account's identity: the value set into the agent's account variable, exactly as set, or `Default` |
+| `Account` | what `resolve` answers: `key`, `env` (the account's variables, then the profile's own) and each place, read with `Account::path(AccountPath)` |
+
+#### `[account]` in a definition file
+
+A definition's `[account]` table says how its accounts are told apart and where each place is:
+
+- `by`: `folder` (variables name a folder), `name` (omp's `OMP_PROFILE`), or `none` with a `reason` (agy, which only a different `HOME` moves).
+- `[account.vars]`: each variable that moves the account, with `default` (where the agent puts the folder when the variable is unset, `~/…`) and `profile` (`{account}`, or a folder below it; the name itself for `by = "name"`).
+  `isolated_home = true` marks a variable a node with a home of its own sets to its default below that home (`hide_host::serve::agent_home_variables`; today `CODEX_HOME`).
+- `[account.paths]`: every place of the closed list `AccountPath::ALL` (`hooks`, `hook_trust`, `plugins`, `skills`, `folder_trust`, `sessions`, `login`, `state`, `usage`), each a template (`~/…` or `{VARIABLE}/…`), a `{ default, profile }` pair, `false` for a place the agent does not have, or `"shared"` for skills every agent reads (`~/.agents/skills`), which no profile owns.
+  `state` is the agent's own folder, whose presence says the agent is set up.
+- `[account.forbid] vars`: variables that would move a place behind the account's back, which a profile may not set.
+
+The definition reader checks it with every other field (`src/definition/file.rs`), so a built-in file with a missing, unknown or malformed place fails the build: every place is named, a template names only declared variables and plain folder names, `{account}` appears only on a profile's side, and no variable is `HOME`, `USERPROFILE` or `HIDE_*`.
+An operator's file for a new agent may carry its own `[account]`; a `based_on` copy keeps the copied agent's, and a file that replaces a built-in agent's screen rules cannot set one.
+
+The seven agents' accounts (Cursor is retired and keeps none):
+
+| Agent | by | Variables, default to profile | Forbidden |
+| --- | --- | --- | --- |
+| Claude Code | folder | `CLAUDE_CONFIG_DIR`: `~/.claude` to `{account}`; its global config (`folder_trust`, `login`) is `~/.claude.json` for the default and moves into the folder for another account | none |
+| Codex | folder | `CODEX_HOME`: `~/.codex` to `{account}` | `CODEX_SQLITE_HOME` |
+| OpenCode | folder | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`: their defaults to `{account}/config`, `/data`, `/state` | `OPENCODE_CONFIG_DIR`, `OPENCODE_DB` |
+| pi | folder | `PI_CODING_AGENT_DIR`: `~/.pi/agent` to `{account}` | `PI_CODING_AGENT_SESSION_DIR` |
+| omp | name | `OMP_PROFILE`: unset to the name; its places move from `~/.omp/agent` to `~/.omp/profiles/<name>/agent` | `PI_CODING_AGENT_DIR`, `PI_PROFILE`, `PI_CONFIG_DIR` |
+| Grok | folder | `GROK_HOME`: `~/.grok` to `{account}` | none |
+| agy | none | none: only a different `HOME` moves its folders | none |
+
+#### `resolve`
+
+`hide_agent_adapter::resolve(definition, profile, node)` is a pure function: no file, no process, no network.
+`NodeEnv` is what the node captured: the account's home, the agent variables that node honours, and its system.
+The default account sets no account variable: a place follows the node's own value of a variable when the caller handed one in (a relative value is refused as `NodeVariable`), and the definition's default otherwise.
+Claude Code depends on this: naming `~/.claude` in `CLAUDE_CONFIG_DIR` is another login.
+Another account sets each variable from the account as stored: `~` is expanded once, when the profile is added, and a final separator is kept, because Claude keys its keychain item by the exact spelling.
+It refuses an empty account, a folder that is not absolute on the node's system (Windows' `C:x` and `\x` forms included), the default folder itself (use the default profile), a name that is not one path part, an account for an agent of `by = "none"`, and a profile variable that is the account's, a forbidden one, `HOME`, `USERPROFILE` or `HIDE_*`, repeated, not a name, longer than 256 bytes, or whose value holds a NUL or exceeds 32 KiB; a profile adds at most 64 variables.
+Windows compares variable names regardless of case.
+A refusal names a variable only by a name that passed the name check, never a value.
+Checking that a folder exists, whom it belongs to, and making it is the node's, when a profile is added.
+
+A built-in agent's account is asked through its adapter (`AgentAdapter::resolve`, `account_in`, `place_in`), which reads that file's `[account]` tables alone (`definition::builtin_account`): an account is asked inside reads with a time budget, such as a usage step's 10 ms, which cannot wait for every definition to be read and its screen rules compiled.
+
+#### Who does what
+
+| Module | Does | Does not |
+| --- | --- | --- |
+| `hide-agent-adapter` | the `[account]` schema and its checks, `Profile`, `LaunchTarget`, `resolve`, `Account` | any I/O or check of a path on disk |
+| `hide-agent-hooks`, `hide-kit` | each agent's file formats and approval keys, installed at the account's places | compute a place |
+| `hide-session`, `hide-host`, `hide-ai`, `hide-desk`, `hide-core` | read sessions, sign-ins and usage at the account's places; an agent's own module handles what only that agent does there | compute a place |
+
+Today every agent runs in its default account, as before profiles: installs ask the default account of a node that honours no variable (`AgentAdapter::account_in`), so hooks, plugins, skills and folder trust go to each agent's default folders whatever the launching shell exported, and the readers that followed a variable before still do, by handing it in: Codex's sign-in for usage, Hide AI and Desk follows `CODEX_HOME`, and OpenCode's database follows the node's `XDG_DATA_HOME`.
+Each session reader's root is the default account's `sessions` place (`hide_session::session_root`).
+
+`scripts/check-agent-folders.sh` keeps it that way: production Rust that names an agent's account folder (`.claude`, `.codex`, `.pi/agent`, `.omp`, `.grok`, agy's `.gemini` folders, OpenCode's folders and database) outside that agent's own modules and the files it lists with a reason fails `verify`.
+`hide-agent-adapter/tests/it/account.rs` holds `resolve`'s contract for the seven agents: the default account, an account of its own, and the inputs refused, with the expected places written by hand from the agents' own documentation and source, on the macOS, Linux and Windows lanes.
+
+Decided in #PRNUM.
 
 ## The platform layer
 
@@ -2199,7 +2271,7 @@ Each adapter is held in its ask mode, which ignores the operator's global auto-a
   So Desk's instructions ask the agent to run every `hide` command with escalated permissions; Codex asks Hide, the table answers, and an allowed escalation runs outside the sandbox.
   Its command shell is not a login shell but still reads the shell's always-read startup file (`~/.zshenv`), so one that sets `PATH` outright, rather than adding to it, hides the `hide` Desk put first.
   The core refuses a Desk spawn that carries words for the agent's own CLI (`desk_spawn_args`) for every Desk agent, since those words can lift the new session's permissions.
-  Codex keeps its sign-in in that home (`auth.json`), so Desk makes that file a link to the operator's own (`$CODEX_HOME/auth.json`, or `~/.codex/auth.json`, as the one resolver of agent folders reads it; a relative `CODEX_HOME` refuses the start with that reason) before every start, as Hide AI's Codex homes do (D-81): Codex follows a linked `auth.json` and refreshes through it, and refuses a hard link, while a copy would leave Desk signed in apart from the operator.
+  Codex keeps its sign-in in that home (`auth.json`), so Desk makes that file a link to the operator's own (`$CODEX_HOME/auth.json`, or `~/.codex/auth.json`: Codex's default account as `CODEX_HOME` moves it, [Agent profiles and accounts](#agent-profiles-and-accounts); a relative `CODEX_HOME` refuses the start with that reason) before every start, as Hide AI's Codex homes do (D-81): Codex follows a linked `auth.json` and refreshes through it, and refuses a hard link, while a copy would leave Desk signed in apart from the operator.
   A Windows account that cannot make a file link cannot start Desk's Codex ([INSTALL.md](INSTALL.md#what-each-system-supports)); an operator not signed in gets `login_needed` with `codex login`.
 - Pi has no mode, so Desk loads an extension of its own (`hide-desk/src/pi_desk.js`, through a launcher `PI_ACP_PI_COMMAND` names) that asks through `ctx.ui.confirm` before every tool call, reads included, so the table decides them; its marker, naming a pid under the Desk process, proves it loaded, and without it the session is not used.
 - OpenCode runs `opencode acp` with Hide's permission configuration in `OPENCODE_CONFIG_CONTENT`, every tool asking but reading, listing and searching files, which OpenCode merges over the operator's own configuration, so an allow-everything setting there does not apply.
@@ -2524,7 +2596,7 @@ Below the install folder, on both systems, every folder on the way to a file is 
 A `run` command starts suspended in a job of its own that allows a resident to break away and ends what it holds when it closes (`HideRunTree`), so everything it starts is in that job before it runs; when the command ends, past its output cap, or on a failure part way, the job is ended and its end confirmed, so only a resident that left the job outlives the command, and an end Windows does not confirm ends the script and with it the link, so the node never reuses a connection with a command of its still running.
 A Windows device runs no Herdr: it connects on the core's own engine, as every device does.
 Its helper reads the account's home only through `hide_platform::host::home_dir` (`USERPROFILE`), never from the `HOME` Windows OpenSSH sets beside it, so its kit, state and panes follow the one variable the start step replaces for a development home of the node's own (`HIDE_DEV_DEVICE_HOME`, which also moves `HOME`, `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` inside it; [docs/VERIFICATION.md](VERIFICATION.md)).
-With such a home both start scripts clear every variable that would move a folder Hide or an agent keeps below the home somewhere else, one list for both (`hide_host::serve::HOME_FOLDER_VARIABLES`: `HIDE_STATE_DIR`, the `XDG_*` base folders, `CLAUDE_CONFIG_DIR`, `CURSOR_CONFIG_DIR`, `ZDOTDIR`), and set each agent's own home variable that an agent definition declares to its folder inside that home, made private (`agent_home_variables`: today `CODEX_HOME`, because Codex on Windows reads the account's profile folder from Windows rather than `USERPROFILE`), so nothing the account's environment or profile names takes the helper's state, kit or a pane's agent out of that home.
+With such a home both start scripts clear every variable that would move a folder Hide or an agent keeps below the home somewhere else, one list for both (`hide_host::serve::HOME_FOLDER_VARIABLES`: `HIDE_STATE_DIR`, the `XDG_*` base folders, `CLAUDE_CONFIG_DIR`, `CURSOR_CONFIG_DIR`, `ZDOTDIR`), and set each agent account variable a definition marks `isolated_home` to its default folder inside that home, made private (`agent_home_variables`: today `CODEX_HOME`, because Codex on Windows reads the account's profile folder from Windows rather than `USERPROFILE`), so nothing the account's environment or profile names takes the helper's state, kit or a pane's agent out of that home.
 The first Hello after a connection's install wrote the helper waits up to 60 s (`FIRST_HELLO_TIMEOUT`) instead of 15 s, since Windows scans a new `.exe` on its first start and a real PC's first Hello once took longer than 15 s; a helper the device already held keeps the 15 s bound, on every system.
 Its node is the `hided.exe` the script starts with the link's pipes, inside the job Windows OpenSSH makes for the session, which ends what it holds when the link ends and lets a process break away; the node's pane holders leave it through `start_resident` ([The platform layer](#the-platform-layer)), so a pane and its program outlive the link and the next connection's node adopts them.
 
