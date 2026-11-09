@@ -312,5 +312,26 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
         // Worked out again, it decides the same.
         runtime.refresh_reported_accounts();
         assert_eq!(warned(&runtime), elsewhere_last);
+        // p2's start delivered again, and a plain status report of it, do
+        // not make it the last start.
+        started(&mut runtime, "p2", "s-2", first);
+        let status = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("s-2".to_owned()),
+            turn: None,
+            counts: None,
+            session_start: false,
+            waiting: None,
+            account: None,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "p2", &status)
+            .expect("the report is recorded");
+        assert_eq!(
+            warned(&runtime),
+            elsewhere_last,
+            "p2 again: {elsewhere_last}"
+        );
     }
 }

@@ -306,6 +306,13 @@ impl HookFacts {
         };
         facts.reported_since_engine = true;
         let turn_before = fact.turn;
+        // The same start delivered again (its session and account already
+        // kept) keeps its place: only a start not seen yet is the latest.
+        let start = start.filter(|_| {
+            fact.account_start == 0
+                || fact.account != report.account
+                || (report.session.is_some() && fact.session != report.session)
+        });
         fact.version = report.version;
         if report.session.is_some() {
             fact.session.clone_from(&report.session);
