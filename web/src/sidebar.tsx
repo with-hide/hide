@@ -940,13 +940,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             onClick={() => actions.openProject(workspace, projectRowExpansion(workspace, target, context.workspaceScreen ? context.focusedCheckoutId : null, disclosure))}
           >
             {/* A project's own mark, so its checkouts read as standing under it; a pinned one wears the pin in its place, and a Git project a folder with the branch mark. */}
-            {workspace.pinned ? (
-              <PinIcon aria-hidden="true" data-project-pin={workspace.id} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-            ) : workspace.is_git ? (
-              <FolderGit2Icon aria-hidden="true" data-project-mark={workspace.id} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-            ) : (
-              <FolderIcon aria-hidden="true" data-project-mark={workspace.id} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-            )}
+            <ProjectMark workspace={workspace} />
             <ProjectName workspace={workspace} label />
             {/* A folded project still says what runs and asks inside it; open, its own rows say it. */}
             {expanded ? null : <StatusBadge counts={sumMarks(workspace.checkouts.map((checkout) => checkout.agent_summary?.marks))} className="group-hover:hidden group-focus-within:hidden" data-project-status={workspace.id} />}
@@ -1269,6 +1263,16 @@ const FolderRowView = memo(function FolderRowView({
  * neither opens nor unfolds. Every other kind is the plain icon the row
  * button covers.
  */
+/** The project's mark in a box the checkout glyph's size, so a tab's guide hangs at the center of either. */
+function ProjectMark({ workspace }: { workspace: Workspace }) {
+  const Icon = workspace.pinned ? PinIcon : workspace.is_git ? FolderGit2Icon : FolderIcon;
+  return (
+    <span className="flex size-(--size-checkout-icon) shrink-0 items-center justify-center text-muted-foreground">
+      <Icon aria-hidden="true" {...(workspace.pinned ? { "data-project-pin": workspace.id } : { "data-project-mark": workspace.id })} className="size-(--size-icon-sm)" />
+    </span>
+  );
+}
+
 function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; deviceId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const pr = view.kind === "pull_request" ? view.pullRequest : null;

@@ -6,7 +6,7 @@ import { fixtureExecutable } from "./platform-fixture";
 import { openProject, runInPaneKeepingFocus, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, showDocuments, showProjectRow } from "./wire";
+import { enterWorkspace, projectOpener, showDocuments, showProjectRow } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 90_000 });
@@ -110,7 +110,7 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     if (process.env.HIDE_E2E_SCREENSHOT_DIR) {
       await page.screenshot({ path: path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "workspace-cli-background.png") });
     }
-    const firstRow = await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first());
+    const firstRow = await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "fixture" })));
     await firstRow.click();
     await expect(firstRow).toHaveAttribute("aria-current", "true");
     // Background opens kept beta intact and left the caller's lane alone

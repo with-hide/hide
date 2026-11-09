@@ -14,7 +14,7 @@ import { closePane, focusTab, openProject, openWorktree, showTabOf, tabOfPane, v
 import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject, takeOverSession } from "./fixture-agents";
 import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, openOtherCheckouts, screenshot } from "./wire";
+import { countSent, enterWorkspace, openOtherCheckouts, screenshot, showProjectRow } from "./wire";
 import { chord } from "./chords";
 import { completedCloseOrder, type CloseRecord, type CloseTiming } from "./close-order";
 
@@ -464,7 +464,7 @@ test("Remove project closes the agents its panes spawned outside it before the p
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-tree-chevron="${parent}"]`).first()).toBeVisible({ timeout: 30_000 });
 
     // The project row's own menu removes the whole project.
-    await page.getByRole("button", { name: "More actions for fixture", exact: true }).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-row-more]"))).click();
     await page.getByRole("menu", { name: "More actions for fixture" }).locator('[data-menu-item="remove_project"]').click();
 
     const dialog = page.locator("[data-remove-project]");

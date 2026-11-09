@@ -101,6 +101,7 @@ test("a start whose kind this build has no home for stays an operator's row nami
     // A record with no task, or one a newer build wrote, loads with the rest of the ledger (B20).
     await seed(stack, null);
     await open(page, stack.daemon);
+    await openOtherCheckouts(page.locator("[data-project]", { hasText: "scratch" }));
     const row = page.locator(`[data-pane="${stack.hideAiPane}"]`);
     await expect(row.locator("[data-agent-task]")).toHaveText("Hide AI", { timeout: 30_000 });
 

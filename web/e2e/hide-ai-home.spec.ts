@@ -181,7 +181,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     const needsYou = page.locator('[data-project-list] [data-raised-group="needs_you"]');
     const row = needsYou.locator(`[data-pane="${stack.hideAiPane}"]`);
     await expect(row).toHaveCount(1, { timeout: 60_000 });
-    await expect(row).toContainText("Promote Memory · m43");
+    await expect(row.locator("[data-agent-open]")).toHaveAttribute("aria-label", /Promote Memory · m43/);
     await expect(row.locator("[data-agent-home-turn]")).toHaveText(`PR ${"#"}${PR} review`);
     // B1: it is in no tree and no Sessions group of its own, so the one row is the raised one.
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);

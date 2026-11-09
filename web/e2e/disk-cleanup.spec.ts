@@ -22,7 +22,7 @@ import { startEngine } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { countSent, screenshot } from "./wire";
+import { countSent, openOtherCheckouts, screenshot } from "./wire";
 import { projectRow } from "./overview-entry";
 import { initGithubRepository } from "./github-remote";
 
@@ -386,6 +386,7 @@ test("a worktree left with only a finished agent's pane is chosen and its pane c
 
     // Once its turn is over, the same worktree is chosen and the sheet counts the pane that closes with it.
     const status = (await setAgentState(daemon, pane, "idle")).status_code;
+    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo$/ }) }));
     // A review reads the agents the core holds, the same rows the sidebar draws: the review opens once the
     // agent's row shows the turn over. A `done` with no label verdict is a stop to read, worded Stopped (status-marks D-03).
     await expect(page.locator(`[data-pane="${pane}"] [data-agent-status]`).first()).toHaveAttribute("data-agent-status", status === "done" ? "stopped" : status, { timeout: 30_000 });

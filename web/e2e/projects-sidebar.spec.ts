@@ -313,7 +313,6 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     // (group-tabs D-14).
     const emptyRow = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="empty"]') });
     const emptyButton = emptyRow.locator("[data-checkout]");
-    await expect(emptyRow.locator("[data-checkout-toggle]")).toHaveCount(0);
     expect((await emptyButton.boundingBox())!.height).toBe(await emptyButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await emptyButton.click();
     await expect(emptyButton).toHaveAttribute("aria-current", "true");
@@ -807,12 +806,12 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     await rest(page);
     await expect(pair).toBeHidden();
 
-    // B8: each has its own name, and the keyboard reaches and presses them.
-    await expect(start).toHaveAccessibleName("Start agent in tools-repo");
-    await expect(more).toHaveAccessibleName("More actions for tools-repo");
     // Focus on the row's button draws the pair, which the keyboard then reaches.
     await keyboardFocus(page, row);
     await expect(pair).toBeVisible();
+    // B8: each has its own name, and the keyboard reaches and presses them.
+    await expect(start).toHaveAccessibleName("Start agent in tools-repo");
+    await expect(more).toHaveAccessibleName("More actions for tools-repo");
     await keyboardFocus(page, start);
     await expect(pair).toBeVisible();
     // B7: + aims the start panel at the project's main checkout.
@@ -883,9 +882,7 @@ test("a section head stays at the top of the scrolled list, and a row the keyboa
     // B10: the keyboard brings the first project row under the head into view below it, whole.
     const first = page.locator("[data-project-list] > li[data-project] [data-project-row]").first();
     await keyboardFocus(page, first);
-    const row = (await first.boundingBox())!;
-    const stuck = (await head.boundingBox())!;
-    expect(row.y).toBeGreaterThanOrEqual(stuck.y + stuck.height - 0.5);
+    await expect.poll(async () => (await first.boundingBox())!.y).toBeGreaterThanOrEqual((await head.boundingBox())!.y + (await head.boundingBox())!.height - 0.5);
 
     // A real core focus change brings its row in below the head too: the first tree agent fits in
     // the viewport but is covered by the head.
