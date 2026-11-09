@@ -871,6 +871,85 @@ mod tests {
         assert!(!home.exists());
     }
 
+    /// A Grok session folder: `<home>/.grok/sessions/<group>/<id>/`, with the
+    /// `summary.json` that names its folder and kind and an `updates.jsonl`.
+    fn grok_session(user_home: &Path, id: &str, cwd: &Path, kind: &str) {
+        let folder = user_home.join(".grok/sessions/group").join(id);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("updates.jsonl"), "").unwrap();
+        std::fs::write(
+            folder.join("summary.json"),
+            serde_json::json!({"info": {"id": id, "cwd": cwd}, "session_kind": kind}).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn claude_session(user_home: &Path, cwd: &Path) {
+        let folder = user_home.join(".claude/projects/p");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("one.jsonl"),
+            format!(
+                "{{\"type\":\"user\",\"cwd\":{},\"timestamp\":\"2026-11-07T01:00:00Z\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
+                serde_json::to_string(cwd).unwrap()
+            ),
+        )
+        .unwrap();
+    }
+
+    /// An agent's own bookkeeping sessions (Hide's label session, a subagent's)
+    /// are no work in any folder: beside an empty `~/hide` they do not keep it.
+    #[test]
+    fn sessions_that_are_no_operators_do_not_keep_an_empty_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        let id = "0199b000-0000-7000-8000-000000000001";
+        grok_session(dir.path(), id, &home, "subagent");
+        let retired = retire(dir.path(), false, true).unwrap();
+        assert!(!retired.kept, "{retired:?}");
+        assert!(!home.exists());
+    }
+
+    /// D-04: a session an agent recorded in the folder keeps it as the `hide`
+    /// project, whatever bookkeeping sessions lie beside it.
+    #[test]
+    fn a_session_recorded_in_the_folder_keeps_it_beside_sessions_that_are_not_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        grok_session(
+            dir.path(),
+            "0199b000-0000-7000-8000-000000000001",
+            &home,
+            "headless",
+        );
+        claude_session(dir.path(), &home);
+        let retired = retire(dir.path(), false, true).unwrap();
+        assert!(retired.kept, "{retired:?}");
+        assert!(names(&home).is_empty());
+    }
+
+    /// A store that cannot be listed leaves the question open: the folder is
+    /// kept and the answer says why, never "no session".
+    #[test]
+    fn a_store_that_cannot_be_listed_keeps_the_folder_and_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        empty_of_hides_entries(dir.path(), &home);
+        // A file where Claude's session folder should be fails the listing the
+        // way a folder without read permission does, under any account.
+        std::fs::create_dir(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/projects"), "").unwrap();
+        let retired = retire(dir.path(), false, true).unwrap();
+        assert!(retired.kept, "{retired:?}");
+        assert_eq!(
+            retired.failure.as_deref(),
+            Some("The agents' session stores could not all be read, so ~/hide is kept")
+        );
+        assert!(home.exists());
+    }
+
     /// A pane recorded in the folder keeps it, empty as it is.
     #[test]
     fn an_empty_folder_stays_when_the_caller_keeps_it() {

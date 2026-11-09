@@ -2604,6 +2604,43 @@ pub(crate) mod grok {
             3
         );
     }
+
+    /// Hide's own label sessions, a subagent's and a headless run's are no
+    /// operator's session: the folders search skips them instead of refusing
+    /// the whole Grok store, while the root conversation beside them is found.
+    #[test]
+    fn the_folders_search_skips_grok_sessions_that_are_no_operators_without_refusing() {
+        let native = Native::new();
+        let catalog =
+            SessionCatalog::new(&hide_session::Accounts::new(native.home.path()), "local");
+        let deadline = || std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let found = catalog.worked_folders(0, deadline());
+        assert!(found.refusals.is_empty(), "{:?}", found.refusals);
+        assert_eq!(
+            found
+                .folders
+                .iter()
+                .map(|folder| (folder.agent, folder.cwd.clone()))
+                .collect::<Vec<_>>(),
+            vec![(Agent::Grok, native.cwd.clone())]
+        );
+
+        for kind in ["subagent", "headless"] {
+            native.summary(|summary| summary["session_kind"] = json!(kind));
+            let found = catalog.worked_folders(0, deadline());
+            assert!(found.folders.is_empty(), "{kind}: {:?}", found.folders);
+            assert!(found.refusals.is_empty(), "{kind}: {:?}", found.refusals);
+        }
+        native.summary(|summary| summary["hidden"] = json!(true));
+        let found = catalog.worked_folders(0, deadline());
+        assert!(found.folders.is_empty() && found.refusals.is_empty());
+
+        // A summary that is merely unreadable is still said.
+        native.summary(|summary| summary["info"]["id"] = json!("not an id"));
+        let found = catalog.worked_folders(0, deadline());
+        assert_eq!(found.refusals.len(), 1, "{:?}", found.refusals);
+        assert_eq!(found.refusals[0].agent, Agent::Grok);
+    }
 }
 
 pub(crate) mod pi {

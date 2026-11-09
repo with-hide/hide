@@ -243,7 +243,7 @@ impl SessionCatalog {
             let kept_stamp = file_cache::keeps(agent).then(|| stamp.clone()).flatten();
             let cwd = match self.file_cwd(agent, &path, kept_stamp.clone()) {
                 Ok(Some(cwd)) => cwd,
-                Ok(None) | Err(HeaderError::Unreadable(_)) => continue,
+                Ok(None) | Err(HeaderError::Unreadable(_) | HeaderError::NoFolder) => continue,
                 // A file whose header is refused belongs to no Project the
                 // listing can name, so its refusal is the store's, once.
                 Err(HeaderError::Refused(reason)) => {
@@ -357,7 +357,14 @@ impl SessionCatalog {
         if agent == Agent::Cursor {
             return crate::cursor::header(self.accounts.home(), path)
                 .map(|header| Some(header.cwd))
-                .map_err(|error| HeaderError::Unreadable(error.to_string()));
+                .map_err(|error| match &error {
+                    SessionError::Checkpoint(reason)
+                        if reason == crate::cursor::CWD_UNCONFIRMED =>
+                    {
+                        HeaderError::NoFolder
+                    }
+                    _ => HeaderError::Unreadable(error.to_string()),
+                });
         }
         file_cache::header_cwd(path, stamp, || session_cwd(agent, path))
     }
@@ -372,7 +379,10 @@ impl SessionCatalog {
     /// more than that once per store: one whose store cannot be listed or
     /// is past its budget, or whose session files cannot be read, is a
     /// refusal beside what the others found, and every agent not reached
-    /// by `deadline` is refused as late, so the call ends by then. The kept
+    /// by `deadline` is refused as late, so the call ends by then. A session
+    /// file that names no folder a session could be placed in (Hide's own
+    /// label session, a subagent's, a folder that cannot be confirmed) is
+    /// skipped, as it is work in no folder. The kept
     /// headers of each store listed whole are pruned to that listing, as a
     /// project's listing prunes them, whatever another store did.
     pub fn worked_folders(&self, since_unix_ms: u64, deadline: Instant) -> WorkedFolders {
@@ -427,6 +437,9 @@ impl SessionCatalog {
                         *entry = (*entry).max(changed);
                     }
                     Ok(None) => {}
+                    // A file that names no folder to place a session in is no
+                    // work in any folder, so it is neither one nor a refusal.
+                    Err(HeaderError::NoFolder) => {}
                     Err(HeaderError::Refused(reason) | HeaderError::Unreadable(reason)) => {
                         refuse(agent, format!("a session file could not be read: {reason}"));
                     }
@@ -630,11 +643,16 @@ fn collect_grok(
 /// Why a session file's header named no folder: refused by rule for its
 /// bytes (Codex's `session_meta` over the record cap), which holds while the
 /// file does, or not read at all (the file could not be opened, or its
-/// header is not one), which is tried again on the next listing.
+/// header is not one), which is tried again on the next listing, or read
+/// whole and naming no folder a session could be placed in: not a session of
+/// the operator's (Hide's own label session, a subagent's), or a folder that
+/// cannot be confirmed. Such a file is no refusal of its store: it is work in
+/// no folder, whichever walk reads it.
 #[derive(Clone, Debug)]
 pub(crate) enum HeaderError {
     Refused(String),
     Unreadable(String),
+    NoFolder,
 }
 
 /// The cwd a session file names, or why its header named none.
@@ -644,7 +662,13 @@ fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, HeaderError
         Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
             crate::source::facts::header(agent, path)
                 .map(|header| Some(header.cwd))
-                .map_err(|error| unreadable(&error))
+                .map_err(|error| {
+                    if crate::grok::places_in_no_folder(&error.to_string()) {
+                        HeaderError::NoFolder
+                    } else {
+                        unreadable(&error)
+                    }
+                })
         }
         Agent::Codex => {
             let file = crate::source::open(path).map_err(|error| unreadable(&error))?;

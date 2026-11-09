@@ -41,9 +41,7 @@ pub(crate) struct Summary {
 
 /// `urlencoding::encode` of the cwd, which Grok uses as the group name.
 pub(crate) fn group_name(cwd: &Path) -> Result<String> {
-    let spelling = cwd
-        .to_str()
-        .ok_or_else(|| anyhow!("label_session_cwd_unconfirmed"))?;
+    let spelling = cwd.to_str().ok_or_else(|| anyhow!(CWD_UNCONFIRMED))?;
     let mut name = String::with_capacity(spelling.len());
     for byte in spelling.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
@@ -93,6 +91,18 @@ fn sibling(path: &Path, name: &str, limit: u64, read_bytes: &mut u64) -> Result<
     Ok(Some(bytes))
 }
 
+/// Why a summary is refused for being no pane's root conversation.
+pub(crate) const NOT_ROOT: &str = "label_session_not_root";
+
+/// Why a summary is refused for naming no absolute folder.
+pub(crate) const CWD_UNCONFIRMED: &str = "label_session_cwd_unconfirmed";
+
+/// Whether a refused summary's `reason` says it names no folder a session
+/// could be placed in: it is no operator's session, or its folder is not one.
+pub(crate) fn places_in_no_folder(reason: &str) -> bool {
+    reason == NOT_ROOT || reason == CWD_UNCONFIRMED
+}
+
 /// Native identity, cwd and title from `summary.json`. A subagent child,
 /// a headless run or a hidden session is no pane's root conversation.
 pub(crate) fn summary(path: &Path, read_bytes: &mut u64) -> Result<Summary> {
@@ -119,12 +129,12 @@ pub(crate) fn summary(path: &Path, read_bytes: &mut u64) -> Result<Summary> {
         .filter(|cwd| !cwd.chars().any(char::is_control))
         .map(PathBuf::from)
         .filter(|cwd| cwd.is_absolute())
-        .ok_or_else(|| anyhow!("label_session_cwd_unconfirmed"))?;
+        .ok_or_else(|| anyhow!(CWD_UNCONFIRMED))?;
     let kind = value.get("session_kind").and_then(Value::as_str);
     if kind.is_some_and(|kind| kind.starts_with("subagent") || kind == "headless")
         || value["hidden"] == true
     {
-        return Err(anyhow!("label_session_not_root"));
+        return Err(anyhow!(NOT_ROOT));
     }
     let title = match value.get("generated_title") {
         None | Some(Value::Null) => String::new(),

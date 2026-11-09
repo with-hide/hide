@@ -233,36 +233,51 @@ fn native_pages_refuse_bad_cursors_and_budget_without_publishing_text() {
     );
 }
 
+/// Runs the test `name` of this module again in an owned child whose
+/// environment names no Cursor root, and says whether this call was the
+/// parent that did: the child (`true` for it too would run the body twice)
+/// gets `false` and goes on with its own body.
+///
+/// The fixtures are default-root fixtures. Capturing that environment in an
+/// owned child happens before the reader's process-wide root selection is
+/// initialized. Other tests retain their explicit override and duplicate-root
+/// cases.
+fn ran_in_default_root_child(name: &str) -> bool {
+    const CHILD: &str = "HIDE_TEST_CURSOR_CONSUMERS_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            &format!("cursor::{name}"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env_remove("CURSOR_CONFIG_DIR")
+        .env_remove("XDG_CONFIG_HOME");
+    let output = hide_platform::process::run_to_end(
+        &mut command,
+        std::time::Duration::from_secs(60),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(
+        output.succeeded(),
+        "private default-root consumer test failed:\n{}\n{}",
+        output.stdout,
+        output.stderr
+    );
+    true
+}
+
 #[test]
 fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
-    const CHILD: &str = "HIDE_TEST_CURSOR_CONSUMERS_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        // This is a default-root fixture. Capture that environment in an owned
-        // child before the reader's process-wide root selection is initialized.
-        // Other tests retain their explicit override and duplicate-root cases.
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "cursor::labels_archive_and_search_share_native_graph_and_checkpoint_ownership",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .env_remove("CURSOR_CONFIG_DIR")
-            .env_remove("XDG_CONFIG_HOME");
-        let output = hide_platform::process::run_to_end(
-            &mut command,
-            std::time::Duration::from_secs(60),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        assert!(
-            output.succeeded(),
-            "private default-root consumer test failed:\n{}\n{}",
-            output.stdout,
-            output.stderr
-        );
+    if ran_in_default_root_child(
+        "labels_archive_and_search_share_native_graph_and_checkpoint_ownership",
+    ) {
         return;
     }
     use hide_session::{Agent, SessionReadScope, label_transcript};
@@ -741,4 +756,42 @@ fn same_path_database_replacement_resets_native_checkpoint() {
     let result = fixture.read(Some(first.checkpoint)).unwrap();
     assert_eq!(result.parsed.rescan_reason, Some(RescanReason::Replaced));
     assert_eq!(result.parsed.events.len(), 2);
+}
+
+/// A session whose folder is gone names no folder to work in: the folders
+/// search skips it instead of refusing the whole Cursor store.
+#[test]
+fn a_session_whose_folder_cannot_be_confirmed_is_skipped_not_refused() {
+    if ran_in_default_root_child(
+        "a_session_whose_folder_cannot_be_confirmed_is_skipped_not_refused",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let catalog = hide_session::SessionCatalog::new(
+        &hide_session::Accounts::new(fixture.home.path()),
+        "fixture",
+    );
+    let deadline = || std::time::Instant::now() + std::time::Duration::from_secs(60);
+
+    let found = catalog.worked_folders(0, deadline());
+    assert!(found.refusals.is_empty(), "{:?}", found.refusals);
+    assert_eq!(found.folders.len(), 1);
+    assert_eq!(found.folders[0].cwd, fixture.cwd);
+
+    // The folder was removed after the session ran: its bucket still names it.
+    let gone = fixture.home.path().join("gone");
+    fixture.sidecar(json!({"schemaVersion":1,"createdAtMs":CREATED,"hasConversation":true,"cwd":gone,"title":"x"}));
+    let bucket = fixture.path.parent().unwrap().parent().unwrap();
+    std::fs::rename(
+        bucket,
+        bucket.with_file_name(format!(
+            "{:x}",
+            md5::compute(gone.to_str().unwrap().as_bytes())
+        )),
+    )
+    .unwrap();
+    let found = catalog.worked_folders(0, deadline());
+    assert!(found.folders.is_empty(), "{:?}", found.folders);
+    assert!(found.refusals.is_empty(), "{:?}", found.refusals);
 }

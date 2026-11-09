@@ -27,6 +27,9 @@ const EVENT_LIMIT: usize = 200;
 const SQL_STEPS: usize = 1_000_000;
 const ANCESTOR_LIMIT: usize = 64;
 
+/// Why a store is refused for a folder it names that cannot be confirmed.
+pub(crate) const CWD_UNCONFIRMED: &str = "cursor_cwd_unconfirmed";
+
 fn invalid(reason: &'static str) -> SessionError {
     SessionError::Checkpoint(reason.to_owned())
 }
@@ -91,7 +94,7 @@ pub(crate) fn directory(cwd: &Path) -> Result<String> {
         .to_str()
         .filter(|value| !value.chars().any(char::is_control))
         .filter(|_| cwd.is_absolute())
-        .ok_or_else(|| invalid("cursor_cwd_unconfirmed"))?;
+        .ok_or_else(|| invalid(CWD_UNCONFIRMED))?;
     Ok(format!("{:x}", md5::compute(spelling.as_bytes())))
 }
 
@@ -371,12 +374,12 @@ impl Database {
             return Err(invalid("cursor_session_identity_mismatch"));
         }
         let actual = hide_platform::fs::identity::canonical(&sidecar.cwd)
-            .map_err(|_| invalid("cursor_cwd_unconfirmed"))?;
-        let cwd_identity = hide_platform::fs::identity::file_id(&actual)
-            .map_err(|_| invalid("cursor_cwd_unconfirmed"))?;
+            .map_err(|_| invalid(CWD_UNCONFIRMED))?;
+        let cwd_identity =
+            hide_platform::fs::identity::file_id(&actual).map_err(|_| invalid(CWD_UNCONFIRMED))?;
         if let Some((expected_id, expected_cwd)) = scope {
             let expected = hide_platform::fs::identity::canonical(Path::new(expected_cwd))
-                .map_err(|_| invalid("cursor_cwd_unconfirmed"))?;
+                .map_err(|_| invalid(CWD_UNCONFIRMED))?;
             if expected_id != id || actual != expected {
                 return Err(invalid("cursor_scope_mismatch"));
             }
@@ -1079,8 +1082,7 @@ pub(crate) fn confirm_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> R
         home,
         &route,
         Some(id),
-        cwd.to_str()
-            .ok_or_else(|| invalid("cursor_cwd_unconfirmed"))?,
+        cwd.to_str().ok_or_else(|| invalid(CWD_UNCONFIRMED))?,
     )?;
     confirm_known_roots(home, id)?;
     Ok(())
