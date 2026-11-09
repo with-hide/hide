@@ -19,7 +19,8 @@ import { OverviewPage } from "../Overview";
 import { SettingsGate } from "../SettingsSheet";
 import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Sidebar } from "../sidebar";
-import type { AiProvider, HerdrImport, MachineProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import type { AiProvider, DeskSection, HerdrImport, MachineProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import { AGENTS } from "./deskSceneData";
 import { StartPanelHost } from "../StartPanel";
 import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
@@ -166,6 +167,17 @@ export function onboardingSceneParams(params: URLSearchParams): OnboardingSceneP
 }
 
 const HOME = "/Users/me";
+
+/** Labs' Desk section: Desk on, with the agents the Desk gallery scene draws. */
+const SCENE_DESK: DeskSection = {
+  selection: { agent: "claude", model: null, effort: null },
+  agents: AGENTS,
+  host: { state: "ready", detail: null },
+  conversation: { generation: 1, items: [], dropped: 0 },
+  approvals_waiting: 0,
+  settings: { enabled: true, default_agent: "claude", location: "desk", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "ask" } },
+  lane: { pinned: false, kept: [] },
+};
 
 /** Phone access off, no phone paired, push only while the app is closed: the daemon's `mobile` frame on a fresh Mac. */
 const SCENE_MOBILE: MobileState = {
@@ -397,7 +409,7 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
   // The host and the stores are in place before the first render, since the wizard asks the host which one it is in.
   useMemo(() => {
     window.hideHost = sceneHost(system, permissionOf(state, system), update);
-    useShellStore.setState({ connection: "live", rest: sceneRest(state, system), agents: [], revision: 1, mobile: SCENE_MOBILE } as never);
+    useShellStore.setState({ connection: "live", rest: sceneRest(state, system), agents: [], revision: 1, mobile: SCENE_MOBILE, desk: page === "labs" ? SCENE_DESK : null } as never);
     // The Overview's Work tab is where an empty device, or one on its way, says so (UI_BEHAVIOR, Overview).
     const device = state.startsWith("home-device") ? "window" : undefined;
     useUiStore.setState({ screen: { kind: "main", ...(device ? { deviceId: device } : {}) }, overviewOpen: false, mainView: state === "home-no-agent-work" || device ? "work" : "backlog" } as never);
