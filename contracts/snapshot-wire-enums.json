@@ -58,6 +58,8 @@
   "kit_component_state": ["installed", "outdated", "not_installed", "removed", "failed", "absent", "off"],
   "profiles_state": ["listed", "unsupported", "unreadable"],
   "profile_install": ["default", "own", "refused", "removing", "remove_failed"],
+  "profile_answer_state": ["pending", "done", "refused"],
+  "profile_field": ["kind", "name", "account", "program", "env", "profile"],
   "kit_feature": ["skill", "guidance", "letters", "bell", "memory", "sleep", "fork", "start", "titles"],
   "task_state": ["needs_you", "blocked", "working", "waiting", "done", "revisit", "resting", "cleanup"],
   "backlog_phase": ["waiting", "creating", "created", "failed"],

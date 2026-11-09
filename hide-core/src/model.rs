@@ -9123,6 +9123,44 @@ mod wire_enum_tests {
         assert_wire(&contract, "profile_install", &installs);
         checked.insert("profile_install");
 
+        use crate::agent_profiles::AnswerState as ProfileAnswerState;
+        let answers = [
+            ProfileAnswerState::Pending,
+            ProfileAnswerState::Done,
+            ProfileAnswerState::Refused,
+        ];
+        for variant in answers {
+            match variant {
+                ProfileAnswerState::Pending
+                | ProfileAnswerState::Done
+                | ProfileAnswerState::Refused => {}
+            }
+        }
+        assert_wire(&contract, "profile_answer_state", &answers);
+        checked.insert("profile_answer_state");
+
+        use hide_node_link::profiles::ProfileField;
+        let fields = [
+            ProfileField::Kind,
+            ProfileField::Name,
+            ProfileField::Account,
+            ProfileField::Program,
+            ProfileField::Env,
+            ProfileField::Profile,
+        ];
+        for variant in fields {
+            match variant {
+                ProfileField::Kind
+                | ProfileField::Name
+                | ProfileField::Account
+                | ProfileField::Program
+                | ProfileField::Env
+                | ProfileField::Profile => {}
+            }
+        }
+        assert_wire(&contract, "profile_field", &fields);
+        checked.insert("profile_field");
+
         let onboarding = [AgentOnboarding::Pending, AgentOnboarding::Done];
         for variant in onboarding {
             match variant {
