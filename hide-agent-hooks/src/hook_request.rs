@@ -78,23 +78,30 @@ pub enum HookCommand {
     Status {
         report: HookStatusReport,
     },
-    /// What `hide agent exec` says of the profile's start it runs (PRD
-    /// agent-profiles B22), for the start `attempt` names
+    /// What `hide agent exec` asks or says of the profile's start it runs
+    /// (PRD agent-profiles B22), for the start `attempt` names
     /// ([`AGENT_EXEC_ATTEMPT`] on its line). The service that takes it
     /// answers only a caller whose own arguments are that attempt's
     /// executor, and hands on that caller's process ([`ExecProcess`]); the
     /// engine decides what came of the start from a read of that process,
-    /// never from this report alone. Metadata only, like `Status`.
+    /// never from this report alone. Metadata only, like `Status`; a
+    /// [`AgentExecEvent::Profile`] is answered with an [`ExecProfile`].
     AgentExec {
         attempt: String,
         event: AgentExecEvent,
     },
 }
 
-/// What `hide agent exec` tells of the start it runs.
+/// What `hide agent exec` asks or tells of the start it runs.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentExecEvent {
+    /// It asks how its profile runs, before it checks any program: its line
+    /// names only its attempt and the agent's own words, and the engine
+    /// keeps which profile, at which version, the start was checked with.
+    /// Answered only while that attempt runs and before its `Ready`, with
+    /// the profile as its machine has it now ([`ExecProfile`]).
+    Profile,
     /// It is about to hand the pane to the program, and does only when
     /// this report is answered ok: an attempt that has ended is refused, so
     /// its line does not run the program after its start was answered.
@@ -114,7 +121,7 @@ pub enum AgentExecEvent {
 impl AgentExecEvent {
     fn valid(&self) -> bool {
         match self {
-            Self::Ready | Self::Spawned { .. } => true,
+            Self::Profile | Self::Ready | Self::Spawned { .. } => true,
             Self::Refused { failure } | Self::Failed { failure } => {
                 failure.len() <= AGENT_EXEC_FAILURE_LIMIT
             }
@@ -124,6 +131,34 @@ impl AgentExecEvent {
 
 /// The longest sentence an [`AgentExecEvent`] failure carries.
 pub const AGENT_EXEC_FAILURE_LIMIT: usize = 1024;
+
+/// The answer to an [`AgentExecEvent::Profile`]: how the start runs, as the
+/// profile's machine has it now at the version its start was checked with,
+/// or why it does not run, which the executor reports as `Refused` and
+/// starts nothing on.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ExecProfile {
+    Ready(ExecStart),
+    Refused { failure: String },
+}
+
+/// How a profile's start runs on its machine: what its line once carried.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ExecStart {
+    /// The agent and the profile as the operator reads them
+    /// (`Claude · work`), which the start's failures name.
+    pub label: String,
+    /// The variables the start sets: the account's, then the profile's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<(String, String)>,
+    /// The profile's own program, run in place of the agent's, with the
+    /// words `leading` names before the agent's arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leading: Vec<String>,
+}
 
 /// The flag of `hide agent exec` that names its start's attempt: the first
 /// words after `agent exec`, so a bounded read of its arguments always has
@@ -138,17 +173,26 @@ pub struct ExecProcess {
     pub started: u64,
 }
 
-/// Whether `attempt` is one an engine gave a start
-/// ([`fresh_request_id`]'s shape), which bounds what a report may name.
+/// Whether `attempt` is one an engine gave a start ([`fresh_attempt`]'s
+/// shape), which bounds what a report may name. An executor of another
+/// shape's build refuses this one's line before it runs anything, as this
+/// one refuses that one's.
 pub fn valid_attempt(attempt: &str) -> bool {
-    attempt.split_once('-').is_some_and(|(time, random)| {
-        (1..=20).contains(&time.len())
-            && time.bytes().all(|byte| byte.is_ascii_digit())
-            && random.len() == 32
-            && random
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
+    attempt.len() == ATTEMPT_BYTES * 2
+        && attempt
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// The random bytes of an attempt: it tells one start of a pane from the
+/// others, beside the kernel's word for the process that names it, and is
+/// never a credential.
+const ATTEMPT_BYTES: usize = 8;
+
+/// A fresh attempt for a profile's start: [`ATTEMPT_BYTES`] random bytes
+/// in lowercase hex, short enough to read on the start line.
+pub fn fresh_attempt() -> Result<String, &'static str> {
+    random_hex::<ATTEMPT_BYTES>()
 }
 
 /// Whether `argv`, a process's arguments with its program first, is the
@@ -866,15 +910,17 @@ mod tests {
     /// its own first words after `agent exec` name it.
     #[test]
     fn a_report_names_an_attempt_of_the_engines_shape_and_its_executor_names_it_first() {
-        let attempt = fresh_request_id().unwrap();
+        let attempt = fresh_attempt().unwrap();
         assert!(valid_attempt(&attempt));
+        assert_ne!(fresh_attempt().unwrap(), attempt);
         for refused in [
             "",
-            "1-",
-            "x-0123456789abcdef0123456789abcdef",
-            "1-0123456789ABCDEF0123456789ABCDEF",
-            "1-0123456789abcdef0123456789abcde",
-            "123456789012345678901-0123456789abcdef0123456789abcdef",
+            "0123456789abcde",
+            "0123456789abcdef0",
+            "0123456789ABCDEF",
+            "0123456789abcdeg",
+            // The shape a build before it typed, which it never reads.
+            "1794175536904-d976a9485d217ccbe6a55d4704337678",
         ] {
             assert!(!valid_attempt(refused), "{refused}");
         }
@@ -890,24 +936,13 @@ mod tests {
             "exec",
             "--attempt",
             &attempt,
-            "--profile",
-            "p",
+            "--",
+            "claude",
         ]);
         assert!(is_attempt_executor(&executor, &attempt));
-        assert!(!is_attempt_executor(
-            &executor,
-            "1-0123456789abcdef0123456789abcdef"
-        ));
+        assert!(!is_attempt_executor(&executor, "0123456789abcdef"));
         // The attempt named anywhere but first is not this executor's.
-        let later = line(&[
-            "/bin/hide",
-            "agent",
-            "exec",
-            "--profile",
-            "p",
-            "--attempt",
-            &attempt,
-        ]);
+        let later = line(&["/bin/hide", "agent", "exec", "--", "--attempt", &attempt]);
         assert!(!is_attempt_executor(&later, &attempt));
         assert!(!is_attempt_executor(&line(&["/bin/cat", "-"]), &attempt));
         assert!(!is_attempt_executor(&[], &attempt));
@@ -917,7 +952,7 @@ mod tests {
     /// as its sender: this test's own, here.
     #[test]
     fn a_report_from_a_process_that_is_not_its_executor_is_refused() {
-        let attempt = fresh_request_id().unwrap();
+        let attempt = fresh_attempt().unwrap();
         assert_eq!(
             executor_process(std::process::id(), &attempt),
             Err("attempt_mismatch")
@@ -930,7 +965,7 @@ mod tests {
     /// gone when the pid is not in the pane or names a later process.
     #[test]
     fn a_read_of_the_executors_pid_counts_only_the_same_process_with_other_arguments() {
-        let attempt = fresh_request_id().unwrap();
+        let attempt = fresh_attempt().unwrap();
         let executor = ExecProcess {
             pid: 40,
             started: 7,

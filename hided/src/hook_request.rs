@@ -194,10 +194,12 @@ fn status(
         })
 }
 
-/// What `hide agent exec` in the caller's pane reported of its profile's
-/// start, which ends the engine's wait for it.
+/// What `hide agent exec` in the caller's pane asked or reported of its
+/// profile's start, which ends the engine's wait for it.
 /// An `AgentExec` report, taken only with the kernel's word for its
-/// sender: a `Ready` refused here leaves the program unstarted.
+/// sender: a `Ready` refused here leaves the program unstarted. Its ask for
+/// the profile (`Profile`) is answered with how the profile runs now
+/// (`ExecProfile`), its machine asked on this thread.
 fn agent_exec(
     core: &CoreHandle,
     cap: &Capability,
@@ -205,9 +207,17 @@ fn agent_exec(
     event: AgentExecEvent,
     executor: Option<ExecProcess>,
 ) -> Result<Value, Failure> {
-    cap.pane_terminal()
+    let proved = cap
+        .pane_terminal()
         .ok_or("agent_pane_required")
-        .and_then(|_| executor.ok_or("caller_unavailable"))
+        .and_then(|_| executor.ok_or("caller_unavailable"));
+    if event == AgentExecEvent::Profile {
+        return proved
+            .and_then(|_| core.exec_start(&cap.context.device_id, &cap.pane_id, attempt))
+            .and_then(|answer| serde_json::to_value(answer).map_err(|_| "result_encoding_failed"))
+            .map_err(|reason| (reason.to_owned(), "Start the agent again"));
+    }
+    proved
         .and_then(|executor| {
             core.agent_exec(
                 &cap.context.device_id,

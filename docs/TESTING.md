@@ -812,6 +812,7 @@ It also runs a project's dependencies whole in every shard that holds a dependen
 A shard of a lane with more than one shard therefore runs the tests `scripts/e2e-shard.py split` deals it: each listed test (`playwright test --list`) weighs its seconds in the suite's own table (`--table`), a test the table lacks weighs the table's median, and the longest test goes first into the shard with the least work so far.
 The same list and table always give the same shards, and every listed test lands in exactly one shard.
 The shard runs them with `--test-list`, so Playwright's retry, the flaky report and `--grep` work as before; the script reads and writes UTF-8, because a title holds `›` and a Windows runner's default encoding cannot write it.
+A title never holds ` › ` itself: `--test-list` splits a line on that separator, so such a test matches nothing in its shard file and `check` fails the lane (a desktop shard failed on one in 2026-11).
 
 Playwright counts a `--test-list` that matches nothing as a pass, so the step does not trust the file: `e2e-shard.py check` fails it unless `playwright test --list --test-list <shard file>` lists exactly the tests `split` planned, and a list, a table or a plan it cannot read is one line and a failed step.
 A `grep` that leaves fewer tests than shards leaves the extra shards no test; those steps end at once, which is what the old `--shard` did.
