@@ -45,7 +45,7 @@ pub const HOOK_ENTRY_VERSION: u32 = 12;
 #[macro_export]
 macro_rules! intent_table {
     () => {
-        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| split the work across several agents | plan it (`hide task help`) and hand only the steps that deliver something with `hide agent spawn --parent here --plan-node <key> …`; research stays with your own subagents |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| complex work with several steps, work to split across agents, or a request to plan first or review | run `hide mission help` and follow it as the Conductor directing agents; if it is unclear, ask the operator before starting whether to do it directly or delegate it as a mission |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
     };
 }
 
@@ -560,6 +560,7 @@ mod tests {
             // The intent table comes first, in English, and names the exact
             // command for each request (PRD agent-beside-and-session-guide B18).
             assert!(PURPOSE_CONTEXT.starts_with("Inside Hide, turn what the operator asks for"));
+            assert!(!PURPOSE_CONTEXT.contains("hide task help"));
             for command in [
                 "`hide file open <path>`",
                 "`hide diff open <path>`",
@@ -570,9 +571,9 @@ mod tests {
                 "`hide agent spawn --beside …`",
                 "`hide agent spawn --parent here …`",
                 "`hide agent spawn …` without --parent",
-                // Split work goes through the plan (PRD hide-plan-delegate B22).
-                "| split the work across several agents | plan it (`hide task help`)",
-                "`hide agent spawn --parent here --plan-node <key> …`; research stays with your own subagents",
+                // Complex work goes through a mission (PRD hide-task-skill-merge B7).
+                "| complex work with several steps, work to split across agents, or a request to plan first or review | run `hide mission help`",
+                "ask the operator before starting whether to do it directly or delegate it as a mission",
                 "Never start an agent with `hide pane open` or by typing its program into a pane",
                 "`hide pane read <pane>`",
                 "`hide agent read <agent>`",
