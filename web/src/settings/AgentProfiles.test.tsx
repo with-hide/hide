@@ -121,6 +121,52 @@ it("edits only after the variables' values are read, and deletes after naming th
   await tab.unmount();
 });
 
+it("keeps what was typed while the values are read, and closes only once the last edit is saved (B26)", async () => {
+  const tab = await mount(listed([work]));
+  await tab.click(tab.q('[data-profile-row="p-work"] button'));
+  // Typed before the values arrive: kept when they do, and saved after.
+  await tab.type(tab.q("#profile-edit-name"), "work-2");
+  await tab.answer({ values: [["A", "1"]] });
+  expect((tab.q("#profile-edit-name") as HTMLInputElement).value).toBe("work-2");
+  expect(tab.changes().at(-1)?.change).toEqual({ op: "edit", id: "p-work", name: "work-2", program: null, env: [["A", "1"]] });
+
+  // A second change while the first is on its way, then a close.
+  await tab.type(tab.q("#profile-edit-program"), "claude-gateway");
+  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(tab.q("[data-profile-dialog='edit']")).not.toBeNull();
+  await tab.answer({});
+  expect(tab.changes().at(-1)?.change).toEqual({ op: "edit", id: "p-work", name: "work-2", program: "claude-gateway", env: [["A", "1"]] });
+  expect(tab.q("[data-profile-dialog='edit']")).not.toBeNull();
+  await tab.answer({});
+  expect(tab.q("[data-profile-dialog]")).toBeNull();
+  await tab.unmount();
+});
+
+it("keeps the dialog open with its values and the reason when the last edit is refused on close", async () => {
+  const tab = await mount(listed([work]));
+  await tab.click(tab.q('[data-profile-row="p-work"] button'));
+  await tab.answer({ values: [["A", "1"]] });
+  await tab.type(tab.q("#profile-edit-program"), "nope");
+  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(tab.changes().at(-1)?.change).toMatchObject({ op: "edit", program: "nope" });
+  await tab.answer({ state: "refused", code: "profile_refused", field: "program", text: "No such program" });
+  expect(tab.q("[data-profile-dialog='edit']")?.textContent).toContain("No such program");
+  expect((tab.q("#profile-edit-program") as HTMLInputElement).value).toBe("nope");
+  await tab.unmount();
+});
+
+it("saves nothing on close when the values could not be read", async () => {
+  const tab = await mount(listed([work]));
+  await tab.click(tab.q('[data-profile-row="p-work"] button'));
+  await tab.type(tab.q("#profile-edit-name"), "work-2");
+  await tab.answer({ state: "refused", code: "profile_gone" });
+  const sent = tab.changes().length;
+  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(tab.changes()).toHaveLength(sent);
+  expect(tab.q("[data-profile-dialog]")).toBeNull();
+  await tab.unmount();
+});
+
 it("refuses a delete while an agent runs with the profile and lists it (B27)", async () => {
   const tab = await mount(listed([work]));
   await tab.click(tab.q('[data-profile-row="p-work"] button'));

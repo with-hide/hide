@@ -4,7 +4,7 @@
 // (`kit.profiles`); this keeps only which dialog is open, its draft and the
 // one request it waits on.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { hostWays } from "../addProject";
 import {
@@ -30,7 +30,10 @@ import { useUiStore } from "../ui";
 
 type Open =
   | { kind: "add"; agent: string; draft: ProfileDraft }
-  | { kind: "edit"; agent: string; id: string; draft: ProfileDraft; saved: ProfileDraft | null }
+  // `saved` is the machine's values once read (null before: nothing is saved
+  // then, since an edit replaces every variable); `closing` holds a close
+  // the operator asked for until the last draft is saved.
+  | { kind: "edit"; agent: string; id: string; draft: ProfileDraft; saved: ProfileDraft | null; closing: boolean }
   | { kind: "delete"; agent: string; id: string; checked: boolean };
 
 type Sent = { id: string; change: ProfileChange; draft?: ProfileDraft };
@@ -48,7 +51,6 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
   const native = useShellStore((s) => hostWays(device.id, s.rest?.navigator?.devices, hostBridge() !== null).native);
   const [open, setOpen] = useState<Open | null>(null);
   const [sent, setSent] = useState<Sent | null>(null);
-  const again = useRef<ProfileDraft | null>(null);
   const answer = useShellStore((s) => profileAnswer(s.rest, sent?.id ?? null));
   const waiting = sent !== null && (answer === null || answer.state === "pending");
 
@@ -58,30 +60,37 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
     actions.changeAgentProfile(device.id, id, change);
   };
 
-  // What the answer to the one request changes on screen.
+  // What the answer to the one request changes on screen. `open`, `view`
+  // and `send` are this render's; the answer is what moves.
   useEffect(() => {
-    if (!sent || !answer || answer.state === "pending") return;
+    if (!sent || !answer || answer.state === "pending" || !open) return;
     const { change } = sent;
-    setOpen((now) => {
-      if (!now) return now;
-      if (change.op === "values" && now.kind === "edit" && now.id === change.id && now.saved === null) {
-        if (answer.state !== "done") return now;
-        const draft = profileDraft(view(now.agent)?.profiles.find((row) => row.id === now.id) ?? null, answer.values ?? []);
-        return { ...now, draft, saved: draft };
+    const done = answer.state === "done";
+    if (open.kind === "edit") {
+      let next = open;
+      if (change.op === "values" && change.id === open.id && open.saved === null) {
+        // Only a read gives the variables; what was typed meanwhile stays.
+        if (done) {
+          const values = answer.values ?? [];
+          const saved = profileDraft(view(open.agent)?.profiles.find((row) => row.id === open.id) ?? null, values);
+          next = { ...open, saved, draft: { ...open.draft, env: saved.env } };
+        } else next = { ...open, closing: false };
+      } else if (change.op === "edit" && change.id === open.id && sent.draft) {
+        next = done ? { ...open, saved: sent.draft } : { ...open, closing: false };
       }
-      if (change.op === "add" && answer.state === "done") return null;
-      if (change.op === "edit" && answer.state === "done" && now.kind === "edit" && sent.draft) return { ...now, saved: sent.draft };
-      if (change.op === "remove_check" && now.kind === "delete" && answer.state === "done") return { ...now, checked: true };
-      if (change.op === "remove") return answer.state === "refused" && answer.code === "profile_in_use" && now.kind === "delete" ? { ...now, checked: true } : null;
-      return now;
-    });
-    // An edit made while the last one was on its way goes now.
-    if (change.op === "edit" && again.current) {
-      const draft = again.current;
-      again.current = null;
-      send(editChange(change.id, draft), draft);
+      // The last draft goes once the one before it is answered; a refused
+      // one waits for the operator's next change.
+      const dirty = next.saved !== null && !sameDraft(next.saved, next.draft) && next.draft.name.trim() !== "";
+      if (done && dirty) {
+        setOpen(next);
+        send(editChange(next.id, next.draft), next.draft);
+      } else if (done && next.closing && next.saved !== null) setOpen(null);
+      else if (next !== open) setOpen(next);
+      return;
     }
-    // `view` and `send` read this render's values; the answer is what moves.
+    if (change.op === "add" && done && open.kind === "add") setOpen(null);
+    if (change.op === "remove_check" && open.kind === "delete" && done) setOpen({ ...open, checked: true });
+    if (change.op === "remove" && open.kind === "delete") setOpen(answer.state === "refused" && answer.code === "profile_in_use" ? { ...open, checked: true } : null);
   }, [sent?.id, answer?.state]);
 
   function view(agent: string) {
@@ -91,26 +100,33 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
 
   const refusal = answerRefusal(answer);
   const errorText = refusal.text ?? (refusal.key ? t(refusal.key as "agentProfiles.error.other") : null);
-  const close = () => {
-    setOpen(null);
-    again.current = null;
+  const close = () => setOpen(null);
+  /**
+   * Closing an edit saves its last draft first (B26): the dialog stays,
+   * saving, until the machine took it, and a refusal keeps it open with the
+   * values and the reason. Values never read are not saved.
+   */
+  const requestClose = () => {
+    if (open?.kind !== "edit") return close();
+    // A nameless draft cannot be saved, as on leaving a field.
+    const dirty = open.saved !== null && !sameDraft(open.saved, open.draft) && open.draft.name.trim() !== "";
+    if (!dirty && !waiting) return close();
+    setOpen({ ...open, closing: true });
+    if (dirty && !waiting) send(editChange(open.id, open.draft), open.draft);
   };
   const openEdit = (agent: string, profile: ProfileView) => {
     if (profile.builtIn) {
-      setOpen({ kind: "edit", agent, id: profile.id, draft: profileDraft(profile, []), saved: profileDraft(profile, []) });
+      setOpen({ kind: "edit", agent, id: profile.id, draft: profileDraft(profile, []), saved: profileDraft(profile, []), closing: false });
       return;
     }
-    setOpen({ kind: "edit", agent, id: profile.id, draft: profileDraft(profile), saved: null });
+    setOpen({ kind: "edit", agent, id: profile.id, draft: profileDraft(profile), saved: null, closing: false });
     send({ op: "values", id: profile.id });
   };
   const commit = (id: string, saved: ProfileDraft | null, draft: ProfileDraft) => {
-    // Nothing is saved before the variables' values are read: an edit
-    // replaces them all.
-    if (saved === null || sameDraft(saved, draft) || !draft.name.trim()) return;
-    if (waiting) {
-      again.current = draft;
-      return;
-    }
+    // Nothing is saved before the variables' values are read (an edit
+    // replaces them all), and one on its way sends the latest draft when
+    // it is answered.
+    if (saved === null || waiting || sameDraft(saved, draft) || !draft.name.trim()) return;
     send(editChange(id, draft), draft);
   };
   const chooseFolder = async () => {
@@ -181,14 +197,14 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
       overlay = (
         <ProfileFormDialog
           open
-          onOpenChange={(next) => !next && close()}
+          onOpenChange={(next) => !next && requestClose()}
           view={shown}
           mode={open.kind}
           profile={profile ?? undefined}
           draft={open.draft}
           refusals={refusal.refusals}
           error={errorText}
-          busy={waiting}
+          busy={waiting || editing?.closing === true}
           envLoading={editing?.saved === null}
           canChoose={native}
           onChooseFolder={() => void chooseFolder()}
