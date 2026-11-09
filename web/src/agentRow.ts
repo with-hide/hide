@@ -93,9 +93,11 @@ export function projectTreeLine(agent: Pick<AgentRow, "state" | "status_code" | 
   return line?.mode === "waiting" ? null : line;
 }
 
-/** The background tasks a finished turn left, as its line's tail (B27), or null when none. */
-export function backgroundTail(t: TFunction<"translation">, agent: { background_left?: number | null }): string | null {
-  return agent.background_left ? t("agents.line.backgroundLeft", { count: agent.background_left }) : null;
+/** What a finished turn left still running, as its line's tail: its background tasks (B27) and the children still working under a root (`· 자식 N개 작업 중`), or null when none. */
+export function leftTail(t: TFunction<"translation">, agent: { background_left?: number | null; children_left?: number | null }): string | null {
+  const background = agent.background_left ? t("agents.line.backgroundLeft", { count: agent.background_left }) : null;
+  const children = agent.children_left ? t("agents.line.children", { count: agent.children_left }) : null;
+  return [background, children].filter(Boolean).join(" · ") || null;
 }
 
 /** Status codes that lead a line as its word: what was asked, how a turn ended (D-04). */
@@ -110,12 +112,13 @@ export function leadWord(t: TFunction<"translation">, agent: Pick<AgentRow, "sta
 }
 
 /** What `lineText` reads off a row: a desktop row, or the phone's. */
-export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode; descendant_counts?: { working: number } | null; background_left?: number | null; look?: { count: number } | null };
+export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode; descendant_counts?: { working: number } | null; background_left?: number | null; children_left?: number | null; look?: { count: number } | null };
 
 /**
  * A line in its three parts, so a narrow row cuts only the sentence: the word
  * that leads it, the sentence, and the background tasks a finished turn left
- * (`끝남 · … · 백그라운드 2`, status-marks B27). Empty parts are null.
+ * (`끝남 · … · 백그라운드 2`, status-marks B27) and the children still working under it
+ * (`끝남 · … · 자식 2개 작업 중`). Empty parts are null.
  */
 export type LineParts = { lead: string | null; text: string | null; tail: string | null };
 
@@ -134,7 +137,7 @@ export type LineParts = { lead: string | null; text: string | null; tail: string
 export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: RowLine): LineParts {
   const word = leadWord(t, agent);
   const looks = line.look === undefined ? (agent.look ? t("agents.line.lookTail", { count: agent.look.count }) : null) : line.look > 1 ? t("agents.line.lookOthers", { count: line.look - 1 }) : null;
-  const tail = [backgroundTail(t, agent), looks].filter(Boolean).join(" · ") || null;
+  const tail = [leftTail(t, agent), looks].filter(Boolean).join(" · ") || null;
   const parts = (lead: string | null, text: string | null): LineParts => ({ lead, text: text || null, tail });
   switch (line.mode) {
     case "vanished":
@@ -216,10 +219,11 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  * 막힘); a working row names nothing more, its line says why. A row of unknown state
  * has no mark and says only `상태 모름`. A sleeping row says its
  * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
- * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27). A person's turn names
+ * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27), as it does the
+ * children still working under it, `읽을 것 · 끝남 · 자식 2개 작업 중`. A person's turn names
  * the key and what it asks, `사람 차례 · 인증 · github.com/login`.
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; wait?: AgentWait | null; human_turn?: { kind: HumanKind; place: string } | null }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; children_left?: number; wait?: AgentWait | null; human_turn?: { kind: HumanKind; place: string } | null }): string {
   // The key's name and what it asks, on the declaring row and its root (PRD ask-human B9).
   if (agent.human_turn && agent.mark !== "unknown") return [t("agents.human.mark"), humanTurnText(t, agent.human_turn)].join(" · ");
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
@@ -228,7 +232,8 @@ export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "ma
   const name = markName(t, agent.mark);
   const word = agent.mark === "going" ? null : agent.mark === "waiting" ? (!agent.wait && ASKING_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : waitWord(t, agent.wait)) : agent.mark === "quiet" ? (agent.status_code === "unfinished" ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);
   const left = agent.background_left ? t("agents.backgroundLeftWords", { count: agent.background_left }) : null;
-  return [name, word, left].filter(Boolean).join(" · ");
+  const children = agent.children_left ? t("agents.line.children", { count: agent.children_left }) : null;
+  return [name, word, left, children].filter(Boolean).join(" · ");
 }
 
 /** A delegated child's own request, which waits on its parent's answer (B24): its word, 막힘 or 질문, says what it waits on. */

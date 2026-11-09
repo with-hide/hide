@@ -395,6 +395,10 @@ pub mod phone {
         /// ends with (status-marks D-19); 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub background_left: u64,
+        /// The descendants still working under a finished turn the operator
+        /// has not read, which its line ends with; 0 otherwise.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub children_left: u64,
         pub agent_kind: String,
         pub title: String,
         /// `project · branch`, or the project alone for a plain folder.
@@ -1005,6 +1009,10 @@ pub mod phone {
                     .unwrap_or(0),
                 background_left: agent
                     .get("background_left")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                children_left: agent
+                    .get("children_left")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
                 emphasized: matches!(str_of(agent, "group"), "needs_you" | "done"),
