@@ -503,6 +503,7 @@ function ProjectList({ actions }: { actions: Actions }) {
         {raised.map((row, stack) => (
           <ProjectRowView key={rowKey(row)} row={row} stack={stack} context={context} />
         ))}
+        {raised.length > 0 && listRows.length > 0 ? <li role="separator" className="my-xs border-t border-border" /> : null}
         {listRows.map((row, index) => (
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
