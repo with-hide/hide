@@ -65,52 +65,69 @@ fn a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement() {
             "refs/remotes/origin/main",
         ],
     );
+    // Every Git answer comes 10 seconds late.
+    let result = with_stand_in_git(
+        "worktrees::a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement",
+        "std::thread::sleep(std::time::Duration::from_secs(10));",
+        &[(CHILD_ROOT, repository.path().as_os_str())],
+    );
+    eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+}
+
+/// Runs the test named `test` again in a child process whose `git` is a
+/// stand-in that runs `body`, then the real Git with the same arguments, and
+/// answers its outcome, which must be a pass. The stand-in is a native Rust
+/// program inside this checkout's build tree, so it works on Windows too,
+/// without a shell or a product-only test hook; `body` reads the arguments
+/// as `args` and may exit on its own. PATH changes only in the isolated
+/// child, which has no login shell to ask: a node finds Git on its account's
+/// search, the login shell's `PATH` first, and macOS's puts the system's Git
+/// ahead of any folder the child was handed.
+fn with_stand_in_git(
+    test: &str,
+    body: &str,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Output {
+    use std::time::Duration;
     let inherited_path = std::env::var_os("PATH").expect("fixture requires Git on PATH");
     let real_git = std::env::split_paths(&inherited_path)
         .map(|directory| directory.join(format!("git{}", std::env::consts::EXE_SUFFIX)))
         .find(|path| path.is_file())
         .expect("fixture requires a real Git executable");
-    // The only generated executable is inside this checkout's build tree.
-    // A native Rust stand-in works on Windows too, without a shell or a
-    // product-only test hook. PATH changes only in the isolated child, which
-    // has no login shell to ask: a node finds Git on its account's search,
-    // the login shell's `PATH` first, and macOS's puts the system's Git
-    // ahead of any folder the child was handed.
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target");
     std::fs::create_dir_all(&target).unwrap();
     let fixture = tempfile::tempdir_in(target).unwrap();
-    let source = fixture.path().join("delayed_git.rs");
+    let source = fixture.path().join("stand_in_git.rs");
     std::fs::write(
         &source,
-        r#"fn main() {
+        format!(
+            r#"fn main() {{
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "--version") {
+    if args.first().is_some_and(|arg| arg == "--version") {{
         return;
-    }
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    }}
+    {body}
     let status = std::process::Command::new(std::env::var_os("HIDE_TEST_REAL_GIT").unwrap())
         .args(args).status().unwrap();
     std::process::exit(status.code().unwrap_or(1));
-}
-"#,
+}}
+"#
+        ),
     )
     .unwrap();
-    let delayed_git = fixture
+    let stand_in = fixture
         .path()
         .join(format!("git{}", std::env::consts::EXE_SUFFIX));
     let compiled = hide_host::worktrees::output_within(
-        Command::new("rustc")
-            .arg(&source)
-            .arg("-o")
-            .arg(&delayed_git),
+        Command::new("rustc").arg(&source).arg("-o").arg(&stand_in),
         Duration::from_secs(60),
     )
     .unwrap()
     .expect("fixture compiler did not finish");
     assert!(compiled.status.success(), "{compiled:?}");
-    // Pay the platform's first-executable check before timing the read.
+    // Pay the platform's first-executable check before the test runs.
     let ready = hide_host::worktrees::output_within(
-        Command::new(&delayed_git).arg("--version"),
+        Command::new(&stand_in).arg("--version"),
         Duration::from_secs(60),
     )
     .unwrap()
@@ -120,23 +137,49 @@ fn a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement() {
         std::iter::once(fixture.path().to_owned()).chain(std::env::split_paths(&inherited_path)),
     )
     .unwrap();
-    let result = hide_host::worktrees::output_within(
-        Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "worktrees::a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement",
-                "--nocapture",
-            ])
-            .env(CHILD_ROOT, repository.path())
-            .env("HIDE_TEST_REAL_GIT", real_git)
-            .env("PATH", path)
-            .env_remove("SHELL"),
-        Duration::from_secs(90),
-    )
-    .unwrap()
-    .expect("isolated public read did not return");
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
+        .args(["--exact", test, "--nocapture"])
+        .env("HIDE_TEST_REAL_GIT", real_git)
+        .env("PATH", path)
+        .env_remove("SHELL");
+    for (name, value) in env {
+        child.env(name, value);
+    }
+    let result = hide_host::worktrees::output_within(&mut child, Duration::from_secs(90))
+        .unwrap()
+        .expect("isolated child did not return");
     assert!(result.status.success(), "{result:?}");
-    eprintln!("{}", String::from_utf8_lossy(&result.stderr));
+    result
+}
+
+/// Git removes the worktree, and then its worktree list cannot be read, as
+/// on a nearly full disk: the folder is gone, so the removal answers removed
+/// rather than a worktree that remains (with-hide/hide#2296).
+#[test]
+fn a_removal_git_made_is_removed_when_its_readback_cannot_list_worktrees() {
+    const CHILD_LINKED: &str = "HIDE_TEST_REMOVED_WORKTREE";
+    if let Some(linked) = std::env::var_os(CHILD_LINKED) {
+        let linked = std::path::PathBuf::from(linked);
+        let root = linked.parent().unwrap().join("repo");
+        let removed = hide_host::worktrees::remove_confirmed(&removal(&root, &linked));
+        assert!(removed.is_ok(), "{removed:?}");
+        return;
+    }
+    let (_fixture, root, linked) = linked_worktree(0);
+    // The stand-in fails `git worktree list` once the folder has left its
+    // path, which is only after the removal began.
+    with_stand_in_git(
+        "worktrees::a_removal_git_made_is_removed_when_its_readback_cannot_list_worktrees",
+        r#"let gone = !std::path::Path::new(&std::env::var_os("HIDE_TEST_REMOVED_WORKTREE").unwrap()).exists();
+    if gone && args.iter().any(|arg| arg == "worktree") && args.iter().any(|arg| arg == "list") {
+        eprintln!("fatal: unable to write new index file");
+        std::process::exit(128);
+    }"#,
+        &[(CHILD_LINKED, linked.as_os_str())],
+    );
+    assert!(!linked.exists());
+    assert!(!output(&root, &["worktree", "list", "--porcelain"]).contains("linked"));
 }
 
 fn removal(root: &Path, linked: &Path) -> ConfirmedRemoval {
