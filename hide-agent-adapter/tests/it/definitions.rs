@@ -43,7 +43,8 @@ fn credential_paths_are_declared_for_every_agent_whose_login_is_read() {
 #[test]
 fn login_rules_reject_unbounded_paths_and_invalid_pointers() {
     let builtin = include_str!("../../agents/codex.toml");
-    let account = &builtin[builtin.find("[account]").unwrap()..builtin.find("\n[screen]\n").unwrap()];
+    let account =
+        &builtin[builtin.find("[account]").unwrap()..builtin.find("\n[screen]\n").unwrap()];
     let base = format!(
         "schema = 1\nid = \"credential-test\"\nname = \"C\"\nexecutables = [\"credential-test\"]\nhooks = \"none\"\n{account}"
     );

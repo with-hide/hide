@@ -248,7 +248,7 @@ it("keeps the last device profiles dimmed without add or edit when its connectio
   expect(before).toEqual(["default", "p-work"]);
   await act(async () => {
     const rest = useShellStore.getState().rest!;
-    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: rest.navigator.devices.map((row) => ({ ...row, kind: "remote", state: "unavailable" })) } } } as never);
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: rest.navigator!.devices!.map((row) => ({ ...row, kind: "remote", state: "unavailable" })) } } } as never);
   });
   expect(tab.all('[data-inline-profiles="claude-code"] [data-profile-row]').map((row) => row.dataset.profileRow)).toEqual(before);
   expect(tab.q('[data-inline-profiles="claude-code"]')?.className).toContain("opacity-(--opacity-dimmed)");
