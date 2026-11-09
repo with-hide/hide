@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { agentAdapter, agentProductName } from "../agentAdapters";
-import { catalogFor, modelLabel, providerLabel, takesModel, type ProviderKind } from "../agentPicker";
-import { BUILT_IN_PROFILE, itemName, missingItemName, type AgentItem } from "../agentProfiles";
+import { catalogFor, modelLabel, providerLabel, takesModel, type ProfileItem, type ProviderKind } from "../agentPicker";
+import { itemName, missingItemName, type AgentItem } from "../agentProfiles";
 import { Note } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -15,8 +15,8 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, addCandidate, candidateAgent, candidateGone, candidateItems, candidateProfile, effortsOf, pickItem, replaceCandidate } from "../conductorSettings";
-import type { BackgroundAi, ConductorCandidate, ConductorSettings, MissionScope, MissionStrength } from "../snapshot";
+import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, addCandidate, candidateAgent, candidateGone, candidateItems, candidateProfile, candidateProfileItem, effortsOf, pickItem, replaceCandidate } from "../conductorSettings";
+import type { BackgroundAi, ConductorCandidate, ConductorSettings, Device, MissionScope, MissionStrength } from "../snapshot";
 import type { CoreError } from "../coreError";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
@@ -125,7 +125,7 @@ export function CandidateRows({ settings, send, layout }: Pick<ConductorEdit, "s
   return (
     <>
       {settings.candidates.map((candidate, index) => (
-        <CandidateRow key={index} candidate={candidate} list={list} layout={layout} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
+        <CandidateRow key={index} candidate={candidate} device={device} list={list} layout={layout} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
       ))}
     </>
   );
@@ -147,7 +147,7 @@ export type CandidateLayout = "grid" | "stack";
  * no longer lists is dimmed as `없는 프로필` and its item is not in the list
  * to pick again (B15); picking another item mends it.
  */
-function CandidateRow({ candidate, list, layout, onChange }: { candidate: ConductorCandidate; list: { items: AgentItem[]; named: boolean }; layout: CandidateLayout; onChange: (next: ConductorCandidate | null) => void }) {
+function CandidateRow({ candidate, device, list, layout, onChange }: { candidate: ConductorCandidate; device: Device | undefined; list: { items: AgentItem[]; named: boolean }; layout: CandidateLayout; onChange: (next: ConductorCandidate | null) => void }) {
   const { t } = useInterfaceTranslation();
   const kind = candidateAgent(candidate.agent);
   const profile = candidateProfile(candidate);
@@ -165,7 +165,7 @@ function CandidateRow({ candidate, list, layout, onChange }: { candidate: Conduc
   const [purpose, setPurpose] = useState(candidate.purpose);
   useEffect(() => setPurpose(candidate.purpose), [candidate.purpose]);
   const efforts = effortsOf(candidate.agent);
-  const catalog = modelCatalog(ai, kind, profile, t);
+  const catalog = modelCatalog(ai, kind, candidateProfileItem(device, profile), t);
   const label = !kind ? candidate.agent : gone ? missingItemName(t, agentLabel(kind)) : item ? named(item) : agentLabel(kind);
   const agent = (
     <Select value={item ? itemValue(item) : NO_ITEM} onValueChange={(value) => {
@@ -230,8 +230,8 @@ function CandidateRow({ candidate, list, layout, onChange }: { candidate: Conduc
 }
 
 /** The start panel's models of an item whose agent takes one (its profile's own list, B7), with why it cannot list them; null for an agent that takes none. */
-function modelCatalog(ai: BackgroundAi | undefined, kind: ProviderKind | null, profile: string, t: (key: string, values?: Record<string, string>) => string) {
-  const catalog = kind && takesModel(kind) ? catalogFor(ai, kind, profile === BUILT_IN_PROFILE ? null : profile) : null;
+function modelCatalog(ai: BackgroundAi | undefined, kind: ProviderKind | null, profile: ProfileItem | null, t: (key: string, values?: Record<string, string>) => string) {
+  const catalog = kind && takesModel(kind) ? catalogFor(ai, kind, profile) : null;
   if (!catalog) return null;
   return {
     models: catalog.state === "ready" ? catalog.models : [],

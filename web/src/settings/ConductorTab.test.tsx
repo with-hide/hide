@@ -143,7 +143,7 @@ it("lists this machine's agent items in a candidate's agent cell, offers the pic
     navigator: { devices: [{ id: "mac", kind: "local", kit: { agents: [{ id: "claude-code", availability: "available" }], profiles: { state: "listed", version: 2, profiles: [profile("p-gate", "opengateway"), profile("p-work", "work")], defaults: {} } } }] },
     status: { background_ai: { provider: "claude", chosen: false, unavailable_reason: null, providers: [{
       id: "claude", label: "Claude Code", agent: "claude-code", state: "ready", headline: "", message: null, model: "", models: ["opus", "sonnet"], models_unavailable_reason: null,
-      profile_models: [{ profile: "p-gate", models: ["deepseek-v4", "glm-5"], model_labels: { "deepseek-v4": "DeepSeek V4" }, models_fixed: false, models_unavailable_reason: null }],
+      profile_models: [{ profile: "p-gate", version: 1, models: ["deepseek-v4", "glm-5"], model_labels: { "deepseek-v4": "DeepSeek V4" }, models_fixed: false, models_unavailable_reason: null }],
     }] } },
   };
   const tab = await mount({ ...DEFAULT_CONDUCTOR, candidates: [

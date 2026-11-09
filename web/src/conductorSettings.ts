@@ -4,8 +4,8 @@
 // these mirror its bounds so the page never offers what it would refuse.
 
 import { agentAdapter } from "./agentAdapters";
-import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
-import { agentItems, BUILT_IN_PROFILE, type AgentItem } from "./agentProfiles";
+import { PROVIDER_KINDS, type ProfileItem, type ProviderKind } from "./agentPicker";
+import { agentItems, BUILT_IN_PROFILE, listedProfiles, type AgentItem } from "./agentProfiles";
 import type { ConductorCandidate, ConductorSettings, Device, MissionStrength } from "./snapshot";
 
 /** The cap's range (`CAP_LIMIT`) and the candidate list's (`CANDIDATE_LIMIT`). */
@@ -66,6 +66,13 @@ export function pickItem(candidate: ConductorCandidate, item: Pick<AgentItem, "k
 export function candidateItems(device: Device | undefined): { items: AgentItem[]; named: boolean } {
   const items = PROVIDER_KINDS.flatMap((kind) => agentItems(device, kind));
   return { items, named: items.some((item) => item.name !== null) };
+}
+
+/** A candidate's profile as `catalogFor` asks for it, its id and its version now on `device`; null for the built-in item and for a profile the machine no longer lists. */
+export function candidateProfileItem(device: Device | undefined, profile: string): ProfileItem | null {
+  if (profile === BUILT_IN_PROFILE) return null;
+  const row = listedProfiles(device)?.profiles.find((listed) => listed.id === profile);
+  return row ? { id: row.id, version: row.version } : null;
 }
 
 /** Whether the candidate's profile is one this machine no longer lists (B15): such a row admits no worker, and its item cannot be picked again. */
