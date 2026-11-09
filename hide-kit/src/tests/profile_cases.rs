@@ -264,7 +264,10 @@ fn the_agents_switch_reinstall_and_removal_reach_every_account() {
     );
 
     let removed = remove(&fixture.target);
-    let key = format!("profile:claude-code:{}", folder.display());
+    // Removal names the resolved account, including native separators,
+    // even when the profile was added with a mixed-separator spelling.
+    let resolved = hide_platform::fs::identity::canonical(&folder).unwrap();
+    let key = format!("profile:claude-code:{}", resolved.display());
     assert!(
         removed
             .agents
