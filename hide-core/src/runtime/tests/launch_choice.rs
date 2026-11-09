@@ -426,6 +426,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
             session_id: Some(SESSION.into()),
             launch: launch.clone(),
             profile: None,
+            registration: None,
         })
     );
 
@@ -457,6 +458,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
                         launch: launch.clone(),
                         session_id: Some(SESSION.into()),
                         profile: None,
+                        registration: None,
                     }],
                 }
             )

@@ -203,6 +203,9 @@ pub struct ReopenedAgent {
     /// The profile it started with, which its pane's record keeps.
     pub profile: Option<crate::launch::LaunchProfile>,
     pub session_id: Option<String>,
+    /// The registration the closed agent held, when its conversation
+    /// resumed here: the new pane continues it.
+    pub registration: Option<crate::agent_sleep::DormantRegistration>,
 }
 
 #[derive(Debug)]
@@ -952,13 +955,14 @@ fn start_or_degrade_agent(
             return None;
         }
     };
-    let started = |session_id: Option<&String>| ReopenedAgent {
+    let started = |resumed: bool| ReopenedAgent {
         pane_id: pane_id.to_owned(),
         kind: agent.kind.clone(),
         name: name.clone(),
         launch: agent.launch.clone(),
         profile: agent.profile.clone(),
-        session_id: session_id.cloned(),
+        session_id: agent.session_id.clone().filter(|_| resumed),
+        registration: agent.registration.as_deref().cloned().filter(|_| resumed),
     };
     // The profile the agent ran with is asked once, before the pane is
     // touched: one that is gone keeps the shell and says so, rather than
@@ -1025,7 +1029,7 @@ fn start_or_degrade_agent(
             return None;
         }
         if result.is_ok() || (pane_was_clear && agent_is_running(engine, pane_id, &agent.kind)) {
-            return Some(started(agent.session_id.as_ref()));
+            return Some(started(true));
         }
         let preparation = interrupted_reused_agent
             .as_ref()
@@ -1060,7 +1064,7 @@ fn start_or_degrade_agent(
         ));
         return None;
     }
-    Some(started(None))
+    Some(started(false))
 }
 
 /// The engine can reuse the just-closed pane id while its old PTY is still alive.
@@ -1162,6 +1166,7 @@ mod tests {
                 session_id: Some("session".into()),
                 launch: launch.clone(),
                 profile: None,
+                registration: None,
             },
             crate::codex_launch::CodexDaemon::Unsupported,
             // No saved choice: full access, on the resume and on the new
@@ -1191,6 +1196,7 @@ mod tests {
                 launch,
                 session_id: None,
                 profile: None,
+                registration: None,
             })
         );
         assert_eq!(
@@ -1244,6 +1250,7 @@ mod tests {
                     name: "work".into(),
                     account: hide_agent_adapter::AccountKey::Folder("/home/me/.claude-work".into()),
                 }),
+                registration: None,
             },
             crate::codex_launch::CodexDaemon::Unsupported,
             &Default::default(),

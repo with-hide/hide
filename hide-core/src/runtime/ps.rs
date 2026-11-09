@@ -299,6 +299,7 @@ fn registered(life: Life, disconnected: bool, mark: Option<PsState>) -> PsState 
         Life::Ended => PsState::Ended,
         _ if disconnected => PsState::Disconnected,
         Life::Asleep => PsState::Asleep,
+        Life::Closed => PsState::Closed,
         Life::Running => mark.unwrap_or(PsState::Unknown),
     }
 }

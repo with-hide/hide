@@ -2196,7 +2196,7 @@ impl Runtime {
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
         changed |= self.advance_session_archive();
-        changed |= self.advance_tree_reopens();
+        changed |= self.advance_reopens();
         if changed {
             self.sync_async_operations();
         }
@@ -3191,7 +3191,7 @@ impl Runtime {
         changed |= self.refresh_agent_lineage();
         changed |= self.advance_tree_closes();
         changed |= self.advance_session_archive();
-        changed |= self.advance_tree_reopens();
+        changed |= self.advance_reopens();
         for (tab_id, reason) in &rejected_layouts {
             crate::diagnostic!(serde_json::json!({
                 "component": "session",

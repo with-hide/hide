@@ -27,6 +27,7 @@ mod branch_decision;
 mod checkout_git;
 mod checks_wait;
 mod clone;
+mod closed_registrations;
 mod control_lane;
 pub(crate) mod core_move;
 pub(crate) mod delivery;
@@ -1533,9 +1534,9 @@ pub struct Runtime {
     tree_reopen_captures: Vec<tree_reopen::TreeCapture>,
     /// The tree unit being reopened, one member at a time.
     tree_reopen: Option<tree_reopen::TreeReopen>,
-    /// Registrations of reopened tree members waiting for their new pane to
-    /// take them over.
-    tree_reopen_continuations: Vec<tree_reopen::Continuation>,
+    /// Registrations of reopened agents waiting for their new pane to take
+    /// them over (`closed_registrations.rs`).
+    reopen_continuations: Vec<closed_registrations::Continuation>,
     /// User-initiated local closes, newest last. Memory only by contract.
     recent_closed: VecDeque<ClosedItem>,
     /// User closes in request order. A close is promoted onto
@@ -2502,7 +2503,7 @@ impl Runtime {
             next_tree_close_id: 0,
             tree_reopen_captures: Vec::new(),
             tree_reopen: None,
-            tree_reopen_continuations: Vec::new(),
+            reopen_continuations: Vec::new(),
             recent_closed: VecDeque::new(),
             close_capture_order: VecDeque::new(),
             close_operations: HashMap::new(),

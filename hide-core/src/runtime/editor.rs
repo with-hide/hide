@@ -915,6 +915,7 @@ impl Runtime {
                         session_id: agent.session_id.clone(),
                         launch: self.launch_choice_of(agent),
                         profile: self.launch_profile_of(agent),
+                        registration: self.delivery_registration_of(&pane.id).map(Box::new),
                     });
                 ClosedPane {
                     pane_id: pane.id.clone(),
@@ -2080,7 +2081,12 @@ impl Runtime {
                 && operation.item.is_some();
             let item = operation
                 .item
+                .clone()
                 .filter(|_| operation.phase == "completed" && operation.request.retain_for_reopen);
+            // With no item to reopen, nothing continues what the close held.
+            if item.is_none() {
+                self.release_close_registrations(&operation);
+            }
             if let Some(item) = self.settle_captured_close(&key, item) {
                 self.push_closed_item(item);
             }
@@ -2866,10 +2872,9 @@ impl Runtime {
             return false;
         }
         self.reopen_in_flight = None;
-        // A member of a tree entry: the agents it brought back, which the
-        // registrations it held move to.
+        // A member of a tree entry comes back behind its target.
         let behind = self.tree_member_behind(key);
-        let mut tree_agents = None;
+        let mut back = false;
         match result {
             Err(message) => {
                 let reserved = match &request.item {
@@ -3008,8 +3013,11 @@ impl Runtime {
                     ) => self.agent_can_show_created(&context.checkout_path, id),
                     _ => true,
                 };
+                // The registrations the item held follow the agents that
+                // came back (`closed_registrations.rs`).
                 if outcome.consumed {
-                    tree_agents = Some(outcome.agents.clone());
+                    self.continue_reopened_registrations(&request.item, &outcome.agents);
+                    back = true;
                 }
                 // A tree's descendants come back behind its target.
                 if can_show
@@ -3032,7 +3040,7 @@ impl Runtime {
                 self.set_reopen_notices(outcome.notices);
             }
         }
-        self.tree_member_settled(key, tree_agents.as_deref());
+        self.tree_member_settled(key, back);
         self.sync_recent_closed_snapshot();
         true
     }

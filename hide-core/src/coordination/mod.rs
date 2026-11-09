@@ -239,7 +239,7 @@ pub struct PlanLink {
 }
 
 /// A spawn admitted as a plan step's child: its link, and the main's plan
-/// children asleep now, which hold no place under the cap.
+/// children asleep or closed now, which hold no place under the cap.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanAdmission {
     pub link: PlanLink,
@@ -299,7 +299,8 @@ fn spawn_cap(
     now: u64,
 ) -> Result<(), String> {
     if let Some(admission) = mission
-        && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
+        && mission_workers(ledger, &admission.mission, &admission.closed, now)
+            >= usize::from(admission.cap)
     {
         return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
     }
@@ -367,8 +368,14 @@ pub const HOOK_PASS_WAIT: std::time::Duration = std::time::Duration::from_secs(3
 pub(crate) const MISSION_RESERVATION_HOLD_MS: u64 = 10 * 60 * 1000;
 
 /// The workers a mission has now (D-29): spawns made for it whose child has
-/// not ended, and those still being made, which will be one.
-pub(crate) fn mission_workers(ledger: &Ledger, mission: &str, now: u64) -> usize {
+/// neither ended nor is among `closed` (its pane closed, held for Reopen
+/// closed), and those still being made, which will be one.
+pub(crate) fn mission_workers(
+    ledger: &Ledger,
+    mission: &str,
+    closed: &[String],
+    now: u64,
+) -> usize {
     ledger
         .spawns
         .iter()
@@ -378,10 +385,13 @@ pub(crate) fn mission_workers(ledger: &Ledger, mission: &str, now: u64) -> usize
                 !spawn.completed
                     && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
             }
-            Some(child) => ledger
-                .agents
-                .iter()
-                .any(|agent| &agent.id == child && !agent.ended),
+            Some(child) => {
+                !closed.contains(child)
+                    && ledger
+                        .agents
+                        .iter()
+                        .any(|agent| &agent.id == child && !agent.ended)
+            }
         })
         .count()
 }
@@ -1293,13 +1303,14 @@ pub(crate) fn here<'a>(
     }
 }
 
-/// The live registrations whose agent Hide put to sleep, by id, as the
-/// runtime reads them from its sleep records under its lock
-/// (`Runtime::sleeping_registrations`), and the profile each live agent runs
-/// with, as its row names it (`Runtime::registration_profiles`).
+/// The live registrations whose agent Hide put to sleep, and those whose
+/// pane was closed for Reopen closed, by id, as the runtime reads them under
+/// its lock (`Runtime::sleeping_registrations`), and the profile each live
+/// agent runs with, as its row names it (`Runtime::registration_profiles`).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RegistrationFacts {
     pub(crate) asleep: std::collections::BTreeSet<String>,
+    pub(crate) closed: std::collections::BTreeSet<String>,
     pub(crate) profiles: std::collections::BTreeMap<String, String>,
 }
 
@@ -1308,18 +1319,22 @@ impl RegistrationFacts {
     /// or one just ended: neither is asleep, and its row is not read.
     pub(crate) const NONE: Self = Self {
         asleep: std::collections::BTreeSet::new(),
+        closed: std::collections::BTreeSet::new(),
         profiles: std::collections::BTreeMap::new(),
     };
 }
 
 /// Where a registration's agent is in its life: ended with its record,
-/// asleep while Hide holds it asleep, running otherwise. The one decision
+/// asleep while Hide holds it asleep, closed while its pane is closed and
+/// Reopen closed can bring it back, running otherwise. The one decision
 /// `hide agent list`, `hide agent show` and `hide ps` answer from.
 pub(crate) fn life(record: &AgentRecord, sleeping: &RegistrationFacts) -> Runtime {
     if record.ended {
         Runtime::Ended
     } else if sleeping.asleep.contains(&record.id) {
         Runtime::Asleep
+    } else if sleeping.closed.contains(&record.id) {
+        Runtime::Closed
     } else {
         Runtime::Running
     }
@@ -3090,6 +3105,7 @@ mod tests {
                 *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 1,
+                    closed: Vec::new(),
                 }));
             }
             Mutation::Reserve {
@@ -3099,7 +3115,7 @@ mod tests {
         };
         let first = apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
         assert_eq!(first["mission"], "mission-1");
-        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 1);
         let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 3).unwrap_err();
         assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
         assert_eq!(
@@ -3107,7 +3123,7 @@ mod tests {
             first["id"]
         );
         // Another mission and an ordinary spawn are not counted here.
-        assert_eq!(mission_workers(&ledger, "mission-2", 6), 0);
+        assert_eq!(mission_workers(&ledger, "mission-2", &[], 6), 0);
         apply(
             &mut ledger,
             &caller,
@@ -3118,7 +3134,7 @@ mod tests {
             5,
         )
         .unwrap();
-        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 1);
         // The worker came up and then ended: its place is free again.
         let child = register(
             &mut ledger,
@@ -3132,20 +3148,25 @@ mod tests {
             .unwrap();
         spawn.child = Some(child.clone());
         spawn.completed = true;
-        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 1);
+        // A worker whose pane was closed for Reopen closed holds no place.
+        assert_eq!(
+            mission_workers(&ledger, "mission-1", std::slice::from_ref(&child), 6),
+            0
+        );
         ledger
             .agents
             .iter_mut()
             .find(|agent| agent.id == child)
             .unwrap()
             .ended = true;
-        assert_eq!(mission_workers(&ledger, "mission-1", 6), 0);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 0);
         apply(&mut ledger, &caller, &worker("mission-1:b"), 6).unwrap();
         // A start that never produced its worker stops holding the place
         // once it is long past, so a retry under a new intent can start.
         let later = 6 + MISSION_RESERVATION_HOLD_MS;
-        assert_eq!(mission_workers(&ledger, "mission-1", later - 1), 1);
-        assert_eq!(mission_workers(&ledger, "mission-1", later), 0);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], later - 1), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], later), 0);
         apply(&mut ledger, &caller, &worker("mission-1:c"), later).unwrap();
         // The start that stopped holding its place comes back while `c` holds
         // the one place: it waits rather than run a second worker, and takes
@@ -3156,7 +3177,7 @@ mod tests {
         );
         let gone = later + MISSION_RESERVATION_HOLD_MS;
         apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
-        assert_eq!(mission_workers(&ledger, "mission-1", gone), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], gone), 1);
     }
     /// A main's plans hand steps to at most three children at once, counted
     /// at the reserve with the starts still being made, so a fourth start is
@@ -3275,6 +3296,7 @@ mod tests {
                 *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 2,
+                    closed: Vec::new(),
                 }));
             }
             spawn
@@ -3461,6 +3483,7 @@ mod tests {
                 *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: mission.into(),
                     cap: 2,
+                    closed: Vec::new(),
                 }));
             }
             spawn
