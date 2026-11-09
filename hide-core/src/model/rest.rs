@@ -145,6 +145,7 @@ section!(TerminalSections, TerminalSnapshot, s, {
 }, {});
 
 section!(StatusSections, StatusSnapshot, s, {
+    start_profiles: BTreeMap<String, StartProfilesSnapshot> => s.start_profiles,
     server_discovery: ServerDiscoverySnapshot => s.server_discovery,
     tab_rename: Option<TabRenameSnapshot> => s.tab_rename,
     engine as "herdr": ProviderStatusSnapshot => s.engine,

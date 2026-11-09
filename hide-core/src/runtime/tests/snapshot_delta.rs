@@ -85,6 +85,54 @@ fn the_complete_rest_carries_every_field_of_each_section() {
     }
 }
 
+#[test]
+fn automatic_start_profiles_reach_the_shell_and_clear_when_removed() {
+    let mut runtime = runtime();
+    let first = runtime.snapshot_delta_payload(0);
+    runtime.snapshot.status.start_profiles.insert(
+        "project".to_owned(),
+        crate::model::StartProfilesSnapshot {
+            device_id: "device".to_owned(),
+            root: "/fixture/project".to_owned(),
+            profiles: [("claude-code".to_owned(), "chosen-profile".to_owned())].into(),
+        },
+    );
+    let chosen = runtime.snapshot_delta_payload(first.revision);
+    let expected = serde_json::json!({
+        "project": {
+            "device_id": "device",
+            "root": "/fixture/project",
+            "profiles": {"claude-code": "chosen-profile"}
+        }
+    });
+    assert_eq!(
+        semantic(&chosen)["rest"]["status"]["start_profiles"],
+        expected
+    );
+    let complete: serde_json::Value =
+        serde_json::from_slice(&serialize_snapshot_delta(&chosen).unwrap()).unwrap();
+    assert_eq!(complete["rest"]["status"]["start_profiles"], expected);
+    assert!(
+        runtime
+            .snapshot_delta_payload(chosen.revision)
+            .rest
+            .is_none()
+    );
+
+    runtime.snapshot.status.start_profiles.clear();
+    let removed = runtime.snapshot_delta_payload(chosen.revision);
+    assert_eq!(
+        semantic(&removed)["rest"]["status"]["start_profiles"],
+        serde_json::json!({})
+    );
+    assert!(
+        runtime
+            .snapshot_delta_payload(removed.revision)
+            .rest
+            .is_none()
+    );
+}
+
 /// A slow reader accumulates current replacements; reset restores every field.
 #[test]
 fn semantic_readers_converge_with_null_empty_reordering_and_future_reset() {
