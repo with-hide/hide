@@ -171,6 +171,35 @@ fn a_long_named_account_session_stays_in_its_account_after_resolution() {
     assert_eq!(of(&accounts, Agent::Omp, &resolved), Ok(expected));
 }
 
+/// A malformed path inside a profile nested in the default account must
+/// not fall back to the default account when profile routing refuses it.
+#[test]
+fn a_parent_component_in_a_nested_profile_never_reads_as_the_default_account() {
+    let root = tempfile::tempdir().unwrap();
+    let home = hide_platform::fs::identity::canonical(root.path())
+        .unwrap()
+        .join("home");
+    let folder = home.join(".claude/projects/profile");
+    let session = file(&folder.join("projects/-w/s.jsonl"));
+    let accounts = Accounts::new(&home).with_profiles([&profile("claude-code", &folder)]);
+    assert_eq!(of(&accounts, Agent::Claude, &session), Ok(key(&folder)));
+    let malformed = folder
+        .join("projects")
+        .join("-w")
+        .join("..")
+        .join("-w")
+        .join("s.jsonl");
+
+    assert_eq!(
+        hide_session::inside_session_root(&accounts, &[Agent::Claude], &malformed),
+        Err(RootRefusal::Outside)
+    );
+    assert_eq!(
+        of(&accounts, Agent::Claude, &malformed),
+        Err(RootRefusal::Outside.reason().to_owned())
+    );
+}
+
 /// A link below a profile's folder never makes a session of an account the
 /// node did not register readable or listed, nor does `..` in a path; the
 /// default account's own link is followed as before profiles.
