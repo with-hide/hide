@@ -1429,7 +1429,7 @@ export type MissionQuestion = {
   material_asked?: boolean;
 };
 
-/** A View linked to a mission's open decision that is still open (`DecisionView`): the Conductor's, named or opened in the turn that asked, or the stopped node's worker's in its current attempt. */
+/** A View linked to a mission's open decision that is still open (`DecisionView`): the Conductor's, named with `--show` or opened since the question before, or the stopped node's worker's in its current attempt. */
 export type DecisionView = {
   device_id: string;
   checkout_path: string;
@@ -1438,7 +1438,10 @@ export type DecisionView = {
   label: string;
   /** The operator has not looked at it since it was opened; absent once they have. */
   unseen?: boolean;
+  /** Who linked it (`contracts/snapshot-wire-enums.json`: `mission_decision_view_by`). */
   by: "conductor" | "worker";
+  /** The pane of the agent that opened it, while that agent is open. */
+  pane_id?: string;
 };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */

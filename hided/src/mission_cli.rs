@@ -105,6 +105,7 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
             "--option",
             "--recommend",
             "--node",
+            "--show",
         ],
         &["--clear"],
     ),

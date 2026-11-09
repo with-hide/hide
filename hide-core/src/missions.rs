@@ -699,6 +699,9 @@ pub struct Question {
 
 /// The most Views one question or one node links; past it the oldest goes.
 pub const VIEW_LINK_LIMIT: usize = 16;
+/// The longest `decide --show` value: a View id, or a path the CLI opens as
+/// a View before the core sees it.
+const SHOW_LIMIT: usize = 4096;
 
 /// A View a decision shows the operator to look at, by the checkout that
 /// holds it: a link is a fact recorded when the View was opened or named,
@@ -1847,7 +1850,9 @@ impl MissionCommand {
                     && options.len() <= NODE_LIMIT
                     && node.as_deref().is_none_or(valid_key)
                     && show.len() <= VIEW_LINK_LIMIT
-                    && show.iter().all(|id| valid_key(id))
+                    && show
+                        .iter()
+                        .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
             }
             Self::Delay { mission, line } => {
                 id_ok(mission)

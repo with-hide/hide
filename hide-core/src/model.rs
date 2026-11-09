@@ -10150,6 +10150,15 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_source", &sources);
             checked.insert("mission_answer_source");
+            use crate::runtime::mission_views::DecisionViewBy;
+            let linked_by = [DecisionViewBy::Conductor, DecisionViewBy::Worker];
+            for variant in linked_by {
+                match variant {
+                    DecisionViewBy::Conductor | DecisionViewBy::Worker => {}
+                }
+            }
+            assert_wire(&contract, "mission_decision_view_by", &linked_by);
+            checked.insert("mission_decision_view_by");
             use crate::missions::AnswerFailure;
             let failures = [
                 AnswerFailure::ConductorGone,
