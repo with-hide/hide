@@ -725,7 +725,7 @@ impl OwnEngine<'_> {
         agent: agents::PaneAgent,
         line: &str,
         wakes: bool,
-        attempt: Option<String>,
+        attempt: Option<crate::launch::ExecAttempt>,
     ) -> Answer<()> {
         let start = {
             let mut topology = self.topology();
@@ -1413,6 +1413,7 @@ enum Settled {
 fn agent_exec_event(event: &hide_node_link::panes::AgentExecEvent) -> &'static str {
     use hide_node_link::panes::AgentExecEvent;
     match event {
+        AgentExecEvent::Profile => "profile",
         AgentExecEvent::Ready => "ready",
         AgentExecEvent::Refused { .. } => "refused",
         AgentExecEvent::Failed { .. } => "failed",
@@ -2510,8 +2511,8 @@ impl<'g> Engine for OwnEngine<'g> {
         // call ends the attempt with it.
         let finish = line
             .attempt
-            .as_deref()
-            .map(|id| attempt::Finish::new(self, pane, id));
+            .as_ref()
+            .map(|attempt| attempt::Finish::new(self, pane, &attempt.id));
         self.type_agent_start(
             pane,
             agents::PaneAgent::started(
@@ -2565,6 +2566,22 @@ impl<'g> Engine for OwnEngine<'g> {
                 code,
                 format!("pane {pane} runs no start {}", report.attempt),
             )
+        })
+    }
+
+    fn exec_attempt(&self, pane: &str, attempt: &str) -> Answer<crate::launch::ExecAttempt> {
+        self.check()?;
+        let asked = self.topology().asked_attempt(pane, attempt);
+        asked.map_err(|code| {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "agent_exec.not_taken",
+                "pane": pane,
+                "attempt": attempt,
+                "event": "profile",
+                "code": code,
+            }));
+            refused(code, format!("pane {pane} runs no start {attempt}"))
         })
     }
 
@@ -4710,11 +4727,21 @@ mod tests {
             "exec",
             "--attempt",
             attempt,
-            "--profile",
-            "Claude · gw",
             "--",
             "claude",
         ])
+    }
+
+    /// The attempt `id` of a start of the profile `p1` checked at version 1,
+    /// as a start's line keeps it.
+    fn checked(id: &str) -> crate::launch::ExecAttempt {
+        crate::launch::ExecAttempt {
+            id: id.to_owned(),
+            kind: "claude".to_owned(),
+            profile: hide_agent_adapter::ProfileId("p1".to_owned()),
+            name: "gw".to_owned(),
+            version: 1,
+        }
     }
 
     fn answered(
@@ -4849,13 +4876,14 @@ mod tests {
     }
 
     /// A start with a profile other than the built-in default is typed as
-    /// `hide agent exec` with its attempt first and the profile's variables
-    /// as its arguments, never as a variable of the pane's shell (PRD
-    /// agent-profiles D-26, B21), and starts once a fresh read shows its
-    /// program in the executor's own process; the test above types the
-    /// built-in default's line, unchanged (B29).
+    /// `hide agent exec` with its attempt first and the agent's own words,
+    /// nothing of its profile: its variables are neither the pane's shell's
+    /// nor on the line (PRD agent-profiles D-26, B21), and the executor asks
+    /// for them. It starts once a fresh read shows its program in the
+    /// executor's own process; the test above types the built-in default's
+    /// line, unchanged (B29).
     #[test]
-    fn a_profiles_start_is_typed_as_hide_agent_exec_with_its_variables_as_arguments() {
+    fn a_profiles_start_is_typed_as_hide_agent_exec_with_its_attempt_and_the_agents_words() {
         let (holders, engine, pane) = shell_pane();
         let mut profile = answered("work", None);
         profile.account =
@@ -4876,9 +4904,7 @@ mod tests {
         let attempt = typed_attempt(&holders, &pane, 0);
         assert_eq!(
             holders.typed(&pane),
-            format!(
-                "/opt/hide/hide agent exec --attempt {attempt} --profile 'Claude · work' --env CLAUDE_CONFIG_DIR=/home/me/.claude-work -- claude --model 'it'\\''s'\r"
-            )
+            format!("/opt/hide/hide agent exec --attempt {attempt} -- claude --model 'it'\\''s'\r")
         );
         // The agent is still the definition's agent, by its own program.
         assert_eq!(
@@ -4943,11 +4969,11 @@ mod tests {
                 file: "/opt/gw".to_owned(),
                 leading: vec!["--via".to_owned()],
             })),
-            "/opt/hide/hide agent exec --attempt <attempt> --profile 'Claude · gw' --program /opt/gw --leading --via -- claude --model x\r"
+            "/opt/hide/hide agent exec --attempt <attempt> -- claude --model x\r"
         );
         assert_eq!(
             typed(None),
-            "/opt/hide/hide agent exec --attempt <attempt> --profile 'Claude · gw' -- /opt/node /opt/claude/cli.js --model x\r",
+            "/opt/hide/hide agent exec --attempt <attempt> -- /opt/node /opt/claude/cli.js --model x\r",
             "without a program of its own the profile starts the agent's as it always starts"
         );
     }
@@ -5312,7 +5338,7 @@ mod tests {
     #[test]
     fn a_waiter_that_goes_ends_its_attempt_and_later_reports_are_refused() {
         let (_holders, engine, pane) = shell_pane();
-        let id = hide_agent_hooks::hook_request::fresh_request_id().unwrap();
+        let id = hide_agent_hooks::hook_request::fresh_attempt().unwrap();
         {
             let _finish = attempt::Finish::new(&engine, &pane, &id);
             engine
@@ -5321,12 +5347,61 @@ mod tests {
                     agents::PaneAgent::started("claude-code", Some("worker"), None),
                     "line",
                     false,
-                    Some(id.clone()),
+                    Some(checked(&id)),
                 )
                 .unwrap();
             assert!(engine.topology().look_attempt(&pane, &id).is_some());
         }
         assert_eq!(engine.topology().look_attempt(&pane, &id), None);
+        let late = exec_report(
+            &engine,
+            &pane,
+            &id,
+            hide_node_link::panes::AgentExecEvent::Ready,
+            EXECUTOR,
+        )
+        .unwrap_err();
+        assert_eq!(late.code(), Some(crate::engine::ATTEMPT_UNKNOWN));
+    }
+
+    /// An executor's ask is answered from its pane's running attempt alone,
+    /// before its `Ready`; once the start ends after that answer (its waiter
+    /// gone, as a deadline or a newer start ends it), the ask is refused and
+    /// so is the `Ready` that follows, so the profile it was handed never
+    /// runs.
+    #[test]
+    fn an_ask_answered_before_its_start_ended_leaves_the_ready_that_follows_refused() {
+        let (_holders, engine, pane) = shell_pane();
+        let id = hide_agent_hooks::hook_request::fresh_attempt().unwrap();
+        let unknown = |answer: Answer<crate::launch::ExecAttempt>| {
+            answer.unwrap_err().code().map(str::to_owned)
+        };
+        {
+            let _finish = attempt::Finish::new(&engine, &pane, &id);
+            engine
+                .type_agent_start(
+                    &pane,
+                    agents::PaneAgent::started("claude-code", Some("worker"), None),
+                    "line",
+                    false,
+                    Some(checked(&id)),
+                )
+                .unwrap();
+            assert_eq!(engine.exec_attempt(&pane, &id).unwrap(), checked(&id));
+            for (pane, id) in [
+                (pane.as_str(), "0123456789abcdef"),
+                ("w9:p404", id.as_str()),
+            ] {
+                assert_eq!(
+                    unknown(engine.exec_attempt(pane, id)).as_deref(),
+                    Some(crate::engine::ATTEMPT_UNKNOWN)
+                );
+            }
+        }
+        assert_eq!(
+            unknown(engine.exec_attempt(&pane, &id)).as_deref(),
+            Some(crate::engine::ATTEMPT_UNKNOWN)
+        );
         let late = exec_report(
             &engine,
             &pane,
@@ -5369,7 +5444,7 @@ mod tests {
     fn a_profile_resume_whose_program_cannot_start_is_named_not_resumed_with_its_executors_sentence()
      {
         let (_holders, engine, pane) = shell_pane();
-        let id = hide_agent_hooks::hook_request::fresh_request_id().unwrap();
+        let id = hide_agent_hooks::hook_request::fresh_attempt().unwrap();
         let resume = restore::Resume::of_profile(&pane, "claude-code", "s-1");
         let finish = attempt::Finish::new(&engine, &pane, &id);
         engine
@@ -5378,7 +5453,7 @@ mod tests {
                 agents::PaneAgent::resumed("claude-code", None, Some("s-1".to_owned())),
                 "line",
                 false,
-                Some(id.clone()),
+                Some(checked(&id)),
             )
             .unwrap();
         engine.observe_resume(&resume, finish);

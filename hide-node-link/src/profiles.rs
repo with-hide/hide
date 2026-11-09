@@ -233,15 +233,17 @@ pub enum ProfileLaunch {
 }
 
 /// How a start of one profile's agent runs on its machine, as that
-/// machine's node checked it just now: what the start line of `hide agent
-/// exec` carries.
+/// machine's node checked it just now: what `hide agent exec` is handed when
+/// it asks for its profile (`panes::ExecStart`), at this `version`, and the
+/// `hide` its start line runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileStart {
-    /// The profile's name, which the start line and its failures name.
+    /// The profile's name, which the start's failures name.
     pub name: String,
     /// The account the agent runs in (D-15).
     pub account: AccountKey,
-    /// The profile's version the answer was made from.
+    /// The profile's version the answer was made from: the start runs only
+    /// at it.
     pub version: u64,
     /// The variables the start sets: the account's, then the profile's own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
