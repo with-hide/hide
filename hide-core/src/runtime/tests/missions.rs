@@ -9,7 +9,7 @@ use crate::handle::ChangeNotifier;
 use crate::mission_criteria::CriterionState;
 use crate::missions::{AnswerFailure, MissionCommand, MissionStatus, NodeStatus, Strength};
 use crate::model::{
-    GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
+    DetailItem, GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
     PullRequestSnapshot, ReviewDecision,
 };
 use crate::runtime::delivery::tests::{authority, fixture};
@@ -2929,6 +2929,69 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     assert!(!runtime.missions.events.contains_key("mission-1"));
     runtime.refresh_mission_events();
     assert!(runtime.snapshot.mission_events.events.is_empty());
+}
+
+/// Operator decision 2026-11-09: a mission's card on top of the front Agent
+/// tab's 보기 slot sends its events while the slot is drawn; the mission
+/// screen's detail, when the page names one, wins; the card goes with its
+/// mission.
+#[test]
+fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.open_detail(DetailItem::Mission {
+        mission: "mission-1".into(),
+    });
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    assert_eq!(runtime.snapshot.mission_events.events.len(), 1);
+    // The slot folded behind the documents sends nothing; shown again, it does.
+    runtime.snapshot.ui_state.detail.shown = false;
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    runtime.snapshot.ui_state.detail.shown = true;
+    // The mission screen's detail wins over the card while the page names it.
+    runtime.missions.shown = Some("mission-404".into());
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-404")
+    );
+    runtime.missions.shown = None;
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    // Another card on top sends no mission's events; ← brings the map back.
+    runtime.open_detail(DetailItem::Cost {
+        workspace_id: "w".into(),
+    });
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    runtime.detail_back();
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    // The mission deleted with its Conductor's session takes its card along.
+    let session = runtime.missions.book.missions[0]
+        .conductor
+        .session
+        .clone()
+        .unwrap();
+    assert!(runtime.drop_missions_of(&[(session.device_id, session.session_id)]));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail,
+        crate::model::DetailSlot::default()
+    );
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
 }
 
 /// The fixture's `recipient` pane as the node's worker and a third pane,

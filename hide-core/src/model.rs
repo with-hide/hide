@@ -4477,6 +4477,10 @@ pub enum DetailItem {
     Record {
         session: crate::links::ledger::SessionIdentity,
     },
+    /// A Conductor's mission map, opened from wherever a mission is pressed
+    /// outside the mission screen's table (operator decision 2026-11-09,
+    /// replacing PRD mission-screen D-09).
+    Mission { mission: String },
     /// A session's own plan, drawn large (PRD hide-plan B11).
     Plan {
         session: crate::links::ledger::SessionIdentity,
@@ -10068,6 +10072,9 @@ mod wire_enum_tests {
             DetailItem::Record {
                 session: session.clone(),
             },
+            DetailItem::Mission {
+                mission: "mission-1".into(),
+            },
             DetailItem::Worktrees {
                 workspace_id: "w".into(),
             },
@@ -10089,6 +10096,7 @@ mod wire_enum_tests {
             match item {
                 DetailItem::PullRequest { .. }
                 | DetailItem::Record { .. }
+                | DetailItem::Mission { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
                 | DetailItem::Remains { .. }

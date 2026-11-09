@@ -2,7 +2,8 @@ import type { Catalog, Catalogs } from "../schema";
 
 // The mission screen (PRD mission-screen B1-B23): one device's missions in a
 // table of groups, the list beside a mission's detail, the start guide with
-// its moving picture, and the words its states say.
+// its moving picture, and the words its states say; and a mission's card in
+// the 보기 slot (operator decision 2026-11-09).
 export const missionScreenEnglish = {
   "missionScreen.title": "Missions",
   "missionScreen.rowHint": "Missions · {{count}} your turn",
@@ -20,7 +21,8 @@ export const missionScreenEnglish = {
   "missionScreen.offline": "Not connected",
   "missionScreen.open": "{{title}} · open",
   "missionScreen.close": "Back to the table",
-  "missionScreen.back": "Back to {{pane}}",
+  "missionScreen.card": "Mission · {{title}}",
+  "missionScreen.allMissions": "All missions",
   "missionScreen.list": "Missions of {{device}}",
   "missionScreen.settings": "Mission defaults",
   "missionScreen.unreadable": "Could not read the mission records",
@@ -73,7 +75,8 @@ const ko: Catalog<typeof missionScreenEnglish> = {
   "missionScreen.offline": "연결 안 됨",
   "missionScreen.open": "{{title}} · 열기",
   "missionScreen.close": "표로 돌아가기",
-  "missionScreen.back": "돌아가기 · {{pane}}",
+  "missionScreen.card": "미션 · {{title}}",
+  "missionScreen.allMissions": "모든 미션",
   "missionScreen.list": "{{device}}의 미션",
   "missionScreen.settings": "미션 기본값",
   "missionScreen.unreadable": "미션 기록을 읽지 못했어요",
@@ -126,7 +129,8 @@ const zh: Catalog<typeof missionScreenEnglish> = {
   "missionScreen.offline": "未连接",
   "missionScreen.open": "{{title}} · 打开",
   "missionScreen.close": "返回表格",
-  "missionScreen.back": "返回 {{pane}}",
+  "missionScreen.card": "任务 · {{title}}",
+  "missionScreen.allMissions": "所有任务",
   "missionScreen.list": "{{device}} 的任务",
   "missionScreen.settings": "任务默认值",
   "missionScreen.unreadable": "无法读取任务记录",
@@ -179,7 +183,8 @@ const ja: Catalog<typeof missionScreenEnglish> = {
   "missionScreen.offline": "未接続",
   "missionScreen.open": "{{title}} · 開く",
   "missionScreen.close": "表に戻る",
-  "missionScreen.back": "{{pane}} に戻る",
+  "missionScreen.card": "ミッション · {{title}}",
+  "missionScreen.allMissions": "すべてのミッション",
   "missionScreen.list": "{{device}} のミッション",
   "missionScreen.settings": "ミッションの既定値",
   "missionScreen.unreadable": "ミッションの記録を読めませんでした",

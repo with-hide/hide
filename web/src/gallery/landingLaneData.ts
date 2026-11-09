@@ -32,11 +32,11 @@ export function leadSession(agents: AgentRow[]): WorkSession {
   return { device_id: "local", agent: lead?.agent_kind ?? "claude", session_id: lead?.session_id ?? sessionId(LEAD_PANE) };
 }
 
-/** What the 보기 slot holds in a lane shot; the Conductor's mission is the mission screen's, no slot item (PRD mission-screen D-09). */
-export function laneItem(lane: LandingLane, agents: AgentRow[]): DetailItem | null {
+/** What the 보기 slot holds in a lane shot: the card, the record, or the Conductor's mission map beside its pane. */
+export function laneItem(lane: LandingLane, agents: AgentRow[]): DetailItem {
   if (lane === "pr") return { kind: "pull_request", workspace_id: PROJECT, number: 431 };
   if (lane === "record") return { kind: "record", session: leadSession(agents) };
-  return null;
+  return { kind: "mission", mission: "mission-export" };
 }
 
 /** Pull request 431 as GitHub would answer the card: its body, files and a mergeable head. */

@@ -85,15 +85,13 @@ export type MissionPlace = {
   selected: string | null;
   /** The project chip (B3): a catalog project id, or null for every project. */
   projectId: string | null;
-  /** The agent pane an open came from (B14), which the head's `← <pane>` returns to. */
-  returnPane: string | null;
   /** 끝남 opened whole by `모두 ›` (B4). */
   closedAll: boolean;
   /** The table's scroll, so ✕ comes back to where it was (B11). */
   scroll: number;
 };
 
-export const MISSION_ENTRY: MissionPlace = { deviceId: null, selected: null, projectId: null, returnPane: null, closedAll: false, scroll: 0 };
+export const MISSION_ENTRY: MissionPlace = { deviceId: null, selected: null, projectId: null, closedAll: false, scroll: 0 };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };

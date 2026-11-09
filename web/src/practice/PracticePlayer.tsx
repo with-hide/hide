@@ -54,7 +54,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const [model, setModel] = useState<unknown>(() => chapter.world.initial());
   // How many events the world has answered: the signal a step that takes several presses moves on.
   const [moves, setMoves] = useState(0);
-  // A mission opened from its chip shows on the mission screen, in the Workspace's place, as in the shell (PRD mission-screen B10).
+  // The sidebar's 미션 row shows the mission screen in the Workspace's place, as in the shell (PRD mission-screen B2).
   const missionsShown = useUiStore((s) => s.screen?.kind === "missions");
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
