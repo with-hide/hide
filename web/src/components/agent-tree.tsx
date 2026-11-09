@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, EyeIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -50,6 +50,7 @@ export function AskLine({ ask, copy, textHidden = false, className }: { ask: Non
   const what = askWhat(t, ask.verb, ask.what, ask.subject);
   const more = moreTail(t, ask.more);
   const human = ask.subject?.cause === "human_turn" ? ask.subject : null;
+  const views = ask.subject?.cause === "mission_decision" ? (ask.subject.views ?? 0) : 0;
   const hidden = textHidden || undefined;
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
@@ -58,6 +59,13 @@ export function AskLine({ ask, copy, textHidden = false, className }: { ask: Non
       </span>
       {human && copy ? <HumanTurnCopy turn={human} copy={copy} /> : null}
       {human?.device ? <span aria-hidden={hidden} className="contents"><DeviceChip label={human.device} variant="inline" className="shrink-0 self-center" /></span> : null}
+      {/* A decision with Views linked to it says how many wait to be looked at; its card lists them. */}
+      {views ? (
+        <span aria-hidden={hidden} className="flex shrink-0 items-center gap-xxs self-center text-muted-foreground" title={t("mission.banner.looks", { count: views })} data-ask-views={views}>
+          <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+          {views}
+        </span>
+      ) : null}
       {more ? <span aria-hidden={hidden} className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
     </span>
   );

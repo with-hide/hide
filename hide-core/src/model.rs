@@ -1683,8 +1683,14 @@ pub enum AskSubject {
     /// review.
     PlanReview { steps: u32 },
     /// The mission this Conductor conducts waits on the operator's decision,
-    /// whose one line it carries (needs-you-cleanup D-12).
-    MissionDecision { line: String },
+    /// whose one line it carries (needs-you-cleanup D-12), and how many
+    /// Views linked to it are open for the operator to look at (0 left off
+    /// the wire).
+    MissionDecision {
+        line: String,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        views: u32,
+    },
     /// A node of the mission waits on the operator to look (PRD
     /// mission-node-simple D-05, B14): its title and why.
     ///
@@ -8707,6 +8713,7 @@ mod wire_enum_tests {
             AskSubject::PlanReview { steps: 1 },
             AskSubject::MissionDecision {
                 line: "line".into(),
+                views: 0,
             },
             AskSubject::MissionAttention {
                 node: "node".into(),

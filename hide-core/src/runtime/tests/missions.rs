@@ -5224,6 +5224,7 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     let asking = conductor_shown(&mut runtime);
     let decision = crate::model::AskSubject::MissionDecision {
         line: "Skip the check line?".into(),
+        views: 0,
     };
     assert_eq!(
         (
@@ -5253,7 +5254,8 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     assert_eq!(
         conductor_shown(&mut runtime).ask_subject,
         Some(crate::model::AskSubject::MissionDecision {
-            line: "Which base?".into()
+            line: "Which base?".into(),
+            views: 0
         })
     );
 

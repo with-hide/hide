@@ -1009,7 +1009,10 @@ impl Runtime {
             Some((
                 Asked::Session(session.clone()),
                 since,
-                AskSubject::MissionDecision { line: line.clone() },
+                AskSubject::MissionDecision {
+                    line: line.clone(),
+                    views: u32::try_from(self.decision_views(mission).len()).unwrap_or(u32::MAX),
+                },
             ))
         });
         let inputs = self
