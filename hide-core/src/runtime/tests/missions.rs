@@ -8763,6 +8763,16 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         .unwrap_err(),
         "mission_show_unknown"
     );
+    // A clear shows nothing, as it asks nothing.
+    assert_eq!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "decide", "line": null, "show": [after]}),
+        )
+        .unwrap_err(),
+        "mission_question_without_line"
+    );
 }
 
 /// A decision with nothing linked asks the Conductor for something to look

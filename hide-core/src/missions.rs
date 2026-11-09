@@ -2650,7 +2650,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
         }
         "mission_question_without_line" => {
-            "Give --why, --option, --recommend and --node with --line; --clear takes none of them"
+            "Give --why, --option, --recommend, --node and --show with --line; --clear takes none of them"
         }
         "mission_options_too_many" => "Offer at most 5 options; leave the rest to the conversation",
         "mission_option_invalid" => "Write each option as one line of at most 120 characters",

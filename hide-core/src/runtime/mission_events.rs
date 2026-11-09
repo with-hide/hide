@@ -293,6 +293,9 @@ impl Runtime {
             recommend,
             node.as_deref(),
         )?;
+        if line.is_none() && shown.is_some_and(|(_, show)| !show.is_empty()) {
+            return Err("mission_question_without_line".into());
+        }
         let current = mission.question.as_ref();
         let same = mission.decision == line
             && current.is_some_and(|question| {
