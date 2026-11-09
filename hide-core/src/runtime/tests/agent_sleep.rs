@@ -2134,6 +2134,43 @@ fn a_new_agent_clears_the_sleep_and_a_closed_pane_drops_it() {
     assert!(runtime.snapshot().ui_state.agent_sleep.records.is_empty());
 }
 
+/// B18: a restarted engine can reuse the ended agent's sequence.
+#[test]
+fn a_restarted_runtime_wakes_a_sleeper_when_its_engine_reuses_the_sequence() {
+    // A pane need not carry hide_server yet: the connection owns its mark.
+    // Older saved records carried no mark either.
+    for legacy in [false, true] {
+        let (mut runtime, _) = asleep();
+        runtime.ingest_session(Ok(session(Some(4))));
+        assert_eq!(row(&runtime)["sleep"]["state"], "sleeping");
+        let path = runtime.state_path.clone();
+        let _state = hold_dirs(&mut runtime);
+        drop(runtime);
+        if legacy {
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            state["agent_sleep"]["records"][SLEEPER]
+                .as_object_mut()
+                .unwrap()
+                .remove("server_mark");
+            std::fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        }
+        let mut restarted = restarted_on(&path);
+        restarted.begin_read_connection(None);
+        let mut starting = session(Some(4));
+        starting.agents[0].start_unshown = true;
+        restarted.ingest_session(Ok(starting));
+        assert_eq!(row(&restarted)["sleep"]["state"], "sleeping");
+
+        restarted.ingest_session(Ok(session(Some(4))));
+        assert!(
+            row(&restarted).get("sleep").is_none(),
+            "a shown agent after restart is new even when its sequence repeats (legacy={legacy})"
+        );
+        assert!(restarted.snapshot().ui_state.agent_sleep.records.is_empty());
+    }
+}
+
 /// B8: an end that did not land leaves the agent awake.
 #[test]
 fn an_end_that_fails_leaves_the_agent_awake() {

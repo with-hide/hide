@@ -772,6 +772,8 @@ The last conversation line is the newest request or reply the session read prove
 Until a session read proves a line, the change stamp stands in, so a restart only ever delays a sleep.
 A wake stamps a last look, as a visit does, because the conversation it resumes is as old as the sleep and would make the agent due again at the next minute.
 A relaunch forgets an end that was in flight, because it cannot know whether it landed, and reads a wake that was in flight as still asleep until an agent appears in the pane.
+An in-pane sleep keeps the read axis's engine mark beside the ended agent's state sequence: the sequence identifies the ended agent only on that engine, because an engine restart starts its counter again.
+A listed provider whose program has shown wakes the record when either the sequence or that mark differs; a pane with no mark uses its read connection's, and an older record with no mark cannot claim that a newly listed agent is still the ended one.
 
 ### Sleep by mission, letter and command
 
@@ -2103,6 +2105,8 @@ The node exposes reserve, exact-incarnation start and cancel as typed pane calls
 Only the worker changing that reservation from `reserved` to `preparing` expands the shell and starts its holder; an old incarnation or a cancelled request is refused before expansion.
 Cancel can precede reserve and writes a terminal record for that same intent, so a delayed reserve cannot recreate it.
 Each connection issues increasing logical creation numbers, distinct from transport call IDs, and uses the same number for reserve, start and cancel.
+Holder renewal carries a number from that same issuer (`PaneCall::Renew`, protocol 93), admitted before any close or replacement and used through the replacement's reserve and start; the node never issues an independent number behind the core's counter.
+The core retires a renewal after a definite answer, including `current` and `kept`; an unknown answer or unsettled replacement retains its pending number until owner turnover, as a node-issued replacement did.
 Its owner keeps the highest observed number and at most 128 unresolved entries, including gaps for issued calls not yet received; a jump that would exceed the bound or overflow is refused before advancing the window.
 A completed number is absence below that high-water mark, so a late reserve, start or cancel cannot return even after its ended record is pruned.
 Retirement closes admission under the same owner mutex as worker admission and completes only after every admitted worker has finished its mutation and cleanup; no I/O holds that mutex.

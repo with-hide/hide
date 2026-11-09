@@ -1305,7 +1305,15 @@ impl OwnEngine<'_> {
             let cwd = cwd.unwrap_or(&held.cwd).to_owned();
             start_request(pane, None, &cwd, held.env.clone(), None)
         };
-        let renewed = self.shared.holders.renew(&start).map_err(holder_error);
+        // Renewal is a start on this same connection, not a second issuer
+        // of request numbers on the node. An unknown replacement keeps its
+        // number pending until owner turnover, just as it did on the node.
+        let request = self.shared.holders.request().map_err(holder_error)?;
+        let renewed = self
+            .shared
+            .holders
+            .renew(&start, request)
+            .map_err(holder_error);
         if let Err(EngineError::Refused { code, message }) = &renewed
             && (code == RENEWAL_LOST || code == RENEWAL_UNSETTLED)
         {
@@ -1316,6 +1324,17 @@ impl OwnEngine<'_> {
             }
             self.changed();
         }
+        let unresolved = renewed.as_ref().is_err_and(|error| {
+            error.reply_unknown()
+                || matches!(error, EngineError::Refused { code, .. } if code == RENEWAL_UNSETTLED)
+        });
+        let renewed = if !unresolved && let Err(error) = self.shared.holders.retire(request) {
+            Err(EngineError::Unanswered(format!(
+                "the holder renewal request retirement is unresolved: {error:?}"
+            )))
+        } else {
+            renewed
+        };
         crate::diagnostic!(match &renewed {
             Ok(HolderRenewal::Current) => serde_json::json!({
                 "component": "own_engine",
@@ -2815,6 +2834,7 @@ mod tests {
         /// spent. The starts renewals were asked with.
         renewals: Mutex<std::collections::VecDeque<Result<HolderRenewal, HolderError>>>,
         renewed: Mutex<Vec<HolderStart>>,
+        renewal_requests: Mutex<Vec<hide_node_link::holders::HolderRequest>>,
         /// The panes each input typed as the sleep's own went to, in order.
         sleep_typed: Mutex<Vec<String>>,
         /// How many of the next process asks about each pane are lost, as a
@@ -3029,8 +3049,13 @@ mod tests {
             }
         }
 
-        fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+        fn renew(
+            &self,
+            start: &HolderStart,
+            request: hide_node_link::holders::HolderRequest,
+        ) -> Result<HolderRenewal, HolderError> {
             self.renewed.lock().unwrap().push(start.clone());
+            self.renewal_requests.lock().unwrap().push(request);
             self.renewals
                 .lock()
                 .unwrap()
@@ -3961,6 +3986,25 @@ mod tests {
             restore_error(&engine, &unsettled).is_some_and(|why| why.contains("did not finish")),
             "the pane is marked"
         );
+        // Creation and renewal share one connection's numbers. Definite
+        // outcomes release their entries; unknown starts remain pinned.
+        let requests = holders.renewal_requests.lock().unwrap().clone();
+        let retired = holders.retired.lock().unwrap().clone();
+        assert_eq!(requests.len(), 6);
+        assert!(
+            requests
+                .windows(2)
+                .all(|pair| pair[0].number < pair[1].number)
+        );
+        for (request, definite) in requests.iter().zip([true, true, true, false, true, false]) {
+            assert_eq!(retired.contains(&request.number), definite, "{request:?}");
+        }
+        // A new tab after the update still starts and has its own request.
+        let (_, _, next) = engine
+            .create_workspace(WAIT, "/next", "next", false, Env::new())
+            .unwrap();
+        engine.read_pane(WAIT, &next, "recent", 1).unwrap();
+        assert!(listed(&engine).contains(&next));
     }
 
     fn moves(engine: &OwnEngine<'_>) -> (Vec<String>, Option<(String, bool)>) {
