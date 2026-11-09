@@ -162,7 +162,6 @@ impl Runtime {
             request: request.map(str::to_owned),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
-            holds: Arc::clone(&self.profile_holds),
             settled: false,
         })
     }
@@ -326,6 +325,25 @@ impl Runtime {
             projects: self.profile_projects(machine, &id),
             id,
         })
+    }
+
+    /// A removal of `id` on `machine` made again on a list at `version`
+    /// that moved since its plan: refused as its plan would be while an
+    /// agent runs, sleeps or starts with the profile, otherwise marked being
+    /// removed at that version (`launch::holds`).
+    pub(crate) fn recheck_removal(
+        &self,
+        machine: &str,
+        id: &ProfileId,
+        version: u64,
+    ) -> Result<(), Refusal> {
+        let in_use = self.profile_in_use(machine, id);
+        if !in_use.is_empty() {
+            return Err(Refusal::in_use(in_use));
+        }
+        self.profile_holds
+            .remove(machine, id, version)
+            .map_err(|starting| Refusal::in_use(starting.iter().map(InUse::starting).collect()))
     }
 
     /// `request`, holding its profile on `machine` while it starts

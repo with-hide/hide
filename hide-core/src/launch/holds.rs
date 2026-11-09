@@ -28,11 +28,13 @@
 //!
 //! A removal marks its profile `removing` with the list version its change
 //! names, and a start of a marked profile is refused. The mark goes when the
-//! node definitely refused the change, or when a list shows the profile gone,
-//! or not being removed in a version newer than the change named: a change
-//! is applied only against the version it names, so a list newer than that
-//! settles whether it ever will be, and an older list, or one read before a
-//! late apply, settles nothing.
+//! node definitely refused the change, or when a list newer than the version
+//! the change named shows the profile gone or not being removed: a change is
+//! applied only against the version it names, so a list newer than that
+//! settles whether it ever will be, and an older list, read before the
+//! profile existed or before a late apply, settles nothing. A change made
+//! again on a moved list is checked again by the runtime before it is marked
+//! anew (`Runtime::recheck_removal`).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -231,18 +233,6 @@ impl ProfileHolds {
         Ok(())
     }
 
-    /// The removal of `profile` is made again on a list that moved, at
-    /// `version`: marked anew, since a list read meanwhile may have ended
-    /// the mark, and refused like [`Self::remove`] while a start holds it.
-    pub(crate) fn removing_at(
-        &self,
-        machine: &str,
-        profile: &ProfileId,
-        version: u64,
-    ) -> Result<(), Vec<Start>> {
-        self.remove(machine, profile, version)
-    }
-
     /// The removal of `profile` was definitely not made.
     pub(crate) fn not_removed(&self, machine: &str, profile: &ProfileId) {
         self.lock()
@@ -259,8 +249,10 @@ impl ProfileHolds {
     }
 
     /// What `machine`'s list at `version` settles of its removals: one whose
-    /// profile it no longer lists, or lists as not being removed in a
-    /// version newer than the one the removal named, is over.
+    /// profile it no longer lists, or lists as not being removed, in a
+    /// version newer than the one the removal named, is over. A list no
+    /// newer than that may have been read before the profile existed, or
+    /// before the removal applied, so it settles nothing.
     pub(crate) fn listed(
         &self,
         machine: &str,
@@ -268,12 +260,7 @@ impl ProfileHolds {
         removing: impl Fn(&ProfileId) -> Option<bool>,
     ) {
         self.lock().removing.retain(|(on, profile), named| {
-            on != machine
-                || match removing(profile) {
-                    None => false,
-                    Some(true) => true,
-                    Some(false) => version <= *named,
-                }
+            on != machine || removing(profile) == Some(true) || version <= *named
         });
     }
 }
@@ -346,8 +333,10 @@ mod tests {
     fn only_a_list_newer_than_the_removal_or_without_the_profile_ends_it() {
         let holds = ProfileHolds::default();
         holds.remove("m", &id("p"), 5).unwrap();
-        // A list read before the change applied, at its own version.
+        // A list read before the change applied, at its own version, or
+        // before the profile existed.
         holds.listed("m", 5, |_| Some(false));
+        holds.listed("m", 4, |_| None);
         assert!(holds.is_removing("m", &id("p")));
         // The change applied late: the profile is being removed.
         holds.listed("m", 6, |_| Some(true));

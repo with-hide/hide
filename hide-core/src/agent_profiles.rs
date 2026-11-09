@@ -508,9 +508,6 @@ pub struct Prepared {
     pub(crate) request: Option<String>,
     pub(crate) runtime: Weak<Mutex<crate::runtime::Runtime>>,
     pub(crate) notifier: crate::handle::ChangeNotifier,
-    /// Where a removal made again on a moved list says which version it
-    /// names now (`launch::holds`).
-    pub(crate) holds: Arc<crate::launch::holds::ProfileHolds>,
     /// Set once the outcome reached the runtime; a run that ends without
     /// one gives the slot back on drop.
     pub(crate) settled: bool,
@@ -668,6 +665,17 @@ impl Prepared {
         }
     }
 
+    /// The removal of `id` about to be made again at `version`, through the
+    /// runtime's own check (`Runtime::recheck_removal`), under its lock.
+    fn recheck_removal(&self, id: &ProfileId, version: u64) -> Result<(), Refusal> {
+        let runtime = self
+            .runtime
+            .upgrade()
+            .ok_or_else(|| Refusal::code(UNANSWERED))?;
+        let runtime = runtime.lock().map_err(|_| Refusal::code(UNANSWERED))?;
+        runtime.recheck_removal(&self.machine, id, version)
+    }
+
     /// One change of the list, made again once on a list read anew when the
     /// list moved since the plan (D-30): the change names its profile by
     /// id, so it means the same on the newer list.
@@ -698,19 +706,17 @@ impl Prepared {
                     match list(link, false) {
                         Ok(list) => {
                             expected = list.version;
-                            // Only a list newer than this one settles
-                            // whether the removal made again was made, and
-                            // a start that took the profile meanwhile
-                            // keeps it.
+                            // A removal made again on a moved list is
+                            // checked again as it was planned: an agent
+                            // that started with the profile meanwhile, or
+                            // runs or sleeps with it, keeps it, and only a
+                            // list newer than this one settles the mark.
                             if let ProfileOp::Remove { id } = &op
-                                && let Err(starting) =
-                                    self.holds.removing_at(&self.machine, id, expected)
+                                && let Err(refusal) = self.recheck_removal(id, expected)
                             {
                                 return Outcome {
                                     list: Some(list),
-                                    result: Err(Refusal::in_use(
-                                        starting.iter().map(InUse::starting).collect(),
-                                    )),
+                                    result: Err(refusal),
                                 };
                             }
                         }

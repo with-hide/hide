@@ -343,7 +343,6 @@ fn removal(
         request: None,
         runtime: std::sync::Weak::new(),
         notifier: crate::handle::ChangeNotifier::noop(),
-        holds: Arc::clone(&runtime.profile_holds),
         settled: true,
     };
     let outcome = profiles::Outcome {
@@ -488,6 +487,15 @@ fn a_removal_whose_answer_was_lost_refuses_starts_until_a_list_newer_than_it_set
     assert!(hold(&runtime, "p-work").is_err());
     // Its removal finished.
     runtime.ingest_profiles(&node, list_at(5, None));
+    assert!(hold(&runtime, "p-work").is_ok());
+
+    // A list read before the profile existed, answered late, says nothing of
+    // a removal planned on a newer one: not listing the profile is settled
+    // only by a list newer than the removal.
+    mark(&runtime);
+    runtime.ingest_profiles(&node, list_at(2, None));
+    assert!(hold(&runtime, "p-work").is_err());
+    runtime.ingest_profiles(&node, list_at(4, None));
     assert!(hold(&runtime, "p-work").is_ok());
 
     // A removal that never applied: a list past its version settles it, as
@@ -637,4 +645,89 @@ fn a_child_of_the_same_agent_takes_its_parents_account_only_from_a_record_that_d
         runtime.caller_launch_profile(&actor("w1:p1", "codex", "boss"), "claude"),
         crate::launch::Parent::None
     );
+}
+
+/// A node that answers each call from a script, in order, and keeps what it
+/// was asked.
+struct Scripted {
+    answers: Mutex<Vec<Result<serde_json::Value, hide_node_link::ErrorCode>>>,
+    asked: Mutex<Vec<hide_node_link::protocol::Call>>,
+}
+
+impl crate::node_access::NodeLink for Scripted {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        _: std::time::Duration,
+    ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
+        self.asked.lock().unwrap().push(call);
+        match self.answers.lock().unwrap().remove(0) {
+            Ok(value) => Ok(value.into()),
+            Err(code) => Err(hide_node_link::LinkError::Refused(
+                hide_node_link::HostError::new(code, "refused"),
+            )),
+        }
+    }
+}
+
+#[test]
+fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_with_the_profile_meanwhile()
+ {
+    let shared = SharedRuntime::new(listed());
+    let node = shared.lock().unwrap().node.to_string();
+    // The removal was planned on version 3 with nothing on the profile.
+    let link = Arc::new(Scripted {
+        answers: Mutex::new(vec![
+            Err(hide_node_link::ErrorCode::Conflict),
+            Ok(serde_json::json!({"version": 4, "profiles": [
+                {"id": "p-work", "kind": "claude-code", "name": "work", "version": 1}
+            ]})),
+        ]),
+        asked: Mutex::new(Vec::new()),
+    });
+    let job = {
+        let mut runtime = shared.lock().unwrap();
+        runtime
+            .profile_holds
+            .remove(&node, &ProfileId("p-work".into()), 3)
+            .unwrap();
+        // Meanwhile a list past the removal ended its mark, an agent started
+        // with the profile, and its row carries the use: no start holds it.
+        runtime.ingest_profiles(&node, list_at(4, Some(false)));
+        let start = hold(&runtime, "p-work").unwrap();
+        running(&mut runtime, "w1:p1", "p-work", "fix-bell");
+        drop(start);
+        profiles::Prepared {
+            machine: node.clone(),
+            link: Arc::clone(&link) as Arc<dyn crate::node_access::NodeLink>,
+            change: profiles::Change::Remove {
+                id: ProfileId("p-work".into()),
+                projects: Vec::new(),
+            },
+            version: 3,
+            kind: None,
+            request: None,
+            runtime: shared.weak(),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            settled: false,
+        }
+    };
+    // The node refuses the stale version; the removal made again is checked
+    // as its plan was, and refused without asking the node again.
+    let line = job.run().unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&line).0,
+        profiles::IN_USE,
+        "{line}"
+    );
+    let asked = link.asked.lock().unwrap();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(matches!(
+        asked[1],
+        hide_node_link::protocol::Call::ProfileList { .. }
+    ));
+    drop(asked);
+    // The agent keeps its profile, and the runtime is free for the next change.
+    let runtime = shared.lock().unwrap();
+    assert!(hold(&runtime, "p-work").is_ok());
 }
