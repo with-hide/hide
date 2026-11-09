@@ -504,9 +504,9 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     // The operator's turn wears 내 차례's word and mark in the decision colour's border; one waiting on the Conductor names it quietly in its own border (B2).
     expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["Needs you", "Conductor"]);
     expect(card(map, "raised").dataset.nodeAttention).toBe("operator");
-    expect(card(map, "raised").className).toContain("border-mission-hold");
+    expect(card(map, "raised").className).toContain("border-mission-turn");
     expect(card(map, "raised").querySelector("[data-node-turn]")).not.toBeNull();
-    expect(card(map, "asked").className).not.toContain("border-mission-hold");
+    expect(card(map, "asked").className).not.toContain("border-mission-turn");
     expect(card(map, "asked").querySelector("[data-node-turn]")).toBeNull();
     expect(card(map, "raised").getAttribute("aria-label")).toBe(`Node raised · In progress · PR ${"#"}1840 · Needs a look · You · PR ${"#"}1840 merged, a finish line missing or failed`);
     // Hide's mark on the card it changed last, what it did and why in the name (B3).
@@ -845,6 +845,27 @@ it("puts the question the decision asks of a node and its choices in its panel, 
     expect(panel.querySelector("[data-panel-conductor-line]")?.textContent).toBe("Asked which base to use");
     await act(async () => card(map, "old").click());
     expect(map.q('[data-mission-detail="old"] [data-panel-conductor-line]')?.textContent).toBe("Replaced by the API screen");
+  } finally { await map.unmount(); }
+});
+
+// Operator report on M41: a raise in 내 차례 said only a reason and the plan's long sentences; its card now says what happened, why it reached the operator, and on 자세히 the worker's one line on each failed finish line.
+it("draws a raise in 내 차례 as a card saying what happened, why it reached the operator, and each failed line's summary on 자세히", async () => {
+  const failed = (key: string, text: string, summary?: string) => ({ key, kind: "own", text, state: "fail", checkers: [], ...(summary ? { summary } : {}) });
+  const ended = node("together", { title: "Upgrade check", status: "working", criteria: [failed("c1", "Agents resume after the upgrade", "Pi wake failed, as it did before"), failed("c2", "The OS table matches")] as unknown as MissionNode["criteria"], attention: { reason: "worker_ended", pr: null, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } });
+  const map = await mount({ items: [mission({ nodes: [ended] })] });
+  try {
+    const item = map.q('[data-mission-turn-item="attention"]')!;
+    expect(item.querySelector("[data-mission-turn-what]")?.textContent).toBe("Worker ended with work leftFinish lines failed: 2");
+    expect(item.querySelector("[data-mission-turn-why]")?.getAttribute("data-mission-turn-why")).toBe("waited");
+    expect(item.querySelector("[data-mission-turn-why]")?.textContent).toBe("The Conductor did not settle it");
+    expect(item.querySelector("[data-mission-turn-details]")).toBeNull();
+    await act(async () => item.querySelector<HTMLButtonElement>("[data-mission-turn-details-toggle]")!.click());
+    expect([...item.querySelectorAll("[data-mission-turn-details] li")].map((li) => li.textContent)).toEqual(["Pi wake failed, as it did beforeAgents resume after the upgrade failed", "The OS table matches failed"]);
+    // 노드 보기 picks the node on the map.
+    await act(async () => item.querySelector<HTMLButtonElement>('[data-mission-turn-node="together"]')!.click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("together");
+    // The node's card wears the card's colour and its corner dot.
+    expect(card(map, "together").querySelector("[data-node-turn]")).not.toBeNull();
   } finally { await map.unmount(); }
 });
 

@@ -27,28 +27,14 @@ import { Button } from "./ui/button";
 // the Conductor (B17). Once one is sent every choice is off; the item goes
 // when the core's next snapshot settles it.
 
-export function AttentionChoices({ mission, node, attention, actions, className }: { mission: Mission; node: MissionNode; attention: MissionAttention; actions: Actions; className?: string }) {
+export function AttentionChoices({ mission, node, attention, actions, facts = true, className }: { mission: Mission; node: MissionNode; attention: MissionAttention; actions: Actions; facts?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const [sent, setSent] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === mission.workspace_id) ?? null);
-  const pr = attentionPr(node, attention, project?.pull_requests);
-  const row = pr ? (project?.agent_scope.prs.rows.find((candidate) => candidate.number === pr.number) ?? null) : null;
-  // The pull request's own words already say a failed CI; the node's own finish lines are counted, their sentences on hover.
-  const failed = failedWords(node.criteria.filter((line) => line.state === "fail" && !(pr && line.kind === "ci")), t);
   return (
     <span className={cn("flex min-w-0 flex-wrap items-center gap-xs", className)} data-attention-choices={attention.reason}>
-      {pr ? (
-        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-attention-pr={pr.number} data-attention-pr-reason={row?.reason.kind ?? pr.state ?? "unread"}>
-          <MissionPrMark number={pr.number} state={pr.state} />
-          {row ? <ReasonLine reason={row.reason} group={row.group} className="text-caption" /> : pr.state ? <span className="min-w-0 truncate">{t(`agentSessions.pr.${pr.state}`)}</span> : null}
-        </span>
-      ) : null}
-      {failed ? (
-        <span className="min-w-0 truncate text-caption text-destructive" title={failed.full} data-attention-failed={failed.count}>
-          {failed.short}
-        </span>
-      ) : null}
+      {/* 내 차례's card says the facts on its own line (`facts` false); every other place says them before the choices. */}
+      {facts ? <AttentionFacts mission={mission} node={node} attention={attention} /> : null}
       {attention.choices.map((choice) => {
         // A choice that ends something goes on a second press: dropping a node, or closing a mission whose empty lines the operator passes.
         const closes = choice === "done" && attention.reason === "close_refused";
@@ -87,6 +73,36 @@ export function AttentionChoices({ mission, node, attention, actions, className 
   );
 }
 
+/** The pull request a raise is about with why it stands where it does, and the node's failed lines in a few words, the full lines on hover. */
+export function AttentionFacts({ mission, node, attention }: { mission: Mission; node: MissionNode; attention: MissionAttention }) {
+  const { t } = useInterfaceTranslation();
+  const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === mission.workspace_id) ?? null);
+  const pr = attentionPr(node, attention, project?.pull_requests);
+  const row = pr ? (project?.agent_scope.prs.rows.find((candidate) => candidate.number === pr.number) ?? null) : null;
+  // The pull request's own words already say a failed CI; the node's own finish lines are counted, their sentences on hover.
+  const failed = failedWords(failedLines(node, pr !== null), t);
+  return (
+    <>
+      {pr ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-attention-pr={pr.number} data-attention-pr-reason={row?.reason.kind ?? pr.state ?? "unread"}>
+          <MissionPrMark number={pr.number} state={pr.state} />
+          {row ? <ReasonLine reason={row.reason} group={row.group} className="text-caption" /> : pr.state ? <span className="min-w-0 truncate">{t(`agentSessions.pr.${pr.state}`)}</span> : null}
+        </span>
+      ) : null}
+      {failed ? (
+        <span className="min-w-0 truncate text-caption text-destructive" title={failed.full} data-attention-failed={failed.count}>
+          {failed.short}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** A node's failed finish lines a raise shows, leaving out a CI its pull request already says. */
+export function failedLines(node: MissionNode, withPr: boolean): MissionCriterion[] {
+  return node.criteria.filter((line) => line.state === "fail" && !(withPr && line.kind === "ci"));
+}
+
 type Translate = ReturnType<typeof useInterfaceTranslation>["t"];
 
 /**
@@ -106,7 +122,7 @@ function failedWords(lines: MissionCriterion[], t: Translate): { short: string; 
 }
 
 /** A failed line as `<line> 실패`: a review or a verification by its kind alone, a CI with no pull request to say it as `CI 실패`. */
-function failedLine(line: MissionCriterion, t: Translate): string {
+export function failedLine(line: MissionCriterion, t: Translate): string {
   switch (line.kind) {
     case "ci":
       return t("mission.fix.ci_failed");

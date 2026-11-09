@@ -16,7 +16,6 @@ import { MissionSummary } from "./components/mission-summary";
 import { HEAD_FILL, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
-import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
@@ -327,8 +326,8 @@ const LOOK_CARD: Record<NodeLook, string> = {
   dropped: "border-dashed border-border bg-transparent",
 };
 
-/** A card waiting on the operator wears the decision colour's border and outline over its look, readable at the map's smallest zoom (PRD mission-node-simple B2). */
-const ATTENTION_CARD = "border-2 border-mission-hold outline-2 outline-offset-2 outline-mission-hold/40";
+/** A card waiting on the operator wears 내 차례's card colour as a thick border and ring over its look, readable at the map's smallest zoom (PRD mission-node-simple B2). */
+const ATTENTION_CARD = "border-2 border-mission-turn ring-4 ring-mission-turn/20";
 
 /**
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
@@ -405,14 +404,13 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
         node.kind === "external" && "border-dotted",
         selected && "outline-2 outline-offset-2 outline-primary",
-        yours && "pr-xl",
         dimmed && "opacity-(--opacity-dimmed)",
       )}
     >
       {/* A node that runs on another device wears that device's colour on its edge, the one the workspace's header band wears; a node here stays quiet. */}
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
-      {/* The operator's turn wears the 내 차례 mark on its corner, the one the sidebar and 내 차례 draw. */}
-      {yours ? <StatusMark mark="turn" className="absolute top-xs right-xs" data-node-turn="true" /> : null}
+      {/* The operator's turn wears a dot on its corner in the colour of 내 차례's card. */}
+      {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-turn" data-node-turn="true" /> : null}
       <span className="flex min-w-0 items-center gap-xs">
         <MissionNodeMark look={look} label={word} still={doing != null && doing.state !== "working"} />
         {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
@@ -461,7 +459,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
           {attention ? (
             <Hint label={attention.why}>
-              <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>{yours ? t("agents.mark.turn") : attention.who}</span>
+              <span className={cn("shrink-0", yours ? "font-semibold text-mission-turn" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>{yours ? t("agents.mark.turn") : attention.who}</span>
             </Hint>
           ) : null}
         </span>

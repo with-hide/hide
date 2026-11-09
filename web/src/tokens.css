@@ -100,6 +100,7 @@
   --color-mission-working: var(--mission-working);
   --color-mission-review: var(--mission-review);
   --color-mission-hold: var(--mission-hold);
+  --color-mission-turn: var(--mission-turn);
   --color-mission-failed: var(--mission-failed);
   --color-mission-waiting: var(--mission-waiting);
   --color-mission-cancelled: var(--mission-cancelled);
@@ -496,6 +497,7 @@
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
   --mission-hold: var(--warning);
+  --mission-turn: var(--destructive);
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
@@ -602,6 +604,7 @@
   --mission-working: var(--agent-working);
   --mission-review: var(--pr-merged);
   --mission-hold: var(--warning);
+  --mission-turn: var(--destructive);
   --mission-failed: var(--destructive);
   --mission-waiting: var(--muted-foreground);
   --mission-cancelled: var(--status-seen);
