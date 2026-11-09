@@ -1465,7 +1465,12 @@ fn launch_with_prompt_checked(
     // is none for a device, whose own engine answers for its PATH, and a
     // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(refusal) = crate::agent_start::trust_worktree(pane_node, &kind, path)
+        && let Err(refusal) = crate::agent_start::trust_worktree(
+            pane_node,
+            &kind,
+            path,
+            profile.as_ref().map(|(id, _)| id),
+        )
     {
         return TaskAgentOutcome::Failed(AgentFailure::with_detail(refusal.code, refusal.detail));
     }

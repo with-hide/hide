@@ -1072,13 +1072,16 @@ pub enum Call {
         profile: Option<crate::profiles::ProfileStart>,
     },
     /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
-    /// made, in the node account's own settings of that agent
-    /// (`hide_agent_hooks::folder_trust`). `agent` is the start's kind, as
-    /// the adapter names it.
+    /// made, in the agent's settings of the account the start runs in
+    /// (`hide_agent_hooks::folder_trust`): the account of `profile` when the
+    /// start names one, the node account's default one otherwise. `agent` is
+    /// the start's kind, as the adapter names it.
     AgentTrust {
         agent: String,
         path: String,
         trusted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<hide_agent_adapter::ProfileId>,
     },
     /// Answers the account's exact normal shell recipe and readiness policy.
     /// Tries Hide's first-prompt integration, otherwise preserves the same

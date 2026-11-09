@@ -242,10 +242,13 @@ pub(crate) enum StartError {
 /// Nothing is asked for a kind that never asks; a trust that cannot be
 /// recorded refuses the start with its reason, so no agent waits unseen on
 /// its trust question (PRD antigravity-first-class B20).
+/// `profile` is the profile the start runs with, whose account the node
+/// writes the trust in (docs/agent-hooks.md, Profile accounts).
 pub(crate) fn trust_worktree(
     node: Option<&dyn crate::node_access::NodeLink>,
     kind: &str,
     path: &str,
+    profile: Option<&hide_agent_adapter::ProfileId>,
 ) -> Result<(), TrustRefusal> {
     let Some((adapter, agent)) = hide_agent_adapter::adapter(kind).and_then(|adapter| {
         let agent = hide_agent_hooks::folder_trust::Agent::of(adapter.start?)?;
@@ -263,6 +266,7 @@ pub(crate) fn trust_worktree(
             agent: adapter.id.to_owned(),
             path: path.to_owned(),
             trusted: true,
+            profile: profile.cloned(),
         },
         // The node may wait for another start's change of the same agent's
         // trust before its own (a Codex app-server each), and the link
@@ -1690,7 +1694,7 @@ mod tests {
         std::fs::create_dir_all(tree("plain")).unwrap();
         // Grok keeps a worktree's trust under its repository's main checkout,
         // which `tree-1` is itself.
-        trust_worktree(Some(&node), "grok", &wire("tree-1")).unwrap();
+        trust_worktree(Some(&node), "grok", &wire("tree-1"), None).unwrap();
         // Its format and spelling are `folder_trust`'s tests'.
         let grok = std::fs::read_to_string(home.path().join(".grok/trusted_folders.toml")).unwrap();
         assert!(
@@ -1698,14 +1702,14 @@ mod tests {
             "{grok}"
         );
         assert!(!agy.exists() && !claude.exists());
-        trust_worktree(Some(&node), "antigravity", &wire("tree-1")).unwrap();
+        trust_worktree(Some(&node), "antigravity", &wire("tree-1"), None).unwrap();
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&agy).unwrap()).unwrap();
         assert_eq!(
             written["trustedWorkspaces"],
             serde_json::json!([resolved("tree-1")])
         );
-        trust_worktree(Some(&node), "claude", &wire("tree-1")).unwrap();
+        trust_worktree(Some(&node), "claude", &wire("tree-1"), None).unwrap();
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&claude).unwrap()).unwrap();
         let key = if cfg!(windows) {
@@ -1720,20 +1724,21 @@ mod tests {
         // A folder that is not a worktree is never trusted.
         for kind in ["antigravity", "claude", "grok"] {
             let refused =
-                String::from(trust_worktree(Some(&node), kind, &wire("plain")).unwrap_err());
+                String::from(trust_worktree(Some(&node), kind, &wire("plain"), None).unwrap_err());
             assert!(refused.starts_with("agent_trust_failed"), "{refused}");
         }
         // A trust that cannot be recorded stops the start with its reason,
         // naming the agent.
         std::fs::write(&agy, "{ not json").unwrap();
-        let refused =
-            String::from(trust_worktree(Some(&node), "antigravity", &wire("tree-2")).unwrap_err());
+        let refused = String::from(
+            trust_worktree(Some(&node), "antigravity", &wire("tree-2"), None).unwrap_err(),
+        );
         assert!(
             refused.starts_with("agent_trust_failed: Antigravity's trust of"),
             "{refused}"
         );
         assert!(
-            trust_worktree(None, "claude", &wire("tree-2"))
+            trust_worktree(None, "claude", &wire("tree-2"), None)
                 .unwrap_err()
                 .code
                 == "agent_trust_unavailable"

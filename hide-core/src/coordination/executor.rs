@@ -1555,7 +1555,12 @@ fn spawn(
                 (created.path, tab.pane_id, seed_tab, true)
             };
             if made {
-                crate::agent_start::trust_worktree(node.as_deref(), kind, &checkout)?;
+                crate::agent_start::trust_worktree(
+                    node.as_deref(),
+                    kind,
+                    &checkout,
+                    agent.profile().map(|(id, _)| id).as_ref(),
+                )?;
             }
             // The terminal is recorded with the pane, so a later attempt can
             // tell this pane from another terminal that later answers to the same id.

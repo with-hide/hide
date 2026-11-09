@@ -313,6 +313,64 @@ fn launch_beside(
     }))
 }
 
+/// The account a start of `kind` with the profile `id` runs in, for the
+/// node to write the agent's folder trust there (docs/agent-hooks.md,
+/// Profile accounts): `None` for a profile in the agent's default account,
+/// whose trust is the default's. A profile that is gone, another agent's,
+/// being removed, or whose account Hide may not write in
+/// (`hide_kit::trust_writable`) is refused with a reason that names it.
+pub fn trust_account(
+    env: &Env,
+    kind: &str,
+    id: &ProfileId,
+) -> HostResult<Option<hide_agent_adapter::Account>> {
+    let refused = |text: String| Err(HostError::new(ErrorCode::InvalidPath, text));
+    if id.is_default() {
+        return Ok(None);
+    }
+    let place = place(env)?;
+    let file = read(&place.file)?;
+    let Some(stored) = file.profiles.iter().find(|stored| stored.profile.id == *id) else {
+        return refused(format!(
+            "the profile {} is no longer on this machine",
+            id.0
+        ));
+    };
+    let profile = &stored.profile;
+    if stored.removing {
+        return refused(format!("the profile {} is being removed", profile.name));
+    }
+    let Some(adapter) =
+        hide_agent_adapter::adapter(kind).filter(|adapter| adapter.id == profile.kind)
+    else {
+        return refused(format!(
+            "the profile {} is not one of {kind}'s",
+            profile.name
+        ));
+    };
+    if profile.account.is_none() {
+        return Ok(None);
+    }
+    hide_kit::trust_writable(&place.home, profile).map_err(|why| {
+        HostError::new(
+            ErrorCode::InvalidPath,
+            format!(
+                "Hide may not write in the profile {}'s account: {why}",
+                profile.name
+            ),
+        )
+    })?;
+    adapter
+        .resolve(profile, &NodeEnv::new(Some(place.home.clone())))
+        .map(Some)
+        .map_err(|refusal| {
+            HostError::new(
+                ErrorCode::InvalidPath,
+                format!("the profile {} cannot start here: {refusal}", profile.name),
+            )
+        })
+}
+
 /// How the profile's `program` starts here: a bare name found as a pane's
 /// shell finds an agent's program (`hide_platform::programs::account_path`),
 /// or an absolute path, each a program this account can start

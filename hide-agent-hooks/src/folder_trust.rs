@@ -50,11 +50,15 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::LaunchDialect;
+use hide_agent_adapter::{
+    Account, AccountKey, AccountPath, AccountRef, AgentAdapter, AgentId, LaunchDialect, NodeEnv,
+    Profile,
+};
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::account::AccountAt;
 use crate::install::{HookDocument, InstallFailure, read_document, write_document};
 use crate::runtime::AgentRuntime;
 
@@ -114,16 +118,29 @@ impl Agent {
         }
     }
 
-    /// The file whose trust entries this agent reads: for Claude Code and
-    /// Codex the one their hooks' folder names (`AgentRuntime::trust_path`).
-    pub fn settings_path(self, home: &Path) -> PathBuf {
+    /// The file whose trust entries this agent reads in the account `at`
+    /// (`AccountPath::FolderTrust`): for Claude Code and Codex the one their
+    /// hooks' folder names (`AgentRuntime::trust_path`).
+    pub fn settings_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        let at = at.into();
         match self {
-            Self::ClaudeCode => AgentRuntime::ClaudeCode.trust_path(home),
-            Self::Codex => AgentRuntime::Codex.trust_path(home),
-            Self::Antigravity => antigravity::settings_path(home),
-            Self::Grok => grok::settings_path(home),
-            Self::Pi => pi::settings_path(home),
+            Self::ClaudeCode => AgentRuntime::ClaudeCode.trust_path(at),
+            Self::Codex => AgentRuntime::Codex.trust_path(at),
+            Self::Antigravity | Self::Grok | Self::Pi => {
+                at.place(self.adapter(), AccountPath::FolderTrust)
+            }
         }
+    }
+
+    fn adapter(self) -> &'static AgentAdapter {
+        match self {
+            Self::ClaudeCode => AgentId::ClaudeCode,
+            Self::Codex => AgentId::Codex,
+            Self::Antigravity => AgentId::Antigravity,
+            Self::Grok => AgentId::Grok,
+            Self::Pi => AgentId::Pi,
+        }
+        .adapter()
     }
 
     /// The longest one change holds Hide's lock for this agent: a Codex
@@ -251,12 +268,22 @@ fn hold(
 }
 
 /// One folder Hide trusted for an agent, as its record keeps it: the folder,
-/// and the entry it put in the agent's file when that names another folder.
-/// Grok's entry names the repository's main checkout, shared by every
-/// worktree of it, so the entry leaves only with the last of them.
+/// the entry it put in the agent's file when that names another folder, and
+/// the account whose file holds it when that is not the agent's default
+/// (PRD agent-profiles B19). Grok's entry names the repository's main
+/// checkout, shared by every worktree of it, so the entry leaves only with
+/// the last of them in its account.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 enum Recorded {
+    /// In a profile's account, which an earlier build, reading it as
+    /// `Through`, takes for the default's. Read first: the forms below would
+    /// match it with its account dropped.
+    InAccount {
+        folder: String,
+        entry: String,
+        account: AccountKey,
+    },
     /// The entry is the folder itself, the form every record held before
     /// Grok's.
     Folder(String),
@@ -266,9 +293,18 @@ enum Recorded {
     },
 }
 
+/// The default account, which a record entry without one is in.
+const DEFAULT_ACCOUNT: AccountKey = AccountKey::Default;
+
 impl Recorded {
-    fn new(folder: String, entry: String) -> Self {
-        if folder == entry {
+    fn new(folder: String, entry: String, account: AccountKey) -> Self {
+        if !account.is_default() {
+            Self::InAccount {
+                folder,
+                entry,
+                account,
+            }
+        } else if folder == entry {
             Self::Folder(folder)
         } else {
             Self::Through { folder, entry }
@@ -277,33 +313,89 @@ impl Recorded {
 
     fn folder(&self) -> &str {
         match self {
-            Self::Folder(folder) | Self::Through { folder, .. } => folder,
+            Self::Folder(folder)
+            | Self::Through { folder, .. }
+            | Self::InAccount { folder, .. } => folder,
         }
     }
 
     fn entry(&self) -> &str {
         match self {
-            Self::Folder(entry) | Self::Through { entry, .. } => entry,
+            Self::Folder(entry) | Self::Through { entry, .. } | Self::InAccount { entry, .. } => {
+                entry
+            }
         }
+    }
+
+    fn account(&self) -> &AccountKey {
+        match self {
+            Self::InAccount { account, .. } => account,
+            Self::Folder(_) | Self::Through { .. } => &DEFAULT_ACCOUNT,
+        }
+    }
+
+    /// Whether `other` puts the same entry in the same account's file.
+    fn same_entry(&self, other: &Self) -> bool {
+        self.entry() == other.entry() && self.account() == other.account()
     }
 }
 
-/// The entries of `leaving` that no record in `staying` still needs, each
-/// once.
+/// The entries of `leaving` in `account` that no record in `staying` still
+/// needs there, each once.
 fn entries_to_take_out<'a>(
+    account: &AccountKey,
     leaving: impl IntoIterator<Item = &'a Recorded>,
     staying: &[&Recorded],
 ) -> Vec<String> {
     let mut entries: Vec<String> = Vec::new();
     for recorded in leaving {
         let entry = recorded.entry();
-        if !staying.iter().any(|kept| kept.entry() == entry)
+        if recorded.account() == account
+            && !staying.iter().any(|kept| kept.same_entry(recorded))
             && !entries.iter().any(|taken| taken == entry)
         {
             entries.push(entry.to_owned());
         }
     }
     entries
+}
+
+/// The account a record entry's key names, resolved as the node resolves a
+/// profile's for a start: `None` for the agent's default account, which is
+/// found under the home.
+fn account_of(
+    agent: Agent,
+    home: &Path,
+    key: &AccountKey,
+) -> Result<Option<Account>, InstallFailure> {
+    let spelled = match key {
+        AccountKey::Default => return Ok(None),
+        AccountKey::Folder(folder) => AccountRef::Folder(folder.clone()),
+        AccountKey::Name(name) => AccountRef::Name(name.clone()),
+    };
+    let adapter = agent.adapter();
+    let profile = Profile {
+        account: Some(spelled),
+        ..Profile::builtin_default(adapter.id)
+    };
+    adapter
+        .resolve(&profile, &NodeEnv::new(Some(home.to_path_buf())))
+        .map(Some)
+        .map_err(|refusal| InstallFailure::UnexpectedShape {
+            path: home.display().to_string(),
+            detail: format!(
+                "the account {key:?} {} trusted a folder in no longer resolves: {refusal}",
+                agent.label()
+            ),
+        })
+}
+
+/// The account `at`'s key.
+fn key_of(at: AccountAt<'_>) -> AccountKey {
+    match at {
+        AccountAt::Home(_) => AccountKey::Default,
+        AccountAt::Account { account, .. } => account.key.clone(),
+    }
 }
 
 fn read_record(agent: Agent, home: &Path) -> Result<Vec<Recorded>, InstallFailure> {
@@ -341,10 +433,20 @@ pub(crate) enum Added {
     Present,
 }
 
-/// Records that `agent` may trust `folder`, spelled as given, without asking.
-/// A folder the agent already trusts is left as it is and stays the
-/// operator's.
-pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(), InstallFailure> {
+/// Records that `agent` may trust `folder`, spelled as given, without asking,
+/// in the account `at`: the agent's default account under a home, or a
+/// profile's. A folder the agent already trusts is left as it is and stays
+/// the operator's. Hide's record of it is kept under the account's home.
+pub fn trust<'a>(
+    agent: Agent,
+    at: impl Into<AccountAt<'a>>,
+    folder: &Path,
+    tools: Tools,
+) -> Result<(), InstallFailure> {
+    let at = at.into();
+    let home = at.home();
+    let account = key_of(at);
+    let settings = agent.settings_path(at);
     let folder_key = agent.spelling(folder)?;
     let repository = match agent {
         Agent::Codex | Agent::Grok => main_checkout(folder)
@@ -359,15 +461,20 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
         })?,
         _ => folder_key.clone(),
     };
-    let new = Recorded::new(folder_key, key.clone());
+    let new = Recorded::new(folder_key, key.clone(), account.clone());
     let _lock = hold(agent, home, tools.stop)?;
     let mut record = read_record(agent, home)?;
-    // Hide's entries for folders that are gone (removed outside Hide, or by a
-    // removal that could not reach the agent) go in the same write as the new
-    // one, so the cap is only reached by folders that exist.
+    // Hide's entries in this account for folders that are gone (removed
+    // outside Hide, or by a removal that could not reach the agent) go in the
+    // same write as the new one, so the cap is only reached by folders that
+    // exist.
     let gone: Vec<Recorded> = record
         .iter()
-        .filter(|recorded| recorded.folder() != new.folder() && folder_is_gone(recorded.folder()))
+        .filter(|recorded| {
+            recorded.account() == &account
+                && recorded.folder() != new.folder()
+                && folder_is_gone(recorded.folder())
+        })
         .cloned()
         .collect();
     let staying: Vec<&Recorded> = record
@@ -375,11 +482,12 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
         .filter(|recorded| !gone.contains(recorded))
         .chain([&new])
         .collect();
-    let gone_entries = entries_to_take_out(&gone, &staying);
-    // An entry another worktree of Hide's already needs is Hide's too, so
-    // this folder is recorded with it whatever the agent's file says.
+    let gone_entries = entries_to_take_out(&account, &gone, &staying);
+    // An entry another worktree of Hide's already needs in this account is
+    // Hide's too, so this folder is recorded with it whatever the agent's
+    // file says.
     let shared = record.iter().any(|recorded| {
-        recorded.entry() == key && recorded.folder() != new.folder() && !gone.contains(recorded)
+        recorded.same_entry(&new) && recorded.folder() != new.folder() && !gone.contains(recorded)
     });
     let mut added = false;
     // The record is written first, so a crash between the two writes leaves a
@@ -390,7 +498,7 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
         let mut remember = || {
             if !record
                 .iter()
-                .any(|recorded| recorded.folder() == new.folder())
+                .any(|recorded| recorded.folder() == new.folder() && recorded.account() == &account)
             {
                 if record.len() - gone.len() >= RECORD_LIMIT {
                     return Err(InstallFailure::NotWritable {
@@ -409,19 +517,19 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
         };
         let shared_remembered = if shared { remember() } else { Ok(()) };
         shared_remembered.and_then(|()| match agent {
-            Agent::ClaudeCode => claude::add(home, &key, &gone_entries, &mut remember),
+            Agent::ClaudeCode => claude::add(&settings, &key, &gone_entries, &mut remember),
             Agent::Codex => crate::codex_trust::add_project_trust(
-                codex_program(home, tools)?,
-                home,
+                codex_program(&settings, tools)?,
+                at,
                 tools.stop,
                 &key,
                 repository.as_deref(),
                 &gone_entries,
                 &mut remember,
             ),
-            Agent::Antigravity => antigravity::add(home, &key, &gone_entries, &mut remember),
-            Agent::Grok => grok::add(home, &key, &gone_entries, tools.stop, &mut remember),
-            Agent::Pi => pi::add(home, &key, &gone_entries, &mut remember),
+            Agent::Antigravity => antigravity::add(&settings, &key, &gone_entries, &mut remember),
+            Agent::Grok => grok::add(&settings, &key, &gone_entries, tools.stop, &mut remember),
+            Agent::Pi => pi::add(&settings, &key, &gone_entries, &mut remember),
         })
     };
     match written {
@@ -435,7 +543,7 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
         Ok(_) => Ok(()),
         Err(failure) => {
             if added {
-                record.retain(|recorded| recorded.folder() != new.folder());
+                record.retain(|recorded| recorded != &new);
                 // The agent's failure is the one reported; a record left
                 // behind is the crash case above.
                 let _ = write_record(agent, home, &record);
@@ -457,12 +565,14 @@ fn folder_is_gone(entry: &str) -> bool {
 /// it. Trust makes the agent load the folder's own settings and hooks
 /// without asking, so a path that is not such a worktree is never trusted,
 /// whoever asks.
-pub fn trust_worktree(
+pub fn trust_worktree<'a>(
     agent: Agent,
-    home: &Path,
+    at: impl Into<AccountAt<'a>>,
     folder: &Path,
     tools: Tools,
 ) -> Result<(), InstallFailure> {
+    let at = at.into();
+    let home = at.home();
     let refuse = |detail: &str| InstallFailure::UnexpectedShape {
         path: folder.display().to_string(),
         detail: format!("a worktree {} trusts {detail}", agent.label()),
@@ -491,7 +601,7 @@ pub fn trust_worktree(
     // The entry is the folder's resolved path, so a link along the way cannot
     // be pointed elsewhere after it is trusted, and `//` or a trailing
     // separator never reaches it; [`forget`] takes it out by either spelling.
-    trust(agent, home, &canonical, tools)
+    trust(agent, at, &canonical, tools)
 }
 
 /// The main checkout of the repository `worktree` belongs to, which Codex
@@ -507,9 +617,9 @@ fn main_checkout(worktree: &Path) -> Option<PathBuf> {
     hide_platform::fs::identity::canonical(common.parent()?).ok()
 }
 
-fn codex_program<'a>(home: &Path, tools: Tools<'a>) -> Result<&'a Program, InstallFailure> {
+fn codex_program<'a>(settings: &Path, tools: Tools<'a>) -> Result<&'a Program, InstallFailure> {
     tools.codex.ok_or_else(|| InstallFailure::NotWritable {
-        path: Agent::Codex.settings_path(home).display().to_string(),
+        path: settings.display().to_string(),
         detail: "no codex program was found to record Codex's trust through".to_owned(),
     })
 }
@@ -528,8 +638,10 @@ pub fn forget(
 ) -> Result<usize, InstallFailure> {
     agent.spelling(folder)?;
     let names = folder_names(folder);
-    forget_where(agent, home, tools, |entry| {
-        names.iter().any(|name| same_folder(entry, name))
+    forget_where(agent, home, tools, |recorded| {
+        names
+            .iter()
+            .any(|name| same_folder(recorded.folder(), name))
     })
 }
 
@@ -566,16 +678,50 @@ fn same_folder(entry: &str, path: &Path) -> bool {
     }
 }
 
-/// Takes out every trust Hide added for `agent`, as when it is switched off.
+/// Takes out every trust Hide added for `agent`, in every account, as when it
+/// is switched off.
 pub fn forget_all(agent: Agent, home: &Path, tools: Tools) -> Result<usize, InstallFailure> {
     forget_where(agent, home, tools, |_| true)
 }
 
+/// Takes out every trust Hide added for `agent` in the profile account
+/// `account`, as when the last profile in it goes (docs/agent-hooks.md,
+/// Profile accounts). An entry recorded under another spelling of the same
+/// account (a final `/`, a link to it) is found by the agent's own folder
+/// there, as the file system names it.
+pub fn forget_account(
+    agent: Agent,
+    home: &Path,
+    account: &Account,
+    tools: Tools,
+) -> Result<usize, InstallFailure> {
+    let real = |account: &Account| {
+        account
+            .path(AccountPath::State)
+            .and_then(|state| hide_platform::fs::identity::canonical(state).ok())
+    };
+    let going = real(account);
+    forget_where(agent, home, tools, |recorded| {
+        let key = recorded.account();
+        !key.is_default()
+            && (key == &account.key
+                || going.is_some()
+                    && account_of(agent, home, key)
+                        .ok()
+                        .flatten()
+                        .as_ref()
+                        .and_then(real)
+                        == going)
+    })
+}
+
+/// Takes out the trust Hide added for the record entries `chosen` picks, each
+/// in its own account's file, unless another entry kept there still needs it.
 fn forget_where(
     agent: Agent,
     home: &Path,
     tools: Tools,
-    chosen: impl Fn(&str) -> bool,
+    chosen: impl Fn(&Recorded) -> bool,
 ) -> Result<usize, InstallFailure> {
     // A machine where Hide never trusted a folder has no record and needs
     // no lock, so a removal there writes nothing of the agent's or Hide's.
@@ -591,26 +737,42 @@ fn forget_where(
     }
     let _lock = hold(agent, home, tools.stop)?;
     let record = read_record(agent, home)?;
-    let (gone, kept): (Vec<_>, Vec<_>) = record
-        .into_iter()
-        .partition(|recorded| chosen(recorded.folder()));
+    let (gone, kept): (Vec<_>, Vec<_>) = record.into_iter().partition(|recorded| chosen(recorded));
     if gone.is_empty() {
         return Ok(0);
     }
-    let gone = entries_to_take_out(&gone, &kept.iter().collect::<Vec<_>>());
-    let removed = match agent {
-        _ if gone.is_empty() => 0,
-        Agent::ClaudeCode => claude::remove(home, &gone)?,
-        Agent::Codex => crate::codex_trust::remove_project_trust(
-            codex_program(home, tools)?,
-            home,
-            tools.stop,
-            &gone,
-        )?,
-        Agent::Antigravity => antigravity::remove(home, &gone)?,
-        Agent::Grok => grok::remove(home, &gone, tools.stop)?,
-        Agent::Pi => pi::remove(home, &gone)?,
-    };
+    let staying: Vec<&Recorded> = kept.iter().collect();
+    let mut accounts: Vec<&AccountKey> = Vec::new();
+    for recorded in &gone {
+        if !accounts.contains(&recorded.account()) {
+            accounts.push(recorded.account());
+        }
+    }
+    let mut removed = 0;
+    for account in accounts {
+        let entries = entries_to_take_out(account, &gone, &staying);
+        if entries.is_empty() {
+            continue;
+        }
+        let resolved = account_of(agent, home, account)?;
+        let at = match &resolved {
+            Some(account) => AccountAt::Account { home, account },
+            None => AccountAt::Home(home),
+        };
+        let settings = agent.settings_path(at);
+        removed += match agent {
+            Agent::ClaudeCode => claude::remove(&settings, &entries)?,
+            Agent::Codex => crate::codex_trust::remove_project_trust(
+                codex_program(&settings, tools)?,
+                at,
+                tools.stop,
+                &entries,
+            )?,
+            Agent::Antigravity => antigravity::remove(&settings, &entries)?,
+            Agent::Grok => grok::remove(&settings, &entries, tools.stop)?,
+            Agent::Pi => pi::remove(&settings, &entries)?,
+        };
+    }
     write_record(agent, home, &kept)?;
     Ok(removed)
 }
@@ -651,13 +813,6 @@ mod antigravity {
 
     const KEY: &str = "trustedWorkspaces";
 
-    /// agy's folder trust in its account (`AccountPath::FolderTrust`).
-    pub(super) fn settings_path(home: &Path) -> PathBuf {
-        hide_agent_adapter::AgentId::Antigravity
-            .adapter()
-            .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
-    }
-
     fn entries<'a>(
         document: &'a mut HookDocument,
         settings: &Path,
@@ -675,32 +830,30 @@ mod antigravity {
     /// Adds `key` unless agy trusts it already, and takes out the entries in
     /// `gone` in the same write.
     pub(super) fn add(
-        home: &Path,
+        settings: &Path,
         key: &str,
         gone: &[String],
         remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
     ) -> Result<Added, InstallFailure> {
-        let settings = settings_path(home);
-        let mut document = read_document(&settings)?
+        let mut document = read_document(settings)?
             .unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
-        let list = entries(&mut document, &settings)?;
+        let list = entries(&mut document, settings)?;
         if list.iter().any(|entry| entry.as_str() == Some(key)) {
             return Ok(Added::Present);
         }
         remember()?;
         take_out(list, gone);
         list.push(Value::String(key.to_owned()));
-        write_document(&settings, &document).map(|()| Added::New)
+        write_document(settings, &document).map(|()| Added::New)
     }
 
-    pub(super) fn remove(home: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
-        let settings = settings_path(home);
-        let Some(mut document) = read_document(&settings)? else {
+    pub(super) fn remove(settings: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
+        let Some(mut document) = read_document(settings)? else {
             return Ok(0);
         };
-        let removed = take_out(entries(&mut document, &settings)?, gone);
+        let removed = take_out(entries(&mut document, settings)?, gone);
         if removed > 0 {
-            write_document(&settings, &document)?;
+            write_document(settings, &document)?;
         }
         Ok(removed)
     }
@@ -731,14 +884,6 @@ mod grok {
     const FOLDERS: &str = "folders";
     const TRUSTED: &str = "trusted";
     const DECIDED_AT: &str = "decided_at";
-
-    /// Grok's folder trust in its default account (`AccountPath::FolderTrust`),
-    /// beside Hide's hook file.
-    pub(super) fn settings_path(home: &Path) -> PathBuf {
-        hide_agent_adapter::AgentId::Grok
-            .adapter()
-            .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
-    }
 
     /// Grok's lock on its trust file, held until dropped.
     fn take_lock(
@@ -843,17 +988,16 @@ mod grok {
     /// the entries in `gone` in the same write. A folder the operator answered
     /// "No" for in Grok is refused, never overridden.
     pub(super) fn add(
-        home: &Path,
+        settings: &Path,
         key: &str,
         gone: &[String],
         stop: &AtomicBool,
         remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
     ) -> Result<Added, InstallFailure> {
-        let settings = settings_path(home);
-        let _lock = take_lock(&settings, stop)?;
-        let (real, document) = read(&settings)?;
+        let _lock = take_lock(settings, stop)?;
+        let (real, document) = read(settings)?;
         let mut document = document.unwrap_or_default();
-        let folders = folders(&mut document, &settings)?;
+        let folders = folders(&mut document, settings)?;
         match decision(folders, key) {
             Some(true) => return Ok(Added::Present),
             Some(false) => {
@@ -880,25 +1024,24 @@ mod grok {
             entry.insert(DECIDED_AT, value(now));
         }
         folders.insert(key, Item::Table(entry));
-        write(&settings, &real, &document).map(|()| Added::New)
+        write(settings, &real, &document).map(|()| Added::New)
     }
 
     pub(super) fn remove(
-        home: &Path,
+        settings: &Path,
         gone: &[String],
         stop: &AtomicBool,
     ) -> Result<usize, InstallFailure> {
-        let settings = settings_path(home);
         if !settings.exists() {
             return Ok(0);
         }
-        let _lock = take_lock(&settings, stop)?;
-        let (real, Some(mut document)) = read(&settings)? else {
+        let _lock = take_lock(settings, stop)?;
+        let (real, Some(mut document)) = read(settings)? else {
             return Ok(0);
         };
-        let removed = take_out(folders(&mut document, &settings)?, gone);
+        let removed = take_out(folders(&mut document, settings)?, gone);
         if removed > 0 {
-            write(&settings, &real, &document)?;
+            write(settings, &real, &document)?;
         }
         Ok(removed)
     }
@@ -1055,14 +1198,6 @@ mod pi {
     use super::lock_folder::LockFolder;
     use super::*;
 
-    /// Pi's folder trust in its default account (`AccountPath::FolderTrust`),
-    /// beside its settings.
-    pub(super) fn settings_path(home: &Path) -> PathBuf {
-        hide_agent_adapter::AgentId::Pi
-            .adapter()
-            .place_in(home, hide_agent_adapter::AccountPath::FolderTrust)
-    }
-
     fn lock(settings: &Path) -> Result<LockFolder, InstallFailure> {
         if let Some(parent) = settings.parent() {
             hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
@@ -1093,16 +1228,15 @@ mod pi {
     /// and starts as it would without Hide, so Hide writes nothing and the
     /// start goes on.
     pub(super) fn add(
-        home: &Path,
+        settings: &Path,
         key: &str,
         gone: &[String],
         remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
     ) -> Result<Added, InstallFailure> {
-        let settings = settings_path(home);
-        let lock = lock(&settings)?;
-        let mut document = read_document(&settings)?
+        let lock = lock(settings)?;
+        let mut document = read_document(settings)?
             .unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
-        let decisions = root_object(&mut document, &settings, Agent::Pi)?;
+        let decisions = root_object(&mut document, settings, Agent::Pi)?;
         if decided(decisions, key) {
             return Ok(Added::Present);
         }
@@ -1110,22 +1244,21 @@ mod pi {
         take_out(decisions, gone);
         decisions.insert(key.to_owned(), Value::Bool(true));
         lock.still_held()?;
-        write_document(&settings, &document).map(|()| Added::New)
+        write_document(settings, &document).map(|()| Added::New)
     }
 
-    pub(super) fn remove(home: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
-        let settings = settings_path(home);
+    pub(super) fn remove(settings: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
         if !settings.exists() {
             return Ok(0);
         }
-        let lock = lock(&settings)?;
-        let Some(mut document) = read_document(&settings)? else {
+        let lock = lock(settings)?;
+        let Some(mut document) = read_document(settings)? else {
             return Ok(0);
         };
-        let removed = take_out(root_object(&mut document, &settings, Agent::Pi)?, gone);
+        let removed = take_out(root_object(&mut document, settings, Agent::Pi)?, gone);
         if removed > 0 {
             lock.still_held()?;
-            write_document(&settings, &document)?;
+            write_document(settings, &document)?;
         }
         Ok(removed)
     }
@@ -1185,17 +1318,17 @@ mod claude {
     /// Sets the flag on `key` unless Claude Code trusts it already, and takes
     /// Hide's flag off the entries in `gone` in the same write.
     pub(super) fn add(
-        home: &Path,
+        settings: &Path,
         key: &str,
         gone: &[String],
         remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
     ) -> Result<Added, InstallFailure> {
-        let config = Agent::ClaudeCode.settings_path(home);
-        let lock = lock(&config)?;
+        let config = settings;
+        let lock = lock(config)?;
         let mut document =
-            read_document(&config)?.unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
-        let projects = projects(&mut document, &config)?;
-        let entry = object_entry(projects, key, &config, "a projects entry is not an object")?;
+            read_document(config)?.unwrap_or_else(|| HookDocument::new(Value::Object(Map::new())));
+        let projects = projects(&mut document, config)?;
+        let entry = object_entry(projects, key, config, "a projects entry is not an object")?;
         if entry.get(ACCEPTED) == Some(&Value::Bool(true)) {
             return Ok(Added::Present);
         }
@@ -1203,22 +1336,21 @@ mod claude {
         entry.insert(ACCEPTED.to_owned(), Value::Bool(true));
         take_out(projects, gone);
         lock.still_held()?;
-        write_document(&config, &document).map(|()| Added::New)
+        write_document(config, &document).map(|()| Added::New)
     }
 
-    pub(super) fn remove(home: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
-        let config = Agent::ClaudeCode.settings_path(home);
+    pub(super) fn remove(config: &Path, gone: &[String]) -> Result<usize, InstallFailure> {
         if !config.exists() {
             return Ok(0);
         }
-        let lock = lock(&config)?;
-        let Some(mut document) = read_document(&config)? else {
+        let lock = lock(config)?;
+        let Some(mut document) = read_document(config)? else {
             return Ok(0);
         };
-        let removed = take_out(projects(&mut document, &config)?, gone);
+        let removed = take_out(projects(&mut document, config)?, gone);
         if removed > 0 {
             lock.still_held()?;
-            write_document(&config, &document)?;
+            write_document(config, &document)?;
         }
         Ok(removed)
     }

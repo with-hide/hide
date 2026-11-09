@@ -1440,12 +1440,14 @@ pub fn handle_with_progress(
             )?)
         }
         Call::AgentTrust {
-            agent,
+            agent: kind,
             path,
             trusted,
+            profile,
         } => {
+            use hide_agent_hooks::account::AccountAt;
             use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-            let agent = hide_agent_adapter::adapter(&agent)
+            let agent = hide_agent_adapter::adapter(&kind)
                 .and_then(|adapter| adapter.start)
                 .and_then(Agent::of)
                 .ok_or_else(|| {
@@ -1453,6 +1455,14 @@ pub fn handle_with_progress(
                 })?;
             let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
+            let account = match &profile {
+                Some(id) => crate::profiles::trust_account(env, &kind, id)?,
+                None => None,
+            };
+            let at = match &account {
+                Some(account) => AccountAt::Account { home, account },
+                None => AccountAt::Home(home),
+            };
             let folder = antigravity_folder(&path).ok_or_else(|| {
                 HostError::new(ErrorCode::InvalidPath, "agent_trust_path_invalid")
             })?;
@@ -1465,7 +1475,7 @@ pub fn handle_with_progress(
                 stop: &env.stop,
             };
             if trusted {
-                folder_trust::trust_worktree(agent, home, folder, tools)
+                folder_trust::trust_worktree(agent, at, folder, tools)
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }
