@@ -347,7 +347,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const checkoutName = await left(feature.locator("[data-checkout-menu] [data-row-name]"));
     const agentMark = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-status-mark]`));
     const agentTitle = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-title]`));
-    expect([checkoutGlyph - projectMark, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([8, 18, 0, 16]);
+    expect([checkoutGlyph - projectMark, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([8, 17, 0, 16]);
     expect((await featureButton.boundingBox())!.height).toBe(await featureButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await screenshot(page, "projects-sidebar-open");
 
@@ -825,6 +825,7 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     await row.click({ button: "right" });
     const contextItems = await page.locator('[role="menu"] [data-menu-item]').evaluateAll((items) => items.map((item) => item.getAttribute("data-menu-item")));
     await page.keyboard.press("Escape");
+    await keyboardFocus(page, row);
     await keyboardFocus(page, more);
     await page.keyboard.press("Space");
     const menu = page.locator('[role="menu"]');

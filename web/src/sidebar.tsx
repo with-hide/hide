@@ -1224,7 +1224,7 @@ const FolderRowView = memo(function FolderRowView({
             projectExpanded={asleep ? checkoutRowExpansion(true, context.workspaceScreen && focused, open) : undefined}
           />
           <span className="pointer-events-none flex h-(--size-sidebar-line) min-w-0 items-center gap-sm">
-            {workspace.pinned ? <PinIcon aria-hidden="true" data-project-pin={workspace.id} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : <FolderIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
+            <ProjectMark workspace={workspace} />
             <ProjectName workspace={workspace} hidden grow={false} label />
             <CheckoutBadge checkout={checkout} />
             <span className="flex-1" />

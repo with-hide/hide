@@ -110,9 +110,10 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     if (process.env.HIDE_E2E_SCREENSHOT_DIR) {
       await page.screenshot({ path: path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "workspace-cli-background.png") });
     }
-    const firstRow = await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "fixture" })));
-    await firstRow.click();
-    await expect(firstRow).toHaveAttribute("aria-current", "true");
+    const firstProject = page.locator("[data-project]", { hasText: "fixture" });
+    await (await showProjectRow(page, projectOpener(firstProject))).click();
+    // Opened, the project's main checkout is its row, which the focus keeps drawn.
+    await expect(firstProject.locator("button[data-checkout]").first()).toHaveAttribute("aria-current", "true");
     // Background opens kept beta intact and left the caller's lane alone
     // (PRD right-lane B17): its documents button counts the prepared views,
     // and pressing it shows them.
