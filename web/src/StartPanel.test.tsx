@@ -189,7 +189,7 @@ it("shows the profile the core would pick, the project's first, and sends a prof
   const panel = useStartPanel.getState();
   const events: { kind: string; payload: Record<string, unknown> }[] = [];
   const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null, startable: true });
-  const snapshot = (profiles: unknown, projectProfile: string | null) => ({
+  const snapshot = (profiles: unknown, projectProfile: string | null, automaticProfile: string) => ({
     navigator: {
       focused_device_id: "core-machine",
       workspaces: [{ id: "blog", label: "blog", path: "/local/blog", device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: "blog-main", workspace_id: "blog", label: "main", path: "/local/blog", exists: true, is_primary: true }] }],
@@ -199,7 +199,7 @@ it("shows the profile the core would pick, the project's first, and sends a prof
       agent_start: { kind: "claude", models: {} },
       project_settings: projectProfile ? { blog: { version: 1, device_id: "core-machine", root: "/local/blog", agent_profiles: { "claude-code": projectProfile } } } : {},
     },
-    status: {},
+    status: { start_profiles: { blog: { device_id: "core-machine", root: "/local/blog", profiles: { "claude-code": automaticProfile } } } },
   }) as unknown as SnapshotRest;
   const container = document.createElement("div");
   document.body.append(container);
@@ -217,14 +217,14 @@ it("shows the profile the core would pick, the project's first, and sends a prof
   };
   try {
     // No profile on the machine: no menu, and the start names none.
-    await render(snapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, null));
+    await render(snapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, null, "default"));
     expect(q("[data-profile-pick]")).toBeNull();
     await act(async () => q("[data-start-submit]")!.click());
     expect(started().at(-1)).not.toHaveProperty("profile");
     await act(async () => root.render(<></>));
 
     const profiles = { state: "listed", version: 2, profiles: [listed("p-work", "work"), listed("p-side", "side")], defaults: { "claude-code": "p-side" } };
-    await render(snapshot(profiles, "p-work"));
+    await render(snapshot(profiles, "p-work", "p-work"));
     // The project's choice is shown chosen and sent as no choice at all.
     expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
     await act(async () => q("[data-start-submit]")!.click());
@@ -232,11 +232,11 @@ it("shows the profile the core would pick, the project's first, and sends a prof
     await act(async () => root.render(<></>));
 
     // A project that names the built-in profile opens on it, though the agent's default is side.
-    await render(snapshot(profiles, "default"));
+    await render(snapshot(profiles, "default", "default"));
     expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("default");
     await act(async () => root.render(<></>));
 
-    await render(snapshot(profiles, null));
+    await render(snapshot(profiles, null, "p-side"));
     expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-side");
     const trigger = q("[data-profile-pick]")!;
     trigger.focus();
