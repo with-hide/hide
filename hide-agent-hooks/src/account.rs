@@ -175,18 +175,37 @@ mod tests {
 
     #[test]
     fn a_scrubbed_claude_hook_reports_the_folder_its_session_env_file_is_in() {
-        let env_file = "/accounts/claude-a/session-env/s-1/hook-1.sh";
-        let scrubbed = read(&[
-            ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
-            ("CLAUDE_ENV_FILE", env_file),
-        ]);
+        // The file as Claude Code writes it on this system: below the
+        // account's folder, in the system's own spelling (a drive and `\`
+        // on Windows), which the folder is reported in as it is there.
+        let folder = if cfg!(windows) {
+            r"C:\Users\me\accounts\claude-a"
+        } else {
+            "/Users/me/accounts/claude-a"
+        };
+        let env_file = Path::new(folder)
+            .join("session-env")
+            .join("s-1")
+            .join("hook-1.sh");
+        let env_file = env_file.to_str().unwrap();
+        let scrubbed = |file: &str| {
+            read(&[
+                ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
+                ("CLAUDE_ENV_FILE", file),
+            ])
+        };
         assert_eq!(
-            reported_variables("claude-code", scrubbed),
-            Some(vec![(
-                "CLAUDE_CONFIG_DIR".to_owned(),
-                "/accounts/claude-a".to_owned()
-            )])
+            reported_variables("claude-code", scrubbed(env_file)),
+            Some(vec![("CLAUDE_CONFIG_DIR".to_owned(), folder.to_owned())])
         );
+        // A file outside any account folder, or not absolute, names none.
+        for file in ["session-env/s-1/hook-1.sh", "/tmp/hook-1.sh"] {
+            assert_eq!(
+                reported_variables("claude-code", scrubbed(file)),
+                Some(Vec::new()),
+                "{file}"
+            );
+        }
         // Without the scrub the file says nothing: the variable is absent
         // because the agent runs in its default account.
         assert_eq!(
