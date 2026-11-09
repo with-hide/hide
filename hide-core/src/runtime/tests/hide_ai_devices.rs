@@ -121,6 +121,7 @@ fn a_device_agent_is_offered_and_chosen_first_only_when_none_here_is_signed_in()
             id: DEVICE.to_owned(),
             selecting: [hide_ai::ProviderId::CODEX].into(),
             cli_found: Some(hide_ai::PROVIDERS.iter().copied().collect()),
+            items: Vec::new(),
         }],
         "the connected device's switched-on agents are asked too"
     );

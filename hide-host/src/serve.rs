@@ -848,6 +848,15 @@ pub struct Env {
     pub panes: crate::pane_holders::PaneSlot,
 }
 
+/// How this node runs a Hide AI backend's profile: as a start of it runs
+/// here (`profiles::ai_run`), the built-in default as the agent always has.
+fn ai_run(env: &Env, spec: &hide_node_link::ai::BackendSpec) -> HostResult<hide_ai::ItemRun> {
+    match &spec.profile {
+        None => Ok(hide_ai::ItemRun::default()),
+        Some(profile) => crate::profiles::ai_run(env, spec.provider.agent(), profile),
+    }
+}
+
 /// The AI backends a node answering for this process keeps, shared by every
 /// request it serves.
 fn process_ai() -> Arc<crate::ai::Backends> {
@@ -1364,15 +1373,22 @@ pub fn handle_with_progress(
             &branch,
             tip.as_deref(),
         )?),
-        Call::AiAvailability { backend } => to_value(env.ai.availability(&backend)?),
-        Call::AiModels { backend } => to_value(env.ai.models(&backend)?),
+        Call::AiAvailability { backend } => {
+            to_value(env.ai.availability(&backend, &|spec| ai_run(env, spec))?)
+        }
+        Call::AiModels { backend } => to_value(env.ai.models(&backend, &|spec| ai_run(env, spec))?),
         Call::AiExecute { backend, request } => to_value(env.ai.execute(
             &backend,
+            &|spec| ai_run(env, spec),
             request,
             &mut || progress(Value::Null),
         )?),
-        Call::AiMeasurement { backend } => to_value(env.ai.measurement(&backend)?),
-        Call::AiRestart { backend } => to_value(env.ai.restart(&backend)?),
+        Call::AiMeasurement { backend } => {
+            to_value(env.ai.measurement(&backend, &|spec| ai_run(env, spec))?)
+        }
+        Call::AiRestart { backend } => {
+            to_value(env.ai.restart(&backend, &|spec| ai_run(env, spec))?)
+        }
         Call::AiRelease { instance } => {
             env.ai.release(instance);
             to_value(())

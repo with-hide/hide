@@ -1023,7 +1023,7 @@ mod tests {
             Availability::Ready
         }
         fn models(&self) -> ModelCatalog {
-            ModelCatalog::Offered(vec!["fixture".to_owned()])
+            ModelCatalog::plain(["fixture"])
         }
         fn execute(&self, _: &AiRequest, _: &CancelToken) -> Result<AiResponse, AiError> {
             self.calls.fetch_add(1, Ordering::SeqCst);

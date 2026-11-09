@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use hide_agent_adapter::ProfileId;
 use hide_ai::{
     AiBackend, AiError, AiLogEvent, AiLogSink, AiRequest as ProviderRequest, AiResponse, AiRouter,
     AiSettings, AiUsageSink, Availability, CancelToken, ModelCatalog, ProcessMeasurement,
@@ -79,6 +80,10 @@ pub struct AiRequest {
     /// offer an agent signed in on one (PRD wsl-device B11). A device that
     /// is not connected is not listed, so asking never wakes one.
     pub devices: Vec<DeviceAsk>,
+    /// The core's own machine's profiles whose model lists are read beside
+    /// their agents' while a screen reads model lists (PRD
+    /// agent-profiles-phase2 D-09).
+    pub items: Vec<ItemAsk>,
 }
 
 /// What the read asks of one connected device: the same as of the core's
@@ -91,7 +96,27 @@ pub struct DeviceAsk {
     pub selecting: BTreeSet<ProviderId>,
     /// The agents the device's kit found, `None` while it has not answered.
     pub cli_found: Option<BTreeSet<ProviderId>>,
+    /// The device's profiles whose model lists are read, as [`AiRequest::items`].
+    pub items: Vec<ItemAsk>,
 }
+
+/// One of a machine's profiles whose model list is read beside its agent's
+/// built-in default's: the agent item `Claude Code · work` (PRD
+/// agent-profiles-phase2 D-09).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ItemAsk {
+    pub provider: ProviderId,
+    pub profile: ProfileId,
+    /// The profile's version on its machine's list: an edit is read again,
+    /// by a backend made after it.
+    pub version: u64,
+}
+
+/// The most profiles whose model lists one machine's read asks. A node
+/// keeps at most 64 backends (`hide_host::ai`), shared with the routers of
+/// Settings, labels and Memory; a profile past this is answered as a
+/// reported failure (`model_reads_full`), never one backend more.
+const MAX_ITEM_READS: usize = 16;
 
 impl AiRequest {
     /// Whether anything is asked at all.
@@ -123,6 +148,19 @@ struct Cached {
 /// The routers of the core's own machine (`None`) and each asked device.
 type CachedRouters = Arc<Mutex<BTreeMap<Option<String>, Cached>>>;
 
+/// One item's machine (`None` for the core's own), agent and profile.
+type ItemKey = (Option<String>, ProviderId, ProfileId);
+
+/// The backends that read the items' model lists, one per machine and item,
+/// kept while a screen reads model lists as the routers' are, so Claude's
+/// list keeps its ten minutes and a Codex app-server is started once per
+/// screen; and the reason each item's list was last logged as unreadable.
+#[derive(Default)]
+struct ItemReads {
+    backends: BTreeMap<ItemKey, (u64, Arc<NodeBackend>)>,
+    logged: BTreeMap<ItemKey, String>,
+}
+
 pub struct AiReader {
     inner: BackgroundRead<AiRequest, BackgroundAiSnapshot>,
 }
@@ -136,13 +174,17 @@ impl AiReader {
         // read. It is rebuilt only when the configured models change, because
         // the model is what the backend was constructed with.
         let cached: CachedRouters = Arc::default();
+        // Only the read's own worker takes it, one read at a time.
+        let items: Mutex<ItemReads> = Mutex::default();
         Self {
             inner: BackgroundRead::new(REFRESH_INTERVAL, SPACING, move |request: &AiRequest| {
                 let mut guard = cached.lock().unwrap_or_else(|error| error.into_inner());
+                let mut items = items.lock().unwrap_or_else(|error| error.into_inner());
                 if !request.asks() {
                     // Drop the routers with the screen: a Codex child is a
                     // process, and nothing is reading its answers.
                     guard.clear();
+                    items.backends.clear();
                     return BackgroundAiSnapshot::unread();
                 }
                 // A device no longer asked releases its agents' backends.
@@ -168,26 +210,31 @@ impl AiReader {
                     })
                     .collect();
                 drop(guard);
+                items.keep(request);
                 let mut snapshot = read(
                     &own,
                     &request.models,
                     request.observing,
                     request.cli_found.as_ref(),
                 );
+                if request.observing {
+                    items.read(&machines, None, &request.items, &mut snapshot.providers);
+                }
                 for (device, router) in devices {
-                    let rows = read(
+                    let mut rows = read(
                         &router,
                         &request.models,
                         request.observing,
                         device.cli_found.as_ref(),
                     )
-                    .providers
-                    .into_iter()
-                    .map(|mut row| {
+                    .providers;
+                    if request.observing {
+                        items.read(&machines, Some(&device.id), &device.items, &mut rows);
+                    }
+                    snapshot.providers.extend(rows.into_iter().map(|mut row| {
                         row.device_id = Some(device.id.clone());
                         row
-                    });
-                    snapshot.providers.extend(rows);
+                    }));
                 }
                 snapshot
             }),
@@ -202,6 +249,126 @@ impl AiReader {
         });
         self.inner.poll(request)
     }
+}
+
+impl ItemReads {
+    /// Drops the backends of every item the request no longer reads: all of
+    /// them while no screen reads model lists, else those of a machine or a
+    /// profile no longer asked. Dropping one releases its node's backend,
+    /// which ends a resident process.
+    fn keep(&mut self, request: &AiRequest) {
+        if !request.observing {
+            self.backends.clear();
+            return;
+        }
+        let asked = |machine: &Option<String>| -> &[ItemAsk] {
+            match machine {
+                None => &request.items,
+                Some(id) => request
+                    .devices
+                    .iter()
+                    .find(|device| device.id == *id)
+                    .map_or(&[], |device| device.items.as_slice()),
+            }
+        };
+        self.backends.retain(|(machine, provider, profile), _| {
+            asked(machine)
+                .iter()
+                .take(MAX_ITEM_READS)
+                .any(|ask| ask.provider == *provider && ask.profile == *profile)
+        });
+    }
+
+    /// Reads the model list of each item `asks` names on `machine` and puts
+    /// it on its agent's row of `rows`. A list that cannot be read is logged
+    /// with its item once per reason (B9, design 13); the row then carries
+    /// the reason, and the screens offer the agent's default list.
+    fn read(
+        &mut self,
+        machines: &AiMachines,
+        machine: Option<&str>,
+        asks: &[ItemAsk],
+        rows: &mut [BackgroundAiProviderSnapshot],
+    ) {
+        for (index, ask) in asks.iter().enumerate() {
+            let key: ItemKey = (
+                machine.map(str::to_owned),
+                ask.provider,
+                ask.profile.clone(),
+            );
+            let catalog = if index < MAX_ITEM_READS {
+                self.backend(machines, &key, ask.version).models()
+            } else {
+                ModelCatalog::Unknown {
+                    reason: "model_reads_full".to_owned(),
+                }
+            };
+            self.log(&key, &catalog);
+            let Some(row) = rows.iter_mut().find(|row| row.id == ask.provider.as_str()) else {
+                continue;
+            };
+            let (models, model_labels) = listed(&catalog);
+            row.profile_models
+                .push(crate::model::BackgroundAiProfileModels {
+                    profile: ask.profile.0.clone(),
+                    models,
+                    model_labels,
+                    models_fixed: catalog.is_fixed(),
+                    models_unavailable_reason: catalog.unknown_reason().map(str::to_owned),
+                });
+        }
+    }
+
+    /// The backend of `key`, made again when its profile changed since.
+    fn backend(&mut self, machines: &AiMachines, key: &ItemKey, version: u64) -> Arc<NodeBackend> {
+        if let Some((built, backend)) = self.backends.get(key)
+            && *built == version
+        {
+            return Arc::clone(backend);
+        }
+        let (machine, provider, profile) = key;
+        let backend = Arc::new(NodeBackend::new(
+            machines.machine(machine.as_deref()),
+            *provider,
+            hide_ai::settings::default_model(*provider).to_owned(),
+            Some(profile.clone()),
+        ));
+        self.backends
+            .insert(key.clone(), (version, Arc::clone(&backend)));
+        backend
+    }
+
+    /// Writes why an item's list could not be read when that first happens
+    /// or its reason changes, not on every read the open screen repeats.
+    fn log(&mut self, key: &ItemKey, catalog: &ModelCatalog) {
+        let Some(reason) = catalog.unknown_reason() else {
+            self.logged.remove(key);
+            return;
+        };
+        if self.logged.get(key).map(String::as_str) == Some(reason) {
+            return;
+        }
+        self.logged.insert(key.clone(), reason.to_owned());
+        let (machine, provider, profile) = key;
+        crate::diagnostic!(serde_json::json!({
+            "component": "ai", "kind": "ai.models.unavailable",
+            "provider": provider.as_str(), "profile": profile.0,
+            "machine": machine, "reason": reason,
+        }));
+    }
+}
+
+/// The models a catalog lists, by the name a start passes, and the name the
+/// agent shows for each where that differs.
+fn listed(catalog: &ModelCatalog) -> (Vec<String>, BTreeMap<String, String>) {
+    let models = catalog.offered();
+    (
+        models.iter().map(|model| model.id.clone()).collect(),
+        models
+            .iter()
+            .filter_map(|model| Some((model.id.clone(), model.label.clone()?)))
+            .collect(),
+    )
 }
 
 /// The cached router of one machine, rebuilt when the models or the agents
@@ -286,7 +453,7 @@ fn backends(
                 .cloned()
                 .unwrap_or_else(|| hide_ai::settings::default_model(*provider).to_owned());
             let machine = machines.machine(placed.get(provider).map(String::as_str));
-            Arc::new(NodeBackend::new(machine, *provider, model)) as Arc<dyn AiBackend>
+            Arc::new(NodeBackend::new(machine, *provider, model, None)) as Arc<dyn AiBackend>
         })
         .collect()
 }
@@ -356,7 +523,12 @@ pub fn hide_ai_ready_here(asks: &[(String, String)]) -> Result<(), String> {
             let Some(provider) = ProviderId::from_id(id) else {
                 return Some(format!("{id}: unknown to this build"));
             };
-            let backend = hide_ai::build_backend(provider, model, Arc::new(DiagnosticLogSink));
+            let backend = hide_ai::build_backend(
+                provider,
+                model,
+                hide_ai::ItemRun::default(),
+                Arc::new(DiagnosticLogSink),
+            );
             match backend.availability() {
                 Availability::Ready => None,
                 other => Some(format!("{id}: {}", other.class())),
@@ -483,13 +655,21 @@ struct NodeBackend {
 }
 
 impl NodeBackend {
-    fn new(machine: Machine, provider: ProviderId, model: String) -> Self {
+    /// A backend of `provider` asked for `model`, run as the machine's
+    /// `profile` of its agent, the built-in default for `None`.
+    fn new(
+        machine: Machine,
+        provider: ProviderId,
+        model: String,
+        profile: Option<ProfileId>,
+    ) -> Self {
         Self {
             machine,
             spec: BackendSpec {
                 instance: NEXT_BACKEND.fetch_add(1, Ordering::Relaxed),
                 provider,
                 model,
+                profile,
             },
             asked: Mutex::new(None),
         }
@@ -803,7 +983,7 @@ fn project(
     }
     match catalog {
         Some(catalog) => {
-            row.models = catalog.offered().to_vec();
+            (row.models, row.model_labels) = listed(catalog);
             row.models_fixed = catalog.is_fixed();
             row.models_unavailable_reason = catalog.unknown_reason().map(str::to_owned);
         }
@@ -1193,6 +1373,7 @@ mod tests {
             selecting: BTreeSet::new(),
             cli_found: None,
             devices: Vec::new(),
+            items: Vec::new(),
         };
         // The first read starts the worker; once it has ended, the next read
         // hands its answer back.
@@ -1224,6 +1405,7 @@ mod tests {
             selecting: only.clone(),
             cli_found: None,
             devices: Vec::new(),
+            items: Vec::new(),
         };
         assert!(request.asks());
         assert_eq!(request.only(&request.selecting), Some(&only));
@@ -1406,7 +1588,7 @@ mod tests {
         let offered = project(
             ProviderId::CLAUDE,
             Some(&ready),
-            Some(&ModelCatalog::Offered(vec!["haiku".to_owned()])),
+            Some(&ModelCatalog::plain(["haiku"])),
             &models(),
             true,
             None,
@@ -1419,7 +1601,7 @@ mod tests {
         let fixed = project(
             ProviderId::GROK,
             Some(&ready),
-            Some(&ModelCatalog::Fixed(vec!["pro".to_owned()])),
+            Some(&ModelCatalog::Fixed(vec![hide_ai::Model::plain("pro")])),
             &models(),
             true,
             None,

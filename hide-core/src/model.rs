@@ -7739,6 +7739,11 @@ pub struct BackgroundAiProviderSnapshot {
     /// The models this agent offers. Empty when they are not known, which
     /// `models_unavailable_reason` then says.
     pub models: Vec<String>,
+    /// The name the agent shows for a listed model where it is not the
+    /// model itself (Claude Code's `displayName`, PRD agent-profiles-phase2
+    /// B8): a start passes the model and a menu shows this name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_labels: BTreeMap<String, String>,
     /// The list came from documented aliases rather than an account query,
     /// as an older peer may report, so the shell labels it (B36).
     pub models_fixed: bool,
@@ -7753,6 +7758,27 @@ pub struct BackgroundAiProviderSnapshot {
     /// The weekly figure is at or past the usage limit: this agent cannot
     /// answer a request Hide AI starts on its own (D-02).
     pub past_limit: bool,
+    /// The model lists of the row's machine's profiles of this agent, each
+    /// read with the profile's own account, variables and wrapper (PRD
+    /// agent-profiles-phase2 D-09), in the machine's list order; absent with
+    /// none, and while no screen reads model lists.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profile_models: Vec<BackgroundAiProfileModels>,
+}
+
+/// One profile's model list, beside its agent's built-in default's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct BackgroundAiProfileModels {
+    /// The profile's id.
+    pub profile: String,
+    /// The models the agent listed in the profile's environment. Empty when
+    /// they could not be read, which `models_unavailable_reason` says; the
+    /// screens then offer the agent's default list (B9).
+    pub models: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_labels: BTreeMap<String, String>,
+    pub models_fixed: bool,
+    pub models_unavailable_reason: Option<String>,
 }
 
 /// One agent's weekly usage: the share spent and when the window resets.

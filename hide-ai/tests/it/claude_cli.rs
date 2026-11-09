@@ -30,6 +30,7 @@ fn backend() -> ClaudeCliBackend {
         model: "haiku".to_owned(),
         cwd: std::env::temp_dir(),
         search_path: None,
+        run: hide_ai::ItemRun::default(),
     })
 }
 
@@ -517,6 +518,7 @@ mod usage {
             model: "haiku".to_owned(),
             cwd: cwd.to_path_buf(),
             search_path: None,
+            run: hide_ai::ItemRun::default(),
         })
     }
 
@@ -696,7 +698,7 @@ fn the_model_list_is_asked_of_the_cli_without_a_model_turn_and_leaks_no_account(
         assert!(request.contains(r#""subtype":"initialize""#), "{request}");
         assert_eq!(
             catalog,
-            hide_ai::ModelCatalog::Offered(vec!["opus".to_owned(), "sonnet".to_owned()]),
+            hide_ai::ModelCatalog::plain(["opus", "sonnet"]),
             "the account's models, without the CLI's own 'default'"
         );
         assert!(
@@ -741,7 +743,7 @@ fn real_claude_lists_its_models_and_answers_one_request() {
         hide_ai::ModelCatalog::Offered(models) => models.clone(),
         other => panic!("the live model list was not offered: {other:?}"),
     };
-    assert!(!models.is_empty() && !models.iter().any(|model| model == "default"));
+    assert!(!models.is_empty() && !models.iter().any(|model| model.id == "default"));
 
     let router = AiRouter::new(
         vec![backend.clone()],

@@ -270,7 +270,9 @@ impl AntigravityCliBackend {
                 cwd,
                 stdin,
                 environment: Environment::Login,
-                set: &Self::environment(cwd),
+                // The item's variables, then agy's own, which keep its
+                // programs off `PATH` whatever the item sets.
+                set: &self.config.set(&Self::environment(cwd)),
                 deadline,
             },
             cancel,
@@ -438,7 +440,7 @@ impl AiBackend for AntigravityCliBackend {
             };
         }
         match self.list_models(&binary) {
-            Ok(ModelsOutcome::Models(models)) => ModelCatalog::Offered(models),
+            Ok(ModelsOutcome::Models(models)) => ModelCatalog::plain(models),
             Ok(ModelsOutcome::NotAuthenticated) => ModelCatalog::Unknown {
                 reason: "antigravity_not_authenticated".to_owned(),
             },

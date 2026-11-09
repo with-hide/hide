@@ -282,7 +282,7 @@ mod tests {
             Availability::Ready
         }
         fn models(&self) -> ModelCatalog {
-            ModelCatalog::Offered(vec![self.model.clone()])
+            ModelCatalog::plain([self.model.clone()])
         }
         fn execute(&self, _: &AiRequest, _: &CancelToken) -> Result<AiResponse, AiError> {
             lock(&self.asked).push((self.id, self.model.clone()));

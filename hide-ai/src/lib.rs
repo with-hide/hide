@@ -36,7 +36,7 @@ pub use log::{AiLogEvent, AiLogSink, NoopLogSink};
 pub use omp::{OmpConfig, OmpSdkBackend};
 pub use pi::PiCliBackend;
 pub use process::ProcessMeasurement;
-pub use program::resolve_start;
+pub use program::{ItemRun, Wrapper, resolve_start};
 pub use registry::{CLI_DEFAULT_MODEL, PROVIDERS, ProviderId, build_backend};
 pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig};
 pub use settings::{AiSettings, FallbackEntry, FallbackRefusal};
@@ -56,6 +56,59 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// One model a provider offers: the name a start or a request passes as its
+/// model (`id`), and the name the provider itself shows for it where that
+/// differs (`label`), as Claude Code's `displayName` (PRD
+/// agent-profiles-phase2 B8). On the wire a model without a label is its
+/// name alone, as every list was before labels.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(from = "ModelWire", into = "ModelWire")]
+pub struct Model {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+impl Model {
+    /// A model the provider names by its id alone.
+    pub fn plain(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: None,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum ModelWire {
+    Plain(String),
+    Labelled { id: String, label: String },
+}
+
+impl From<ModelWire> for Model {
+    fn from(wire: ModelWire) -> Self {
+        match wire {
+            ModelWire::Plain(id) => Self::plain(id),
+            ModelWire::Labelled { id, label } => Self {
+                id,
+                label: Some(label),
+            },
+        }
+    }
+}
+
+impl From<Model> for ModelWire {
+    fn from(model: Model) -> Self {
+        match model.label {
+            None => Self::Plain(model.id),
+            Some(label) => Self::Labelled {
+                id: model.id,
+                label,
+            },
+        }
+    }
+}
+
 /// What models a provider offers, or why that is not known.
 ///
 /// A provider that cannot be asked reports the reason rather than an empty
@@ -64,17 +117,23 @@ use serde_json::Value;
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ModelCatalog {
     /// The list the provider's own CLI or account answered.
-    Offered(Vec<String>),
+    Offered(Vec<Model>),
     /// A documented list from a compatible peer, rather than the account's
     /// own answer. Kept readable for older node responses (B36).
-    Fixed(Vec<String>),
+    Fixed(Vec<Model>),
     Unknown {
         reason: String,
     },
 }
 
 impl ModelCatalog {
-    pub fn offered(&self) -> &[String] {
+    /// The list a provider answered with the names alone, as every provider
+    /// but Claude Code answers it.
+    pub fn plain<S: Into<String>>(ids: impl IntoIterator<Item = S>) -> Self {
+        Self::Offered(ids.into_iter().map(Model::plain).collect())
+    }
+
+    pub fn offered(&self) -> &[Model] {
         match self {
             Self::Offered(models) | Self::Fixed(models) => models,
             Self::Unknown { .. } => &[],

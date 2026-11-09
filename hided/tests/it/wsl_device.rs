@@ -927,6 +927,7 @@ fn ask_ai(link: &dyn NodeLink, instance: u64, journey: &Journey) -> Value {
                 instance,
                 provider: ProviderId::PI,
                 model: String::new(),
+                profile: None,
             },
             request,
         },

@@ -244,19 +244,25 @@ pub fn launch(env: &Env, kind: &str, id: &ProfileId) -> HostResult<ProfileLaunch
     launch_beside(env, kind, id, own.as_deref())
 }
 
-/// [`launch`] by the node whose program is `own`.
-fn launch_beside(
-    env: &Env,
-    kind: &str,
-    id: &ProfileId,
-    own: Option<&Path>,
-) -> HostResult<ProfileLaunch> {
+/// A profile as a start of it runs on this machine now: the profile as the
+/// file holds it, its account resolved, and its program found.
+struct Runnable {
+    profile: Profile,
+    account: hide_agent_adapter::Account,
+    program: Option<ProfileProgram>,
+}
+
+/// The profile `id` of `kind` as a start of it would run here now, or what
+/// a start is answered instead: gone, or refused with a sentence that names
+/// it. The one check a pane's start and Hide AI's backend of the profile
+/// make, so the two run it alike.
+fn runnable(env: &Env, kind: &str, id: &ProfileId) -> HostResult<Result<Runnable, ProfileLaunch>> {
     let place = place(env)?;
     let file = read(&place.file)?;
-    let refused = |text: String| Ok(ProfileLaunch::Refused { text });
+    let refused = |text: String| Ok(Err(ProfileLaunch::Refused { text }));
     let (profile, account) = match account_of(&place.home, &file, id, kind) {
         Ok(found) => found,
-        Err(Unusable::Gone) => return Ok(ProfileLaunch::Gone),
+        Err(Unusable::Gone) => return Ok(Err(ProfileLaunch::Gone)),
         Err(Unusable::Removing(profile)) => {
             return refused(format!("the profile {} is being removed", profile.name));
         }
@@ -283,6 +289,57 @@ fn launch_beside(
             ));
         }
     };
+    Ok(Ok(Runnable {
+        profile: profile.clone(),
+        account,
+        program,
+    }))
+}
+
+/// How Hide AI runs the agent `kind` as the profile `id` on this machine
+/// (PRD agent-profiles-phase2 D-09): the variables and the program a start
+/// of the profile runs with, for the backend the core asks for that item
+/// (`ai::BackendSpec::profile`). The built-in default runs as the agent
+/// always has. A profile that is gone, being removed, another agent's, or
+/// that cannot start here is refused with the sentence a start would get.
+pub fn ai_run(env: &Env, kind: &str, id: &ProfileId) -> HostResult<hide_ai::ItemRun> {
+    if id.is_default() {
+        return Ok(hide_ai::ItemRun::default());
+    }
+    match runnable(env, kind, id)? {
+        Ok(Runnable {
+            account, program, ..
+        }) => Ok(hide_ai::ItemRun {
+            env: account.env,
+            program: program.map(|program| hide_ai::Wrapper {
+                file: PathBuf::from(program.file),
+                leading: program.leading,
+            }),
+        }),
+        Err(ProfileLaunch::Refused { text }) => Err(HostError::new(ErrorCode::InvalidPath, text)),
+        Err(_) => Err(HostError::new(
+            ErrorCode::NotFound,
+            format!("This machine has no profile {}", id.0),
+        )),
+    }
+}
+
+/// [`launch`] by the node whose program is `own`.
+fn launch_beside(
+    env: &Env,
+    kind: &str,
+    id: &ProfileId,
+    own: Option<&Path>,
+) -> HostResult<ProfileLaunch> {
+    let Runnable {
+        profile,
+        account,
+        program,
+    } = match runnable(env, kind, id)? {
+        Ok(runnable) => runnable,
+        Err(answer) => return Ok(answer),
+    };
+    let refused = |text: String| Ok(ProfileLaunch::Refused { text });
     let exec = match own
         .ok_or_else(|| "its node's program is unknown".to_owned())
         .and_then(exec_command)

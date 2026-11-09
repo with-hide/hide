@@ -9,8 +9,8 @@ use crate::program::Program;
 use crate::runner::{self, Environment, PrivateFile, Spec};
 use crate::text_cli::{TextCliConfig, system_with_schema};
 use crate::{
-    AiBackend, AiError, AiRequest, AiResponse, AiUsage, Availability, CancelToken, ModelCatalog,
-    ProviderId,
+    AiBackend, AiError, AiRequest, AiResponse, AiUsage, Availability, CancelToken, Model,
+    ModelCatalog, ProviderId,
 };
 
 pub const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
@@ -45,12 +45,22 @@ impl OmpSdkBackend {
         Self { config }
     }
 
+    /// The omp program itself, beside which its SDK is found. A profile's
+    /// wrapper is not it: Hide asks omp through its SDK, never its CLI, so
+    /// an item reaches omp with its variables (`OMP_PROFILE`) alone.
+    fn cli(&self) -> Option<Program> {
+        Program::resolve(
+            self.config
+                .cli
+                .binary
+                .as_deref()
+                .unwrap_or(Path::new("omp")),
+            self.config.cli.search_path.as_deref(),
+        )
+    }
+
     fn installation(&self) -> Result<(Program, PathBuf), AiError> {
-        let cli = self
-            .config
-            .cli
-            .resolved("omp")
-            .ok_or_else(|| unavailable("omp_not_installed"))?;
+        let cli = self.cli().ok_or_else(|| unavailable("omp_not_installed"))?;
         let package = match &self.config.package {
             Some(path) if is_package(path) => path.clone(),
             Some(_) => return Err(unavailable("omp_sdk_package_identity_invalid")),
@@ -102,7 +112,7 @@ impl OmpSdkBackend {
                 cwd: request.dir(),
                 stdin: None,
                 environment: Environment::Login,
-                set: &[],
+                set: &self.config.cli.set(&[]),
                 deadline,
             },
             cancel,
@@ -202,7 +212,7 @@ impl AiBackend for OmpSdkBackend {
         ProviderId::OMP
     }
     fn availability(&self) -> Availability {
-        if self.config.cli.resolved("omp").is_none() {
+        if self.cli().is_none() {
             return Availability::NotInstalled;
         }
         match self.catalog() {
@@ -216,7 +226,9 @@ impl AiBackend for OmpSdkBackend {
     }
     fn models(&self) -> ModelCatalog {
         match self.catalog() {
-            Ok(models) if !models.is_empty() => ModelCatalog::Fixed(models),
+            Ok(models) if !models.is_empty() => {
+                ModelCatalog::Fixed(models.into_iter().map(Model::plain).collect())
+            }
             Ok(_) => ModelCatalog::Unknown {
                 reason: "omp_login_required".into(),
             },

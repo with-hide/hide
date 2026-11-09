@@ -1403,7 +1403,7 @@ mod tests {
         fn models(&self) -> ModelCatalog {
             match self.models_unreadable.lock().unwrap().clone() {
                 Some(reason) => ModelCatalog::Unknown { reason },
-                None => ModelCatalog::Offered(vec![format!("{}-model", self.id)]),
+                None => ModelCatalog::plain([format!("{}-model", self.id)]),
             }
         }
         fn execute(&self, _: &AiRequest, _: &CancelToken) -> Result<AiResponse, AiError> {

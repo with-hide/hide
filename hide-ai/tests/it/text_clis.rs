@@ -92,6 +92,7 @@ impl Fake {
             model: model.to_owned(),
             cwd: self.dir.clone(),
             search_path: None,
+            run: hide_ai::ItemRun::default(),
         }
     }
 
@@ -241,7 +242,7 @@ fn grok_login_and_models_come_from_what_grok_models_prints() {
     assert_eq!(backend.availability(), Availability::Ready);
     assert_eq!(
         backend.models(),
-        ModelCatalog::Offered(vec!["grok-4.6".to_owned(), "grok-4.5".to_owned()])
+        ModelCatalog::plain(["grok-4.6", "grok-4.5"])
     );
 
     let signed_out =
@@ -371,10 +372,7 @@ fn pi_with_its_own_default_model_is_ready_when_it_lists_models_and_offers_that_l
     assert_eq!(backend.availability(), Availability::Ready);
     assert_eq!(
         backend.models(),
-        ModelCatalog::Offered(vec![
-            "anthropic/claude-x".to_owned(),
-            "openai/gpt-y".to_owned()
-        ])
+        ModelCatalog::plain(["anthropic/claude-x", "openai/gpt-y"])
     );
 
     let none = pi_fake(json!([{"when": ["--list-models"], "stdout": ""}]));
@@ -678,7 +676,7 @@ fn agy_is_ready_from_its_model_list_and_its_usage_is_the_whole_frame() {
     assert_eq!(backend.availability(), Availability::Ready);
     assert_eq!(
         backend.models(),
-        ModelCatalog::Offered(vec!["gemini-3.8-flash-high".to_owned()])
+        ModelCatalog::plain(["gemini-3.8-flash-high"])
     );
     let text = backend.usage_text(&CancelToken::new()).unwrap();
     assert_eq!(

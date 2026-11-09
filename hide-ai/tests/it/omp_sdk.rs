@@ -247,8 +247,11 @@ fn real_sdk_preserves_the_background_provider_boundary() {
     let ModelCatalog::Fixed(models) = backend.models() else {
         panic!("static SDK catalog is labelled fixed");
     };
-    assert!(models.contains(&"openai/ok".into()), "{models:?}");
-    assert!(!models.iter().any(|model| model.contains("image")));
+    assert!(
+        models.contains(&hide_ai::Model::plain("openai/ok")),
+        "{models:?}"
+    );
+    assert!(!models.iter().any(|model| model.id.contains("image")));
     assert!(lines(&record).is_empty(), "discovery sends no inference");
     let answer = backend
         .execute(&request("ok"), &CancelToken::new())

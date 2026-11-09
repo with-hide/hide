@@ -92,6 +92,83 @@ impl Program {
     }
 }
 
+/// How one agent item runs on its machine (PRD agent-profiles-phase2 D-09):
+/// the variables its account and its profile set, given to every child the
+/// backend starts after that child's own base environment, and the program
+/// its profile runs in the agent's place. The default is the agent's own
+/// program with nothing added: its built-in default profile. The node makes
+/// it from its own profile file (`hide_host::profiles::ai_run`), as a start
+/// of the profile in a pane would run, so no backend reads an account's
+/// folder from anywhere else.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ItemRun {
+    /// The account's variables, then the profile's own.
+    pub env: Vec<(String, String)>,
+    /// A wrapper, found on the machine, run with the agent's arguments.
+    pub program: Option<Wrapper>,
+}
+
+/// A profile's own program as its machine starts it: the file, and the
+/// words before the agent's arguments (npm's Windows launcher read as the
+/// program it runs).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Wrapper {
+    pub file: PathBuf,
+    pub leading: Vec<String>,
+}
+
+impl ItemRun {
+    /// The program a child of this item starts: the profile's wrapper, or
+    /// the agent's own `binary` as [`Program::resolve`] finds it. A wrapper
+    /// is run with the `PATH` its machine's account searches, which is where
+    /// a wrapper finds the agent and its interpreter, as in a pane.
+    pub(crate) fn program(&self, binary: &Path, search: Option<&OsStr>) -> Option<Program> {
+        let Some(wrapper) = &self.program else {
+            return Program::resolve(binary, search);
+        };
+        let search = match search {
+            Some(search) => search.to_owned(),
+            None => programs::account_path()?,
+        };
+        Some(Program {
+            path: wrapper.file.clone(),
+            start: programs::Start::Direct {
+                program: wrapper.file.clone(),
+                leading: wrapper.leading.iter().map(OsString::from).collect(),
+            },
+            search: Some(search),
+        })
+    }
+
+    /// The variables a child is given on top of its base environment.
+    pub(crate) fn set(&self) -> Vec<(&str, String)> {
+        self.env
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect()
+    }
+
+    /// The value this item sets for `name`, else this process's own: what a
+    /// child of the item reads for it.
+    pub(crate) fn variable(&self, name: &str) -> Option<OsString> {
+        self.env
+            .iter()
+            .rev()
+            .find(|(key, _)| variable_named(key, name))
+            .map(|(_, value)| OsString::from(value))
+            .or_else(|| hide_platform::host::variable(name))
+    }
+}
+
+/// Windows reads a variable's name regardless of case.
+fn variable_named(key: &str, name: &str) -> bool {
+    if cfg!(windows) {
+        key.eq_ignore_ascii_case(name)
+    } else {
+        key == name
+    }
+}
+
 /// Shared by every backend that starts a user-installed CLI, and by the node
 /// before the core starts one in a pane: how `binary` starts, if it is
 /// anywhere the account's own terminal would find it.
