@@ -139,6 +139,38 @@ fn a_named_accounts_session_belongs_to_that_account() {
     );
 }
 
+/// The node confirms a session twice: once by the engine's native path and
+/// again by the resolved path it returns. On Windows, a long file can keep
+/// its extended path prefix while its shorter account home does not.
+#[test]
+fn a_long_named_account_session_stays_in_its_account_after_resolution() {
+    let root = tempfile::tempdir().unwrap();
+    let home = hide_platform::fs::identity::canonical(root.path())
+        .unwrap()
+        .join("home");
+    let journey = Profile {
+        account: Some(AccountRef::Name("journey".to_owned())),
+        ..Profile::builtin_default("omp")
+    };
+    let accounts = Accounts::new(&home).with_profiles([&journey]);
+    let name = format!("session-{}.jsonl", "x".repeat(220));
+    let native = file(
+        &home
+            .join(".omp/profiles/journey/agent/sessions/--w--")
+            .join(name),
+    );
+    assert!(native.as_os_str().len() > 259);
+
+    let resolved = hide_session::inside_session_root(&accounts, &[Agent::Omp], &native).unwrap();
+    assert_eq!(
+        hide_session::inside_session_root(&accounts, &[Agent::Omp], &resolved),
+        Ok(resolved.clone())
+    );
+    let expected = AccountKey::Name("journey".to_owned());
+    assert_eq!(accounts.account_of(Agent::Omp, &resolved), Some(&expected));
+    assert_eq!(of(&accounts, Agent::Omp, &resolved), Ok(expected));
+}
+
 /// A link below a profile's folder never makes a session of an account the
 /// node did not register readable or listed, nor does `..` in a path; the
 /// default account's own link is followed as before profiles.
