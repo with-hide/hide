@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { CHAPTERS, nextChapter } from "./chapters";
+import { CHAPTERS } from "./chapters";
 import { FIRST_CHAPTER, openPractice, PRACTICE_CHANNEL, practiceAddress, type PracticeMessage } from "./channel";
 
 // How the shell opens the practice window on a chapter (docs/UI_BEHAVIOR.md,
@@ -11,9 +11,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("starts a newcomer on the mission, wherever it stands in the list, and leads on from it to the list's first flow", () => {
-  const mission = CHAPTERS.find((chapter) => chapter.id === FIRST_CHAPTER)!;
-  expect(nextChapter(mission)).toBe(CHAPTERS[0]);
+it("starts a newcomer on the first flow of the list", () => {
+  expect(CHAPTERS[0]!.id).toBe(FIRST_CHAPTER);
 });
 
 it("opens a browser tab on the chapter's address and tells a window already open to play it", async () => {
@@ -21,9 +20,9 @@ it("opens a browser tab on the chapter's address and tells a window already open
   const listener = new BroadcastChannel(PRACTICE_CHANNEL);
   const heard = new Promise<PracticeMessage>((resolve) => { listener.onmessage = (event: MessageEvent<PracticeMessage>) => resolve(event.data); });
   openPractice(FIRST_CHAPTER);
-  expect(await heard).toEqual({ kind: "play", chapter: "mission" });
+  expect(await heard).toEqual({ kind: "play", chapter: "overview" });
   listener.close();
-  expect(open).toHaveBeenCalledWith(practiceAddress("en", "mission"), PRACTICE_CHANNEL);
+  expect(open).toHaveBeenCalledWith(practiceAddress("en", "overview"), PRACTICE_CHANNEL);
   expect(practiceAddress("ko", "overview")).toBe("/?practice=1&lang=ko&chapter=overview");
   expect(practiceAddress("ko")).toBe("/?practice=1&lang=ko");
 });
@@ -34,5 +33,5 @@ it("asks the desktop app for no chapter when none is named, so the window opens 
   openPractice();
   expect(bridge).toHaveBeenCalledWith("en", undefined);
   openPractice(FIRST_CHAPTER);
-  expect(bridge).toHaveBeenLastCalledWith("en", "mission");
+  expect(bridge).toHaveBeenLastCalledWith("en", "overview");
 });

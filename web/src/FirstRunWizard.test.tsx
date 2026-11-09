@@ -114,13 +114,13 @@ it("asks how to start with two ways and Skip for now, and no choice to confirm",
   await unmount();
 });
 
-it("practice first ends the wizard and opens the practice window on the mission flow", async () => {
+it("practice first ends the wizard and opens the practice window on the first flow", async () => {
   const openPractice = vi.fn();
   window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
   const { events, unmount } = await mount(startStep());
   await act(async () => way("practice").click());
   expect(navigation(events)).toEqual([{ from: "project" }]);
-  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "mission");
+  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "overview");
   await unmount();
 });
 

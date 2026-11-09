@@ -4,38 +4,25 @@
 
 const EASE = "cubic-bezier(.2,.8,.2,1)";
 const SHADOW = `0 var(--spacing-lg) var(--spacing-xxxl) color-mix(in srgb, var(--practice-scrim) 50%, transparent)`;
-const ZONES = (["view", "work", "project"] as const)
-  .map((zone) => `.pc-zone.${zone}{border-color:var(--practice-zone-${zone});background:color-mix(in srgb,var(--practice-zone-${zone}) 6%,transparent)}
-.pc-zone.${zone} .pc-tag{background:color-mix(in srgb,var(--practice-zone-${zone}) 55%,var(--practice-keycap))}`)
-  .join("\n");
+/** How long the ring and the card glide from one target to the next. */
+const GLIDE = ".35s";
 
 export const COACH_CSS = `
 .pc-layer{position:fixed;inset:0;z-index:60;pointer-events:none}
-.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 var(--size-tab-indicator) var(--practice-accent),0 0 0 var(--spacing-sm) color-mix(in srgb,var(--practice-accent) 16%,transparent),0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 42%,transparent);
-  transition:left .6s ${EASE},top .6s ${EASE},width .6s ${EASE},height .6s ${EASE},box-shadow .4s}
-.pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1);border-radius:var(--radius-xl);border:var(--size-tab-indicator) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
-.pc-spot.off{box-shadow:0 0 0 0 transparent,0 0 0 0 transparent,0 0 0 100vmax transparent}
-.pc-spot.off::after{display:none}
-@keyframes pc-pulse{0%{opacity:.55;transform:scale(1)}100%{opacity:0;transform:scale(1.03)}}
-.pc-zdim{position:absolute;inset:0;background:color-mix(in srgb,var(--practice-scrim) 32%,transparent);animation:pc-in .4s both}
-.pc-zone{position:absolute;border-radius:var(--radius-xl);border:var(--size-tab-indicator) dashed;animation:pc-zone .5s ${EASE} both}
-${ZONES}
-.pc-tag{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);padding:var(--spacing-md) var(--spacing-lg);border-radius:var(--radius-xl);font-weight:700;font-size:var(--text-headline);white-space:nowrap;box-shadow:${SHADOW};text-align:center;line-height:1.35;color:var(--practice-ink)}
-/* The project zone is the tool rail alone while the lane is closed, narrower than its tag, so the tag ends where the screen does. */
-.pc-zone.project .pc-tag{left:auto;right:0;transform:translate(0,-50%)}
-.pc-tag small{display:block;font-size:var(--text-body);font-weight:500;opacity:.8}
-@keyframes pc-zone{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
+/* The ring is the hole in the dim: its own shadow dims the rest of the screen, so the dim glides with it from one target to the next. */
+.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 var(--size-tab-indicator) var(--practice-accent),0 0 0 var(--spacing-xs) color-mix(in srgb,var(--practice-accent) 16%,transparent),0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);
+  transition:left ${GLIDE} ${EASE},top ${GLIDE} ${EASE},width ${GLIDE} ${EASE},height ${GLIDE} ${EASE},box-shadow .3s ease;animation:pc-in .4s backwards}
+.pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1);border-radius:var(--radius-xl);border:var(--size-hairline) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
+@keyframes pc-pulse{0%{opacity:.5;transform:scale(1)}100%{opacity:0;transform:scale(1.02)}}
 @keyframes pc-in{from{opacity:0}to{opacity:1}}
-.pc-bubble{position:absolute;width:var(--size-practice-bubble);background:var(--practice-card);color:var(--practice-text);border-radius:var(--radius-xl);padding:var(--spacing-lg) var(--spacing-lg) var(--spacing-md) var(--spacing-xl);pointer-events:auto;
-  box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);transition:left .6s ${EASE},top .6s ${EASE};animation:pc-bubble .35s ${EASE} both}
-@keyframes pc-bubble{from{opacity:0;transform:translateY(var(--spacing-sm))}to{opacity:1;transform:none}}
-.pc-bubble::before{content:"";position:absolute;inset:0 auto 0 0;width:var(--spacing-xs);border-radius:var(--radius-xl) 0 0 var(--radius-xl);background:var(--practice-accent)}
-.pc-arrow{position:absolute;width:var(--spacing-lg);height:var(--spacing-lg);background:var(--practice-card);transform:rotate(45deg);box-shadow:calc(var(--size-hairline) * -1) calc(var(--size-hairline) * -1) 0 var(--practice-line)}
+/* While a card's scene change is on screen the card steps aside and comes back once it has settled; the ring's border and glow step aside too, but its dim stays, so the screen never brightens between two cards. */
+.pc-away{opacity:0;pointer-events:none;transition:opacity .15s ease,left 0s,top 0s,width 0s,height 0s !important}
+.pc-spot.pc-away{opacity:1;box-shadow:0 0 0 var(--size-tab-indicator) transparent,0 0 0 var(--spacing-xs) transparent,0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);transition:box-shadow .15s ease,left 0s,top 0s,width 0s,height 0s !important}
+.pc-spot.pc-away::after{opacity:0;animation:none}
 .pc-kick{font-size:var(--text-caption);font-weight:600;letter-spacing:.02em;color:color-mix(in srgb,var(--practice-accent-strong) 60%,var(--practice-ink));display:flex;justify-content:space-between;gap:var(--spacing-sm)}
 .pc-kick span:last-child{flex:none;white-space:nowrap}
-.pc-bubble h3{margin:var(--spacing-sm) 0 var(--spacing-xs);font-size:var(--text-headline);line-height:1.35;font-weight:600}
-.pc-bubble p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
-.pc-via{margin-top:var(--spacing-sm);font-size:var(--text-body);color:var(--practice-mute);display:flex;gap:var(--spacing-sm);align-items:center;flex-wrap:wrap}
+.pc-via{margin-top:var(--spacing-xs);font-size:var(--text-body);color:var(--practice-mute);display:flex;gap:var(--spacing-sm);align-items:center}
+.pc-keys{display:inline-flex;gap:var(--spacing-xxs)}
 .pc-row{display:flex;align-items:center;gap:var(--spacing-sm);margin-top:var(--spacing-md)}
 .pc-dots{display:flex;gap:var(--spacing-xs);margin-right:auto;min-width:0;overflow:hidden}
 .pc-dots i{width:var(--size-tab-status-dot);height:var(--size-tab-status-dot);border-radius:var(--radius-xl);background:var(--practice-line);transition:all .3s}
@@ -44,59 +31,25 @@ ${ZONES}
 .pc-go{font:inherit;font-size:var(--text-subhead);font-weight:600;border:0;border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:var(--practice-accent);color:var(--practice-ink);cursor:pointer;display:flex;gap:var(--spacing-sm);align-items:center;white-space:nowrap;flex:none}
 .pc-back{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);white-space:nowrap;flex:none}
 .pc-back:hover,.pc-exit:hover{color:var(--practice-text)}
-.pc-exit{font:inherit;font-size:var(--text-body);border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:var(--spacing-xs);margin-left:calc(var(--spacing-xs) * -1);white-space:nowrap;flex:none}
 .pc-go.pc-sub{background:color-mix(in srgb,var(--practice-ink) 8%,transparent)}
-.pc-end{position:absolute;inset:0;margin:auto;height:fit-content;width:calc(var(--size-practice-bubble) * 1.2);background:var(--practice-card);color:var(--practice-text);border-radius:var(--radius-xl);padding:var(--spacing-lg) var(--spacing-lg) var(--spacing-md) var(--spacing-xl);pointer-events:auto;
-  box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);animation:pc-bubble .35s ${EASE} both}
-.pc-end::before{content:"";position:absolute;inset:0 auto 0 0;width:var(--spacing-xs);border-radius:var(--radius-xl) 0 0 var(--radius-xl);background:var(--practice-accent)}
-.pc-end-dim{background:color-mix(in srgb,var(--practice-scrim) 42%,transparent)}
-.pc-end-head{display:flex;align-items:center;gap:var(--spacing-md)}
-.pc-end h3{margin:var(--spacing-xxs) 0 0;font-size:var(--text-title);line-height:1.35;font-weight:600}
-.pc-badge{flex:none;display:grid;place-items:center;width:var(--size-icon-button-standard);height:var(--size-icon-button-standard);border-radius:var(--radius-xl);background:var(--practice-accent);color:var(--practice-ink);font-weight:800;animation:pc-pop-in .45s ${EASE} both}
-@keyframes pc-pop-in{0%{transform:scale(.4);opacity:0}100%{transform:scale(1);opacity:1}}
-.pc-learned{list-style:none;margin:var(--spacing-md) 0 0;padding:0}
-.pc-learned li{display:flex;align-items:center;gap:var(--spacing-sm);padding:var(--spacing-xs) 0;font-size:var(--text-subhead);border-top:var(--size-hairline) solid var(--practice-line)}
-.pc-learned li:first-child{border-top:0}
-.pc-ways{display:flex;flex-direction:column;gap:var(--spacing-xs);margin-top:var(--spacing-md)}
-.pc-way{font:inherit;display:flex;align-items:center;gap:var(--spacing-sm);width:100%;text-align:left;border:var(--size-hairline) solid var(--practice-line);border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:transparent;color:var(--practice-text);cursor:pointer;transition:background .2s,border-color .2s}
-.pc-way:hover,.pc-way:focus-visible{background:color-mix(in srgb,var(--practice-accent) 18%,transparent);border-color:var(--practice-accent);outline:none}
-.pc-way>span:first-child{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--spacing-xxs)}
-.pc-way b{font-size:var(--text-subhead);font-weight:600}
-.pc-way small{font-size:var(--text-body);color:var(--practice-mute)}
-.pc-up{margin:var(--spacing-md) 0 0;font-size:var(--text-body);color:var(--practice-mute)}
-.pc-again{margin-right:auto;margin-left:calc(var(--spacing-xs) * -1)}
-.pc-keys{display:inline-flex;gap:var(--spacing-xxs);vertical-align:middle}
 .pc-kc{display:inline-flex;align-items:center;justify-content:center;min-width:var(--size-control-compact);height:var(--size-control-compact);padding:0 var(--spacing-xs);border-radius:var(--radius-sm);font-size:var(--text-body);font-weight:700;background:var(--practice-keycap);color:var(--practice-keycap-ink);box-shadow:0 var(--size-hairline) 0 var(--practice-line);border:var(--size-hairline) solid var(--practice-line)}
 .pc-go .pc-kc{background:color-mix(in srgb,var(--practice-keycap) 55%,transparent);border-color:transparent;box-shadow:none}
-.pc-flash{position:absolute;z-index:1;left:50%;top:40%;transform:translate(-50%,-50%);display:flex;gap:var(--spacing-md);animation:pc-flash .9s ${EASE} both}
-.pc-flash .pc-kc{min-width:var(--size-practice-flash-key);height:var(--size-practice-flash-key);font-size:var(--text-display);border-radius:var(--radius-xl);padding:0 var(--spacing-md);background:var(--practice-card);box-shadow:0 var(--spacing-xs) 0 var(--practice-line),${SHADOW}}
-@keyframes pc-flash{0%{opacity:0;transform:translate(-50%,-50%) scale(.85)}20%{opacity:1;transform:translate(-50%,-50%) scale(1)}75%{opacity:1}100%{opacity:0}}
 .pc-mode{position:absolute;left:50%;top:var(--spacing-xs);transform:translateX(-50%);display:flex;align-items:center;gap:var(--spacing-md);font-size:var(--text-body);font-weight:600;padding:var(--spacing-xxs) var(--spacing-xs);white-space:nowrap;border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto}
 .pc-mode button{font:inherit;font-weight:500;border:0;border-radius:var(--radius-xl);padding:var(--spacing-xxs) var(--spacing-md);background:color-mix(in srgb,var(--practice-accent) 30%,transparent);color:var(--practice-ink);cursor:pointer}
 .pc-mode button.pc-leave{background:var(--practice-accent);font-weight:600}
-.pc-quest{position:absolute;left:var(--spacing-lg);bottom:var(--spacing-lg);width:var(--size-practice-quest);background:var(--practice-card);color:var(--practice-text);border-radius:var(--radius-xl);overflow:hidden;pointer-events:auto;box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);animation:pc-quest .5s ${EASE} both}
-@keyframes pc-quest{from{transform:translateY(var(--spacing-xxl));opacity:0}to{transform:none;opacity:1}}
-.pc-qh{padding:var(--spacing-md) var(--spacing-md) var(--spacing-sm);background:color-mix(in srgb,var(--practice-accent) 38%,var(--practice-card));color:var(--practice-ink)}
-.pc-qh small{display:block;font-size:var(--text-caption);font-weight:700;opacity:.75}
-.pc-qh b{font-size:var(--text-title)}
-.pc-bar{height:var(--spacing-xs);border-radius:var(--radius-xl);background:color-mix(in srgb,var(--practice-ink) 12%,transparent);margin-top:var(--spacing-sm);overflow:hidden}
-.pc-bar i{display:block;height:100%;background:color-mix(in srgb,var(--practice-accent-strong) 80%,var(--practice-ink));border-radius:var(--radius-xl);transition:width .5s ${EASE}}
-.pc-quest ol{list-style:none;margin:0;padding:var(--spacing-sm)}
-.pc-quest li{display:flex;align-items:center;gap:var(--spacing-sm);padding:var(--spacing-xs) var(--spacing-sm);border-radius:var(--radius-md);font-size:var(--text-subhead);color:var(--practice-mute);transition:background .3s,color .3s}
-.pc-quest li.cur{background:color-mix(in srgb,var(--practice-accent) 18%,transparent);color:var(--practice-text);font-weight:600}
-.pc-quest li.done{color:var(--practice-text)}
-.pc-quest:not(:hover) li:not(.cur){display:none}
-.pc-ck{width:var(--size-checkbox);height:var(--size-checkbox);border-radius:var(--radius-sm);border:var(--size-hairline) solid var(--practice-line);display:grid;place-items:center;flex:none;transition:all .3s ${EASE}}
-.pc-quest li.done .pc-ck{background:var(--practice-accent);border-color:var(--practice-accent)}
-.pc-quest li.done .pc-ck::after{content:"";width:var(--spacing-xs);height:var(--spacing-sm);border:solid var(--practice-ink);border-width:0 var(--size-tab-indicator) var(--size-tab-indicator) 0;transform:rotate(45deg);animation:pc-pop .35s ${EASE}}
-@keyframes pc-pop{0%{transform:rotate(45deg) scale(0)}100%{transform:rotate(45deg) scale(1)}}
-.pc-k{margin-left:auto}
-.pc-qf{padding:0 var(--spacing-md) var(--spacing-md);font-size:var(--text-body);color:var(--practice-mute);display:flex;justify-content:space-between}
-.pc-qf button{font:inherit;border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:0}
-.pc-qf button:hover{color:var(--practice-text)}
-.pc-hand{position:absolute;z-index:1;filter:drop-shadow(0 var(--spacing-xxs) var(--spacing-xs) color-mix(in srgb,var(--practice-scrim) 50%,transparent))}
-.pc-hand path{fill:var(--practice-card);stroke:var(--practice-keycap-ink);stroke-width:1.2}
-.pc-example{position:absolute;z-index:1;transform:translate(var(--spacing-xs),-50%);padding:0 var(--spacing-xs);border-radius:var(--radius-xl);border:var(--size-hairline) solid var(--practice-accent-strong);background:color-mix(in srgb,var(--practice-accent) 22%,var(--practice-card));color:var(--practice-ink);font-size:var(--text-caption);font-weight:600;line-height:1.5;white-space:nowrap}
+
+.pc-card{position:absolute;z-index:61;box-sizing:border-box;width:var(--size-practice-bubble);max-width:calc(100vw - var(--spacing-xxl));padding:var(--spacing-lg);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto;transition:left ${GLIDE} ${EASE},top ${GLIDE} ${EASE},opacity .3s ease}
+.pc-card:lang(ko){word-break:keep-all}
+.pc-card-text{animation:pc-card .4s ${EASE} both}
+@keyframes pc-card{from{opacity:0;transform:translateY(var(--spacing-sm))}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.pc-spot,.pc-spot::after,.pc-card,.pc-card-text,.pc-dots i{animation:none !important;transition:none !important}}
+.pc-card h3{margin:var(--spacing-xxs) 0;font-size:var(--text-headline);line-height:1.35;font-weight:600}
+.pc-body{display:flex;flex-direction:column;gap:var(--spacing-xs);margin-top:var(--spacing-xs)}
+.pc-card p{margin:0;font-size:var(--text-subhead);line-height:1.6;color:var(--practice-mute);text-wrap:pretty}
+.pc-card p b{font-weight:700;color:var(--practice-text)}
+.pc-card p.pc-item{position:relative;padding-left:var(--spacing-lg)}
+.pc-card p.pc-item::before{content:"";position:absolute;left:var(--spacing-xs);top:.7em;width:var(--spacing-xs);height:var(--spacing-xs);border-radius:var(--radius-xl);background:var(--practice-accent)}
+.pc-card p.pc-quote{padding:var(--spacing-xs) var(--spacing-md);border-radius:var(--radius-md);border-left:var(--spacing-xxs) solid var(--practice-accent);background:color-mix(in srgb,var(--practice-accent) 14%,transparent);color:var(--practice-text);font-weight:600}
 `;
 
 // The chapter list: cards on the shell's own background, chosen in the soft
@@ -127,6 +80,7 @@ export const HUB_CSS = `
 .ph-keys{margin:var(--spacing-lg) 0 0;font-size:var(--text-body);color:var(--muted-foreground)}
 .ph-note{margin:var(--spacing-xs) 0 0;font-size:var(--text-body);color:var(--practice-accent-strong)}
 .ph-detail.ph-detail{width:min(var(--size-practice-hub) * .75,100% - var(--spacing-xxl))}
+.ph-detail.ph-guide{width:min(var(--size-practice-hub),100% - var(--spacing-xxl))}
 .ph-detail .pv{flex:none}
 .ph-body{display:flex;flex-direction:column;gap:var(--spacing-xxs);padding:var(--spacing-lg) var(--spacing-lg) 0;overflow:auto}
 .ph-body small{font-size:var(--text-caption);color:var(--muted-foreground)}
@@ -135,5 +89,12 @@ export const HUB_CSS = `
 .ph-learn-head{margin:var(--spacing-md) 0 var(--spacing-xxs);font-size:var(--text-caption);font-weight:600;color:var(--muted-foreground)}
 .ph-learn{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--spacing-xxs)}
 .ph-learn li{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-sm);padding:var(--spacing-xs) var(--spacing-sm);border-radius:var(--radius-md);background:var(--secondary);font-size:var(--text-body)}
+.pf{list-style:none;margin:0;padding:var(--spacing-lg) var(--spacing-lg) 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(calc(var(--size-practice-hub) / 5),1fr));gap:var(--spacing-md)}
+.pf li{display:flex;flex-direction:column;gap:var(--spacing-xs);opacity:var(--opacity-dimmed);transition:opacity .3s}
+.pf li.on{opacity:1}
+.pf .pv{border-radius:var(--radius-md);box-shadow:inset 0 0 0 var(--size-hairline) var(--border)}
+.pf li.on .pv{box-shadow:inset 0 0 0 var(--size-hairline) var(--practice-accent),0 0 0 var(--spacing-xxs) color-mix(in srgb,var(--practice-accent) 22%,transparent)}
+.pf li>span{display:flex;gap:var(--spacing-xs);font-size:var(--text-body);line-height:1.4;color:var(--foreground)}
+.pf li>span>b{flex:none;display:grid;place-items:center;width:var(--spacing-lg);height:var(--spacing-lg);border-radius:var(--radius-xl);font-size:var(--text-micro);background:var(--practice-accent);color:var(--practice-ink)}
 .ph-foot.ph-foot{padding:var(--spacing-lg)}
 `;

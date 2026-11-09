@@ -4,7 +4,7 @@
 // or a click changes the screen the way the core would and touches nothing
 // outside the page.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
@@ -13,22 +13,19 @@ import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
-import { useShellStore, type DirectoryList, type Documents } from "../store";
+import { useShellStore } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
 import { MissionScreen } from "../MissionScreen";
 import { WorkspaceScreen } from "../WorkspaceScreen";
-import type { PracticeChapter } from "./chapter";
+import type { PracticeChapter, PracticeScene } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
 import { holdPageClipboard, practiceClipboard } from "./clipboard";
 import { holdPageOutside } from "./outside";
 import type { CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
-
-const NO_DOCUMENTS: Documents = {};
-const NO_LISTINGS: Record<string, DirectoryList> = {};
 
 /** Home, then erase the screen and its scrollback: a screen the world changed is drawn from the top. */
 const CLEAR = "\x1b[H\x1b[2J\x1b[3J";
@@ -38,22 +35,15 @@ export type OperatorChoices = Pick<UiState, "shortcut_bindings" | "browser_short
 
 type Props = {
   chapter: PracticeChapter;
-  next: PracticeChapter | null;
-  /** The step the learner left the chapter at; the coach plays the steps before it again on its own. */
-  resume: number;
   operator: OperatorChoices;
   onStep: (step: number, finished: boolean) => void;
-  /** Starts `chapter` over, the coach playing its steps before `resume` again on its own. */
-  onStart: (chapter: PracticeChapter, resume: number) => void;
   onHub: () => void;
   /** Leaves the practice for the real Hide. */
   onLeave: () => void;
 };
 
-export function PracticePlayer({ chapter, next, resume, operator, onStep, onStart, onHub, onLeave }: Props) {
+export function PracticePlayer({ chapter, operator, onStep, onHub, onLeave }: Props) {
   const [model, setModel] = useState<unknown>(() => chapter.world.initial());
-  // How many events the world has answered: the signal a step that takes several presses moves on.
-  const [moves, setMoves] = useState(0);
   // The sidebar's 미션 row shows the mission screen in the Workspace's place, as in the shell (PRD mission-screen B2).
   const missionsShown = useUiStore((s) => s.screen?.kind === "missions");
   const live = useRef({ world: chapter.world, model });
@@ -65,7 +55,6 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       if (after) {
         live.current = { ...live.current, model: after };
         setModel(after);
-        setMoves((count) => count + 1);
       }
       return true;
     };
@@ -74,31 +63,24 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
     return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
-  // The world's own next beat, an agent finishing a turn, plays at its time; any change to the model before then asks again.
-  useEffect(() => {
-    const beat = chapter.world.later?.(model);
-    if (!beat) return undefined;
-    const timer = window.setTimeout(() => send(beat.event), Math.max(0, beat.at - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [chapter, model, send]);
-
+  // A card sets its scene on the world (the list, the lane, the keyboard's pane); a world with no scene keeps its window.
+  const onScene = useCallback((scene: PracticeScene) => {
+    const after = live.current.world.scene?.(live.current.model, scene);
+    if (!after) return;
+    live.current = { ...live.current, model: after };
+    setModel(after);
+  }, []);
   useEffect(() => installKeyboard(actions), [actions]);
   useEffect(() => holdPageClipboard(clipboard), [clipboard]);
   // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
   useEffect(() => holdPageOutside(send), [send]);
 
   useLayoutEffect(() => {
-    const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
+    const { rest, agents, focused, usage, extra } = chapter.world.snapshot(model, Date.now());
     // The practice screen is the practice: its sidebar never invites to practice.
     const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
-    // A frame the world does not send is empty, so one chapter's files or records never show in the next.
     // A world with no missions holds an empty book, so the sidebar's 미션 row opens the quiet empty table, as in Hide.
-    useShellStore.setState({
-      rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
-      fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
-      sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
-      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
-    });
+    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null, ...extra });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
@@ -138,7 +120,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
 
   return (
     <TooltipProvider>
-      <div className="flex h-full min-w-0 flex-col bg-background text-foreground" data-practice-chapter={chapter.id} data-practice-moves={moves}>
+      <div className="flex h-full min-w-0 flex-col bg-background text-foreground" data-practice-chapter={chapter.id}>
         <TitleRow actions={actions} />
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar actions={actions} />
@@ -148,7 +130,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <Palette actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
-        <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next, 0)} onRestart={() => onStart(chapter, 0)} onRewind={(step) => onStart(chapter, step)} onHub={onHub} onLeave={onLeave} />
+        <PracticeCoach chapter={chapter} onStep={onStep} onHub={onHub} onLeave={onLeave} onScene={onScene} />
       </div>
     </TooltipProvider>
   );

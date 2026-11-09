@@ -12,11 +12,13 @@ import { applyTerminalTheme } from "../terminals";
 import { PALETTE_HIDE_CLASS, readColorTheme, readTheme, resolveTheme } from "../theme";
 import { useUiStore } from "../ui";
 import type { PracticeChapter } from "./chapter";
-import { CHAPTERS, nextChapter } from "./chapters";
+import { CHAPTERS } from "./chapters";
 import { PRACTICE_CHANNEL, type ChapterProgress, type PracticeMessage, type PracticeProgress, type ShellAnswer } from "./channel";
 import { holdPageClipboard } from "./clipboard";
 import { HUB_CSS } from "./coachStyle";
 import { keyParts } from "./PracticeCoach";
+import { GUIDES, type PracticeGuide } from "./guides";
+import { PracticeFrames } from "./PracticeFrames";
 import { PracticePreview, PREVIEW_CSS } from "./PracticePreview";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../components/ui/dialog";
@@ -28,20 +30,19 @@ import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { PracticePlayer, type OperatorChoices } from "./PracticePlayer";
 import { composingKey } from "../keys";
 
-export type ChapterStatus = "new" | "paused" | "done" | "changed";
+export type ChapterStatus = "new" | "done" | "changed";
 
 /** Where a learner stands in `chapter`: a progress kept for older steps reads as changed. */
 export function chapterStatus(chapter: PracticeChapter, progress: ChapterProgress | undefined): ChapterStatus {
   if (!progress) return "new";
   if (progress.version !== chapter.version) return "changed";
-  if (progress.finished) return "done";
-  return progress.step > 0 ? "paused" : "new";
+  return progress.finished ? "done" : "new";
 }
 
 /** How long the page waits for a shell to answer before it says progress is not being kept. */
 const ANSWER_WAIT_MS = 1500;
 
-type Playing = { chapter: PracticeChapter; resume: number; run: number };
+type Playing = { chapter: PracticeChapter; run: number };
 
 /**
  * The shell's page state as the page loaded it. Its stores and its recent
@@ -76,17 +77,17 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
   const [unanswered, setUnanswered] = useState(false);
   const [playing, setPlaying] = useState<Playing | null>(() => {
     const chapter = chapterById(opening);
-    return chapter ? { chapter, resume: 0, run: 1 } : null;
+    return chapter ? { chapter, run: 1 } : null;
   });
   const channel = useRef<BroadcastChannel | null>(null);
   // A chapter keeps the page's copy and paste on its own clipboard; the chapter list holds them with none.
   const listing = playing === null;
   useEffect(() => (listing ? holdPageClipboard(null) : undefined), [listing]);
 
-  // Every start goes through here: a chapter from the list, from its start again, the next one, or one the shell asks for.
-  const start = useCallback((chapter: PracticeChapter, resume: number) => {
+  // Every start goes through here: the chapter from the list, or the one the shell asks for.
+  const start = useCallback((chapter: PracticeChapter) => {
     freshShell();
-    setPlaying((before) => ({ chapter, resume, run: (before?.run ?? 0) + 1 }));
+    setPlaying((before) => ({ chapter, run: (before?.run ?? 0) + 1 }));
   }, []);
 
   useEffect(() => {
@@ -97,7 +98,7 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
       else if (event.data.kind === "play") {
         // The shell brings this window forward and asks for a chapter from the start (the sidebar's invitation).
         const chapter = chapterById(event.data.chapter);
-        if (chapter) start(chapter, 0);
+        if (chapter) start(chapter);
       }
     };
     opened.postMessage({ kind: "hello" } satisfies PracticeMessage);
@@ -141,14 +142,17 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
     channel.current?.postMessage({ kind: "progress", chapter: chapter.id, version: chapter.version, step, finished: finished || kept } satisfies PracticeMessage);
   }, [chapter, progress]);
 
-  if (playing) {
-    const next = nextChapter(playing.chapter);
-    return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={start} onHub={() => setPlaying(null)} onLeave={leave} />;
-  }
+  if (playing) return <PracticePlayer key={playing.run} chapter={playing.chapter} operator={operator} onStep={onStep} onHub={() => setPlaying(null)} onLeave={leave} />;
   return <PracticeHub progress={progress} operator={operator} unsaved={unanswered && !answer} onStart={start} onLeave={leave} />;
 }
 
-type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void; onLeave: () => void };
+type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; /** The id of the card whose detail the list opens on, for a capture. */ opened?: string; onStart: (chapter: PracticeChapter) => void; onLeave: () => void };
+
+/** A card on the list: the first flow, which plays on a practice screen, or a guide, which is looked at. */
+type HubRow = { chapter: PracticeChapter; status: ChapterStatus } | { guide: PracticeGuide };
+const rowId = (row: HubRow) => ("chapter" in row ? row.chapter.id : row.guide.id);
+const rowNumber = (row: HubRow) => ("chapter" in row ? row.chapter.number : row.guide.number);
+const rowPreview = (row: HubRow) => ("chapter" in row ? row.chapter.preview : row.guide.preview);
 
 /** `id`'s chord on this host with the operator's bindings as keycap parts, or null where the host has none. */
 function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
@@ -158,21 +162,21 @@ function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
 }
 
 /**
- * The chapter list: a card per chapter with the move it teaches playing on
- * it, and pressing a card opens what the chapter has the learner do before it
- * starts. The cards hold still while that is open.
+ * The flow list: a card per flow with the move it shows playing on it, and
+ * pressing a card opens its detail. The first flow starts a practice there;
+ * the others are pictures to look things up in. The cards hold still while a
+ * detail is open.
  */
-export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: HubProps) {
+export function PracticeHub({ progress, operator, unsaved, opened: openedId, onStart, onLeave }: HubProps) {
   const { t } = useInterfaceTranslation();
-  const rows = CHAPTERS.map((chapter) => ({ chapter, status: chapterStatus(chapter, progress[chapter.id]), step: progress[chapter.id]?.step ?? 0 }));
-  const firstOpen = rows.findIndex((row) => row.status !== "done");
+  const rows: HubRow[] = [...CHAPTERS.map((chapter) => ({ chapter, status: chapterStatus(chapter, progress[chapter.id]) })), ...GUIDES.map((guide) => ({ guide }))].sort((a, b) => rowNumber(a) - rowNumber(b));
+  const firstOpen = rows.findIndex((row) => "chapter" in row && row.status !== "done");
   const [chosen, setChosen] = useState(firstOpen === -1 ? 0 : firstOpen);
-  const [opened, setOpened] = useState<number | null>(null);
+  const [opened, setOpened] = useState<number | null>(() => {
+    const at = rows.findIndex((row) => rowId(row) === openedId);
+    return at === -1 ? null : at;
+  });
   const cards = useRef<(HTMLButtonElement | null)[]>([]);
-  const play = useCallback((at: number, fromStart: boolean) => {
-    const row = rows[at]!;
-    onStart(row.chapter, !fromStart && row.status === "paused" ? row.step : 0);
-  }, [onStart, rows]);
   const choose = useCallback((at: number) => {
     setChosen(at);
     cards.current[at]?.focus();
@@ -208,23 +212,23 @@ export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: H
         <p className="ph-again">{t("practice.hubAgain")}</p>
         <ol className="ph-grid">
           {rows.map((row, at) => {
-            const id = row.chapter.id;
+            const id = rowId(row);
             return (
               <li key={id} className="ph-cell" style={{ animationDelay: `${at * 60}ms` }}>
                 <RowButton
                   ref={(node) => { cards.current[at] = node; }}
                   className={`ph-card${at === chosen ? " on" : ""}`}
                   data-practice-hub-chapter={id}
-                  data-status={row.status}
+                  data-status={"chapter" in row ? row.status : undefined}
                   onMouseEnter={() => setChosen(at)}
                   onFocus={() => setChosen(at)}
                   onClick={() => setOpened(at)}
                 >
-                  <PracticePreview kind={row.chapter.preview} playing={opened === null} />
+                  <PracticePreview kind={rowPreview(row)} playing={opened === null} />
                   <span className="ph-meta">
                     <span className="ph-top">
-                      <small>{t("practice.chapter", { number: row.chapter.number })}</small>
-                      <StatusChip status={row.status} step={row.step} total={row.chapter.steps.length} />
+                      <small>{t("practice.chapter", { number: rowNumber(row) })}</small>
+                      {"chapter" in row ? <StatusChip status={row.status} /> : null}
                     </span>
                     <b>{t(`practice.${id}.title` as never)}</b>
                     <span className="ph-sum">{t(`practice.${id}.summary` as never)}</span>
@@ -238,24 +242,22 @@ export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: H
         {unsaved ? <p className="ph-note" data-practice-unsaved>{t("practice.hubUnsaved")}</p> : null}
       </main>
       <Dialog open={open !== null} onOpenChange={(next) => { if (!next) setOpened(null); }}>
-        {open ? <ChapterDetail row={open} operator={operator} onPlay={(fromStart) => play(opened!, fromStart)} returnTo={() => cards.current[opened!] ?? null} /> : null}
+        {open && "chapter" in open ? <ChapterDetail row={open} onPlay={() => onStart(open.chapter)} returnTo={() => cards.current[opened!] ?? null} /> : null}
+        {open && "guide" in open ? <GuideDetail guide={open.guide} operator={operator} returnTo={() => cards.current[opened!] ?? null} /> : null}
       </Dialog>
     </div>
   );
 }
 
-function StatusChip({ status, step, total }: { status: ChapterStatus; step: number; total: number }) {
+function StatusChip({ status }: { status: ChapterStatus }) {
   const { t } = useInterfaceTranslation();
-  return <span className={`ph-chip ${status}`}>{status === "paused" ? t("practice.status.paused", { index: step + 1, total }) : t(`practice.status.${status}`)}</span>;
+  return <span className={`ph-chip ${status}`}>{t(`practice.status.${status}`)}</span>;
 }
 
-type HubRow = { chapter: PracticeChapter; status: ChapterStatus; step: number };
-
-/** What a chapter has the learner do, with the keys this host presses for each, and the way to start it. */
-function ChapterDetail({ row, operator, onPlay, returnTo }: { row: HubRow; operator: OperatorChoices; onPlay: (fromStart: boolean) => void; returnTo: () => HTMLElement | null }) {
+/** The first flow: what it shows, and the way to start it. */
+function ChapterDetail({ row, onPlay, returnTo }: { row: { chapter: PracticeChapter; status: ChapterStatus }; onPlay: () => void; returnTo: () => HTMLElement | null }) {
   const { t } = useInterfaceTranslation();
   const { chapter, status } = row;
-  const tasks = chapter.quest ? chapter.steps.filter((step) => step.quest) : [];
   const go = useRef<HTMLButtonElement>(null);
   return (
     <DialogContent
@@ -270,29 +272,44 @@ function ChapterDetail({ row, operator, onPlay, returnTo }: { row: HubRow; opera
         <small>{t("practice.chapter", { number: chapter.number })} · {t("practice.steps", { count: chapter.steps.length })}</small>
         <DialogTitle className="ph-title">{t(`practice.${chapter.id}.title` as never)}</DialogTitle>
         <DialogDescription className="ph-desc">{t(`practice.${chapter.id}.summary` as never)}</DialogDescription>
-        {tasks.length ? (
-          <>
-            <p className="ph-learn-head">{t("practice.learn")}</p>
-            <ol className="ph-learn">
-              {tasks.map((step) => {
-                const keys = step.command ? chordParts(step.command, operator) : null;
-                return (
-                  <li key={step.id}>
-                    <span>{t(`practice.${chapter.id}.${step.id}.quest` as never)}</span>
-                    {keys ? <KbdGroup>{keys.map((part, at) => <Kbd key={at}>{part}</Kbd>)}</KbdGroup> : null}
-                  </li>
-                );
-              })}
-            </ol>
-          </>
-        ) : null}
       </div>
       <DialogFooter className="ph-foot">
-        {status === "paused" ? <Button variant="text" onClick={() => onPlay(true)} data-practice-from-start>{t("practice.fromStart")}</Button> : null}
-        <Button ref={go} variant="practice" onClick={() => onPlay(false)} data-practice-play>
-          {status === "paused" ? t("practice.continue") : status === "done" ? t("practice.replay") : t("practice.start")}
-        </Button>
+        <Button ref={go} variant="practice" onClick={onPlay} data-practice-play>{status === "done" ? t("practice.replay") : t("practice.start")}</Button>
       </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/** A guide: its moves drawn one after another, one line of what to know, and the chords it uses. */
+function GuideDetail({ guide, operator, returnTo }: { guide: PracticeGuide; operator: OperatorChoices; returnTo: () => HTMLElement | null }) {
+  const { t } = useInterfaceTranslation();
+  const chords = guide.chords.flatMap((id) => {
+    const keys = chordParts(id, operator);
+    return keys ? [{ id, keys }] : [];
+  });
+  return (
+    <DialogContent
+      className="ph-detail ph-guide"
+      showCloseButton
+      returnFocusTo={returnTo}
+      data-practice-detail={guide.id}
+    >
+      <PracticeFrames guide={guide} />
+      <div className="ph-body">
+        <small>{t("practice.chapter", { number: guide.number })}</small>
+        <DialogTitle className="ph-title">{t(`practice.${guide.id}.title` as never)}</DialogTitle>
+        <DialogDescription className="ph-desc">{t(`practice.${guide.id}.line` as never)}</DialogDescription>
+        {chords.length ? (
+          <ul className="ph-learn" data-practice-chords>
+            {chords.map(({ id, keys }) => (
+              <li key={id}>
+                <span>{t(`commands.${id}` as never)}</span>
+                <KbdGroup>{keys.map((part, at) => <Kbd key={at}>{part}</Kbd>)}</KbdGroup>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
     </DialogContent>
   );
 }

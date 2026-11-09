@@ -372,7 +372,7 @@ mod tests {
         release.send(()).unwrap();
         let ended = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         worker.client.capture(Event::Practice {
-            chapter: PracticeChapter::Mission,
+            chapter: PracticeChapter::Overview,
             stage: PracticeStage::Finished,
         });
         release.send(()).unwrap();
@@ -410,7 +410,7 @@ mod tests {
         waiting["outcome"] = "merge_wait".into();
         assert_eq!(ended["properties"], waiting);
         let mut chapter = common.clone();
-        chapter["chapter"] = "mission".into();
+        chapter["chapter"] = "overview".into();
         chapter["stage"] = "finished".into();
         assert_eq!(practice["properties"], chapter);
         let mut paired = common.clone();

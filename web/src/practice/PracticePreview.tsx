@@ -1,8 +1,8 @@
-// A chapter's card picture on the practice list: a small drawing of the shell
+// A flow's card picture on the practice list: a small drawing of the shell
 // (the sidebar, a terminal, the lane) that plays the one move the chapter
 // teaches, over and over. It draws shapes only, never a name, a number or an
 // agent's words, so nothing on it can be taken for the operator's own work.
-// A chapter names its picture (`preview` in `chapter.ts`); a new kind of move
+// A flow names its picture (`preview` in `chapter.ts`, `guides.ts`); a new kind of move
 // is added here, with its drawing and its loop.
 
 import type { ReactElement } from "react";
@@ -102,27 +102,77 @@ const DRAWINGS: Record<PracticePreviewKind, () => ReactElement> = {
       <i className="pv-hit h2" />
     </>
   ),
-  // The lane coming in beside a terminal with the project's week in bars.
-  lane: () => (
+  // The overview over the screen: its tabs lit one after another above the rows it holds.
+  overview: () => (
     <>
       <Side />
-      <div className="pv-main pv-with-lane">
-        <div className="pv-pane pv-full"><Line width={60} /><Line width={40} /></div>
-      </div>
-      <div className="pv-lane pv-lane-in">
-        <Row width={60} />
-        <div className="pv-bars">{[40, 70, 30, 90, 55, 75, 60].map((height, at) => <i key={at} style={{ height: `${height}%`, animationDelay: `${at * 0.06}s` }} />)}</div>
+      <div className="pv-main"><div className="pv-pane pv-full pv-under" /></div>
+      <div className="pv-modal">
+        <div className="pv-tabs">{[0, 1, 2, 3, 4].map((at) => <i key={at} className="pv-tab" style={{ animationDelay: `${at * 0.9}s` }} />)}</div>
+        <Row width={82} mark="ask" />
+        <Row width={66} mark="work" />
+        <Row width={74} mark="done" />
       </div>
     </>
   ),
-  // A plan's steps ticked one by one.
-  checklist: () => (
+  // A project, its checkouts one step in, and the agents of one of them unfolding under it.
+  tree: () => (
     <>
-      <Side />
-      <div className="pv-main">
-        <div className="pv-pane pv-full pv-list">
-          {[70, 55, 80, 45].map((width, at) => <span key={at} className="pv-item"><b className="pv-box" style={{ animationDelay: `${0.6 + at * 0.8}s` }} /><Line width={width} /></span>)}
+      <div className="pv-side pv-wide">
+        <i className="pv-head work" />
+        <Row width={70} />
+        <Row width={58} />
+        <div className="pv-set-in">
+          <Row width={46} mark="work" />
+          <Row width={40} mark="ask" />
         </div>
+        <Row width={64} />
+      </div>
+      <div className="pv-main pv-narrow">
+        <div className="pv-pane pv-full"><Line width={60} /><Line width={40} /></div>
+      </div>
+    </>
+  ),
+  // A row whose ring is whole, the agent works, above one whose ring is dashed, it waits, with its second line under it.
+  waits: () => (
+    <>
+      <div className="pv-side pv-wide">
+        <i className="pv-head work" />
+        <div className="pv-wr pv-glow"><b className="pv-ringmark" /><span><Line width={70} /></span></div>
+        <div className="pv-wr pv-glow late"><b className="pv-ringmark dash" /><span><Line width={62} /><Line width={36} /></span></div>
+      </div>
+      <div className="pv-main pv-narrow">
+        <div className="pv-pane pv-full"><Line width={60} /><Line width={40} /></div>
+      </div>
+    </>
+  ),
+  // A row drawn with the moon until it is opened, then waking to its own mark.
+  asleep: () => (
+    <>
+      <div className="pv-side pv-wide">
+        <i className="pv-head done" />
+        <div className="pv-wr">
+          <span className="pv-marks"><b className="pv-moon pv-from" /><b className="pv-ringmark pv-to" /></span>
+          <span><Line width={66} /></span>
+        </div>
+        <Row width={60} mark="done" />
+      </div>
+      <div className="pv-main pv-narrow">
+        <div className="pv-pane pv-full pv-under"><Line width={50} /></div>
+      </div>
+    </>
+  ),
+  // The device rail's second tile picked, and the sidebar and screen answering with that computer's own.
+  devices: () => (
+    <>
+      <div className="pv-rail"><i className="pv-tile" /><i className="pv-tile" /><i className="pv-pick" /></div>
+      <div className="pv-side pv-railed">
+        <div className="pv-set one"><Row width={80} mark="work" /><Row width={60} mark="work" /></div>
+        <div className="pv-set two"><Row width={70} mark="ask" /><Row width={84} mark="work" /><Row width={56} mark="work" /></div>
+      </div>
+      <div className="pv-main pv-railed">
+        <i className="pv-band" />
+        <div className="pv-pane pv-full pv-below"><Line width={55} /><Line width={35} /></div>
       </div>
     </>
   ),
@@ -213,15 +263,36 @@ export const PREVIEW_CSS = `
 @keyframes pv-hit{0%,36%{opacity:0}44%,90%{opacity:1}100%{opacity:0}}
 @keyframes pv-hit-on{0%,36%{opacity:0}44%{opacity:1;background:var(--popover)}54%,90%{opacity:1;background:var(--practice-accent)}100%{opacity:0}}
 
-.pv-lane-in{animation-name:pv-lane}
-@keyframes pv-lane{0%,14%{transform:translateX(100%)}28%,86%{transform:none}96%,100%{transform:translateX(100%)}}
-.pv-bars{display:flex;align-items:flex-end;gap:var(--spacing-xxs);height:45%;margin-top:var(--spacing-sm)}
-.pv-bars i{flex:1;border-radius:var(--radius-xs) var(--radius-xs) 0 0;background:var(--practice-accent-strong);transform-origin:bottom;animation-name:pv-bar}
-@keyframes pv-bar{0%,28%{transform:scaleY(0)}40%,86%{transform:scaleY(1)}96%,100%{transform:scaleY(0)}}
+.pv-set-in{margin-left:var(--spacing-md);margin-bottom:var(--spacing-xs);animation-name:pv-to;opacity:0}
+.pv-wr{display:flex;align-items:flex-start;gap:var(--spacing-xs);margin-bottom:var(--spacing-sm);padding:var(--spacing-xxs);border-radius:var(--radius-xs)}
+.pv-wr>span{flex:1;min-width:0}
+.pv-ringmark{flex:none;width:var(--spacing-md);height:var(--spacing-md);border-radius:50%;border:var(--size-tab-indicator) solid var(--practice-zone-view)}
+.pv-ringmark.dash{border-style:dashed}
+.pv-marks{position:relative;flex:none;width:var(--spacing-md);height:var(--spacing-md)}
+.pv-marks b{position:absolute;inset:0}
+.pv-moon{border-radius:50%;box-shadow:inset calc(var(--spacing-xxs) * -1) 0 0 0 var(--muted-foreground)}
+.pv-marks .pv-from{animation-name:pv-from}
+.pv-marks .pv-to{opacity:0;animation-name:pv-to}
+.pv-glow{animation-name:pv-glow}
+.pv-glow.late{animation-delay:3s}
+@keyframes pv-glow{0%,40%,100%{background:transparent}10%,30%{background:color-mix(in srgb,var(--practice-accent) 22%,transparent)}}
+.pv-modal{position:absolute;inset:12% 12%;padding:var(--spacing-sm);border-radius:var(--radius-sm);background:var(--popover);box-shadow:0 0 0 var(--size-hairline) var(--border),0 var(--spacing-xs) var(--spacing-md) color-mix(in srgb,var(--practice-scrim) 35%,transparent);animation-name:pv-modal}
+@keyframes pv-modal{0%,8%{opacity:0;transform:scale(.96)}18%,90%{opacity:1;transform:none}100%{opacity:0}}
+.pv-tabs{display:flex;gap:var(--spacing-xs);margin-bottom:var(--spacing-sm)}
+.pv-tab{width:16%;height:var(--spacing-xxs);border-radius:var(--radius-xs);background:color-mix(in srgb,var(--foreground) 14%,transparent);animation-name:pv-tab}
+@keyframes pv-tab{0%,6%,24%,100%{background:color-mix(in srgb,var(--foreground) 14%,transparent)}12%,18%{background:var(--practice-accent)}}
 
-.pv-list{padding:var(--spacing-sm)}
-.pv-item{display:flex;align-items:center;gap:var(--spacing-xs);margin-bottom:var(--spacing-sm)}
-.pv-item .pv-ln{flex:1;margin:0}
-.pv-box{flex:none;width:var(--spacing-sm);aspect-ratio:1;border-radius:var(--radius-xs);box-shadow:inset 0 0 0 var(--size-hairline) color-mix(in srgb,var(--foreground) 14%,transparent);animation-name:pv-tick}
-@keyframes pv-tick{0%{background:transparent}6%,72%{background:var(--practice-zone-work);box-shadow:none}82%,100%{background:transparent}}
+.pv-rail{position:absolute;inset:0 auto 0 0;width:10%;padding:var(--spacing-sm) var(--spacing-xxs);border-right:var(--size-hairline) solid var(--border);background:var(--sidebar)}
+.pv-tile{width:100%;aspect-ratio:1;border-radius:var(--radius-xs);background:color-mix(in srgb,var(--foreground) 14%,transparent);margin-bottom:var(--spacing-xs)}
+.pv-pick{position:absolute;left:var(--spacing-xxs);right:var(--spacing-xxs);top:var(--spacing-sm);aspect-ratio:1;border-radius:var(--radius-xs);box-shadow:0 0 0 var(--size-hairline) var(--practice-accent),0 0 0 var(--spacing-xxs) color-mix(in srgb,var(--practice-accent) 35%,transparent);animation-name:pv-pick}
+@keyframes pv-pick{0%,30%{transform:none}42%,90%{transform:translateY(calc(100% + var(--spacing-xs)))}100%{transform:none}}
+.pv-side.pv-railed{left:10%;width:24%}
+.pv-main.pv-railed{left:34%}
+.pv-set{position:absolute;inset:var(--spacing-sm) var(--spacing-xs) 0}
+.pv-set.one{animation-name:pv-from}
+.pv-set.two{opacity:0;animation-name:pv-to}
+@keyframes pv-from{0%,32%{opacity:1}44%,90%{opacity:0}100%{opacity:1}}
+@keyframes pv-to{0%,32%{opacity:0}44%,90%{opacity:1}100%{opacity:0}}
+.pv-band{position:absolute;inset:0 0 auto 0;height:var(--spacing-xs);background:var(--practice-zone-view);opacity:0;animation-name:pv-to}
+.pv-below{top:calc(var(--spacing-xs) * 2)}
 `;
