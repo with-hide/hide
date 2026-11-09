@@ -485,7 +485,7 @@ export function sidebarStatusAxisScene(content: SceneContent, folds: SceneFolds,
   const scope = statusAxisScope as unknown as AgentScope;
   main.agent_scope = scope;
   const project = workspace("hide", { checkouts: [main], agent_scope: scope, agent_presence: { working: true } }, folds);
-  const rest = { ...base.rest, navigator: { ...base.rest.navigator, agent_scope: scope, devices: [{ ...base.rest.navigator!.devices![0]!, agent_scope: scope, agent_count: 5 }], workspaces: [project], agents, sleeping_sessions: [], inactive_projects: [], no_agent_projects: [] }, ui_state: { ...base.rest.ui_state, workspace_registrations: [registrationOf(project, "local")] } };
+  const rest = { ...base.rest, navigator: { ...base.rest.navigator, focused_checkout_id: main.id, agent_scope: scope, devices: [{ ...base.rest.navigator!.devices![0]!, agent_scope: scope, agent_count: 5 }], workspaces: [project], agents, sleeping_sessions: [], inactive_projects: [], no_agent_projects: [] }, ui_state: { ...base.rest.ui_state, workspace_registrations: [registrationOf(project, "local")] } };
   return { rest, agents };
 }
 
