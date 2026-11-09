@@ -52,6 +52,21 @@ it("says why the pull request stands where it does in the PRs list's words, and 
   }
 });
 
+// A line the plan wrote is a sentence that would push the choices off the row (operator report on M41): it is counted, and its sentence is the hover.
+it("counts the failed lines the plan wrote and keeps their sentences for the hover", async () => {
+  await clientI18n.changeLanguage("ko");
+  const own = (key: string, text: string) => ({ ...line(key, "own", "fail"), text }) as MissionCriterion;
+  const { container, unmount } = await draw({ present: true, choices: ["leave", "drop"], criteria: [own("c1", "업그레이드한 앱에서 기존 에이전트가 이어진다"), own("c2", "세 OS 표가 지원표와 맞는다"), line("review", "review", "fail")] });
+  try {
+    const failed = container.querySelector<HTMLElement>("[data-attention-failed]")!;
+    expect(failed.textContent).toBe("리뷰 실패, 완료 기준 2개 실패");
+    expect(failed.title.split("\n")).toEqual(["업그레이드한 앱에서 기존 에이전트가 이어진다 실패", "세 OS 표가 지원표와 맞는다 실패", "리뷰 실패"]);
+  } finally {
+    await unmount();
+    await clientI18n.changeLanguage("en");
+  }
+});
+
 it("draws the core's choices in its order, and leave as leave as is with no Conductor", async () => {
   const { container, sent, unmount } = await draw({ present: false, choices: ["leave", "attach"] });
   try {
