@@ -41,32 +41,74 @@ export function selectKind(kind: AgentKind, start: AgentStartChoice | undefined)
 }
 
 /**
- * The model list of one kind: the catalog's `ready` list, the last one seen
- * while the catalog is read again, or the reason there is none (null when the
- * provider answered with an empty list). `loading` is every state where the
- * catalog has not answered yet.
+ * The model list of one agent item: the catalog's `ready` list, the last one
+ * seen while the catalog is read again, or the reason there is none (null
+ * when the provider answered with an empty list). `loading` is every state
+ * where the catalog has not answered yet. A ready list carries the names the
+ * agent shows for its models where they differ (`labels`: a start passes the
+ * model, a menu shows its label), and `fromDefault` when a profile's own list
+ * could not be read and the agent's is offered in its place.
  */
 export type ModelCatalog =
-  | { state: "ready"; models: readonly string[] }
+  | { state: "ready"; models: readonly string[]; labels?: Readonly<Record<string, string>>; fromDefault?: true }
   | { state: "loading" }
   | { state: "unavailable"; reason: string | null };
 
-/** The lists seen so far, kept for the page's life so a second open shows one at once. */
-const lastLists = new Map<ProviderKind, readonly string[]>();
+type Listed = { models: readonly string[]; labels?: Readonly<Record<string, string>> };
 
-export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind): ModelCatalog {
+/** The lists seen so far by item, kept for the page's life so a second open shows one at once. */
+const lastLists = new Map<string, Listed>();
+
+const ready = (listed: Listed): ModelCatalog => ({
+  state: "ready",
+  models: listed.models,
+  ...(listed.labels && Object.keys(listed.labels).length > 0 ? { labels: listed.labels } : {}),
+});
+
+/**
+ * The model list of `kind`'s item `profile` (a profile id; omitted or null is
+ * the agent's built-in default), as the core read it in that profile's own
+ * environment (PRD agent-profiles-phase2 D-09, B9).
+ */
+export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind, profile?: string | null): ModelCatalog {
   // A start names the agent by its engine kind (`agy`); its Hide AI row is joined by the kit's adapter id (`antigravity`).
   const agent = AGENT_ADAPTERS.find((row) => row.can_start && row.herdr_kind === kind)?.id;
   const provider: AiProvider | undefined = ai?.providers.find((row) => row.agent === agent);
+  if (profile) {
+    const key = `${kind}\u0000${profile}`;
+    const own = provider?.profile_models?.find((row) => row.profile === profile);
+    if (own && own.models.length > 0) {
+      const listed = { models: own.models, labels: own.model_labels };
+      lastLists.set(key, listed);
+      return ready(listed);
+    }
+    const kept = lastLists.get(key);
+    if (kept) return ready(kept);
+    // The profile's list could not be read: the agent's own is offered, the reason is in the log.
+    if (own) {
+      const agentList = catalogFor(ai, kind);
+      return agentList.state === "ready" ? { ...agentList, fromDefault: true } : agentList;
+    }
+    // Not read yet while its agent's list is: the core reads every startable profile while a screen observes
+    // the lists. Otherwise the profile's list waits on, or fails with, its agent's.
+    if (provider && provider.models.length > 0) return { state: "loading" };
+    return catalogFor(ai, kind);
+  }
   if (provider && provider.models.length > 0) {
-    lastLists.set(kind, provider.models);
-    return { state: "ready", models: provider.models };
+    const listed = { models: provider.models, labels: provider.model_labels };
+    lastLists.set(kind, listed);
+    return ready(listed);
   }
   const kept = lastLists.get(kind);
-  if (kept) return { state: "ready", models: kept };
+  if (kept) return ready(kept);
   if (!ai || provider?.state === "unread") return { state: "loading" };
   if (!provider) return { state: "unavailable", reason: null };
   return { state: "unavailable", reason: provider.models_unavailable_reason ?? provider.message ?? null };
+}
+
+/** The name a menu shows for `model`: the agent's own where it gave one, else the model itself. */
+export function modelLabel(catalog: ModelCatalog | null, model: string): string {
+  return (catalog?.state === "ready" && catalog.labels?.[model]) || model;
 }
 
 /** Forgets the kept lists; tests start from a page that has seen none. */

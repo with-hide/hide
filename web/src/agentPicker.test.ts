@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { catalogFor, createCatalogObserver, forgetCatalogs, modelToSend, rememberedSelection, selectKind, takesModel } from "./agentPicker";
+import { catalogFor, createCatalogObserver, forgetCatalogs, modelLabel, modelToSend, rememberedSelection, selectKind, takesModel } from "./agentPicker";
 import type { AgentStartChoice, BackgroundAi } from "./snapshot";
 
 const START: AgentStartChoice = { kind: "codex", models: { claude: "opus", codex: "gpt-6-astra" } };
@@ -34,6 +34,42 @@ describe("switching the kind (B27)", () => {
 
   it("has no model for a terminal", () => {
     expect(selectKind("terminal", START)).toEqual({ kind: "terminal", model: null });
+  });
+});
+
+describe("an agent item's model list (agent-profiles-phase2 D-09, B8, B9)", () => {
+  const gateway = { profile: "p-gw", models: ["opus", "sonnet"], model_labels: { opus: "glm-4.6" }, models_fixed: false, models_unavailable_reason: null };
+  const failed = { profile: "p-side", models: [], models_fixed: false, models_unavailable_reason: "models_not_read" };
+
+  it("lists a profile's own models by the names its agent shows, and a start passes the model", () => {
+    const state = ai(provider("claude", { models: ["haiku", "sonnet"], profile_models: [gateway, failed] }));
+    const catalog = catalogFor(state, "claude", "p-gw");
+    expect(catalog).toEqual({ state: "ready", models: ["opus", "sonnet"], labels: { opus: "glm-4.6" } });
+    expect(modelLabel(catalog, "opus")).toBe("glm-4.6");
+    expect(modelLabel(catalog, "sonnet")).toBe("sonnet");
+    expect(catalogFor(state, "claude")).toEqual({ state: "ready", models: ["haiku", "sonnet"] });
+    expect(catalogFor(state, "claude", null)).toEqual({ state: "ready", models: ["haiku", "sonnet"] });
+  });
+
+  it("offers the agent's own list, marked, when a profile's could not be read", () => {
+    const state = ai(provider("claude", { models: ["haiku", "sonnet"], model_labels: { haiku: "Haiku" }, profile_models: [failed] }));
+    expect(catalogFor(state, "claude", "p-side")).toEqual({ state: "ready", models: ["haiku", "sonnet"], labels: { haiku: "Haiku" }, fromDefault: true });
+  });
+
+  it("is loading while the profile is unread and its agent's list is in, and fails with its agent otherwise", () => {
+    expect(catalogFor(ai(provider("claude", { models: ["haiku"] })), "claude", "p-new")).toEqual({ state: "loading" });
+    expect(catalogFor(ai(provider("claude", { state: "unread" })), "claude", "p-new")).toEqual({ state: "loading" });
+    const signedOut = ai(provider("claude", { state: "needs_login", models_unavailable_reason: "Claude is not signed in" }));
+    expect(catalogFor(signedOut, "claude", "p-new")).toEqual({ state: "unavailable", reason: "Claude is not signed in" });
+  });
+
+  it("keeps each item's last list apart while the lists are read again", () => {
+    const read = ai(provider("claude", { models: ["haiku"], profile_models: [gateway] }));
+    catalogFor(read, "claude", "p-gw");
+    catalogFor(read, "claude");
+    const rereading = ai(provider("claude", { state: "unread" }));
+    expect(catalogFor(rereading, "claude", "p-gw")).toEqual({ state: "ready", models: ["opus", "sonnet"], labels: { opus: "glm-4.6" } });
+    expect(catalogFor(rereading, "claude")).toEqual({ state: "ready", models: ["haiku"] });
   });
 });
 
