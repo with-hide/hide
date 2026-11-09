@@ -310,10 +310,15 @@ impl PaneHolders for LinkPanes {
         )
     }
 
-    fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+    fn renew(
+        &self,
+        start: &HolderStart,
+        request: HolderRequest,
+    ) -> Result<HolderRenewal, HolderError> {
         self.answer(
             PaneCall::Renew {
                 start: start.clone(),
+                request,
             },
             RENEW_WAIT,
         )

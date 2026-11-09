@@ -463,7 +463,14 @@ pub trait PaneHolders: Send + Sync {
     /// build is [`HolderRenewal::Current`], and one it does not renew,
     /// nothing of it ended, [`HolderRenewal::Kept`]. A node that cannot
     /// renew keeps every pane.
-    fn renew(&self, _start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+    /// The caller issues `request` from the same numbering as new panes and
+    /// retires it once the outcome is definite. An unknown replacement keeps
+    /// its pending number and reservation until connection-owner turnover.
+    fn renew(
+        &self,
+        _start: &HolderStart,
+        _request: HolderRequest,
+    ) -> Result<HolderRenewal, HolderError> {
         Ok(HolderRenewal::Kept {
             code: "holder_renewal_unsupported".to_owned(),
             message: "this node cannot renew a pane's holder".to_owned(),
@@ -599,6 +606,7 @@ pub enum PaneCall {
     /// [`PaneHolders::renew`]; answers a [`HolderRenewal`].
     Renew {
         start: HolderStart,
+        request: HolderRequest,
     },
     /// [`PaneHolders::shell_launch`]; answers an optional
     /// [`crate::protocol::ShellLaunch`].

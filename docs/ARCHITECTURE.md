@@ -2065,6 +2065,8 @@ The node exposes reserve, exact-incarnation start and cancel as typed pane calls
 Only the worker changing that reservation from `reserved` to `preparing` expands the shell and starts its holder; an old incarnation or a cancelled request is refused before expansion.
 Cancel can precede reserve and writes a terminal record for that same intent, so a delayed reserve cannot recreate it.
 Each connection issues increasing logical creation numbers, distinct from transport call IDs, and uses the same number for reserve, start and cancel.
+Holder renewal carries a number from that same issuer (`PaneCall::Renew`, protocol 93), admitted before any close or replacement and used through the replacement's reserve and start; the node never issues an independent number behind the core's counter.
+The core retires a renewal after a definite answer, including `current` and `kept`; an unknown answer or unsettled replacement retains its pending number until owner turnover, as a node-issued replacement did.
 Its owner keeps the highest observed number and at most 128 unresolved entries, including gaps for issued calls not yet received; a jump that would exceed the bound or overflow is refused before advancing the window.
 A completed number is absence below that high-water mark, so a late reserve, start or cancel cannot return even after its ended record is pruned.
 Retirement closes admission under the same owner mutex as worker admission and completes only after every admitted worker has finished its mutation and cleanup; no I/O holds that mutex.

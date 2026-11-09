@@ -390,7 +390,11 @@ impl PaneHolders for LocalPanes {
             .map_err(start_refusal)
     }
 
-    fn renew(&self, start: &HolderStart) -> Result<HolderRenewal, HolderError> {
+    fn renew(
+        &self,
+        start: &HolderStart,
+        request: HolderRequest,
+    ) -> Result<HolderRenewal, HolderError> {
         if start.program.is_some() {
             return Err(HolderError::Refused {
                 code: "invalid_program".to_owned(),
@@ -398,11 +402,10 @@ impl PaneHolders for LocalPanes {
             });
         }
         let intent = start.intent()?;
-        match self
-            .holders
-            .renew(self.owner()?, &self.service, &intent, || {
-                self.expand(start).map_err(|error| format!("{error:?}"))
-            }) {
+        let guard = self.admit(request, &intent)?;
+        match self.holders.renew(&guard, &self.service, &intent, || {
+            self.expand(start).map_err(|error| format!("{error:?}"))
+        }) {
             Renewal::Current => Ok(HolderRenewal::Current),
             Renewal::Renewed { from, to } => Ok(HolderRenewal::Renewed { from, to }),
             Renewal::Kept { code, message } => Ok(HolderRenewal::Kept {
