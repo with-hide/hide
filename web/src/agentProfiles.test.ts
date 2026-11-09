@@ -86,7 +86,7 @@ describe("startItems", () => {
     expect(claude(menu)).toEqual([["default", null, 40], ["work", "work", 72], ["work-too", "work-too", 72], ["gateway", "gateway", 40], ["fresh", "fresh", null]]);
     expect(menu).toMatchObject({ showLeft: true, listed: true });
     // An agent with no profile is its built-in item alone.
-    expect(menu.items.filter((item) => item.kind === "codex")).toEqual([{ kind: "codex", profile: "default", name: null, left: null }]);
+    expect(menu.items.filter((item) => item.kind === "codex")).toEqual([{ kind: "codex", profile: "default", name: null, version: null, left: null }]);
   });
 
   it("is the agent names alone while the machine lists no profile, and has no figure for a device (B1, B6)", () => {

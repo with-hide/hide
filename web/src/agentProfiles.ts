@@ -5,7 +5,7 @@
 
 import type { TFunction } from "i18next";
 import { agentAdapter } from "./agentAdapters";
-import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
+import { PROVIDER_KINDS, type ProfileItem, type ProviderKind } from "./agentPicker";
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
 import { kitPartNeedsReinstall } from "./settings";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
@@ -276,6 +276,8 @@ export type StartItem = {
   profile: string;
   /** The profile's name; null for the built-in profile. */
   name: string | null;
+  /** The profile's version now, which its model list must have been read at; null for the built-in profile. */
+  version: number | null;
   /** The weekly percent left of the item's account; null when it is not known, which the menu draws `—` (D-11). */
   left: number | null;
 };
@@ -295,10 +297,16 @@ export function startItems(rest: SnapshotRest | null, deviceId: string, usage: {
     const adapter = agentAdapter(kind);
     const row = own ? ownAgentUsage(own, kind) : null;
     const view = adapter && listed ? agentProfilesView(listed, adapter.id, adapter.label) : null;
-    if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null, left: row ? weeklyLeft(row.limits, now) : null }];
-    return view.profiles.map((profile) => ({ kind, profile: profile.id, name: profile.builtIn ? null : profile.name, left: itemLeft(row, profile.id, now) }));
+    if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null, version: null, left: row ? weeklyLeft(row.limits, now) : null }];
+    return view.profiles.map((profile) => ({ kind, profile: profile.id, name: profile.builtIn ? null : profile.name, version: listed?.profiles.find((row) => row.id === profile.id)?.version ?? null, left: itemLeft(row, profile.id, now) }));
   });
   return { items, showLeft: items.some((item) => item.name !== null), listed: listed !== null };
+}
+
+/** The profile of the item `profile` of `kind` as `catalogFor` asks for it: its id and version now; null for the built-in item. */
+export function profileItem(items: readonly StartItem[], kind: string, profile: string): ProfileItem | null {
+  const item = items.find((row) => row.kind === kind && row.profile === profile);
+  return item && item.version !== null ? { id: item.profile, version: item.version } : null;
 }
 
 /** The profile a start of `kind` in the project `workspaceId` preselects: the core's one answer (D-03), `default` where it gave none. */

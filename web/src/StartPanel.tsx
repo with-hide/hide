@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { catalogFor, rememberedSelection, modelToSend, selectKind, takesModel, type AgentSelection } from "./agentPicker";
 import { AgentPicker } from "./components/agent-picker";
-import { BUILT_IN_PROFILE, preselectedProfile, startItems } from "./agentProfiles";
+import { BUILT_IN_PROFILE, preselectedProfile, profileItem, startItems } from "./agentProfiles";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
@@ -281,7 +281,7 @@ function StartPanel({ actions }: { actions: Actions }) {
   const profileToSend = menu?.listed && menu.showLeft && selection.kind !== "terminal" ? profile : null;
   // A model remembered for the agent that the chosen item's list does not have opens on the item's own default (B5); only the
   // core machine's list is read, so a device's choice is never swapped.
-  const catalog = selection.kind !== "terminal" && takesModel(selection.kind) ? catalogFor(ai, selection.kind, profile === BUILT_IN_PROFILE ? null : profile) : null;
+  const catalog = selection.kind !== "terminal" && takesModel(selection.kind) ? catalogFor(ai, selection.kind, menu ? profileItem(menu.items, selection.kind, profile) : null) : null;
   const unlisted = menu?.showLeft === true && target?.deviceId === localDeviceId(rest) && selection.model !== null && catalog?.state === "ready" && !catalog.fromDefault && !catalog.models.includes(selection.model);
   const effective: AgentSelection = unlisted ? { kind: selection.kind, model: null } : selection;
   const surface = useRef<HTMLDivElement>(null);

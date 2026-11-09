@@ -327,7 +327,7 @@ it("opens a profile item on its own default model when the remembered model is n
     const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-gate", "gate")], defaults: {} };
     const rest = profileSnapshot(profiles, { blog: "p-gate" }) as unknown as { ui_state: { agent_start: unknown }; status: Record<string, unknown> };
     rest.ui_state.agent_start = { kind: "claude", models: { claude: "opus" } };
-    rest.status.background_ai = { providers: [{ id: "claude", agent: "claude-code", state: "ready", selectable: true, models: ["opus", "sonnet"], profile_models: [{ profile: "p-gate", models: ["deepseek-v4", "glm-5"], model_labels: { "deepseek-v4": "DeepSeek V4" }, models_fixed: false }] }] };
+    rest.status.background_ai = { providers: [{ id: "claude", agent: "claude-code", state: "ready", selectable: true, models: ["opus", "sonnet"], profile_models: [{ profile: "p-gate", version: 1, models: ["deepseek-v4", "glm-5"], model_labels: { "deepseek-v4": "DeepSeek V4" }, models_fixed: false }] }] };
     await render(rest as unknown as SnapshotRest);
     const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
     // The remembered `opus` is the agent's, not this item's: the item opens on its default.

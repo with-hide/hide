@@ -163,11 +163,11 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
             <AgentPickerView variant="ghost" value={{ kind: "claude", model: null }} catalog={{ state: "ready", models: [] }} onKind={() => {}} onModel={() => {}}
               items={{
                 list: [
-                  { kind: "claude", profile: "default", name: null, left: 40 },
-                  { kind: "claude", profile: "work", name: "work", left: 72 },
-                  { kind: "claude", profile: "gateway", name: "opengateway", left: null },
-                  { kind: "codex", profile: "default", name: null, left: 88 },
-                  { kind: "opencode", profile: "default", name: null, left: null },
+                  { kind: "claude", profile: "default", name: null, version: null, left: 40 },
+                  { kind: "claude", profile: "work", name: "work", version: 1, left: 72 },
+                  { kind: "claude", profile: "gateway", name: "opengateway", version: 1, left: null },
+                  { kind: "codex", profile: "default", name: null, version: null, left: 88 },
+                  { kind: "opencode", profile: "default", name: null, version: null, left: null },
                 ],
                 profile: "work",
                 showLeft: true,

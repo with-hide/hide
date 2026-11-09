@@ -4,7 +4,7 @@ import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { agentProductName } from "../agentAdapters";
 import { catalogFor, modelLabel, modelToSend, selectKind, providerLabel, takesModel, PROVIDER_KINDS, type AgentKind, type AgentSelection, type ModelCatalog, type ProviderKind } from "../agentPicker";
-import { BUILT_IN_PROFILE, itemName, type StartItem } from "../agentProfiles";
+import { itemName, profileItem, type StartItem } from "../agentProfiles";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { cn } from "../lib/utils";
@@ -77,7 +77,7 @@ export function AgentPicker({
   return (
     <AgentPickerView
       value={value}
-      catalog={value.kind === "terminal" || !takesModel(value.kind) ? null : catalogFor(ai, value.kind, items && items.profile !== BUILT_IN_PROFILE ? items.profile : null)}
+      catalog={value.kind === "terminal" || !takesModel(value.kind) ? null : catalogFor(ai, value.kind, items ? profileItem(items.list, value.kind, items.profile) : null)}
       items={items}
       onKind={(kind) => onChange(selectKind(kind, start))}
       onModel={(model) => onChange({ kind: value.kind, model })}

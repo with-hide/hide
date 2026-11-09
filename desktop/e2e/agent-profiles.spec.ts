@@ -1,5 +1,5 @@
 // Agent profiles through a real private core and node (PRD agent-profiles
-// B1, B3, B14, B15): with no profile the screens are as before; a profile
+// B1, B3, B14, B15; phase 2 B2-B5): with no profile the screens are as before; a profile
 // added in Settings › Agents reaches the node's profile file, the start
 // panel offers it, and Project settings saves it as the project's choice.
 // Captures land in HIDE_E2E_SCREENSHOT_DIR, in Dark and Light, when it is named.
@@ -117,6 +117,19 @@ test("a profile added in the Agents settings page is offered by the start panel 
     expect(fs.statSync(account).isDirectory()).toBe(true);
     await closeAll(page);
 
+    // Phase 2 B2: a gateway wrapper is a second profile; it runs in the default account.
+    const wrapper = path.join(run.env.HOME!, "bin", "claude-opengateway");
+    fs.mkdirSync(path.dirname(wrapper), { recursive: true });
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexec claude "$@"\n', { mode: 0o755 });
+    await openAgents(page);
+    await page.locator('[data-inline-profiles="claude-code"] [data-profile-add]').click();
+    await page.locator("#profile-add-name").fill("opengateway");
+    await page.locator("#profile-add-program").fill(wrapper);
+    await page.locator("[data-profile-submit]").click();
+    await expect(dialog).toHaveCount(0, { timeout: 60_000 });
+    await expect(page.locator('[data-inline-profiles="claude-code"] [data-profile-row]').filter({ hasText: "opengateway" })).toBeVisible();
+    await closeAll(page);
+
     // B15: the project starts Claude Code with it.
     await openWorkingStyle(page);
     const choice = page.locator('[data-project-agent-account="claude-code"] [role="combobox"]');
@@ -129,9 +142,11 @@ test("a profile added in the Agents settings page is offered by the start panel 
 
     // B14: the start panel opens on the project's choice and lists every profile.
     await openStartPanel(page);
-    await expect(page.locator("[data-profile-pick]")).toHaveAttribute("data-profile-pick", work.id);
+    await expect(page.locator("[data-profile-pick]")).toHaveCount(0);
+    await expect(page.locator("[data-agent-item]")).toHaveAttribute("data-agent-item", `claude/${work.id}`);
     await closeAll(page);
 
+    const file2 = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "agent-profiles.json"), "utf8")) as { profiles: { id: string; name: string }[] };
     for (const theme of ["dark", "light"] as const) {
       await setTheme(page, theme);
       await openAgents(page);
@@ -142,9 +157,13 @@ test("a profile added in the Agents settings page is offered by the start panel 
       await capture(app, page, `06-edit-profile-dialog-${theme}`);
       await closeAll(page);
       await openStartPanel(page);
-      await page.locator("[data-profile-pick]").click();
-      await expect(page.locator(`[data-profile-pick-option="${work.id}"]`)).toBeVisible();
-      await capture(app, page, `07-start-panel-profile-menu-${theme}`);
+      await page.locator("[data-agent-item]").click();
+      await expect(page.locator(`[data-agent-item-option="claude/${work.id}"]`)).toBeVisible();
+      await expect(page.locator('[data-agent-item-option="claude/default"]')).toBeVisible();
+      const gateway = file2.profiles.find((profile) => profile.name === "opengateway")!;
+      await expect(page.locator(`[data-agent-item-option="claude/${gateway.id}"]`)).toContainText("Claude Code · opengateway");
+      await expect(page.locator(`[data-agent-item-option="claude/${work.id}"]`)).toContainText("Claude Code · work");
+      await capture(app, page, `07-start-panel-items-${theme}`);
       await closeAll(page);
       await openWorkingStyle(page);
       await expect(page.locator('[data-project-agent-account-value]')).toHaveAttribute("data-project-agent-account-value", work.id);
