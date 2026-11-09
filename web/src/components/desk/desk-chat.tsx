@@ -217,7 +217,7 @@ const ANSWERED: Record<Exclude<DeskApproval["state"], "waiting">, MessageKey> = 
 /**
  * Hide asking before Desk's agent does something (D-52, D-82, D-83, D-75):
  * the one `!` card without an agent mark, since it is Desk's own. It comes
- * for a row of Settings › Desk › 권한 set to 묻기, or for an irreversible
+ * for a row of Settings › Labs › Desk › 권한 set to 묻기, or for an irreversible
  * kind, which says so in its title and names what it is about. The command
  * whole on one grey block, the folder, Desk's reason and three grey answers,
  * none the default: `거절…` opens one line whose words go to Desk, `이 대화에서

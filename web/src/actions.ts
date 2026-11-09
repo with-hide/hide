@@ -2340,7 +2340,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action, ...(preview === undefined ? {} : { preview }) } });
     },
 
-    /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Desk, there is no room to open (D-76). */
+    /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Labs › Desk, there is no room to open (D-76). */
     openDesk() {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       ui().setScreen({ kind: "desk" });
@@ -2414,7 +2414,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_install", payload: { agent } });
     },
 
-    /** Settings › Desk (B4, B19, B21). */
+    /** Settings › Labs › Desk (B4, B19, B21). */
     deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions }) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },

@@ -374,7 +374,7 @@ pub struct DeskAgentSnapshot {
     /// The command that signs the agent in, shown with a `login_needed`
     /// notice.
     pub login_command: &'static str,
-    /// The rows of Settings › Desk › 권한 the agent runs without asking
+    /// The rows of Settings › Labs › Desk › 권한 the agent runs without asking
     /// (`AdapterId::always_runs`), shown on those rows.
     pub always_runs: &'static [hide_desk::permission::Row],
     /// The models and efforts the agent's last session offered; empty until
@@ -717,7 +717,7 @@ pub enum DeskLocation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DeskSettings {
-    /// Settings › Desk's switch (D-76): off by default. While off no entry
+    /// Settings › Labs › Desk's switch (D-76): off by default. While off no entry
     /// to Desk is drawn, its process does not run and every `desk_*` event
     /// but this setting is refused; its sessions stay ordinary sessions.
     #[serde(default)]
@@ -727,7 +727,7 @@ pub struct DeskSettings {
     pub location: DeskLocation,
     /// Sessions Desk runs at once; more wait in its queue.
     pub cap: u8,
-    /// Settings › Desk › 권한 (D-82): every row 바로 in a store written
+    /// Settings › Labs › Desk › 권한 (D-82): every row 바로 in a store written
     /// before it existed.
     #[serde(default)]
     pub permissions: hide_desk::permission::Table,

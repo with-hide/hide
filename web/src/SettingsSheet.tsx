@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, GaugeIcon, BotIcon, DiamondIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -21,11 +21,11 @@ import { AboutTab } from "./settings/AboutTab";
 import { AgentsTab } from "./settings/AgentsTab";
 import { KindHelpButton } from "./components/kind-help-dialog";
 import { ConductorTab } from "./settings/ConductorTab";
-import { DeskSettingsPage } from "./DeskScreen";
 import { DevicesTab } from "./settings/DevicesTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { GithubTab } from "./settings/GithubTab";
 import { HideAiTab } from "./settings/HideAiTab";
+import { LabsTab } from "./settings/LabsTab";
 import { UsageTab } from "./settings/UsageTab";
 import { NotificationsTab } from "./settings/NotificationsTab";
 import { ShortcutsTab } from "./settings/ShortcutsTab";
@@ -48,10 +48,10 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   shortcuts: KeyboardIcon,
   agents: BotIcon,
   hideAi: SparklesIcon,
-  desk: DiamondIcon,
   conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
   github: GithubIcon,
+  labs: FlaskConicalIcon,
   about: InfoIcon,
   privacy: ShieldIcon,
 };
@@ -131,10 +131,10 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "shortcuts" ? <ShortcutsTab actions={actions} /> : null}
               {tab === "agents" ? <AgentsTab actions={actions} /> : null}
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
-              {tab === "desk" ? <DeskSettingsPage actions={actions} /> : null}
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
               {tab === "github" ? <GithubTab actions={actions} /> : null}
+              {tab === "labs" ? <LabsTab actions={actions} /> : null}
               {tab === "about" ? <AboutTab actions={actions} /> : null}
               {tab === "privacy" ? <PrivacyTab actions={actions} /> : null}
             </TabsContent>
