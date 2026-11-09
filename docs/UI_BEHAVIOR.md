@@ -2504,7 +2504,7 @@ Unread weight is never reused to mean parent, child, delegated, or selected.
 ## Project settings
 
 A Git project or plain folder's gear, project menu and the Overview's project panel (Projects tab) open the same Project settings dialog without selecting or folding that project.
-The gear shares the reserved action space with New work and More, appears on hover, keyboard focus or an open menu, and stays visible on devices without hover.
+The gear shares the buttons with New work, More and the repository mark: they appear on hover, keyboard focus or an open menu and stay visible on devices without hover. They stand over the end of the project name, which fades under them, so the name keeps its width whether they show or not.
 Closing the dialog with Escape or its close button restores the opener's focus and leaves the screen, selected device and checkout unchanged.
 
 The dialog is 880 by 640 when the window permits it, with a fixed 200-wide navigation list for Connections, Working style and Memory; only the page scrolls.

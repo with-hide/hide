@@ -701,7 +701,7 @@ const ROW_REVEALED =
 
 /** A row's time and fold slot, a step apart as on an agent row, so every row's time ends on one column. */
 function RowEnd({ children }: { children: ReactNode }) {
-  return <span className="flex shrink-0 items-center gap-xs">{children}</span>;
+  return <span className="relative flex shrink-0 items-center gap-xs self-stretch">{children}</span>;
 }
 
 /**
@@ -800,13 +800,13 @@ function ProjectName({ workspace, hidden = false, grow = true, label = false }: 
  * menu is open; they take no width at rest, and the badge of a folded project
  * stands aside while they show, so the row's end never holds both.
  */
-function RowActions({ workspace, items, onSelect }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void }) {
+function RowActions({ workspace, items, onSelect, fill, children }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void; /** The `from-*` classes of the row's own fill, which the fade starts from; the row's own fill is what the buttons cover the name's end with. */ fill: string; children?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const more = useRef<HTMLButtonElement>(null);
   return (
-    <span className="grid shrink-0 items-center justify-items-end">
-      <span className={cn("pointer-events-auto relative col-start-1 row-start-1 items-center gap-xxs hoverless:flex", menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex")} data-row-actions={workspace.id}>
+    <span className="pointer-events-none absolute inset-y-0 right-full flex items-center justify-end">
+      <span className={cn("pointer-events-auto relative h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md hoverless:flex", fill, menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex")} data-row-actions={workspace.id}>
         <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
           <Button
             variant="row-action"
@@ -837,6 +837,7 @@ function RowActions({ workspace, items, onSelect }: { workspace: Workspace; item
             </Button>
           }
         />
+        {children}
       </span>
     </span>
   );
@@ -945,25 +946,27 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             {/* A folded project still says what runs and asks inside it; open, its own rows say it. */}
             {expanded ? null : <StatusBadge counts={sumMarks(workspace.checkouts.map((checkout) => checkout.agent_summary?.marks))} className="group-hover:hidden group-focus-within:hidden" data-project-status={workspace.id} />}
           </button>
-          <RowActions
-            workspace={workspace}
-            items={() => projectMenu(workspace, menuHost(), t, issueSource)}
-            onSelect={(item) => runProjectItem(actions, workspace, item)}
-          />
-          <span className="hidden items-center hoverless:flex group-hover:flex group-focus-within:flex">
-            <RepositoryMark workspace={workspace} actions={actions} />
-          </span>
-          {disclosure ? (
-            <FoldToggle
-              open={expanded}
-              quiet
-              label={expanded ? t("sidebar.foldProject", { name: workspace.label }) : t("sidebar.unfoldProject", { name: workspace.label })}
-              onToggle={() => actions.toggleProjectCheckouts(workspace)}
-              data-project-toggle={workspace.id}
-            />
-          ) : (
-            <FoldLane />
-          )}
+          <RowEnd>
+            <RowActions
+              workspace={workspace}
+              items={() => projectMenu(workspace, menuHost(), t, issueSource)}
+              onSelect={(item) => runProjectItem(actions, workspace, item)}
+              fill={hiding === "project" ? "from-secondary" : "from-sidebar group-hover:from-accent group-focus-within:from-accent"}
+            >
+              <RepositoryMark workspace={workspace} actions={actions} />
+            </RowActions>
+            {disclosure ? (
+              <FoldToggle
+                open={expanded}
+                quiet
+                label={expanded ? t("sidebar.foldProject", { name: workspace.label }) : t("sidebar.unfoldProject", { name: workspace.label })}
+                onToggle={() => actions.toggleProjectCheckouts(workspace)}
+                data-project-toggle={workspace.id}
+              />
+            ) : (
+              <FoldLane />
+            )}
+          </RowEnd>
         </div>
       </EntryContextMenu>
       {expanded ? (
@@ -1233,6 +1236,7 @@ const FolderRowView = memo(function FolderRowView({
                 workspace={workspace}
                 items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
                 onSelect={(item) => (FOLDER_CHECKOUT_ITEMS.has(item) ? runCheckoutItem(actions, workspace, checkout, item) : runProjectItem(actions, workspace, item))}
+                fill={focused ? "from-secondary" : "from-sidebar group-hover:from-accent group-focus-within:from-accent"}
               />
               {foldable ? (
                 <FoldToggle
