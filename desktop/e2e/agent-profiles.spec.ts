@@ -7,10 +7,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
+import { chord } from "../../web/e2e/chords";
 import { openProject, withControl } from "../../web/e2e/daemon-actions";
 import { startEngine } from "../../web/e2e/engine-fixture";
 import { showProjectRow } from "../../web/e2e/wire";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
+import { toPage } from "../src/main/wirePath";
 import { connectHome, fitWindow, isolate, launchShell, test } from "./fixture";
 
 test.describe.configure({ timeout: 300_000 });
@@ -42,7 +44,7 @@ async function openAgents(page: Page): Promise<void> {
 }
 
 async function openStartPanel(page: Page): Promise<void> {
-  await page.keyboard.press("Meta+KeyK");
+  await page.keyboard.press(chord("search", "electron"));
   await expect(page.locator('[data-palette="Search"] [data-palette-input]')).toBeFocused();
   await page.keyboard.type("Start an agent");
   await page.locator('[data-palette-row="command:start-agent"]').click();
@@ -61,7 +63,10 @@ async function closeAll(page: Page): Promise<void> {
   for (let i = 0; i < 3 && (await page.locator('[data-settings="true"], [data-project-settings], [data-start-panel], [role="dialog"]').count()) > 0; i++) await page.keyboard.press("Escape");
 }
 
-test("a profile added in the Agents settings page is offered by the start panel and kept as a project's choice", async () => {
+// @platform: the account folder is a native path the operator types, which the
+// node checks and makes private by its system's rule (a drive path and an
+// access list on Windows), and the project's root is kept in the wire spelling.
+test("a profile added in the Agents settings page is offered by the start panel and kept as a project's choice", { tag: "@platform" }, async () => {
   const engine = await startEngine();
   const run = isolate(engine, "agent-profiles");
   let app: ElectronApplication | null = null;
@@ -118,7 +123,7 @@ test("a profile added in the Agents settings page is offered by the start panel 
     await page.getByRole("option", { name: "work", exact: true }).click();
     await expect(page.locator("[data-project-settings]")).toContainText("Saved");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "core-state.json"), "utf8")) as { project_settings: Record<string, { root: string; agent_profiles?: Record<string, string> }> };
-    expect(Object.values(state.project_settings).find((record) => record.root === repo)?.agent_profiles).toEqual({ "claude-code": work.id });
+    expect(Object.values(state.project_settings).find((record) => record.root === toPage(repo))?.agent_profiles).toEqual({ "claude-code": work.id });
     await closeAll(page);
 
     // B14: the start panel opens on the project's choice and lists every profile.
