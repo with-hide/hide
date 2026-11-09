@@ -519,25 +519,10 @@ fn handing(spec: &str, ask: bool) -> Value {
     ]}})
 }
 
-/// A Codex spawn on the caller's machine in the fixture's project, on the
-/// CLI's defaults and naming no profile.
-fn codex() -> crate::runtime::missions::SpawnWorker<'static> {
-    static DEFAULTS: hide_agent_adapter::LaunchChoice = hide_agent_adapter::LaunchChoice {
-        model: None,
-        effort: None,
-    };
-    crate::runtime::missions::SpawnWorker {
-        machine: None,
-        kind: "codex",
-        profile: None,
-        repo: "/checkouts/fixture",
-        launch: &DEFAULTS,
-    }
-}
-
 fn spawn_step(step: &str, parent: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
+            pick: None,
             parent: parent.map(str::to_owned),
             machine: None,
             name: "web".into(),
@@ -581,7 +566,6 @@ fn admit(runtime: &Runtime, actor: &Actor, step: &str) -> crate::coordination::P
             crate::node::TEST_NODE,
             Some("here"),
             Some(step),
-            &codex(),
             false,
         )
         .unwrap()
@@ -735,7 +719,6 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
             crate::node::TEST_NODE,
             Some("here"),
             None,
-            &codex(),
             false,
         ),
         Ok(None)
@@ -748,7 +731,6 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
                 crate::node::TEST_NODE,
                 Some("here"),
                 step,
-                &codex(),
                 false,
             ),
             Err("plan_delegate_not_permitted".into())
@@ -761,7 +743,6 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
             crate::node::TEST_NODE,
             Some("here"),
             Some("web"),
-            &codex(),
             true,
         ),
         Err("plan_delegate_not_permitted".into())

@@ -440,7 +440,9 @@ pub struct AttentionView {
 
 /// The spawn an admission judges: the machine its child starts on (none
 /// for the caller's own), its agent, the profile it names by name, the
-/// project it starts in and the model and effort it starts with.
+/// project it starts in, the model and effort it starts with, and whether
+/// it retries a spawn that finished, which answers with the child it
+/// started and is judged by what it did (engineering 11).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SpawnWorker<'a> {
     pub(crate) machine: Option<&'a str>,
@@ -448,6 +450,7 @@ pub(crate) struct SpawnWorker<'a> {
     pub(crate) profile: Option<&'a str>,
     pub(crate) repo: &'a str,
     pub(crate) launch: &'a hide_agent_adapter::LaunchChoice,
+    pub(crate) finished: bool,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -2351,6 +2354,7 @@ impl Runtime {
         &self,
         actor: &Actor,
         worker: &SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
         intent: &str,
         briefed: bool,
     ) -> Result<Option<MissionAdmission>, String> {
@@ -2377,7 +2381,7 @@ impl Runtime {
         }
         // The candidates the mission was created with: a Settings edit
         // applies from the next mission (B48).
-        if let Some(started) = self.outside_candidates(actor, worker, &mission.candidates)? {
+        if let Some(started) = self.outside_candidates(actor, worker, pick, &mission.candidates)? {
             return Err(crate::coordination::refusal(
                 "mission_candidate_refused",
                 &started,
@@ -2441,26 +2445,32 @@ impl Runtime {
 
     /// What the spawn `worker` would start, in the operator's words
     /// (`Claude · work (opus, high)`), when it is none of `candidates`;
-    /// `None` when it is one, or when there are none to hold it to. The
-    /// profile judged is the one the spawn starts with (`spawn_request`):
-    /// the one it names, else its caller's, the project's or the agent's
-    /// default, never the name alone (PRD agent-profiles-phase2 D-08, B13).
+    /// `None` when it is one, when there are none to hold it to, or when it
+    /// retries a spawn that finished. The item judged is the one the spawn
+    /// starts with: the one it names, else its caller's, the project's or
+    /// the agent's default, never the name alone (PRD agent-profiles-phase2
+    /// D-08, B13), picked once into `pick` (`spawn_request`), which the
+    /// start then takes, so every admission and the start see one item.
     pub(crate) fn outside_candidates(
         &self,
         actor: &Actor,
         worker: &SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
         candidates: &[crate::missions::Candidate],
     ) -> Result<Option<String>, String> {
-        if candidates.is_empty() {
+        if candidates.is_empty() || worker.finished {
             return Ok(None);
         }
-        let request = self.spawn_request(
-            actor,
-            worker.machine,
-            worker.kind,
-            worker.profile,
-            worker.repo,
-        )?;
+        let request = match pick {
+            Some(request) => request,
+            None => pick.insert(self.spawn_request(
+                actor,
+                worker.machine,
+                worker.kind,
+                worker.profile,
+                worker.repo,
+            )?),
+        };
         if candidates
             .iter()
             .any(|candidate| candidate.admits(&request.target, worker.launch))

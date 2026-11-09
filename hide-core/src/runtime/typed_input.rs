@@ -934,6 +934,7 @@ pub(crate) mod tests {
             Mutation::Reserve {
                 parent: parent_id.clone(),
                 command: Command::Spawn {
+                    pick: None,
                     parent: (!handoff).then(|| parent_id.clone()),
                     machine: None,
                     name: "worker".into(),

@@ -231,8 +231,21 @@ pub enum Command {
         /// children asleep now. Only the core sets it, from `plan_node`.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
         plan: Option<Box<PlanAdmission>>,
+        /// The agent item the spawn starts with, when an admission judged
+        /// it (Settings › Mission's candidates, PRD agent-profiles-phase2
+        /// D-08, B13). Only the core sets it, never on the wire.
+        #[serde(skip)]
+        pick: Option<Picked>,
     },
 }
+
+/// The item the core picked for a spawn when it admitted it
+/// (`Runtime::spawn_request`, under the lock its admissions run under):
+/// the start takes this one rather than picking again, so a project's or
+/// a profile's change between the two never starts an item the admission
+/// did not judge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picked(pub(crate) Box<crate::launch::Request>);
 
 /// The step of a main's plan a spawn's child works on (PRD
 /// hide-plan-delegate D-24), saved with the spawn from its reservation on.
@@ -1314,6 +1327,25 @@ pub(crate) fn live_self<'a>(
         .agents
         .iter()
         .filter(move |record| !record.ended && record.actor.same_identity(caller))
+}
+
+/// An earlier attempt of `intent` by the spawn's parent: `parent`, or the
+/// caller's first live registration for none or `here`. Every check of a
+/// spawn judges a retry by what that attempt already did (engineering 11).
+pub(crate) fn earlier_spawn<'a>(
+    ledger: &'a Ledger,
+    caller: &'a Actor,
+    parent: Option<&str>,
+    intent: &str,
+) -> Option<&'a SpawnRecord> {
+    let parent = match parent.filter(|parent| *parent != HERE) {
+        Some(parent) => parent,
+        None => live_self(ledger, caller).next()?.id.as_str(),
+    };
+    ledger
+        .spawns
+        .iter()
+        .find(|record| record.parent == parent && record.intent == intent)
 }
 
 /// The caller's own registration, by the same match as `--parent here`,
@@ -2857,6 +2889,7 @@ mod tests {
 
     fn command(intent: &str) -> Command {
         Command::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,

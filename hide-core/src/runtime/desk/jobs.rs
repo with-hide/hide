@@ -1860,6 +1860,7 @@ mod tests {
 
     fn spawn_command(branch: &str, machine: Option<&str>) -> AgentCommand {
         AgentCommand::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,

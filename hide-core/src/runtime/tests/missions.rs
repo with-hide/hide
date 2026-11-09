@@ -85,6 +85,7 @@ fn without_gate(runtime: &mut Runtime) {
 fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
+            pick: None,
             parent: Some("here".into()),
             machine: machine.map(str::to_owned),
             name: "worker".into(),
@@ -119,6 +120,7 @@ fn worker<'a>(
         profile: None,
         repo: PROJECT,
         launch,
+        finished: false,
     }
 }
 
@@ -246,6 +248,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
             .mission_spawn_admission(
                 &conductor,
                 &worker(None, "codex", &Default::default()),
+                &mut None,
                 "plain",
                 false,
             )
@@ -277,6 +280,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         .mission_spawn_admission(
             &conductor,
             &worker(None, "codex", &Default::default()),
+            &mut None,
             "plain",
             false,
         )
@@ -301,6 +305,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
             .mission_spawn_admission(
                 &conductor,
                 &worker(None, "codex", &Default::default()),
+                &mut None,
                 "plain",
                 false,
             )
@@ -2112,7 +2117,13 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     };
     let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
         runtime
-            .mission_spawn_admission(&conductor, &worker(None, kind, &choice), "plain", false)
+            .mission_spawn_admission(
+                &conductor,
+                &worker(None, kind, &choice),
+                &mut None,
+                "plain",
+                false,
+            )
             .map(|admission| admission.is_some())
             .map_err(|refusal| crate::coordination::split_refusal(&refusal).0.to_owned())
     };
@@ -2265,6 +2276,7 @@ fn a_candidate_admits_the_profile_a_worker_starts_with() {
                     profile,
                     ..worker(None, "codex", &defaults)
                 },
+                &mut None,
                 "plain",
                 false,
             )
@@ -7265,6 +7277,7 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
             .mission_spawn_admission(
                 &conductor,
                 &worker(machine, "codex", &Default::default()),
+                &mut None,
                 intent,
                 true,
             )
