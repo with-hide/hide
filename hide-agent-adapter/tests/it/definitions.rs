@@ -42,7 +42,13 @@ fn credential_paths_are_declared_for_every_agent_whose_login_is_read() {
 
 #[test]
 fn login_rules_reject_unbounded_paths_and_invalid_pointers() {
-    let base = include_str!("../../agents/codex.toml");
+    let builtin = include_str!("../../agents/codex.toml");
+    let account = &builtin[builtin.find("[account]").unwrap()..builtin.find("[screen]").unwrap()];
+    let base = format!(
+        "schema = 1\nid = \"credential-test\"\nname = \"C\"\nexecutables = [\"credential-test\"]\nhooks = \"none\"\n{account}"
+    );
+    let valid = Catalog::read(vec![text("credential-test.toml", &base)]);
+    assert!(valid.rejected.is_empty(), "{:?}", valid.rejected);
     let original = "at = \"login\"\nany = [\"/OPENAI_API_KEY\", \"/tokens/access_token\"]";
     for bad in [
         "at = \"sessions\"\nany = [\"/token\"]".to_owned(),
@@ -56,7 +62,10 @@ fn login_rules_reject_unbounded_paths_and_invalid_pointers() {
         let written = base.replace(original, &bad);
         assert_ne!(written, base);
         assert!(
-            hide_agent_adapter::definition::read_account("custom", &written).is_err(),
+            Catalog::read(vec![text("credential-test.toml", &written)])
+                .rejected
+                .iter()
+                .any(|row| row.reason.contains("account.login")),
             "{bad}"
         );
     }
