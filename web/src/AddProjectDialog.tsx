@@ -13,7 +13,7 @@ import { FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucid
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState, type ComponentProps, type Ref } from "react";
 import type { Actions } from "./actions";
-import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, rememberedFolder, trimFolder } from "./addProject";
+import { addProjectHosts, folderLabel, hostWays, initialHost, registeredProject, rememberedFolder, trimFolder } from "./addProject";
 import { CloneFromUrl, cloneRunning } from "./CloneFromUrl";
 import { CreateProjectView } from "./CreateProjectView";
 import { FolderBrowser } from "./FolderBrowser";
@@ -128,8 +128,11 @@ export function AddProjectViews({
   const returnTo = useRef<OtherWay["id"] | "browse" | null>(null);
 
   const add = (path: string, confirmed = false) => {
-    if (alreadyRegistered(path, host.id, registrations)) {
-      registration.refuse(path, "already_registered");
+    // A folder that already is a project is not added again: the dialog goes to it, so the operator is where they meant to be.
+    const existing = registeredProject(path, host.id, registrations);
+    if (existing) {
+      actions.openProjectById(existing.device_id, existing.id);
+      onLeave?.();
       return;
     }
     registration.send(host.id, path, () => actions.createWorkspace(path, folderLabel(path), host.id, confirmed));
