@@ -107,6 +107,7 @@ fn descendant_count_stays_bounded_across_many_requests() {
             model: "gpt-5.6-luna".to_owned(),
             cwd: std::env::temp_dir(),
             search_path: None,
+            run: hide_ai::ItemRun::default(),
         },
         Arc::new(NoopLogSink),
     ));

@@ -29,7 +29,7 @@ use crate::log::AiLogEvent;
 use hide_platform::process::{self as platform, OwnedChild};
 
 use crate::process::{self, ProcessMeasurement};
-use crate::program::Program;
+use crate::program::{ItemRun, Program};
 use crate::text_cli::{json_from_text, system_with_schema};
 use crate::{
     AiBackend, AiError, AiLogSink, AiRequest, AiResponse, AiUsage, AnswerMode, Availability,
@@ -105,6 +105,11 @@ pub struct CodexConfig {
     /// choose it, such as a test with a stand-in login shell, gives one built
     /// by `hide_platform::programs::cli_path_with`.
     pub search_path: Option<OsString>,
+    /// The item this backend runs as (PRD agent-profiles-phase2 D-07, D-09):
+    /// its variables and wrapper reach the app-server, and its account's
+    /// `CODEX_HOME` is where the private home's `auth.json` link points,
+    /// while the app-server itself still runs under the private home.
+    pub run: ItemRun,
 }
 
 impl Default for CodexConfig {
@@ -114,6 +119,7 @@ impl Default for CodexConfig {
             model: DEFAULT_MODEL.to_owned(),
             cwd: std::env::temp_dir(),
             search_path: None,
+            run: ItemRun::default(),
         }
     }
 }
@@ -187,7 +193,9 @@ impl CodexAppServerBackend {
     }
 
     fn resolved_binary(&self) -> Option<Program> {
-        Program::resolve(&self.config.binary, self.config.search_path.as_deref())
+        self.config
+            .run
+            .program(&self.config.binary, self.config.search_path.as_deref())
     }
 
     fn lock(&self) -> MutexGuard<'_, Option<Session>> {
@@ -204,7 +212,7 @@ impl CodexAppServerBackend {
         let binary = self
             .resolved_binary()
             .ok_or_else(|| AiError::ProviderUnavailable("codex_not_installed".to_owned()))?;
-        *guard = Some(Session::spawn(&binary, &self.config.cwd)?);
+        *guard = Some(Session::spawn(&binary, &self.config.cwd, &self.config.run)?);
         Ok(guard.as_mut().expect("just inserted"))
     }
 
@@ -510,12 +518,10 @@ impl AiBackend for CodexAppServerBackend {
         };
         match session.request("model/list", json!({}), CONTROL_TIMEOUT) {
             Ok(models) => match models.get("data").and_then(Value::as_array) {
-                Some(offered) => ModelCatalog::Offered(
+                Some(offered) => ModelCatalog::plain(
                     offered
                         .iter()
-                        .filter_map(|model| model.get("id").and_then(Value::as_str))
-                        .map(str::to_owned)
-                        .collect(),
+                        .filter_map(|model| model.get("id").and_then(Value::as_str)),
                 ),
                 // The field is the contract; without it the list is unknown
                 // rather than empty.
@@ -677,10 +683,15 @@ impl RequestFailure {
 }
 
 impl Session {
-    fn spawn(program: &Program, cwd: &Path) -> Result<Self, AiError> {
-        let home = CodexHome::create()?;
+    fn spawn(program: &Program, cwd: &Path, run: &ItemRun) -> Result<Self, AiError> {
+        let home = CodexHome::create(&|name| run.variable(name))?;
         let mut command = program.command();
         program.apply(&mut command);
+        // The item's variables, then the private home over its own: the
+        // account is reached through the `auth.json` link alone.
+        for (key, value) in &run.env {
+            command.env(key, value);
+        }
         command
             .args(CodexAppServerBackend::spawn_arguments())
             .current_dir(cwd)

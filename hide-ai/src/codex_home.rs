@@ -30,8 +30,14 @@ pub(crate) struct CodexHome {
     pub(crate) path: PathBuf,
 }
 
+/// The value a child of the backend's item reads for a variable.
+pub(crate) type Variable<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
+
 impl CodexHome {
-    pub(crate) fn create() -> Result<Self, AiError> {
+    /// A home whose `auth.json` links to the login of the account `variable`
+    /// names: an item's own `CODEX_HOME`, else this process's (PRD
+    /// agent-profiles-phase2 D-07).
+    pub(crate) fn create(variable: Variable<'_>) -> Result<Self, AiError> {
         let dir = std::env::temp_dir().join(format!(
             "{PREFIX}{}-{}",
             std::process::id(),
@@ -39,7 +45,7 @@ impl CodexHome {
         ));
         create_private_dir(&dir).map_err(|kind| home_unavailable("mkdir", kind))?;
         let home = Self { path: dir };
-        link_auth_json(&home.path).map_err(|kind| home_unavailable("symlink", kind))?;
+        link_auth_json(&home.path, variable).map_err(|kind| home_unavailable("symlink", kind))?;
         Ok(home)
     }
 }
@@ -210,15 +216,15 @@ fn home_unavailable(stage: &str, kind: std::io::ErrorKind) -> AiError {
 }
 
 /// The directory the user's real `auth.json` lives in: Codex's own folder as
-/// the operator runs it (`CODEX_HOME`, or `~/.codex`), the default account
-/// as this process's variables move it (`hide_agent_adapter::resolve`). A
+/// the item runs it (`CODEX_HOME` as `variable` reads it, or `~/.codex`),
+/// the account as those variables move it (`hide_agent_adapter::resolve`). A
 /// relative `CODEX_HOME` leaves the home unavailable rather than linking a
 /// path Codex would read against another folder.
-fn source_codex_dir() -> Result<PathBuf, std::io::ErrorKind> {
+fn source_codex_dir(variable: Variable<'_>) -> Result<PathBuf, std::io::ErrorKind> {
     use hide_agent_adapter::{AccountPath, NodeEnv, Profile, Refusal};
     let codex = hide_agent_adapter::AgentId::Codex.adapter();
     let node = NodeEnv::new(hide_platform::host::home_dir().ok())
-        .with_account_variables(codex.account_rule(), hide_platform::host::variable);
+        .with_account_variables(codex.account_rule(), variable);
     codex
         .resolve(&Profile::builtin_default(codex.id), &node)
         .map_err(|refusal| match refusal {
@@ -246,8 +252,8 @@ fn create_private_dir(dir: &Path) -> Result<(), std::io::ErrorKind> {
 
 /// A link to a file needs a privilege on a Windows account without
 /// Developer Mode; the home is then unavailable with that kind.
-fn link_auth_json(home: &Path) -> Result<(), std::io::ErrorKind> {
-    let source = source_codex_dir()?.join("auth.json");
+fn link_auth_json(home: &Path, variable: Variable<'_>) -> Result<(), std::io::ErrorKind> {
+    let source = source_codex_dir(variable)?.join("auth.json");
     hide_platform::fs::link::create_link(&source, &home.join("auth.json"))
         .map_err(|error| error.kind())
 }

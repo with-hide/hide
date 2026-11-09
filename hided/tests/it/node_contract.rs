@@ -1081,6 +1081,7 @@ fn a_device_answers_hide_ai_for_its_own_agents() {
         instance: 7,
         provider: hide_node_link::ai::ProviderId::CODEX,
         model: String::new(),
+        profile: None,
     };
     let measured: hide_node_link::ai::ProcessMeasurement = call_as(
         &*device.link,

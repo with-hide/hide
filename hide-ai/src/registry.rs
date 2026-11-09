@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use hide_agent_adapter::{ADAPTERS, AgentAdapter, usage::Support};
 
-use crate::{AiBackend, AiLogSink};
+use crate::{AiBackend, AiLogSink, ItemRun};
 
 /// Stable provider name; also the log field value and the settings key.
 ///
@@ -230,35 +230,45 @@ impl ProviderId {
 }
 
 /// Builds the backend for one registered provider, configured with the model
-/// the operator chose for it. This is the only place a backend is chosen, by
+/// the operator chose for it, running as the agent item `run` describes (its
+/// account's and profile's variables and its wrapper; the default is the
+/// built-in default profile). This is the only place a backend is chosen, by
 /// the provider's binding: a provider whose declaration refuses requests gets
 /// the backend that refuses them with its reason.
 pub fn build_backend(
     provider: ProviderId,
     model: &str,
+    run: ItemRun,
     sink: Arc<dyn AiLogSink>,
 ) -> Arc<dyn AiBackend> {
     let Some(backend) = provider.binding().backend else {
         return Arc::new(crate::UnprovenReadOnlyBackend::new(provider));
     };
+    let text = |model: &str| crate::TextCliConfig {
+        run: run.clone(),
+        ..crate::TextCliConfig::new(model)
+    };
     match backend {
         Backend::Claude => Arc::new(crate::ClaudeCliBackend::new(crate::ClaudeConfig {
             model: model.to_owned(),
+            run,
             ..crate::ClaudeConfig::default()
         })),
         Backend::Codex => Arc::new(crate::CodexAppServerBackend::new(
             crate::CodexConfig {
                 model: model.to_owned(),
+                run,
                 ..crate::CodexConfig::default()
             },
             sink,
         )),
-        Backend::Grok => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
-        Backend::Pi => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
-        Backend::Omp => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig::new(model))),
-        Backend::Antigravity => Arc::new(crate::AntigravityCliBackend::new(
-            crate::TextCliConfig::new(model),
-        )),
+        Backend::Grok => Arc::new(crate::GrokCliBackend::new(text(model))),
+        Backend::Pi => Arc::new(crate::PiCliBackend::new(text(model))),
+        Backend::Omp => Arc::new(crate::OmpSdkBackend::new(crate::OmpConfig {
+            cli: text(model),
+            ..crate::OmpConfig::new(model)
+        })),
+        Backend::Antigravity => Arc::new(crate::AntigravityCliBackend::new(text(model))),
     }
 }
 
@@ -342,7 +352,12 @@ mod tests {
             .collect();
         assert_eq!(refused, [ProviderId::OPENCODE]);
         for provider in refused {
-            let backend = build_backend(provider, CLI_DEFAULT_MODEL, Arc::new(crate::NoopLogSink));
+            let backend = build_backend(
+                provider,
+                CLI_DEFAULT_MODEL,
+                ItemRun::default(),
+                Arc::new(crate::NoopLogSink),
+            );
             assert_eq!(backend.id(), provider);
             assert_eq!(
                 backend.availability(),

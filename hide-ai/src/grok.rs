@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::program::Program;
 use crate::runner::{self, Environment, PrivateFile, Spec};
-use crate::text_cli::{self, TextCliConfig, classify_failure, json_from_text};
+use crate::text_cli::{TextCliConfig, classify_failure, json_from_text};
 use crate::{
     AiBackend, AiError, AiRequest, AiResponse, AiUsage, Availability, CancelToken, ModelCatalog,
     ProviderId,
@@ -85,7 +85,7 @@ impl GrokCliBackend {
     }
 
     fn list_models(&self, binary: &Program) -> Result<ModelsOutcome, String> {
-        let run = text_cli::probe(binary, &["models"], &self.config.cwd, "grok_models")?;
+        let run = self.config.probe(binary, &["models"], "grok_models")?;
         Ok(parse_models(&run.stdout, &run.stderr))
     }
 }
@@ -144,7 +144,7 @@ impl AiBackend for GrokCliBackend {
             };
         };
         match self.list_models(&binary) {
-            Ok(ModelsOutcome::Models(models)) => ModelCatalog::Offered(models),
+            Ok(ModelsOutcome::Models(models)) => ModelCatalog::plain(models),
             Ok(ModelsOutcome::NotAuthenticated) => ModelCatalog::Unknown {
                 reason: "grok_not_authenticated".to_owned(),
             },
@@ -175,7 +175,7 @@ impl AiBackend for GrokCliBackend {
                 cwd: prompt.dir(),
                 stdin: None,
                 environment: Environment::Inherit,
-                set: &Self::environment(),
+                set: &self.config.set(&Self::environment()),
                 deadline: request.deadline,
             },
             cancel,

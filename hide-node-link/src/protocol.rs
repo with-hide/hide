@@ -408,7 +408,13 @@ use crate::error::HostError;
 /// just like reserve/start/cancel. An earlier node issues a separate number
 /// during replacement and could retire the next tab's request, so it must
 /// upgrade before any renewal.
-pub const PROTOCOL_VERSION: u32 = 93;
+/// 94: a Hide AI backend names the profile it runs as
+/// (`ai::BackendSpec::profile`, PRD agent-profiles-phase2 D-09), so each
+/// item's model list is read in its own account and with its wrapper; a
+/// helper on 93 would ignore the field and answer the agent's default
+/// account in its place, so it is not admitted, and the helper this build
+/// carries is installed on the next connect.
+pub const PROTOCOL_VERSION: u32 = 94;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

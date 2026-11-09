@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { catalogFor, createCatalogObserver, forgetCatalogs, modelToSend, rememberedSelection, selectKind, takesModel } from "./agentPicker";
+import { catalogFor, createCatalogObserver, forgetCatalogs, modelLabel, modelToSend, rememberedSelection, selectKind, takesModel } from "./agentPicker";
 import type { AgentStartChoice, BackgroundAi } from "./snapshot";
 
 const START: AgentStartChoice = { kind: "codex", models: { claude: "opus", codex: "gpt-6-astra" } };
@@ -34,6 +34,58 @@ describe("switching the kind (B27)", () => {
 
   it("has no model for a terminal", () => {
     expect(selectKind("terminal", START)).toEqual({ kind: "terminal", model: null });
+  });
+});
+
+describe("an agent item's model list (agent-profiles-phase2 D-09, B8, B9)", () => {
+  const read = (profile: string, version: number, over: Record<string, unknown> = {}) => ({ profile, version, models: [] as string[], models_fixed: false, models_unavailable_reason: null as string | null, ...over });
+  const gateway = read("p-gw", 1, { models: ["opus", "sonnet"], model_labels: { opus: "glm-4.6" } });
+  const failed = (profile: string, version: number) => read(profile, version, { models_unavailable_reason: "models_not_read" });
+
+  it("lists a profile's own models by the names its agent shows, and a start passes the model", () => {
+    const state = ai(provider("claude", { models: ["haiku", "sonnet"], profile_models: [gateway, failed("p-side", 1)] }));
+    const catalog = catalogFor(state, "claude", { id: "p-gw", version: 1 });
+    expect(catalog).toEqual({ state: "ready", models: ["opus", "sonnet"], labels: { opus: "glm-4.6" } });
+    expect(modelLabel(catalog, "opus")).toBe("glm-4.6");
+    expect(modelLabel(catalog, "sonnet")).toBe("sonnet");
+    expect(catalogFor(state, "claude")).toEqual({ state: "ready", models: ["haiku", "sonnet"] });
+    expect(catalogFor(state, "claude", null)).toEqual({ state: "ready", models: ["haiku", "sonnet"] });
+  });
+
+  it("offers the agent's own list, marked, when a profile's could not be read", () => {
+    const state = ai(provider("claude", { models: ["haiku", "sonnet"], model_labels: { haiku: "Haiku" }, profile_models: [failed("p-side", 1)] }));
+    expect(catalogFor(state, "claude", { id: "p-side", version: 1 })).toEqual({ state: "ready", models: ["haiku", "sonnet"], labels: { haiku: "Haiku" }, fromDefault: true });
+  });
+
+  it("drops a profile's list once a read of it fails, also after it was read before", () => {
+    const listed = ai(provider("claude", { models: ["haiku"], profile_models: [gateway] }));
+    expect(catalogFor(listed, "claude", { id: "p-gw", version: 1 })).toMatchObject({ models: ["opus", "sonnet"] });
+    const expired = ai(provider("claude", { models: ["haiku"], profile_models: [failed("p-gw", 1)] }));
+    expect(catalogFor(expired, "claude", { id: "p-gw", version: 1 })).toEqual({ state: "ready", models: ["haiku"], fromDefault: true });
+  });
+
+  it("never takes a list read before the profile was edited for its list", () => {
+    const before = ai(provider("claude", { models: ["haiku"], profile_models: [gateway] }));
+    catalogFor(before, "claude", { id: "p-gw", version: 1 });
+    expect(catalogFor(before, "claude", { id: "p-gw", version: 2 })).toEqual({ state: "loading" });
+    const after = ai(provider("claude", { models: ["haiku"], profile_models: [failed("p-gw", 2)] }));
+    expect(catalogFor(after, "claude", { id: "p-gw", version: 2 })).toEqual({ state: "ready", models: ["haiku"], fromDefault: true });
+  });
+
+  it("keeps no list of a removed profile, so one made again with its id starts unread", () => {
+    catalogFor(ai(provider("claude", { models: ["haiku"], profile_models: [gateway] })), "claude", { id: "p-gw", version: 1 });
+    const removed = ai(provider("claude", { models: ["haiku"] }));
+    expect(catalogFor(removed, "claude", { id: "p-gw", version: 1 })).toEqual({ state: "loading" });
+    const rereading = ai(provider("claude", { state: "unread" }));
+    expect(catalogFor(rereading, "claude")).toEqual({ state: "ready", models: ["haiku"] });
+    expect(catalogFor(rereading, "claude", { id: "p-gw", version: 1 })).toEqual({ state: "loading" });
+  });
+
+  it("is loading while the profile is unread, and fails with its agent when the agent cannot answer", () => {
+    expect(catalogFor(undefined, "claude", { id: "p-new", version: 1 })).toEqual({ state: "loading" });
+    expect(catalogFor(ai(provider("claude", { state: "unread" })), "claude", { id: "p-new", version: 1 })).toEqual({ state: "loading" });
+    const signedOut = ai(provider("claude", { state: "needs_login", models_unavailable_reason: "Claude is not signed in" }));
+    expect(catalogFor(signedOut, "claude", { id: "p-new", version: 1 })).toEqual({ state: "unavailable", reason: "Claude is not signed in" });
   });
 });
 

@@ -180,7 +180,25 @@ impl UsageSnapshot {
             .map_or(WeeklyUsage::Unknown, |(used, _)| WeeklyUsage::Used(used))
     }
     pub fn weekly_reading(&self, agent: &str, now_s: u64) -> Option<(f64, u64)> {
-        let Cell::Reading { value, .. } = &self.own_agent(agent)?.limits else {
+        Self::weekly_of(&self.own_agent(agent)?.limits, now_s)
+    }
+
+    /// [`Self::weekly_reading`] of the account of the profile `id` of
+    /// `agent`, as its own row last read it (PRD agent-profiles B23); `None`
+    /// for a profile whose row is another's (`shared`) or has no figure.
+    pub fn profile_weekly_reading(&self, agent: &str, id: &str, now_s: u64) -> Option<(f64, u64)> {
+        let row = self
+            .own_agent(agent)?
+            .profiles
+            .iter()
+            .find(|row| row.id == id)?;
+        Self::weekly_of(row.limits.as_ref()?, now_s)
+    }
+
+    /// The open seven-day window of all models in `limits`, as its share
+    /// used and when it resets.
+    fn weekly_of(limits: &Cell<LimitReading>, now_s: u64) -> Option<(f64, u64)> {
+        let Cell::Reading { value, .. } = limits else {
             return None;
         };
         value.windows.iter().find_map(|window| {

@@ -2402,6 +2402,8 @@ export type AiProvider = {
   /** The model it is asked for; empty is the CLI's own default. */
   model: string;
   models: string[];
+  /** The name the agent shows for a listed model where it differs from the model a start passes (Claude Code's `displayName`); absent with none. */
+  model_labels?: Record<string, string>;
   /** The list is documented rather than queried, as an older peer may report. */
   models_fixed: boolean;
   /** "CLI default" can be chosen: the agent is asked with no `--model`. */
@@ -2412,6 +2414,21 @@ export type AiProvider = {
   weekly?: AiWeekly | null;
   /** The figure is at or past the usage limit, so Hide AI does not ask this agent (the core decides). Absent from an older daemon. */
   past_limit?: boolean;
+  /** Each of the machine's profiles of this agent, its list read as that profile runs, in the list's order; absent with none and while no screen reads model lists. */
+  profile_models?: AiProfileModels[];
+};
+
+/** One profile's model list, read with its own account, variables and wrapper. */
+export type AiProfileModels = {
+  /** The profile's id. */
+  profile: string;
+  /** The profile's version the list was read for; a list of another version than the profile's now is not its list. */
+  version: number;
+  /** Empty when the list could not be read, which `models_unavailable_reason` says; a screen then offers the agent's own list. */
+  models: string[];
+  model_labels?: Record<string, string>;
+  models_fixed: boolean;
+  models_unavailable_reason: string | null;
 };
 
 /** One agent's weekly usage: a percent and when the week resets (unix ms), when the agent said. */

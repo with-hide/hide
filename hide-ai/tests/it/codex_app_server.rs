@@ -24,6 +24,7 @@ fn backend() -> CodexAppServerBackend {
             model: "gpt-5.6-luna".to_owned(),
             cwd: std::env::temp_dir(),
             search_path: None,
+            run: hide_ai::ItemRun::default(),
         },
         Arc::new(NoopLogSink),
     )
@@ -576,4 +577,145 @@ fn availability_reports_login_model_and_install_state() {
         missing.execute(&request(Duration::from_secs(1)), &CancelToken::new()),
         Err(AiError::ProviderUnavailable(_))
     ));
+}
+
+/// One read of the model list of the item `run`, and what its app-server
+/// recorded: its `CODEX_HOME`, where that home's `auth.json` points, and the
+/// variables a profile or a wrapper set.
+fn models_of(run: hide_ai::ItemRun) -> (hide_ai::ModelCatalog, serde_json::Value) {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable, and the
+    // app-server reads it once it is started, inside `models`.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let catalog = CodexAppServerBackend::new(
+        CodexConfig {
+            binary: fixture(),
+            model: "gpt-5.6-luna".to_owned(),
+            cwd: std::env::temp_dir(),
+            // The wrapper runs with the account's search, which a test gives
+            // as its own `PATH` rather than asking the login shell.
+            search_path: std::env::var_os("PATH"),
+            run,
+        },
+        Arc::new(NoopLogSink),
+    )
+    .models();
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+    let env = serde_json::from_slice(&std::fs::read(&env_file).unwrap()).unwrap();
+    (catalog, env)
+}
+
+/// Reads the model list of an item whose gateway is `base_url` on a backend
+/// the caller keeps, and returns it with what its app-server recorded and
+/// that app-server's identity, its pid and start time, taken while the
+/// backend holds it.
+fn held_item(base_url: &str) -> (CodexAppServerBackend, serde_json::Value, (u32, u64)) {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable, and the
+    // app-server reads it once it is started, inside `models`.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let backend = CodexAppServerBackend::new(
+        CodexConfig {
+            binary: fixture(),
+            model: "gpt-5.6-luna".to_owned(),
+            cwd: std::env::temp_dir(),
+            search_path: None,
+            run: hide_ai::ItemRun {
+                env: vec![("OPENAI_BASE_URL".to_owned(), base_url.to_owned())],
+                program: None,
+            },
+        },
+        Arc::new(NoopLogSink),
+    );
+    let catalog = backend.models();
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+    assert_eq!(catalog, hide_ai::ModelCatalog::plain(["gpt-5.6-luna"]));
+    let seen: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&env_file).unwrap()).unwrap();
+    let pid = u32::try_from(seen["pid"].as_u64().unwrap()).unwrap();
+    let started = hide_platform::process::start_time(pid)
+        .expect("the app-server runs while its backend holds it");
+    (backend, seen, (pid, started))
+}
+
+/// Whether the process `identity` names no longer runs: its pid is gone, or
+/// another process that started later holds it now.
+fn ended((pid, started): (u32, u64)) -> bool {
+    !hide_platform::process::is_alive(pid)
+        || hide_platform::process::start_time(pid).ok() != Some(started)
+}
+
+/// Engineering 14, PRD agent-profiles-phase2 D-09: an item's app-server ends
+/// when its backend is dropped, which is how the core lets go of an item no
+/// window reads any more, and an edited item is read by a new app-server
+/// that runs with the edit.
+#[test]
+fn an_items_app_server_ends_with_its_backend_and_an_edit_starts_a_new_one() {
+    let (first, seen, first_server) = held_item("https://first.example/v1");
+    assert_eq!(seen["OPENAI_BASE_URL"], "https://first.example/v1");
+    assert!(!ended(first_server));
+    drop(first);
+    assert!(
+        ended(first_server),
+        "dropping the backend ended its app-server"
+    );
+
+    let (second, seen, second_server) = held_item("https://second.example/v1");
+    assert_ne!(
+        second_server, first_server,
+        "the edit runs a new app-server"
+    );
+    assert_eq!(seen["OPENAI_BASE_URL"], "https://second.example/v1");
+    drop(second);
+    assert!(ended(second_server));
+}
+
+/// PRD agent-profiles-phase2 D-07, D-09: a Codex item's list is read by an
+/// app-server that still runs under Hide's private home, signed in with the
+/// item's own account (its `auth.json`), with the item's variables, through
+/// its wrapper.
+#[test]
+fn an_items_model_list_is_read_with_its_accounts_login_and_through_its_wrapper() {
+    let (default, seen) = models_of(hide_ai::ItemRun::default());
+    assert_eq!(default, hide_ai::ModelCatalog::plain(["gpt-5.6-luna"]));
+    assert_eq!(seen["FAKE_WRAPPED"], serde_json::Value::Null);
+
+    let account = tempfile::tempdir().unwrap();
+    let (profiled, seen) = models_of(hide_ai::ItemRun {
+        env: vec![
+            (
+                "CODEX_HOME".to_owned(),
+                account.path().display().to_string(),
+            ),
+            (
+                "OPENAI_BASE_URL".to_owned(),
+                "https://gw.example/v1".to_owned(),
+            ),
+        ],
+        program: Some(hide_ai::Wrapper {
+            file: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+                "tests/fixtures/wrap-app-server.cmd"
+            } else {
+                "tests/fixtures/wrap-app-server.sh"
+            }),
+            leading: Vec::new(),
+        }),
+    });
+    assert_eq!(profiled, hide_ai::ModelCatalog::plain(["deepseek-chat"]));
+    assert_eq!(seen["FAKE_WRAPPED"], "1", "the wrapper ran the app-server");
+    assert_eq!(seen["OPENAI_BASE_URL"], "https://gw.example/v1");
+    let home = seen["CODEX_HOME"].as_str().unwrap();
+    assert!(
+        home.contains("hide-ai-codex-home-"),
+        "the app-server runs under Hide's private home, not the account's: {home}"
+    );
+    assert_eq!(
+        seen["auth_link"],
+        serde_json::Value::from(account.path().join("auth.json").display().to_string()),
+        "the private home signs in with the item's account"
+    );
 }

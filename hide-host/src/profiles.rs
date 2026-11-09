@@ -244,19 +244,25 @@ pub fn launch(env: &Env, kind: &str, id: &ProfileId) -> HostResult<ProfileLaunch
     launch_beside(env, kind, id, own.as_deref())
 }
 
-/// [`launch`] by the node whose program is `own`.
-fn launch_beside(
-    env: &Env,
-    kind: &str,
-    id: &ProfileId,
-    own: Option<&Path>,
-) -> HostResult<ProfileLaunch> {
+/// A profile as a start of it runs on this machine now: the profile as the
+/// file holds it, its account resolved, and its program found.
+struct Runnable {
+    profile: Profile,
+    account: hide_agent_adapter::Account,
+    program: Option<ProfileProgram>,
+}
+
+/// The profile `id` of `kind` as a start of it would run here now, or what
+/// a start is answered instead: gone, or refused with a sentence that names
+/// it. The one check a pane's start and Hide AI's backend of the profile
+/// make, so the two run it alike.
+fn runnable(env: &Env, kind: &str, id: &ProfileId) -> HostResult<Result<Runnable, ProfileLaunch>> {
     let place = place(env)?;
     let file = read(&place.file)?;
-    let refused = |text: String| Ok(ProfileLaunch::Refused { text });
+    let refused = |text: String| Ok(Err(ProfileLaunch::Refused { text }));
     let (profile, account) = match account_of(&place.home, &file, id, kind) {
         Ok(found) => found,
-        Err(Unusable::Gone) => return Ok(ProfileLaunch::Gone),
+        Err(Unusable::Gone) => return Ok(Err(ProfileLaunch::Gone)),
         Err(Unusable::Removing(profile)) => {
             return refused(format!("the profile {} is being removed", profile.name));
         }
@@ -283,6 +289,57 @@ fn launch_beside(
             ));
         }
     };
+    Ok(Ok(Runnable {
+        profile: profile.clone(),
+        account,
+        program,
+    }))
+}
+
+/// How Hide AI runs the agent `kind` as the profile `id` on this machine
+/// (PRD agent-profiles-phase2 D-09): the variables and the program a start
+/// of the profile runs with, for the backend the core asks for that item
+/// (`ai::BackendSpec::profile`). The built-in default runs as the agent
+/// always has. A profile that is gone, being removed, another agent's, or
+/// that cannot start here is refused with the sentence a start would get.
+pub fn ai_run(env: &Env, kind: &str, id: &ProfileId) -> HostResult<hide_ai::ItemRun> {
+    if id.is_default() {
+        return Ok(hide_ai::ItemRun::default());
+    }
+    match runnable(env, kind, id)? {
+        Ok(Runnable {
+            account, program, ..
+        }) => Ok(hide_ai::ItemRun {
+            env: account.env,
+            program: program.map(|program| hide_ai::Wrapper {
+                file: PathBuf::from(program.file),
+                leading: program.leading,
+            }),
+        }),
+        Err(ProfileLaunch::Refused { text }) => Err(HostError::new(ErrorCode::InvalidPath, text)),
+        Err(_) => Err(HostError::new(
+            ErrorCode::NotFound,
+            format!("This machine has no profile {}", id.0),
+        )),
+    }
+}
+
+/// [`launch`] by the node whose program is `own`.
+fn launch_beside(
+    env: &Env,
+    kind: &str,
+    id: &ProfileId,
+    own: Option<&Path>,
+) -> HostResult<ProfileLaunch> {
+    let Runnable {
+        profile,
+        account,
+        program,
+    } = match runnable(env, kind, id)? {
+        Ok(runnable) => runnable,
+        Err(answer) => return Ok(answer),
+    };
+    let refused = |text: String| Ok(ProfileLaunch::Refused { text });
     let exec = match own
         .ok_or_else(|| "its node's program is unknown".to_owned())
         .and_then(exec_command)
@@ -1564,6 +1621,134 @@ mod tests {
                     .display()
                     .to_string(),
             })
+        );
+    }
+
+    /// A gateway wrapper of the profile tests, a program this account can
+    /// start: a script on Unix, a batch file on Windows.
+    fn gateway(node: &Node, body: &str) -> PathBuf {
+        #[cfg(unix)]
+        {
+            let program = node.root.join("claude-gw");
+            crate::executable_fixture::write_executable(&program, &format!("#!/bin/sh\n{body}\n"));
+            program
+        }
+        #[cfg(windows)]
+        {
+            let _ = body;
+            let program = node.root.join("claude-gw.cmd");
+            std::fs::write(&program, "@echo off\r\n").unwrap();
+            program
+        }
+    }
+
+    /// PRD agent-profiles-phase2 D-09: Hide AI's backend of a profile runs
+    /// as a start of it would, with its account's variables, its own and its
+    /// wrapper; the built-in default runs as the agent always has, and a
+    /// profile that cannot start is refused with the start's sentence.
+    #[test]
+    fn a_hide_ai_backend_of_a_profile_runs_as_a_start_of_it_would() {
+        let node = Node::new();
+        let wrapper = gateway(&node, "exit 0");
+        let added = node.apply(ProfileOp::Add {
+            kind: "claude-code".to_owned(),
+            name: "gw".to_owned(),
+            account: folder("~/accounts/gw/"),
+            program: Some(wrapper.display().to_string()),
+            env: vec![(
+                "ANTHROPIC_BASE_URL".to_owned(),
+                "https://gw.example".to_owned(),
+            )],
+            default: false,
+        });
+        assert_eq!(added.refused, None, "{added:?}");
+        let id = added.added.clone().unwrap();
+        let account = format!("{}/", node.home().join("accounts/gw").display());
+
+        assert_eq!(
+            ai_run(&node.env, "claude-code", &id).unwrap(),
+            hide_ai::ItemRun {
+                env: vec![
+                    ("CLAUDE_CONFIG_DIR".to_owned(), account),
+                    (
+                        "ANTHROPIC_BASE_URL".to_owned(),
+                        "https://gw.example".to_owned()
+                    ),
+                ],
+                program: Some(hide_ai::Wrapper {
+                    file: wrapper,
+                    leading: Vec::new(),
+                }),
+            }
+        );
+        assert_eq!(
+            ai_run(&node.env, "claude-code", &ProfileId::default_profile()).unwrap(),
+            hide_ai::ItemRun::default()
+        );
+        let other = ai_run(&node.env, "codex", &id).unwrap_err();
+        assert_eq!(other.message, "the profile gw is not one of codex's");
+
+        assert_eq!(
+            node.apply(ProfileOp::Remove { id: id.clone() }).refused,
+            None
+        );
+        let gone = ai_run(&node.env, "claude-code", &id).unwrap_err();
+        assert_eq!(gone.code, ErrorCode::NotFound, "{gone:?}");
+    }
+
+    /// The node answers a Hide AI model list of one profile by running that
+    /// profile's wrapper with its account's and its own variables: the list
+    /// is the one the gateway names, which the default account's is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_profiles_model_list_is_answered_by_its_wrapper_in_its_account() {
+        let node = Node::new();
+        let seen = node.root.join("seen");
+        let wrapper = gateway(
+            &node,
+            &format!(
+                "cat > /dev/null\nprintf '%s %s' \"$CLAUDE_CONFIG_DIR\" \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" > '{}'\nprintf '%s\\n' '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"response\":{{\"models\":[{{\"value\":\"default\"}},{{\"value\":\"opus\",\"displayName\":\"'\"$ANTHROPIC_DEFAULT_OPUS_MODEL\"'\"}},{{\"value\":\"sonnet\",\"displayName\":\"'\"$ANTHROPIC_DEFAULT_OPUS_MODEL\"'\"}}]}}}}}}'",
+                seen.display()
+            ),
+        );
+        let added = node.apply(ProfileOp::Add {
+            kind: "claude-code".to_owned(),
+            name: "gw".to_owned(),
+            account: folder("~/accounts/gw/"),
+            program: Some(wrapper.display().to_string()),
+            env: vec![(
+                "ANTHROPIC_DEFAULT_OPUS_MODEL".to_owned(),
+                "glm-4.6".to_owned(),
+            )],
+            default: false,
+        });
+        let id = added.added.clone().unwrap();
+        let backend = hide_node_link::ai::BackendSpec {
+            instance: 9_001,
+            provider: hide_ai::ProviderId::CLAUDE,
+            model: "sonnet".to_owned(),
+            profile: Some(id),
+        };
+
+        let answer: hide_node_link::ai::Logged<hide_ai::ModelCatalog> = serde_json::from_value(
+            node.call(Call::AiModels {
+                backend: backend.clone(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        node.call(Call::AiRelease { instance: 9_001 }).unwrap();
+
+        assert_eq!(
+            answer.value,
+            hide_ai::ModelCatalog::Offered(vec![hide_ai::Model {
+                id: "opus".to_owned(),
+                label: Some("glm-4.6".to_owned()),
+            }])
+        );
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            format!("{}/ glm-4.6", node.home().join("accounts/gw").display())
         );
     }
 

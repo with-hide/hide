@@ -105,7 +105,7 @@ impl AiBackend for Scripted {
         Availability::Ready
     }
     fn models(&self) -> ModelCatalog {
-        ModelCatalog::Offered(vec!["fixture".to_owned()])
+        ModelCatalog::plain(["fixture"])
     }
     fn execute(&self, request: &AiRequest, cancel: &CancelToken) -> Result<AiResponse, AiError> {
         self.inputs.lock().unwrap().push(request.input.clone());

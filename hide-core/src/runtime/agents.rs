@@ -2611,10 +2611,34 @@ impl Runtime {
                 .map(|device| crate::ai::DeviceAsk {
                     selecting: self.ai_selecting(&device),
                     cli_found: self.ai_cli_found(&device),
+                    items: self.ai_items(&device),
                     id: device,
                 })
                 .collect(),
+            items: self.ai_items(self.node.as_str()),
         }
+    }
+
+    /// The profiles of `machine` whose model lists are read beside their
+    /// agents' (PRD agent-profiles-phase2 D-09): each a start may take, of
+    /// an agent Hide AI has a provider for, in the machine's list order.
+    fn ai_items(&self, machine: &str) -> Vec<crate::ai::ItemAsk> {
+        self.machine_profiles(machine)
+            .map(|profiles| {
+                profiles
+                    .profiles
+                    .iter()
+                    .filter(|profile| profile.startable)
+                    .filter_map(|profile| {
+                        Some(crate::ai::ItemAsk {
+                            provider: hide_ai::ProviderId::for_agent(&profile.kind)?,
+                            profile: hide_agent_adapter::ProfileId(profile.id.clone()),
+                            version: profile.version,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Whether `hide agent catalog` is waiting for one read of the model

@@ -31,12 +31,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::program::Program;
+use crate::program::{ItemRun, Program};
 use crate::runner::{self, Environment, Run, Spec};
 use crate::text_cli::{json_from_text, system_with_schema};
 use crate::{
     AiBackend, AiError, AiRequest, AiResponse, AiUsage, AnswerMode, Availability, CancelToken,
-    ModelCatalog, ModelTokens, ProviderId,
+    Model, ModelCatalog, ModelTokens, ProviderId,
 };
 
 /// The default for background features. With thinking off (see
@@ -103,6 +103,10 @@ pub struct ClaudeConfig {
     /// choose it, such as a test with a stand-in login shell, gives one built
     /// by `hide_platform::programs::cli_path_with`.
     pub search_path: Option<OsString>,
+    /// The item this backend runs as: its account's and profile's variables
+    /// and its wrapper, for every child it starts (PRD agent-profiles-phase2
+    /// D-09). The default is the built-in default profile.
+    pub run: ItemRun,
 }
 
 impl Default for ClaudeConfig {
@@ -112,6 +116,7 @@ impl Default for ClaudeConfig {
             model: DEFAULT_MODEL.to_owned(),
             cwd: std::env::temp_dir(),
             search_path: None,
+            run: ItemRun::default(),
         }
     }
 }
@@ -139,7 +144,7 @@ pub enum UsageError {
 pub struct ClaudeCliBackend {
     config: ClaudeConfig,
     /// The account's model list and when it was read.
-    models: Mutex<Option<(Instant, Vec<String>)>>,
+    models: Mutex<Option<(Instant, Vec<Model>)>>,
 }
 
 impl ClaudeCliBackend {
@@ -239,6 +244,8 @@ impl ClaudeCliBackend {
         cancel: &CancelToken,
     ) -> Result<String, UsageError> {
         let binary = self.resolved_binary().ok_or(UsageError::NotInstalled)?;
+        let mut variables = self.config.run.set();
+        variables.extend(set.iter().cloned());
         let run = runner::run(
             &Spec {
                 binary: &binary,
@@ -246,7 +253,7 @@ impl ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: None,
                 environment: Environment::Login,
-                set,
+                set: &variables,
                 deadline: USAGE_TIMEOUT,
             },
             cancel,
@@ -273,7 +280,9 @@ impl ClaudeCliBackend {
     }
 
     fn resolved_binary(&self) -> Option<Program> {
-        Program::resolve(&self.config.binary, self.config.search_path.as_deref())
+        self.config
+            .run
+            .program(&self.config.binary, self.config.search_path.as_deref())
     }
 
     /// The argument vector the account's model list is asked with: the
@@ -302,12 +311,14 @@ impl ClaudeCliBackend {
     /// The one line written to the child's stdin for [`Self::models_arguments`].
     const INITIALIZE_REQUEST: &'static str = r#"{"type":"control_request","request_id":"hide-models","request":{"subtype":"initialize"}}"#;
 
-    /// Asks the CLI which models the logged-in account can use.
+    /// Asks the CLI which models the logged-in account can use, in the
+    /// item's own environment: the variables of its account and profile, and
+    /// its wrapper, which is what moves the list to a gateway's models.
     ///
     /// The `initialize` answer also carries the account (an email, an
-    /// organization, the plan): only the model names are read from it, and
+    /// organization, the plan): only the models' names are read from it, and
     /// neither the answer nor any part of it is logged or returned.
-    fn read_models(&self, binary: &Program) -> Result<Vec<String>, String> {
+    fn read_models(&self, binary: &Program) -> Result<Vec<Model>, String> {
         let mut input = Self::INITIALIZE_REQUEST.to_owned();
         input.push('\n');
         let run = runner::run(
@@ -317,7 +328,7 @@ impl ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: Some(&input),
                 environment: Environment::Inherit,
-                set: &[],
+                set: &self.config.run.set(),
                 deadline: MODELS_TIMEOUT,
             },
             &CancelToken::new(),
@@ -328,10 +339,17 @@ impl ClaudeCliBackend {
     }
 }
 
-/// The model names in the `initialize` control response, in the order the CLI
+/// The models in the `initialize` control response, in the order the CLI
 /// lists them, without `default`: that is the CLI choosing for the account,
 /// which the shell offers as "CLI default" (no `--model`) instead.
-fn parse_models(stdout: &str) -> Option<Vec<String>> {
+///
+/// Each is its `value`, which `--model` takes, and its `displayName`, which
+/// the CLI's own menu shows. Behind a gateway the CLI names the gateway's
+/// model there (`ANTHROPIC_DEFAULT_SONNET_MODEL` set makes `sonnet` show as
+/// that model, measured 2026-11-10 on claude 2.1.319), so two values can show
+/// one name: the first of them stands for it, since either runs that model
+/// (PRD agent-profiles-phase2 B8).
+fn parse_models(stdout: &str) -> Option<Vec<Model>> {
     let frame = stdout.lines().find_map(|line| {
         let frame = serde_json::from_str::<Value>(line.trim()).ok()?;
         (frame.get("type").and_then(Value::as_str) == Some("control_response")).then_some(frame)
@@ -341,13 +359,32 @@ fn parse_models(stdout: &str) -> Option<Vec<String>> {
         return None;
     }
     let models = response.get("response")?.get("models")?.as_array()?;
-    let names: Vec<String> = models
-        .iter()
-        .filter_map(|model| model.get("value").and_then(Value::as_str))
-        .filter(|name| *name != "default")
-        .map(str::to_owned)
-        .collect();
-    (!names.is_empty()).then_some(names)
+    let mut listed: Vec<Model> = Vec::new();
+    for model in models {
+        let Some(id) = model.get("value").and_then(Value::as_str) else {
+            continue;
+        };
+        if id == "default" {
+            continue;
+        }
+        let label = model
+            .get("displayName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|label| !label.is_empty() && *label != id);
+        let shown = label.unwrap_or(id);
+        if listed
+            .iter()
+            .any(|seen| seen.label.as_deref().unwrap_or(&seen.id) == shown)
+        {
+            continue;
+        }
+        listed.push(Model {
+            id: id.to_owned(),
+            label: label.map(str::to_owned),
+        });
+    }
+    (!listed.is_empty()).then_some(listed)
 }
 
 impl AiBackend for ClaudeCliBackend {
@@ -368,7 +405,7 @@ impl AiBackend for ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: None,
                 environment: Environment::Inherit,
-                set: &[],
+                set: &self.config.run.set(),
                 deadline: AUTH_TIMEOUT,
             },
             &CancelToken::new(),
@@ -428,7 +465,12 @@ impl AiBackend for ClaudeCliBackend {
         let binary = self
             .resolved_binary()
             .ok_or_else(|| AiError::ProviderUnavailable("claude_not_installed".to_owned()))?;
-        let thinking_off = [(THINKING_OFF.0, THINKING_OFF.1.to_owned())];
+        let mut variables = self.config.run.set();
+        // Print mode thinks by default; see `THINKING_OFF`. A picked effort
+        // is a request for thinking, so it is left on.
+        if request.effort(ProviderId::CLAUDE).is_none() {
+            variables.push((THINKING_OFF.0, THINKING_OFF.1.to_owned()));
+        }
         let (system, schema) = match request.answer {
             AnswerMode::Schema => (
                 request.system_prompt().into_owned(),
@@ -451,13 +493,7 @@ impl AiBackend for ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: Some(&request.input),
                 environment: Environment::Inherit,
-                // Print mode thinks by default; see `THINKING_OFF`. A picked
-                // effort is a request for thinking, so it is left on.
-                set: if request.effort(ProviderId::CLAUDE).is_some() {
-                    &[]
-                } else {
-                    &thinking_off
-                },
+                set: &variables,
                 deadline: request.deadline,
             },
             cancel,
@@ -1015,8 +1051,45 @@ mod tests {
         });
         let stdout = format!("{}\n", answer);
         let models = parse_models(&stdout).unwrap();
-        assert_eq!(models, ["opus", "sonnet"]);
-        assert!(!models.iter().any(|model| model.contains("example")));
+        assert_eq!(models, [Model::plain("opus"), Model::plain("sonnet")]);
+        assert!(!format!("{models:?}").contains("example"));
+    }
+
+    /// What claude 2.1.319 answered on 2026-11-10 with a gateway's
+    /// variables set (`ANTHROPIC_BASE_URL`, the three
+    /// `ANTHROPIC_DEFAULT_*_MODEL` and `ANTHROPIC_CUSTOM_MODEL_OPTION`): the
+    /// aliases keep their values and show the gateway's models. A start
+    /// passes the value and the menu shows the name, once per name (B8).
+    #[test]
+    fn a_gateways_models_show_their_names_once_and_run_by_their_values() {
+        let answer = json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "hide-models",
+                "response": {"models": [
+                    {"value": "default", "displayName": "Default (recommended)"},
+                    {"value": "opus", "displayName": "glm-4.6"},
+                    {"value": "fable", "displayName": "Fable"},
+                    {"value": "sonnet", "displayName": "glm-4.6"},
+                    {"value": "haiku", "displayName": "deepseek-chat"},
+                    {"value": "deepseek-reasoner", "displayName": "deepseek-reasoner"}
+                ]}
+            }
+        });
+        let labelled = |id: &str, label: &str| Model {
+            id: id.to_owned(),
+            label: Some(label.to_owned()),
+        };
+        assert_eq!(
+            parse_models(&format!("{answer}\n")).unwrap(),
+            [
+                labelled("opus", "glm-4.6"),
+                labelled("fable", "Fable"),
+                labelled("haiku", "deepseek-chat"),
+                Model::plain("deepseek-reasoner"),
+            ]
+        );
     }
 
     #[test]

@@ -1059,3 +1059,233 @@ fn automatic_start_choices_follow_their_inputs_and_forget_old_projects() {
     runtime.refresh_start_profile_catalog();
     assert!(runtime.snapshot.status.start_profiles.is_empty());
 }
+
+/// The share of the weekly window `used` of an account, open for three
+/// more days.
+fn weekly_reading(
+    used_percent: f64,
+) -> crate::usage::model::Cell<crate::usage::model::LimitReading> {
+    use crate::usage::model::*;
+    Cell::Reading {
+        value: LimitReading {
+            windows: vec![WindowReading {
+                kind: WindowKind::Weekly,
+                scope: Scope::All,
+                outcome: WindowOutcome::Open {
+                    used_percent,
+                    resets_at_s: unix_milliseconds() / 1000 + 3 * 24 * 3_600,
+                },
+            }],
+        },
+        freshness: Freshness::Fresh,
+        observed_at_ms: 0,
+    }
+}
+
+/// PRD agent-profiles-phase2 B11, D-09, B9, D-11: `hide agent catalog`
+/// lists every agent item a start can take, its built-in default then each
+/// startable profile by its `--profile` name, with the models its own
+/// environment listed (the agent's default list, marked, when its read
+/// failed), and its own account's weekly figure; a profile the read has not
+/// reached yet is unread, and the model read asks for every such profile.
+#[test]
+fn the_catalog_lists_each_profile_as_an_item_with_its_own_models_and_its_accounts_usage() {
+    use crate::model::BackgroundAiProfileModels;
+    use crate::usage::model::{AgentUsage, Cell, ProfileUsage};
+    use hide_node_link::profiles::ProfileLogin;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let mut runtime = listed();
+    let node = runtime.node.to_string();
+    {
+        let profiles = runtime
+            .kit_states
+            .get_mut(&node)
+            .unwrap()
+            .profiles
+            .as_mut()
+            .unwrap();
+        profiles.profiles[0].login = Some(ProfileLogin::SignedIn);
+        profiles.profiles[1].login = Some(ProfileLogin::SignedOut);
+        // A gateway: the default account through a wrapper of its own.
+        let mut gateway = profile("p-gw", "claude-code", "gw");
+        gateway.account = None;
+        gateway.program = Some("/home/me/bin/claude-gw".to_owned());
+        gateway.account_key = Some(AccountKey::Default);
+        // Another profile in `work`'s account, and one being removed.
+        let mut twin = profile("p-twin", "claude-code", "twin");
+        twin.account_key = profiles.profiles[0].account_key.clone();
+        let mut leaving = profile("p-old", "claude-code", "old");
+        leaving.startable = false;
+        profiles.profiles.splice(2..2, [gateway, twin, leaving]);
+    }
+    let asked: Vec<(&str, String)> = runtime
+        .ai_request()
+        .items
+        .iter()
+        .map(|item| (item.provider.as_str(), item.profile.0.clone()))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("claude", "p-work".to_owned()),
+            ("claude", "p-side".to_owned()),
+            ("claude", "p-gw".to_owned()),
+            ("claude", "p-twin".to_owned()),
+            ("codex", "p-team".to_owned()),
+        ],
+        "every startable profile's list is read, in the list's order"
+    );
+
+    runtime.ingest_ai_settings(hide_ai::AiSettings::default(), None);
+    let mut read = super::agents_settings_remote::ready_read(&["claude", "codex"]);
+    let claude = read
+        .providers
+        .iter_mut()
+        .find(|row| row.id == "claude")
+        .unwrap();
+    claude.model_labels = BTreeMap::from([("m-1".to_owned(), "Model One".to_owned())]);
+    claude.profile_models = vec![
+        BackgroundAiProfileModels {
+            profile: "p-work".to_owned(),
+            version: 1,
+            models: vec!["opus".to_owned()],
+            model_labels: BTreeMap::from([("opus".to_owned(), "glm-4.6".to_owned())]),
+            ..BackgroundAiProfileModels::default()
+        },
+        BackgroundAiProfileModels {
+            profile: "p-side".to_owned(),
+            version: 1,
+            models_unavailable_reason: Some("models_not_read".to_owned()),
+            ..BackgroundAiProfileModels::default()
+        },
+    ];
+    runtime.ingest_background_ai(read);
+    runtime.ingest_usage(vec![AgentUsage {
+        agent: "claude".to_owned(),
+        limits: weekly_reading(30.0),
+        consumption: Cell::Unsupported,
+        profiles: vec![
+            ProfileUsage {
+                id: "p-work".to_owned(),
+                shared: false,
+                limits: Some(weekly_reading(95.0)),
+            },
+            ProfileUsage {
+                id: "p-twin".to_owned(),
+                shared: true,
+                limits: None,
+            },
+        ],
+    }]);
+
+    let catalog = runtime.agent_catalog(&node, None, false).unwrap();
+    let items = catalog["items"].as_array().unwrap();
+    let rows_of = |id: &str| -> Vec<&str> {
+        items
+            .iter()
+            .filter(|item| item["id"] == id)
+            .map(|item| item["profile"].as_str().unwrap())
+            .collect()
+    };
+    assert_eq!(
+        rows_of("claude-code"),
+        ["default", "work", "side", "gw", "twin"]
+    );
+    assert_eq!(rows_of("codex"), ["default", "team"]);
+    let row = |id: &str, profile: &str| {
+        items
+            .iter()
+            .find(|item| item["id"] == id && item["profile"] == profile)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {id} {profile} in {catalog}"))
+    };
+
+    let default = row("claude-code", "default");
+    assert_eq!(default["models"], json!(["m-1", "m-2"]));
+    assert_eq!(default["model_labels"], json!({"m-1": "Model One"}));
+    assert_eq!(default["models_from_default"], false);
+
+    let work = row("claude-code", "work");
+    assert_eq!(work["models"], json!(["opus"]), "a start passes the value");
+    assert_eq!(work["model_labels"], json!({"opus": "glm-4.6"}));
+    assert_eq!(work["models_from_default"], false);
+    assert_eq!(work["signed_in"], true);
+    assert_eq!(work["weekly_used_percent"], 95.0);
+    assert!(work["weekly_resets_at_ms"].is_u64());
+    assert_eq!(work["past_usage_limit"], true, "past the 90% limit");
+
+    let side = row("claude-code", "side");
+    assert_eq!(
+        side["models"],
+        json!(["m-1", "m-2"]),
+        "a list that could not be read is the agent's"
+    );
+    assert_eq!(side["models_from_default"], true);
+    assert!(side["models_unavailable_reason"].is_null());
+    assert_eq!(side["signed_in"], false);
+    assert!(
+        side["weekly_used_percent"].is_null(),
+        "its account has no reading"
+    );
+
+    let twin = row("claude-code", "twin");
+    assert_eq!(
+        twin["weekly_used_percent"], 95.0,
+        "a profile in another's account reads that account's figure"
+    );
+
+    let gateway = row("claude-code", "gw");
+    assert!(gateway["models"].is_null());
+    assert_eq!(gateway["models_unavailable_reason"], "models_unread");
+    assert!(
+        gateway["weekly_used_percent"].is_null(),
+        "a wrapper may run the default account elsewhere"
+    );
+    assert_eq!(gateway["past_usage_limit"], false);
+    assert_eq!(
+        row("codex", "team")["models_unavailable_reason"],
+        "models_unread"
+    );
+    assert_eq!(catalog["models_read_pending"], true);
+
+    // `work` is edited: the list read before the edit is not its list, and
+    // a read is asked for again.
+    runtime
+        .kit_states
+        .get_mut(&node)
+        .unwrap()
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles[0]
+        .version = 2;
+    let edited = runtime.agent_catalog(&node, None, false).unwrap();
+    let edited_work = edited["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["profile"] == "work")
+        .unwrap();
+    assert!(edited_work["models"].is_null(), "{edited_work}");
+    assert_eq!(edited_work["models_unavailable_reason"], "models_unread");
+    assert_eq!(edited["models_read_pending"], true);
+
+    let late = runtime.agent_catalog(&node, None, true).unwrap();
+    assert_eq!(late["models_read_pending"], false);
+    let late_gateway = late["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["profile"] == "gw")
+        .unwrap();
+    assert_eq!(
+        late_gateway["models_unavailable_reason"],
+        "models_read_timeout"
+    );
+    assert_eq!(
+        late_gateway["cli_default_model"],
+        hide_ai::ProviderId::CLAUDE.default_model()
+    );
+}
