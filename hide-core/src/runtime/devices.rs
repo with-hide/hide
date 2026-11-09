@@ -404,6 +404,7 @@ impl Runtime {
                 }
             }
         }
+        self.refresh_start_profile_catalog();
         self.reconcile_remote_terminal_panes(device_id, &HashSet::new(), &HashSet::new());
         if self.look.front() == Some(device_id) {
             self.set_front_device(Some(self.node.as_str().to_owned()));

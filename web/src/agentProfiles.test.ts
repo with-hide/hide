@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agentProfilesView, pickedProfile, signInStart } from "./agentProfiles";
+import { agentProfilesView, startProfiles, signInStart } from "./agentProfiles";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
-import type { AgentProfileWire, MachineAgentProfiles } from "./snapshot";
+import type { AgentProfileWire, MachineAgentProfiles, SnapshotRest } from "./snapshot";
 import type { StartTarget, StartTargets } from "./startTargets";
 
 const NOW = 1_800_000_000_000;
@@ -72,14 +72,12 @@ describe("signInStart", () => {
   });
 });
 
-describe("pickedProfile", () => {
-  // D-30, D-32, B14: the menu preselects what the core's start takes, by the core's own judgment of each profile.
-  it("passes over a project default the core will not start and keeps one it will", () => {
-    const listed = { ...machine([wire("p-work", { install: "removing", startable: false }), wire("p-side"), wire("p-new", { install: null })]), defaults: { "claude-code": "p-side" } };
-    expect(pickedProfile(listed, "claude-code", "p-work")).toBe("p-side");
-    expect(pickedProfile(listed, "claude-code", "p-new")).toBe("p-new");
-    expect(pickedProfile(listed, "claude-code", "p-gone")).toBe("p-side");
-    expect(pickedProfile(listed, "claude-code", "default")).toBe("default");
-    expect(pickedProfile({ ...listed, defaults: {} }, "claude-code", "p-work")).toBe("default");
+describe("startProfiles", () => {
+  it("shows the core's final automatic selection without repeating its priority", () => {
+    const rest = {
+      navigator: { devices: [{ id: "mac", kit: { profiles: { ...machine([wire("p-side"), wire("p-new")]), defaults: { "claude-code": "p-side" } } } }] },
+      status: { start_profiles: { project: { device_id: "mac", root: "/project", profiles: { "claude-code": "p-new" } } } },
+    } as unknown as SnapshotRest;
+    expect(startProfiles(rest, "mac", "project", "claude-code")?.picked).toBe("p-new");
   });
 });

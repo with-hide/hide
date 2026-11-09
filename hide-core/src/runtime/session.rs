@@ -812,6 +812,7 @@ impl Runtime {
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
         self.snapshot.navigator.workspaces = workspaces;
+        self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),
@@ -6016,6 +6017,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         self.snapshot.navigator.workspaces = workspaces;
+        self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
             self.machine_name.as_deref(),

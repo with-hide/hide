@@ -2717,6 +2717,7 @@ impl Runtime {
             #[cfg(test)]
             test_dirs: Vec::new(),
         };
+        runtime.refresh_start_profiles();
         runtime.resync_navigator_focus();
         runtime.refresh_agent_scopes();
         // A sleep saved before this start is as closed as it was.

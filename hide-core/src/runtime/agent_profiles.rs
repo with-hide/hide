@@ -23,6 +23,56 @@ pub(super) struct ProfileChangePayload {
 }
 
 impl Runtime {
+    /// Refresh only when a project's identity, device or root changed. A
+    /// catalog's pane updates do not run the profile picker again.
+    pub(super) fn refresh_start_profile_catalog(&mut self) {
+        let kept = &self.snapshot.status.start_profiles;
+        if self.catalog_workspaces().count() != kept.len()
+            || self.catalog_workspaces().any(|project| {
+                kept.get(&project.id).is_none_or(|row| {
+                    row.device_id != project.device_id || row.root != project.path
+                })
+            })
+        {
+            self.refresh_start_profiles();
+        }
+    }
+
+    /// The final automatic choice, never a second interpretation of its
+    /// priority. Called on profile lists, project settings and catalog changes.
+    pub(super) fn refresh_start_profiles(&mut self) {
+        self.snapshot.status.start_profiles = self
+            .catalog_workspaces()
+            .map(|project| {
+                let profiles = hide_agent_adapter::ADAPTERS
+                    .iter()
+                    .map(|adapter| {
+                        let selected = self.new_start_profile(
+                            &project.device_id,
+                            Some(adapter.id),
+                            Some(&project.path),
+                            None,
+                        );
+                        let selected = selected
+                            .expect("an automatic choice has no explicit profile to refuse");
+                        (
+                            adapter.id.to_owned(),
+                            selected.map_or_else(|| "default".to_owned(), |(id, _)| id.0),
+                        )
+                    })
+                    .collect();
+                (
+                    project.id.clone(),
+                    crate::model::StartProfilesSnapshot {
+                        device_id: project.device_id.clone(),
+                        root: project.path.clone(),
+                        profiles,
+                    },
+                )
+            })
+            .collect();
+    }
+
     /// `hide agent profile` for a caller on `device`: the plan, or why
     /// there is none. A listing whose machine was read answers without a
     /// call too, but asks the node all the same, so it shows what the

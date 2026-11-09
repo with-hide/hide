@@ -975,6 +975,15 @@ fn a_project_default_being_removed_is_passed_over_by_the_start_and_the_screen_al
     };
     runtime.ingest_profiles(&node, crate::runtime::kit::ProfilesRead::Listed(list));
     project_default(&mut runtime, "p-work");
+    let mut project = workspace("project", "blog", ROOT, Vec::new());
+    project.device_id = node.clone();
+    project.path = ROOT.to_owned();
+    runtime.snapshot.navigator.workspaces = vec![project];
+    runtime.refresh_start_profile_catalog();
+    assert_eq!(
+        runtime.snapshot.status.start_profiles["project"].profiles["claude-code"],
+        "p-side"
+    );
     let start = runtime
         .new_start_profile(&node, Some("claude"), Some(ROOT), None)
         .map(|profile| profile.map(|(id, _)| id.0));
@@ -996,4 +1005,57 @@ fn a_project_default_being_removed_is_passed_over_by_the_start_and_the_screen_al
             .is_err(),
         "a start that chose it is refused"
     );
+}
+
+/// A change of project, machine, agent or profile state must reach the
+/// preselection before the next start panel reads it.
+#[test]
+fn automatic_start_choices_follow_their_inputs_and_forget_old_projects() {
+    let mut runtime = listed();
+    let node = runtime.node.to_string();
+    let mut project = workspace("project", "blog", ROOT, Vec::new());
+    project.device_id = node.clone();
+    project.path = ROOT.to_owned();
+    runtime.snapshot.navigator.workspaces = vec![project];
+    runtime.refresh_start_profile_catalog();
+    let picked = |runtime: &Runtime, kind: &str| {
+        runtime.snapshot.status.start_profiles["project"].profiles[kind].clone()
+    };
+    assert_eq!(picked(&runtime, "claude-code"), "p-side");
+    assert_eq!(picked(&runtime, "codex"), "default");
+    project_default(&mut runtime, "default");
+    // Exercise the same settings-change hook as a persisted project edit.
+    let record = runtime
+        .snapshot
+        .ui_state
+        .project_settings
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    runtime.project_settings_changed(None, &record);
+    assert_eq!(picked(&runtime, "claude-code"), "default");
+    project_default(&mut runtime, "p-work");
+    let record = runtime
+        .snapshot
+        .ui_state
+        .project_settings
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    runtime.project_settings_changed(None, &record);
+    assert_eq!(picked(&runtime, "claude-code"), "p-work");
+    let mut kit = runtime.kit_state(&node);
+    kit.profiles.as_mut().unwrap().profiles[0].install =
+        Some(crate::model::ProfileInstall::RemoveFailed);
+    kit.profiles.as_mut().unwrap().profiles[0].startable = false;
+    runtime.set_kit_state(&node, kit);
+    assert_eq!(picked(&runtime, "claude-code"), "p-side");
+    runtime.snapshot.navigator.workspaces[0].device_id = "other".to_owned();
+    runtime.refresh_start_profile_catalog();
+    assert_eq!(picked(&runtime, "claude-code"), "default");
+    runtime.snapshot.navigator.workspaces.clear();
+    runtime.refresh_start_profile_catalog();
+    assert!(runtime.snapshot.status.start_profiles.is_empty());
 }

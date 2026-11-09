@@ -101,14 +101,6 @@ export function agentProfilesView(profiles: MachineAgentProfiles | null, agent: 
   return { agent, label, way, program: agentAdapter(agent)?.program ?? agent, profiles: [builtIn, ...own] };
 }
 
-/** The profile a start of `agent` picks with nothing chosen (D-32): the project's default while a start may take it, else the agent's default there. Whether a start may take a profile is the core's judgment (`startable`), the one `launch::pick` decides the start by; this only says which one the menu shows chosen. */
-export function pickedProfile(profiles: MachineAgentProfiles | null, agent: string, projectDefault: string | null): string {
-  // A project that names the built-in profile starts it; only no choice falls through to the agent's default.
-  if (projectDefault === BUILT_IN_PROFILE) return BUILT_IN_PROFILE;
-  const startable = (id: string | null | undefined) => (id && profiles?.profiles.some((profile) => profile.kind === agent && profile.id === id && profile.startable) ? id : null);
-  return startable(projectDefault) ?? startable(profiles?.defaults[agent]) ?? BUILT_IN_PROFILE;
-}
-
 /** The answer to the request `requestId`, once the core gave one. */
 export function profileAnswer(rest: SnapshotRest | null, requestId: string | null): AgentProfileAnswer | null {
   const answer = rest?.status?.agent_profile_answer;
@@ -260,8 +252,11 @@ export function startProfiles(rest: SnapshotRest | null, deviceId: string, works
   if (!adapter || !listed) return null;
   const view = agentProfilesView(listed, adapter.id, adapter.label, usage);
   if (!view || view.profiles.length < 2) return null;
+  const selection = rest?.status?.start_profiles?.[workspaceId];
+  const picked = selection?.device_id === deviceId ? selection.profiles[adapter.id] : undefined;
+  if (!picked) return null;
   const projectDefault = projectProfile(rest, deviceId, workspaceId, adapter.id);
-  return { view, projectDefault, picked: pickedProfile(listed, adapter.id, projectDefault) };
+  return { view, projectDefault, picked };
 }
 
 /**

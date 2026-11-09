@@ -7273,8 +7273,17 @@ pub struct PaneMovePreviewSnapshot {
     pub message: Option<String>,
 }
 
+/// A project's automatic start choice, from the same picker a start uses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StartProfilesSnapshot {
+    pub device_id: String,
+    pub root: String,
+    pub profiles: BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StatusSnapshot {
+    pub start_profiles: BTreeMap<String, StartProfilesSnapshot>,
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
     #[serde(rename = "herdr")]
@@ -8037,6 +8046,7 @@ impl Snapshot {
                 replacement_range: None,
             },
             status: StatusSnapshot {
+                start_profiles: BTreeMap::new(),
                 tab_rename: None,
                 // The engine's status until the session sync first answers.
                 engine: ProviderStatusSnapshot {

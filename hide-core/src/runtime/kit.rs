@@ -1764,6 +1764,7 @@ impl Runtime {
         let judged_before = self.kit_states.get(device_id).map(pane_judgement_inputs);
         let judged_now = pane_judgement_inputs(&snapshot);
         self.kit_states.insert(device_id.to_owned(), snapshot);
+        self.refresh_start_profiles();
         self.refresh_device_snapshots();
         // A device's agent panes are judged against its kit.
         if device_id != self.node.as_str() {
