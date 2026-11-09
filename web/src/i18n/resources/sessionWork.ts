@@ -48,7 +48,7 @@ const words = {
   "paneTurn.finished": ["Done", "끝남", "完了", "完成"],
   "paneTurn.earlier": ["Earlier turns", "이전 요청", "前のターン", "之前的轮次"],
   "paneTurn.unsummarized": ["No summary", "요약 없음", "要約なし", "无摘要"],
-  "paneTurn.answer": ["Agent's answer", "에이전트의 답", "エージェントの回答", "代理的回答"],
+  "paneTurn.answer": ["Agent's answer", "에이전트의 답", "エージェントの回答", "智能体的回答"],
   "paneTurn.whole": ["Show all", "전체 보기", "全文を表示", "查看全部"],
   "paneTurn.fold": ["Collapse", "접기", "閉じる", "收起"],
   "paneTurn.wholeReading": ["Reading…", "읽는 중…", "読み込み中…", "正在读取…"],
