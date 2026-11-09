@@ -331,10 +331,7 @@ pub fn trust_account(
     let place = place(env)?;
     let file = read(&place.file)?;
     let Some(stored) = file.profiles.iter().find(|stored| stored.profile.id == *id) else {
-        return refused(format!(
-            "the profile {} is no longer on this machine",
-            id.0
-        ));
+        return refused(format!("the profile {} is no longer on this machine", id.0));
     };
     let profile = &stored.profile;
     if stored.removing {
@@ -1212,6 +1209,51 @@ mod tests {
         assert_eq!(node.list(false).profiles, Vec::new());
         let gone = node.call(Call::ProfileInstall { profile: id }).unwrap_err();
         assert_eq!(gone.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn a_profiles_worktree_trust_is_written_in_its_account_and_a_gone_profile_is_refused() {
+        let node = Node::new();
+        let id = node
+            .apply(add("claude-code", "work", folder("~/accounts/work")))
+            .added
+            .unwrap();
+        let tree = node.root.join("repo-task");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        let tree = std::fs::canonicalize(&tree).unwrap();
+        let trust = |profile: Option<ProfileId>| {
+            node.call(Call::AgentTrust {
+                agent: "claude".to_owned(),
+                path: hide_platform::path::to_wire(&tree).unwrap(),
+                trusted: true,
+                profile,
+            })
+        };
+        let trusted = |file: &Path| {
+            std::fs::read(file).ok().is_some_and(|bytes| {
+                serde_json::from_slice::<Value>(&bytes).unwrap()["projects"]
+                    .get(tree.to_str().unwrap())
+                    .is_some()
+            })
+        };
+        let in_account = node.home().join("accounts/work/.claude.json");
+        let in_default = node.home().join(".claude.json");
+
+        trust(Some(id.clone())).unwrap();
+        assert!(trusted(&in_account));
+        assert!(!trusted(&in_default), "the default account is not touched");
+        trust(None).unwrap();
+        assert!(trusted(&in_default));
+
+        assert_eq!(
+            node.apply(ProfileOp::Remove { id: id.clone() }).refused,
+            None
+        );
+        let refused = trust(Some(id)).unwrap_err();
+        assert!(
+            refused.message.contains("no longer on this machine"),
+            "{refused:?}"
+        );
     }
 
     /// A node program `own` with the `hide` beside it, as every package

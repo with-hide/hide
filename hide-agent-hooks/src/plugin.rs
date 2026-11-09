@@ -212,9 +212,9 @@ impl Plugin {
     ) -> Result<bool, String> {
         let at = at.into();
         // Hide's trust entries go whether or not the operator edited the
-        // file: they are Hide's, and nothing else takes them out. Hide
-        // records a trust in the default account only; a profile's account
-        // has none of Hide's to take.
+        // file: they are Hide's, and nothing else takes them out. A
+        // profile's account has its trust taken out by the kit, which
+        // judges that account's file first (`hide_kit` targets).
         let forgotten = match self.trust {
             Some(agent) if at.is_default() => crate::folder_trust::forget_all(
                 agent,

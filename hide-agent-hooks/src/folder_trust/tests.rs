@@ -936,6 +936,13 @@ fn a_profile_account_s_trust_is_its_own_and_leaves_with_that_account_alone() {
         [key.clone(), key.clone()]
     );
 
+    // Switching the agent off in the default account takes out the
+    // default's entry alone: the profile account's goes with its pieces.
+    assert_eq!(forget_all(Agent::ClaudeCode, home, none()).unwrap(), 1);
+    assert!(read_json(&default_file)["projects"].get(&key).is_none());
+    assert_eq!(read_json(&profile_file)["projects"][&key], flag);
+    trust(Agent::ClaudeCode, home, &tree, none()).unwrap();
+
     // The account going, named with a final separator, takes out its own
     // entry and leaves the default account's.
     let respelled = claude_account(home, &format!("{}/", work.display()));

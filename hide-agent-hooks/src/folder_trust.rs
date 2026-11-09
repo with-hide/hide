@@ -678,10 +678,15 @@ fn same_folder(entry: &str, path: &Path) -> bool {
     }
 }
 
-/// Takes out every trust Hide added for `agent`, in every account, as when it
-/// is switched off.
+/// Takes out every trust Hide added for `agent` in its default account under
+/// `home`, as when it is switched off there. A profile account's trust goes
+/// with that account's pieces ([`forget_account`]), once the kit has judged
+/// the account's file Hide's to write (docs/agent-hooks.md, Profile
+/// accounts).
 pub fn forget_all(agent: Agent, home: &Path, tools: Tools) -> Result<usize, InstallFailure> {
-    forget_where(agent, home, tools, |_| true)
+    forget_where(agent, home, tools, |recorded| {
+        recorded.account().is_default()
+    })
 }
 
 /// Takes out every trust Hide added for `agent` in the profile account

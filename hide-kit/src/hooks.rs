@@ -145,8 +145,9 @@ pub(crate) fn install(
 /// recorded for the worktrees it started this agent in, as switching agy off
 /// does (docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
 ///
-/// A profile's account (`at`) holds no folder trust of Hide's: only its
-/// entries come out there.
+/// In a profile's account (`at`) only the hook entries come out here: its
+/// folder trust goes with the account's other pieces once they are judged
+/// (`targets::take_out`).
 pub(crate) fn remove(
     target: &KitTarget,
     runtime: AgentRuntime,
