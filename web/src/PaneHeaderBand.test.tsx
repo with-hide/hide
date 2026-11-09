@@ -190,7 +190,7 @@ it("says the parent waits on its working children after the request, in the side
   const { container, unmount } = await mount({ working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 }, waiting_on_children: 2 }, childrenFixture());
   try {
     const row = container.querySelector('[data-pane-header-band="waiting"]')!;
-    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.querySelector('[data-pane-turn-part="request"]')?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-pane-turn-request-text]")?.textContent).toBe("Find the missing requests");
     expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on children · 2 working");
     expect(row.querySelector("[data-pane-own-progress]")).toBeNull();
@@ -680,6 +680,50 @@ it("opens the turn card from the request on a press, not on hover, until Esc", a
     await act(async () => button().blur());
     expect(card()).toBeNull();
   } finally { await unmount(); }
+});
+
+// The whole `<request> → <answer>` is the card's one trigger: a single
+// button behind the row, the keyboard's one stop, while a control in the
+// answer keeps its own press and opens no card.
+it("makes the whole turn one trigger behind the row, its own controls keeping their press", async () => {
+  const value: PaneHeader = { ...header, request: { text: "Review the child's work", images: 0 } };
+  const { container, events, unmount } = await mount(value, [{ ...turnAgent(), pane_id: "parent" }], { rest: { status: { pane_focus_request: null }, terminal: { headers: { parent: value } } } as SnapshotRest });
+  try {
+    const row = container.querySelector<HTMLElement>("[data-pane-turn=parent]")!;
+    const trigger = row.querySelector<HTMLButtonElement>("[data-pane-turn-request=parent]")!;
+    expect(trigger.textContent, "the words lie over it, not in it").toBe("");
+    expect(trigger.getAttribute("aria-label")).toBe("Request: Review the child's work");
+    expect([...row.querySelectorAll("button")].filter((button) => button.contains(row.querySelector("[data-pane-turn-request-text]")))).toHaveLength(0);
+    await act(async () => row.querySelector<HTMLButtonElement>("[data-pane-band-open=parent]")!.click());
+    expect(events, "Open sends its move").toHaveLength(1);
+    expect(document.querySelector("[data-pane-turn-card=parent]"), "Open moves to the child and opens no card").toBeNull();
+    await act(async () => trigger.click());
+    expect(document.querySelector("[data-pane-turn-card=parent]")).not.toBeNull();
+  } finally { await unmount(); }
+});
+
+// The card's answer that stands for now says what a waiting agent waits for,
+// in the sidebar's words, and `Waiting` alone with no proven cause; a turn
+// before keeps its own end, whose cause was never kept.
+it("says what a waiting turn waits for on the card, in the sidebar's words", async () => {
+  const value: PaneHeader = { working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 } };
+  const waiting = (wait: AgentRow["wait"]): AgentRow => {
+    const agent = turnAgent();
+    agent.wait = wait;
+    agent.request = { ...agent.request!, end: "waiting", line: "Two reviewers still checking", later_by: null, recent_turns: [{ request: "Older ask", end: "waiting", line: null, at_unix_ms: 1 }], answer: { offset: 3, end: "waiting", line: "Handed review to two children", whole: false, at_unix_ms: 2 } };
+    return agent;
+  };
+  for (const [wait, word] of [["children", "Waiting on children"], ["checks", "Waiting on CI"], [undefined, "Waiting"]] as const) {
+    const { container, unmount } = await mount(value, [waiting(wait)], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
+    try {
+      await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!.click());
+      const card = document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
+      expect(card.querySelector("[data-turn-card-answer] p")?.textContent?.startsWith(word)).toBe(true);
+      expect(card.querySelector("[data-turn-card-answer] p")?.textContent?.startsWith(`${word} `)).toBe(false);
+      expect(card.querySelector("[data-turn-card-response]"), "the answer stands for now, so no second line repeats it").toBeNull();
+      expect(card.querySelector("[data-turn-card-earlier-item]")?.textContent).toBe("Older askWaiting");
+    } finally { await unmount(); }
+  }
 });
 
 // The card's later half (docs/UI_BEHAVIOR.md, the turn card): the answer to
