@@ -182,6 +182,8 @@ export type AgentRow = {
   wait?: AgentWait;
   /** The background tasks a finished turn left running, which its line ends with (status-marks D-19); absent when none. */
   background_left?: number;
+  /** The descendants still working under a root whose finished turn the operator has not read, which its line ends with; absent when none. */
+  children_left?: number;
   /** How deep under its lineage root; a root is 0. */
   lineage_depth?: number;
   /** Whether the operator has this row's descendants folded away; folded is the default. */

@@ -7,7 +7,7 @@ import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
-import { agentWithProfile, backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
+import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { AskLine, askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
@@ -678,7 +678,8 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
  * A row's line in its parts, as the sidebar's (status-marks B7, B10, B27,
  * B29, B31): a sleeping row has none, a waking, failed or unknown one says its
  * state, a waiting ring leads with 대기 and its cause, a stop leads with how
- * it ended and keeps its background tail; work in progress says its sentence.
+ * it ended and keeps the tail of what it left running (background tasks,
+ * children still working); work in progress says its sentence.
  */
 function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
   const own = stateLine(agent);
@@ -687,7 +688,7 @@ function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agen
   if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, agent, row!);
   const text = agent.state.session.line;
   if (!text) return null;
-  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: backgroundTail(t, agent) };
+  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: leftTail(t, agent) };
 }
 
 const partsTitle = (parts: LineParts) => [parts.lead, parts.text, parts.tail].filter(Boolean).join(" · ");

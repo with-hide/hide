@@ -2105,6 +2105,27 @@ pub struct SidebarAgentSnapshot {
     /// names (status-marks D-19); 0 on any other row.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub background_left: u32,
+    /// How many descendants still work under a root whose own finished turn
+    /// the operator has not read yet, which its line ends with: that turn is
+    /// not hidden by them (docs/status-model.md, A quiet row that waits); 0
+    /// on any other row.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub children_left: u32,
+    /// The lineage's half of a children wait: a root, quiet itself, with work
+    /// moving on below it. Whether it waits on them is decided with the read
+    /// axis (`axes.rs::settle_wait`).
+    #[serde(skip_serializing)]
+    pub children_moving: bool,
+    /// What the row waits on for itself (`axes.rs::own_wait`), which is its
+    /// wait whenever it does not wait on its children.
+    #[serde(skip_serializing)]
+    pub own_wait: Option<AgentWait>,
+    /// Whether the operator has not read the row's own turn, compared on its
+    /// own fields only (`axes.rs::record_covers_turn`): a child finishing, a
+    /// check ending or a person's turn turns the row unread and leaves this
+    /// alone, and a record that cannot be compared leaves it false.
+    #[serde(skip_serializing)]
+    pub own_unread: bool,
     /// The demands and completions of this row's live descendants, keyed by
     /// the descendant pane. It is what the read record compares against, so
     /// a descendant asking or finishing turns this row unread the same way
