@@ -146,7 +146,7 @@ it("draws the ask instead of a PR mark on a raised root row, whatever its descen
     agent("pane:root", "루트", [{ repo: "app", number: 9, state: "pending", holders: ["자식"] }], { lineage_child_pane_ids: ["pane:child"], group: "needs_you", demand: "question", mark: "turn" }),
     agent("pane:child", "자식", [{ repo: "app", number: 9, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
   ]);
-  const raised = container.querySelector('[data-raised-list] [data-pane="pane:root"]');
+  const raised = container.querySelector('[data-raised-group="needs_you"] [data-pane="pane:root"]');
   expect(raised).not.toBeNull();
   expect(raised?.querySelector("[data-agent-pr]")).toBeNull();
 });

@@ -39,6 +39,8 @@ export type SceneFolds = {
   inactiveProjectsOpen: boolean;
   /** The No agents fold is open (`no_agents/local`, PRD sidebar-titlebar-refresh D-01). */
   noAgentsOpen: boolean;
+  /** The 정리할 것 fold is open (`cleanup/local`). */
+  cleanupOpen: boolean;
   /** Sleeping projects the operator opened (`asleep/<project>`, D-19); every other one starts folded. */
   asleepOpen: string[];
   /** The device the core has in front (`focus_device`); a rail tile changes it. */
@@ -53,6 +55,7 @@ export const REFERENCE_FOLDS: SceneFolds = {
   inactiveCheckoutsOpen: [],
   inactiveProjectsOpen: false,
   noAgentsOpen: false,
+  cleanupOpen: false,
   asleepOpen: [],
   frontDevice: "local",
 };
@@ -63,6 +66,14 @@ const NO_AGENT_PROJECTS = ["investment", "landing-page", "modakbul-site"];
 const SLEEPING_PROJECTS: Record<string, number> = { "codex-daemon-apply-spec": 4, "sticky-notes": 14 };
 
 const ROOT = "/work";
+
+/** The projects whose remote is on GitHub (`home_issues.repository`, which the project row's logo reads). */
+const GITHUB_REPOSITORIES: Record<string, string> = {
+  hide: "with-hide/hide",
+  sasu: "with-hide/sasu",
+  investment: "hoyeon/investment",
+  "landing-page": "hoyeon/landing-page",
+};
 
 const TITLES: Record<SceneContent, Record<string, string>> = {
   reference: {
@@ -213,6 +224,7 @@ export function workspace(id: string, extra: Partial<Workspace> & Pick<Workspace
     is_git: true,
     expanded: !folds.collapsedWorkspaces.includes(id),
     inactive_checkouts: { expanded: folds.inactiveCheckoutsOpen.includes(`${ROOT}/${id}`), checkout_ids: [] },
+    ...(GITHUB_REPOSITORIES[id] ? { home_issues: { repository: GITHUB_REPOSITORIES[id], issues: [], overflow: false } } : {}),
     ...extra,
     id,
   };
@@ -255,6 +267,12 @@ function ownPull(number: number, title: string, state: PullState): Pick<AgentRow
 }
 
 /** Fourteen settled worktrees behind hide's `Inactive 14`; `feat/ui` is where a1's first child works. */
+/** Merged branches whose worktrees wait to be removed: the core's cleanup candidates. */
+const CLEANUP = [
+  { branch: "mission29-core-open-f4b311a", number: 2201, age: 2 },
+  { branch: "fix/retire-home-session-refusals", number: 2285, age: 3 },
+  { branch: "feat/agent-profiles-read", number: 2270, age: 5 },
+];
 const INACTIVE = ["feat/ui", ...Array.from({ length: 13 }, (_, index) => `chore/cleanup-${index + 1}`)];
 
 /** The scene's snapshot and agents for one content set and one set of folds. */
@@ -387,6 +405,9 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     checkout({ id: "hide:ux", workspace: "hide", branch: "design/workspace-ux-proposal", age: 5 * 3600, purpose: "Workspace UX 제안과 상태 소유 정리" }, now),
     checkout({ id: "hide:fix", workspace: "hide", branch: "fix/registered-projects-only", age: 86400 }, now),
     checkout({ id: "hide:legacy", workspace: "hide", branch: "legacy-shell", exists: false }, now),
+    ...CLEANUP.map(({ branch, number, age }, index) =>
+      checkout({ id: `hide:cleanup-${index}`, workspace: "hide", branch, age: age * 86400, pr: { number, title: branch, badge: "merged", is_draft: false, state: "merged" } }, now),
+    ),
     ...INACTIVE.map((branch, index) =>
       checkout({ id: `hide:inactive-${index}`, workspace: "hide", branch, age: (8 + index) * 86400, ...(index === 0 ? { panes: ["a1c1"], marks: { going: 1 } } : {}) }, now),
     ),
@@ -399,6 +420,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       {
         checkouts: hideCheckouts,
         inactive_checkouts: { expanded: folds.inactiveCheckoutsOpen.includes(`${ROOT}/hide`), checkout_ids: INACTIVE.map((_, index) => `hide:inactive-${index}`) },
+        session_folds: { empty: [], child_only: [], cleanup: CLEANUP.map((_, index) => `hide:cleanup-${index}`), empty_open: false, cleanup_open: folds.cleanupOpen, open_prs: 0 },
       },
       folds,
     ),
@@ -579,6 +601,7 @@ export function applyEvent(folds: SceneFolds, event: { kind: string; payload: Re
   const { kind, payload } = event;
   if (kind === "checkout_agents_toggle") return { ...folds, collapsedCheckouts: toggled(folds.collapsedCheckouts, String(payload.checkout_id)) };
   if (kind === "session_fold_toggle" && payload.key === "no_agents/local") return { ...folds, noAgentsOpen: !folds.noAgentsOpen };
+  if (kind === "session_fold_toggle" && payload.key === "cleanup/local") return { ...folds, cleanupOpen: !folds.cleanupOpen };
   if (kind === "project_checkouts_fold" && String(payload.workspace_id) in SLEEPING_PROJECTS) {
     const id = String(payload.workspace_id);
     const expanded = typeof payload.expanded === "boolean" ? payload.expanded : !folds.asleepOpen.includes(id);

@@ -101,6 +101,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   agent,
   device,
   place,
+  placeInHead = false,
   depth,
   tree = null,
   ask = false,
@@ -119,6 +120,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   agent: AgentRow;
   device: string | null;
   place: string | null;
+  /** Names the place's project at the end of line one instead of a line of its own, for a list that keeps each row short. */
+  placeInHead?: boolean;
   /** How deep under the root drawn above it; a root is 0. */
   depth: number;
   /** Set where the row is drawn in a tree with its rails and chevron. */
@@ -248,6 +251,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           {device ? (
             <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
           ) : null}
+          {placeInHead && place ? <span aria-hidden="true" data-agent-place-head={place} className="pointer-events-none min-w-0 max-w-2/5 shrink truncate text-caption text-muted-foreground">{place.split(" › ")[0]}</span> : null}
           {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
           {agent.letters_waiting ? <RowLetterMark /> : null}
           {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
@@ -284,7 +288,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           </span>
         ) : null}
         {agent.human_turn && humanActions ? <HumanTurnDone turn={agent.human_turn} actions={humanActions} className="mt-xxs" /> : null}
-        {place ? (
+        {place && !placeInHead ? (
           <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {place}
           </span>
