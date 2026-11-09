@@ -171,7 +171,10 @@ fn a_removal_is_refused_while_an_agent_runs_with_the_profile_and_names_the_proje
     let rest = crate::model::RestSections::capture(&runtime.snapshot, None, 1);
     let sent = serde_json::to_value(&rest.status).unwrap();
     assert_eq!(sent["agent_profile_answer"]["request_id"], "check-1");
-    assert_eq!(sent["agent_profile_answer"]["in_use"][0]["title"], "fix-bell");
+    assert_eq!(
+        sent["agent_profile_answer"]["in_use"][0]["title"],
+        "fix-bell"
+    );
     assert_eq!(checked.in_use[0].title, "fix-bell");
     assert!(!checked.in_use[0].asleep);
     // The removal itself is refused the same way, before the node is asked.
