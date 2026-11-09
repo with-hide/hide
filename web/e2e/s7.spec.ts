@@ -687,7 +687,7 @@ test("a drag or a tab menu begun on one Workspace ends when another client moves
   try {
     const betaRoot = `${path.posix.dirname(stack.root)}/beta`;
     const choose = async (target: Page, project: string) => {
-      await (await showProjectRow(target, target.locator("[data-project]", { hasText: project }).locator("[data-checkout]").first())).click();
+      await (await showProjectRow(target, target.locator("[data-project]", { hasText: project }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     };
     // Each Workspace numbers its own views, so both hold a1 with d2 and d3.
     await keepOpenInTurn(page, ["a.txt", "c.txt"], (name) => explorerRow(page, stack, name));

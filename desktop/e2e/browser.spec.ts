@@ -682,7 +682,7 @@ test("browser: a login in one Workspace is available in another", async () => {
 
   // The operator goes to the second Workspace, whose agent then opens the
   // page in front; an agent the operator is not with would only add it behind.
-  await (await showProjectRow(page, page.locator("[data-project]", { hasText: "second-checkout" }).locator("[data-checkout]").first())).click();
+  await (await showProjectRow(page, page.locator("[data-project]", { hasText: "second-checkout" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
   await expect.poll(() => page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen")).not.toBe(firstScreen);
   const opened = await cliFromPane(["browser", "open", `${origin}/b.html`, "--wait"], otherPane);
   expect(opened).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
