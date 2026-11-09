@@ -565,6 +565,7 @@ mod tests {
         Call::LabelTranscript {
             request: hide_session::label_transcript::LabelTranscriptRequest {
                 agent,
+                account: Default::default(),
                 reference_kind: "id".to_owned(),
                 reference_value: "native-fixture".to_owned(),
                 cwd: None,
