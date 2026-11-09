@@ -87,7 +87,8 @@ test("the worker of a mission node reads its node's reviewer's letter and anothe
     const read = await ok(as("worker"), ["request", "show", verdict]);
     expect(JSON.stringify(read)).toContain("리뷰 결과: 고칠 곳 하나");
     // Another node's worker is refused. The rest of the boundary (the letter's parties, taking it in,
-    // cancelling, the other direction) is proved under the store in `mission_letters.rs`.
+    // cancelling, the node's checkers reading the worker's and each other's letters) is proved under the
+    // store in `mission_letters.rs`.
     expect(refusal(await answer(as("neighbor"), ["request", "show", verdict]))).toBe("letter_unavailable");
   } finally {
     daemon?.stop();

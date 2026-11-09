@@ -188,4 +188,4 @@ hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
   If any applies, first ask in one line: Shall I run this as a mission, or do it directly?
   Wait for the operator's answer and follow it: a mission means `hide mission help`, direct work means doing it yourself.
   With none of these signals, work directly without asking.
-- A worker or reviewer of a mission node: record your lines with `hide mission record`, as `hide mission help` says under For workers and checkers. A worker can open, with `hide request show <id>`, a letter its node's reviewer or verifier wrote; it opens no other agent's letters.
+- A worker or reviewer of a mission node: record your lines with `hide mission record`, as `hide mission help` says under For workers and checkers. A worker, reviewer or verifier can open, with `hide request show <id>`, a letter between the Conductor and another agent of its node; it opens no other agent's letters.

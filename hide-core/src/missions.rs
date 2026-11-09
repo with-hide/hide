@@ -919,6 +919,14 @@ impl MissionNode {
             .filter_map(|checker| checker.agent_id.as_deref())
     }
 
+    /// The registrations bound to the node: its worker and its checkers.
+    fn bound_agents(&self) -> impl Iterator<Item = &str> {
+        self.agent_id
+            .as_deref()
+            .into_iter()
+            .chain(self.checker_agents())
+    }
+
     /// Whether the node's worker and checkers may run on another machine
     /// than the mission's: only a change that reaches main through a pull
     /// request, whose work GitHub carries back. A direct change's branch
@@ -1242,10 +1250,9 @@ fn is_zero_u32(value: &u32) -> bool {
 impl Mission {
     /// The (checker registration, Conductor) pairs of `node`: the checkers
     /// bound to its lines, each with this mission's Conductor. A letter from
-    /// one to the other is what the node's worker may read
-    /// (`MissionBook::checkers_read_by`) and what `hide mission show <node>`
-    /// lists for it, so the list and the reading never differ
-    /// (with-hide/hide-private#656, #668).
+    /// one to the other is what `hide mission show <node>` lists for its
+    /// worker (with-hide/hide-private#668), and one the worker reads
+    /// (`MissionBook::node_letters_read_by`).
     pub(crate) fn checker_letters<'a>(
         &'a self,
         node: &'a MissionNode,
@@ -1519,19 +1526,27 @@ impl MissionBook {
         self.missions.iter_mut().find(|mission| mission.id == id)
     }
 
-    /// The checkers bound to the lines of the nodes that registration
-    /// `worker` works, each with the Conductor of its mission: the pairs
-    /// whose letters from the checker to that Conductor the worker may read
-    /// (`hide request show`).
-    pub(crate) fn checkers_read_by<'a>(
+    /// The other registrations bound to the nodes registration `reader` is
+    /// bound to, as their worker or a checker of one of their lines, each
+    /// with the Conductor of its mission: the pairs whose letters, either
+    /// way, `reader` may read (`hide request show`). A Conductor points a
+    /// node's reviewer at the worker's design and its verifier at the
+    /// review by the letter's id, so each of them reads what the others of
+    /// its node exchanged with the Conductor (with-hide/hide#2298,
+    /// with-hide/hide-private#656).
+    pub(crate) fn node_letters_read_by<'a>(
         &'a self,
-        worker: &'a str,
+        reader: &'a str,
     ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
         self.missions
             .iter()
             .flat_map(|mission| mission.nodes.iter().map(move |node| (mission, node)))
-            .filter(move |(_, node)| node.agent_id.as_deref() == Some(worker))
-            .flat_map(|(mission, node)| mission.checker_letters(node))
+            .filter(move |(_, node)| node.bound_agents().any(|agent| agent == reader))
+            .flat_map(move |(mission, node)| {
+                node.bound_agents()
+                    .filter(move |agent| *agent != reader)
+                    .map(move |agent| (agent, &mission.conductor.actor))
+            })
     }
 
     /// The mission `actor` conducts and still runs, if any.

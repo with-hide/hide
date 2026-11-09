@@ -583,6 +583,17 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=agent_sleep_engine::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started) | test(=agent_sleep_engine::tests::an_agent_that_asks_for_its_quit_key_again_gets_a_second_press) | test(=agent_sleep_engine::tests::an_agent_quitting_on_its_first_press_is_sent_no_second_one) | test(=agent_sleep_engine::tests::a_press_that_clears_a_draft_is_followed_by_the_quit))'
+      - name: A letter wakes a sleeping agent through a refused wake
+        # A Windows device's Claude asleep off screen was never woken by a
+        # letter: its node could not hold the resume line for a pane no
+        # screen attached (`pane_input_cancelled`, fixed by attaching it for
+        # the input, the hide-node lib tests above), and the refused wake
+        # failed its letter at once. A wake that typed nothing is asked again,
+        # three wakes in all, before its letter fails and its sender is told
+        # (with-hide/hide-private#660, #675).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(/^runtime::tests::mission_worker_sleep::a_letter_wake_/) | test(=agent_sleep_engine::tests::a_wake_whose_renewal_left_no_known_holder_fails_and_types_nothing) | test(=agent_sleep_engine::tests::only_a_refusal_that_passes_on_its_own_lets_a_wake_be_asked_again))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.

@@ -1704,7 +1704,7 @@ impl Runtime {
             }
             _ => None,
         };
-        let also_reads = self.node_checker_exchanges(&actor, &command);
+        let also_reads = self.node_exchanges(&actor, &command);
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
@@ -1729,21 +1729,22 @@ impl Runtime {
     }
 
     /// What a `Show` may read beyond its caller's own letters: when the
-    /// caller works a mission node, the letters that node's checkers (its
-    /// reviewer or verifier) wrote to the mission's Conductor
-    /// (docs/delivery.md, Who may read a letter). Only the pairs are worked
-    /// out here, from the mission book and the registrations; the store
-    /// decides the read (`mailbox::show`). A checker that has since ended
-    /// still counts, because its letters were written, but only a worker
-    /// that runs reads them.
-    fn node_checker_exchanges(&self, reader: &Actor, command: &Command) -> Vec<Exchange> {
+    /// caller is bound to a mission node, as its worker or as a checker of
+    /// one of its lines (its reviewer or verifier), the letters between the
+    /// mission's Conductor and each other agent bound to that node, either
+    /// way (docs/delivery.md, Who may read a letter). Only the pairs are
+    /// worked out here, from the mission book and the registrations; the
+    /// store decides the read (`mailbox::show`). An agent of the node that
+    /// has since ended still counts, because its letters were written, but
+    /// only a reader that runs reads them.
+    fn node_exchanges(&self, reader: &Actor, command: &Command) -> Vec<Exchange> {
         let Command::Show { .. } = command else {
             return Vec::new();
         };
         let Ok(ledger) = self.delivery_ledger.as_ref() else {
             return Vec::new();
         };
-        let Some(worker) = ledger
+        let Some(registration) = ledger
             .agents
             .iter()
             .rev()
@@ -1753,14 +1754,21 @@ impl Runtime {
         };
         self.missions
             .book
-            .checkers_read_by(&worker.id)
-            .filter_map(|(checker, conductor)| {
-                let checker = ledger.agents.iter().find(|record| record.id == checker)?;
-                Some(Exchange {
-                    from: checker.actor.clone(),
-                    to: conductor.clone(),
-                })
+            .node_letters_read_by(&registration.id)
+            .filter_map(|(other, conductor)| {
+                let other = ledger.agents.iter().find(|record| record.id == other)?;
+                Some([
+                    Exchange {
+                        from: other.actor.clone(),
+                        to: conductor.clone(),
+                    },
+                    Exchange {
+                        from: conductor.clone(),
+                        to: other.actor.clone(),
+                    },
+                ])
             })
+            .flatten()
             .collect()
     }
 

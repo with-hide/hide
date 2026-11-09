@@ -1369,6 +1369,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "machine_not_permitted" => {
             "Run the command from an agent on the machine that runs Hide, or leave out --machine"
         }
+        // A letter neither sent by the caller nor to it (nor one its mission
+        // node lets it read), or one gone from the ledger: the same refusal
+        // as for an id that never was, so it says no more than that.
+        "letter_unavailable" => {
+            "No letter with that id was sent by you or to you, or it has left the ledger; ask the agent that named it to send you its body in a letter of its own"
+        }
         "intent_conflict" => {
             "Use a new --intent for each new letter or spawn; send or spawn again with this intent only to repeat exactly what it was first used for (the same recipient, kind and body, or the same spawn)"
         }
