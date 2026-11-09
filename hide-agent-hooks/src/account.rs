@@ -89,10 +89,8 @@ pub const REPORTED_VALUE_BYTES: usize = hide_agent_adapter::account::MAX_ACCOUNT
 /// is the agent's default account; `None` for an agent Hide keeps no
 /// accounts of.
 ///
-/// Claude Code drops its variables from a hook's environment when
-/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`; its folder is then read from the
-/// session's `CLAUDE_ENV_FILE`, which Claude Code keeps below the account's
-/// folder ([`claude_env_file_folder`]).
+/// An agent that drops its variables from a hook's environment has its own
+/// way to the folder (Claude Code's: `crate::claude_account`).
 pub fn reported_variables(
     kind: &str,
     variable: impl Fn(&str) -> Option<std::ffi::OsString>,
@@ -110,30 +108,13 @@ pub fn reported_variables(
     };
     let mut reported = Vec::new();
     for var in rule.vars.iter().take(REPORTED_VARIABLES) {
-        let value = read(&var.name).or_else(|| {
-            (adapter.id == hide_agent_adapter::AgentId::ClaudeCode.adapter().id
-                && read("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB").as_deref() == Some("1"))
-            .then(|| read("CLAUDE_ENV_FILE"))
-            .flatten()
-            .and_then(|file| claude_env_file_folder(&file))
-        });
+        let value = read(&var.name)
+            .or_else(|| crate::claude_account::scrubbed_folder(adapter, &read));
         if let Some(value) = value {
             reported.push((var.name.clone(), value));
         }
     }
     Some(reported)
-}
-
-/// The account folder above a `CLAUDE_ENV_FILE`, which Claude Code writes at
-/// `<folder>/session-env/<session>/…`: the folder above its `session-env`.
-fn claude_env_file_folder(file: &str) -> Option<String> {
-    let path = Path::new(file);
-    path.ancestors()
-        .find(|folder| folder.file_name().is_some_and(|name| name == "session-env"))
-        .and_then(Path::parent)
-        .filter(|folder| folder.is_absolute())
-        .and_then(|folder| folder.to_str())
-        .map(str::to_owned)
 }
 
 #[cfg(test)]

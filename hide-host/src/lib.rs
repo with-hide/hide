@@ -19,6 +19,7 @@ pub mod catalog;
 pub mod cleanup;
 pub mod clone;
 pub mod copy;
+mod credentials;
 pub mod disk;
 pub mod disk_layers;
 pub mod document;
