@@ -21,7 +21,7 @@ export default chapter<TourModel>({
         { target: '[data-pane="a1"] [data-pr-counts]', say: "childPrs" },
         { target: '[data-pane="a1"] [data-line-part="text"]', say: "children" },
         { target: '[data-pane="a2"] [data-mission-chip]', say: "mission" },
-        { target: '[data-pane="e1"] [data-pr-mark]', say: "pr" },
+        { target: '[data-pane="a2"] [data-pr-mark]', say: "pr" },
       ],
     },
     // The task view, one group a card: what waits for the operator, what finished quietly, what is working.
