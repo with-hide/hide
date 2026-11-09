@@ -504,7 +504,12 @@ mod tests {
             ..source(&cwd)
         };
         assert!(matches!(
-            Open::open(&hide_session::Accounts::new(home.path()), "pane", path),
+            Open::open(
+                &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
+                "pane",
+                path
+            ),
             Err(SessionError::UnsupportedSessionKind)
         ));
 
