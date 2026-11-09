@@ -1224,7 +1224,11 @@ mod tests {
         asleep(&mut store, &sleeper);
 
         let mut core = payload(serde_json::json!([]), &["w1:p1"]);
-        assert!(store.settle_payload(&mut core, SleepScope::Core, None).is_empty());
+        assert!(
+            store
+                .settle_payload(&mut core, SleepScope::Core, None)
+                .is_empty()
+        );
         assert!(
             core.agents.is_empty(),
             "the core's own w1:p1 is another pane"

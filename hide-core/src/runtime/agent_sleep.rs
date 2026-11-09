@@ -234,11 +234,11 @@ impl Runtime {
             SleepScope::Core => self.node.as_str(),
             SleepScope::Device(device) => device,
         });
-        let settled = self
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .settle_payload(payload, scope, mark.as_deref());
+        let settled =
+            self.snapshot
+                .ui_state
+                .agent_sleep
+                .settle_payload(payload, scope, mark.as_deref());
         if settled.is_empty() {
             return;
         }
