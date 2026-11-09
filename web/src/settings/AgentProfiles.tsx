@@ -25,7 +25,7 @@ import { InlineProfiles, ProfileDeleteDialog, ProfileFormDialog, ProfilesMachine
 import { Note } from "../components/settings-rows";
 import { hostBridge } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
-import type { Device, KitAgent } from "../snapshot";
+import type { AgentProfileAnswer, Device, KitAgent } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -35,7 +35,11 @@ type Open =
   // then, since an edit replaces every variable); `closing` holds a close
   // the operator asked for until the last draft is saved.
   | { kind: "edit"; agent: string; id: string; draft: ProfileDraft; saved: ProfileDraft | null; closing: boolean }
-  | { kind: "delete"; agent: string; id: string; checked: boolean };
+  // `found` is what the core's last check, or a refused delete, says the
+  // delete meets: kept while the delete itself is on its way.
+  | { kind: "delete"; agent: string; id: string; found: Found | null };
+
+type Found = { inUse: NonNullable<AgentProfileAnswer["in_use"]>; projects: string[] };
 
 type Sent = { id: string; change: ProfileChange; draft?: ProfileDraft };
 
@@ -90,8 +94,11 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
       return;
     }
     if (change.op === "add" && done && open.kind === "add") setOpen(null);
-    if (change.op === "remove_check" && open.kind === "delete" && done) setOpen({ ...open, checked: true });
-    if (change.op === "remove" && open.kind === "delete") setOpen(answer.state === "refused" && answer.code === "profile_in_use" ? { ...open, checked: true } : null);
+    if (open.kind !== "delete") return;
+    if (change.op === "remove_check" && done) setOpen({ ...open, found: { inUse: answer.in_use ?? [], projects: answer.projects ?? [] } });
+    // An agent that started with it since the check refuses the delete: the
+    // dialog lists it then, as the check would have.
+    else if (change.op === "remove") setOpen(answer.code === "profile_in_use" ? { ...open, found: { inUse: answer.in_use ?? [], projects: [] } } : null);
   }, [sent?.id, answer?.state]);
 
   function view(agent: string) {
@@ -178,15 +185,16 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
   let overlay: ReactNode = null;
   if (open && shown && (open.kind === "add" || profile)) {
     if (open.kind === "delete" && profile) {
-      const checked = open.checked && answer && (answer.state === "done" || answer.code === "profile_in_use") ? answer : null;
+      const found = open.found;
       overlay = (
         <ProfileDeleteDialog
-          open={checked !== null}
+          open={found !== null}
           onOpenChange={(next) => !next && close()}
           profile={profile.name}
           location={profile.account ?? profile.program ?? ""}
-          inUse={(checked?.in_use ?? []).map((agent) => ({ id: agent.pane_id, title: agent.title, place: agent.place, asleep: agent.asleep, starting: agent.starting }))}
-          projects={checked?.projects ?? []}
+          inUse={(found?.inUse ?? []).map((agent) => ({ id: agent.pane_id, title: agent.title, place: agent.place, asleep: agent.asleep, starting: agent.starting }))}
+          projects={found?.projects ?? []}
+          busy={waiting}
           onConfirm={() => send({ op: "remove", id: profile.id })}
           onShow={(pane) => {
             close();
@@ -217,7 +225,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
           onMakeDefault={() => send({ op: "default", kind: open.agent, id: open.kind === "edit" ? open.id : "" })}
           onDelete={() => {
             if (open.kind !== "edit") return;
-            setOpen({ kind: "delete", agent: open.agent, id: open.id, checked: false });
+            setOpen({ kind: "delete", agent: open.agent, id: open.id, found: null });
             send({ op: "remove_check", id: open.id });
           }}
         />

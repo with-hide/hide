@@ -176,6 +176,37 @@ it("saves nothing on close when the values could not be read", async () => {
   await tab.unmount();
 });
 
+it("keeps the delete dialog while the delete runs, and lists an agent that started with the profile since the check (B27)", async () => {
+  const tab = await mount(listed([work]));
+  await tab.click(tab.q('[data-profile-row="p-work"] button'));
+  await tab.answer({ values: [["A", "1"]] });
+  await tab.click(tab.q("[data-profile-delete]"));
+  await tab.answer({ in_use: [], projects: [] });
+  await tab.click(tab.q("[data-profile-delete-confirm]"));
+  expect(tab.changes().at(-1)?.change).toEqual({ op: "remove", id: "p-work" });
+  // Waiting on the core, the dialog stays and does not delete twice.
+  expect(tab.q("[data-profile-delete-dialog]")).not.toBeNull();
+  expect(tab.q("[data-profile-delete-confirm]")?.hasAttribute("disabled")).toBe(true);
+  await tab.answer({ state: "refused", code: "profile_in_use", in_use: [{ pane_id: "w2:p1", title: "late-start", place: "blog", asleep: false }] });
+  expect(tab.q("[data-profile-delete-dialog]")?.dataset.profileDeleteDialog).toBe("refused");
+  expect(tab.q("[data-profile-in-use]")?.textContent).toContain("late-start");
+  expect(tab.q('[data-profile-in-use-open="w2:p1"]')).not.toBeNull();
+  expect(tab.q("[data-profiles-error]")).toBeNull();
+  await tab.unmount();
+});
+
+it("closes the delete dialog once the profile is deleted", async () => {
+  const tab = await mount(listed([work]));
+  await tab.click(tab.q('[data-profile-row="p-work"] button'));
+  await tab.answer({ values: [["A", "1"]] });
+  await tab.click(tab.q("[data-profile-delete]"));
+  await tab.answer({ in_use: [], projects: [] });
+  await tab.click(tab.q("[data-profile-delete-confirm]"));
+  await tab.answer({});
+  expect(tab.q("[data-profile-delete-dialog]")).toBeNull();
+  await tab.unmount();
+});
+
 it("refuses a delete while an agent runs or starts with the profile and lists it (B27)", async () => {
   const tab = await mount(listed([work]));
   await tab.click(tab.q('[data-profile-row="p-work"] button'));

@@ -119,6 +119,8 @@ export function profileRefusalKey(code: string | undefined): string {
       return "agentProfiles.unsupported";
     case "profile_builtin":
       return "agentProfiles.builtInNote";
+    case "profile_in_use":
+      return "agentProfiles.inUse";
     case "machine_unavailable":
     case "machine_unknown":
     case "profiles_unread":

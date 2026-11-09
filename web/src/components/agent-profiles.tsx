@@ -333,7 +333,7 @@ export type InUseAgent = { id: string; title: string; place: string; asleep: boo
  * included, each with the way to it; otherwise what the delete takes away and
  * which projects go back to the agent default, before it does.
  */
-export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inUse, projects, onConfirm, onShow }: { open: boolean; onOpenChange?: (open: boolean) => void; profile: string; location: string; inUse: readonly InUseAgent[]; projects: readonly string[]; onConfirm?: () => void; onShow?: (id: string) => void }) {
+export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inUse, projects, busy = false, onConfirm, onShow }: { open: boolean; onOpenChange?: (open: boolean) => void; profile: string; location: string; inUse: readonly InUseAgent[]; projects: readonly string[]; busy?: boolean; onConfirm?: () => void; onShow?: (id: string) => void }) {
   const { t } = useInterfaceTranslation();
   const refused = inUse.length > 0;
   return (
@@ -372,7 +372,16 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inU
           {refused ? <AlertDialogCancel>{t("common.close")}</AlertDialogCancel> : (
             <>
               <AlertDialogCancel>{t("agentProfiles.deleteKeep")}</AlertDialogCancel>
-              <AlertDialogAction onClick={onConfirm} data-profile-delete-confirm="true">{t("agentProfiles.deleteConfirm", { profile })}</AlertDialogAction>
+              <AlertDialogAction
+                disabled={busy}
+                onClick={(event) => {
+                  // The dialog stays until the core answers: a delete it
+                  // refuses lists what refused it here.
+                  event.preventDefault();
+                  onConfirm?.();
+                }}
+                data-profile-delete-confirm="true"
+              >{t("agentProfiles.deleteConfirm", { profile })}</AlertDialogAction>
             </>
           )}
         </AlertDialogFooter>
