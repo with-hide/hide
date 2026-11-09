@@ -73,12 +73,13 @@ function profileName(profile: ProfileView, t: ReturnType<typeof useInterfaceTran
 /** The row's right end: its one state with the action that answers it, or the account's usage when all is well. */
 export function ProfileStateCell({ profile, readOnly = false, onAction }: { profile: ProfileView; readOnly?: boolean; onAction?: (action: "reinstall" | "retry" | "open") => void }) {
   const { t } = useInterfaceTranslation();
+  if (readOnly) return null;
   const state = profileState(profile);
   if (state) {
     return (
       <span className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-x-sm gap-y-xxs" data-profile-state={state.key.slice("agentProfiles.state.".length)}>
         <Status tone={state.tone}>{t(state.key as "agentProfiles.state.failed")}</Status>
-        {state.action && !readOnly ? (
+        {state.action ? (
           <Button variant="secondary" size="sm" className="pointer-events-auto" onClick={() => onAction?.(state.action!)} data-profile-action={state.action}>
             {t(state.action === "reinstall" ? "agentProfiles.reinstall" : state.action === "retry" ? "agentProfiles.retry" : "agentProfiles.openToSignIn")}
           </Button>

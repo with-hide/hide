@@ -257,3 +257,17 @@ it("keeps the last device profiles dimmed without add or edit when its connectio
   expect(tab.changes()).toEqual([]);
   await tab.unmount();
 });
+
+it("keeps only profile names and the default mark when the device disconnects", async () => {
+  const tab = await mount(listed([{ ...work, login: "signed_out" }], { "claude-code": "p-work" }));
+  expect(tab.q('[data-profile-row="p-work"] [data-profile-state="signedOut"]')).not.toBeNull();
+  await act(async () => {
+    const rest = useShellStore.getState().rest!;
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: rest.navigator!.devices!.map((row) => ({ ...row, kind: "remote", state: "unavailable" })) } } } as never);
+  });
+  expect(tab.q('[data-profile-row="p-work"]')?.textContent).toContain("work");
+  expect(tab.q('[data-profile-row="p-work"] [data-profile-default]')).not.toBeNull();
+  expect(tab.all("[data-profile-state], [data-profile-usage]")).toHaveLength(0);
+  expect(tab.changes()).toEqual([]);
+  await tab.unmount();
+});
