@@ -310,3 +310,37 @@ it("shows the desktop's reason and presses nothing when the Conductor is gone or
     await out.unmount();
   }
 });
+
+it("lists the decision's Views, opening one from its agent's 볼 것, and with none asks for material once and says so from the core's frame", async () => {
+  const look = deciding({
+    decision_views: [
+      { device_id: "local", display_id: "d1", kind: "browser", label: "compare.html", unseen: true, by: "conductor", pane_id: "p-conductor" },
+      { device_id: "local", display_id: "d2", kind: "file", label: "notes.md", by: "worker" },
+    ],
+  });
+  const { container, click, serve, socket, unmount } = await connect([look]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-turn"]');
+    const rows = [...container.querySelectorAll<HTMLElement>("[data-phone-decision-view]")];
+    expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("compare.html"), expect.stringContaining("notes.md")]);
+    // A row whose opener's agent is closed presses nothing; with Views there is nothing to ask for.
+    expect(rows[1]!.tagName).not.toBe("BUTTON");
+    expect(container.querySelector("[data-phone-material]")).toBeNull();
+
+    await serve({ type: "missions", items: [deciding()], failed: false });
+    const asks = () => socket.sent.filter((message) => message.type === "ask_mission_material");
+    await click('[data-phone-material="ask"]');
+    expect(asks()).toEqual([expect.objectContaining({ mission: "m-turn", key: 4 })]);
+    // A refusal is told in the material's own words and the press stays.
+    await serve({ type: "mission_result", request_id: asks()[0]!.request_id as string, mission: "m-turn", ok: false, reason: "gone" });
+    expect(container.querySelector("[data-phone-answer-error]")!.textContent).toBe("This question is no longer open.");
+    expect(container.querySelector('[data-phone-material="ask"]')).not.toBeNull();
+
+    await serve({ type: "missions", items: [deciding({ question: { ...deciding().question!, material_asked: true } })], failed: false });
+    expect(container.querySelector('[data-phone-material="asked"]')).not.toBeNull();
+    expect(container.querySelector('[data-phone-material="ask"]')).toBeNull();
+  } finally {
+    await unmount();
+  }
+});

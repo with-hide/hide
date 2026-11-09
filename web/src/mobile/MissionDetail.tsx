@@ -22,7 +22,7 @@ import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } 
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
 import { attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
-import { answerMission, openDetail, settleMissionAnswer } from "./connection";
+import { answerMission, askMissionMaterial, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
 import type { PrState } from "../snapshot";
@@ -196,6 +196,26 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
           })}
         </div>
       )}
+      {/* With nothing linked to look at, the operator may ask for it, as on the desktop's card; it never holds the answer back. */}
+      {!mission.decision_views?.length && question && !view.sent ? (
+        question.material_asked ? (
+          <p className="flex min-w-0 items-center gap-xs text-body text-muted-foreground" data-phone-material="asked">
+            <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-done" />
+            {t("mission.banner.asked")}
+          </p>
+        ) : (
+          <Button
+            variant="text"
+            size="inline"
+            className="min-h-(--size-touch-target) self-start text-body"
+            disabled={view.closed || view.unreachable || !connected}
+            data-phone-material="ask"
+            onClick={() => askMissionMaterial(mission)}
+          >
+            {t("mission.banner.ask")}
+          </Button>
+        )
+      ) : null}
       {view.reason ? (
         <p
           className={cn("break-keep text-body wrap-anywhere", view.refused ? "text-mission-failed" : "text-muted-foreground")}
@@ -338,7 +358,13 @@ function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
           const words = (
             <>
               <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">{view.label}</span>
-              {view.unseen ? <StatusMark mark="look" label={t("agents.mark.look")} /> : null}
+              {/* The phone has no hover, so the mark's words are read out, not hinted. */}
+              {view.unseen ? (
+                <>
+                  <StatusMark mark="look" />
+                  <span className="sr-only">{t("agents.mark.look")}</span>
+                </>
+              ) : null}
               <span className="shrink-0 text-body text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
             </>
           );

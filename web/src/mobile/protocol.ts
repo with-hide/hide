@@ -272,7 +272,7 @@ export type ServerFrame =
   | { type: "agents"; groups: AgentGroup[]; omitted?: number; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
   /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read; `omitted` counts the ones past the frame's caps. */
   | { type: "missions"; items: PhoneMission[]; failed: boolean; omitted?: number }
-  /** hided's answer to `answer_mission`; what the core does with it comes back on the mission itself. */
+  /** hided's answer to `answer_mission` and `ask_mission_material`; what the core does with it comes back on the mission itself. */
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
@@ -328,6 +328,8 @@ export type PhoneMessage =
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
+  /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
+  | { type: "ask_mission_material"; request_id: string; mission: string; key: number }
   /** The PR tab's own requests: `pr` is the list's key (`PhonePr.key`), `head` the card's head commit the merge was confirmed for. */
   | { type: "read_pr"; request_id: string; pr: string; look_again?: boolean }
   | { type: "merge_pr"; request_id: string; pr: string; head: string; method?: PrMergeMethod }
@@ -424,6 +426,18 @@ export function inputFailure(reason: string | null): Notice {
 }
 
 /** The line under a mission's answer for one hided refused or the connection lost (B35); a changed question, a missing Conductor and a lost device come back on the mission, in the desktop's words. */
+/** Why a `자료 요청` did not reach the core, in the phone's words. */
+export function missionMaterialFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "gone":
+      return { key: "mobile.mission.material.gone" };
+    case "offline":
+      return { key: "mobile.mission.material.offline" };
+    default:
+      return { key: "mobile.mission.material.failed" };
+  }
+}
+
 export function missionAnswerFailure(reason: string | null): Notice {
   switch (reason) {
     case "in_flight":

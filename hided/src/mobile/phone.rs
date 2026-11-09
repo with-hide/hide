@@ -927,6 +927,7 @@ async fn handle(
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
         "human_turn_done" => Some(human_turn_done(mobile, phone_id, message, projection).await),
         "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
+        "ask_mission_material" => Some(ask_mission_material(mobile, phone_id, message).await),
         "read_pr" | "merge_pr" | "read_pr_feedback" => {
             Some(pr_request(mobile, phone_id, kind, message).await)
         }
@@ -1272,6 +1273,76 @@ async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -
             return answer(false, Some(reason));
         }
     };
+    match dispatch_mission_event(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// What a phone's `ask_mission_material` asks, once it names a listed
+/// mission: the one `mission_material` event the desktop's `자료 요청` sends
+/// (`Event::MissionMaterial`), for the question its key names.
+fn mission_material_event(
+    message: &Value,
+    missions: &PhoneMissions,
+) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let Some(key) = message.get("key").and_then(Value::as_u64) else {
+        return Err("invalid_request");
+    };
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "mission_material",
+        "payload": {"mission": mission.id, "key": key},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// The operator's `자료 요청` on a mission's decision, from a phone: claimed
+/// and dispatched as an answer is, and the core asks the Conductor once per
+/// question however many presses arrive; that it did comes back on the
+/// mission as the question's `material_asked`.
+async fn ask_mission_material(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let bytes = match mission_material_event(message, &mobile.missions()) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_material:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_mission_event(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// One mission event a phone's press asks for, dispatched once per request
+/// id on one blocking thread: a repeat of the same press, on this socket or
+/// another, answers from the claim, one still being sent answers
+/// `in_flight`, and a dispatch that failed releases the claim so the phone
+/// may send the id again.
+async fn dispatch_mission_event(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    request_id: &str,
+    bytes: Vec<u8>,
+) -> Result<(), &'static str> {
     let (mobile, phone_id, request) = (
         Arc::clone(mobile),
         phone_id.to_owned(),
@@ -1298,9 +1369,8 @@ async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -
     })
     .await;
     match dispatched {
-        Ok(Ok(())) => answer(true, None),
-        Ok(Err(reason)) => answer(false, Some(reason)),
-        Err(_) => answer(false, Some("unavailable")),
+        Ok(result) => result,
+        Err(_) => Err("unavailable"),
     }
 }
 
@@ -2484,6 +2554,57 @@ mod tests {
             (answer["ok"].as_bool(), reason(&answer)),
             (Some(false), Some("invalid_request"))
         );
+    }
+
+    /// A phone's `자료 요청` is the desktop's own `mission_material` event for
+    /// the question its key names, claimed once per press like an answer, and
+    /// a mission the phone's list does not hold is refused before anything
+    /// is claimed.
+    #[tokio::test]
+    async fn a_phone_material_request_is_the_desktop_event_claimed_once_per_press() {
+        let missions = deciding();
+        let material = |body: Value| {
+            let mut message = mission_message("m", body);
+            message["type"] = json!("ask_mission_material");
+            message
+        };
+        let event: Value = serde_json::from_slice(
+            &mission_material_event(&material(json!({})), &missions).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event["kind"], "mission_material");
+        assert_eq!(event["payload"], json!({"mission": "mission-1", "key": 4}));
+        assert_eq!(
+            mission_material_event(&material(json!({"mission": "mission-9"})), &missions),
+            Err("gone")
+        );
+        assert_eq!(
+            mission_material_event(&material(json!({"key": "4"})), &missions),
+            Err("invalid_request")
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(missions));
+        let phone = paired(&mobile);
+        let first = ask_mission_material(&mobile, &phone, &material(json!({}))).await;
+        assert_eq!(
+            (first["type"].as_str(), first["request_id"].as_str(), first["ok"].as_bool()),
+            (Some("mission_result"), Some("m"), Some(true)),
+            "{first}"
+        );
+        assert!(matches!(
+            mobile.reserve_input(&phone, "m"),
+            Reservation::Seen(InputState::Written)
+        ));
+        let again = ask_mission_material(&mobile, &phone, &material(json!({}))).await;
+        assert_eq!(again["ok"], true, "{again}");
+        let mut gone = material(json!({"mission": "mission-9"}));
+        gone["request_id"] = json!("g");
+        let refused = ask_mission_material(&mobile, &phone, &gone).await;
+        assert_eq!(reason(&refused), Some("gone"));
+        assert!(matches!(mobile.reserve_input(&phone, "g"), Reservation::Write));
     }
 
     /// A phone with the one pull request list the PR requests are checked against.
