@@ -90,6 +90,9 @@ pub(super) struct MemoryWork {
     /// change moved the provider it asks.
     pass_cancel: Option<CancelToken>,
     pass_settings: Option<hide_ai::AiSettings>,
+    /// The version of each profile item those settings ask, as its machine
+    /// listed it when the pass started (`crate::ai::ItemProfiles::versions`).
+    pass_profiles: Vec<Option<u64>>,
     /// The settings the last change check saw; the same settings read again
     /// change nothing.
     seen_settings: Option<hide_ai::AiSettings>,
@@ -538,10 +541,15 @@ impl Runtime {
                 super::memory_verify::OperatorHome { home, codex },
             )
         });
+        let profiles = settings
+            .as_ref()
+            .map(|settings| self.ai_profiles.versions(settings))
+            .unwrap_or_default();
         let work = &mut self.memory_work;
         work.pass_in_flight = true;
         work.pass_cancel = Some(cancel.clone());
         work.pass_settings = settings.clone();
+        work.pass_profiles = profiles;
         // A pane closed or a wake while the pass runs sets this back to now.
         work.next_pass_unix_ms = now_unix_ms.saturating_add(MEMORY_PASS_INTERVAL_MS);
         let input = PassInput {
@@ -646,8 +654,26 @@ impl Runtime {
         let cancel = CancelToken::new();
         self.memory_work.pass_cancel = Some(cancel.clone());
         self.memory_work.pass_settings = self.ai_settings.clone();
+        self.memory_work.pass_profiles = self
+            .ai_settings
+            .as_ref()
+            .map(|settings| self.ai_profiles.versions(settings))
+            .unwrap_or_default();
         self.memory_work.seen_settings = self.ai_settings.clone();
         cancel
+    }
+
+    /// A pass builds its router once, so it would keep asking a profile the
+    /// operator has since removed, or run an edited one as it was: it stops
+    /// when a profile item its settings ask moved, and a profile it does not
+    /// ask leaves it alone (PRD agent-profiles-phase2 B21).
+    pub(super) fn memory_ai_profiles_moved(&mut self) {
+        let Some(settings) = self.memory_work.pass_settings.as_ref() else {
+            return;
+        };
+        if self.ai_profiles.versions(settings) != self.memory_work.pass_profiles {
+            self.cancel_memory_pass();
+        }
     }
 
     /// Stops the running pass; the next one starts on the usual interval.

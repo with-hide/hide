@@ -267,10 +267,14 @@ mod tests {
                 .get(&claude(instance, "sonnet"), &default_run)
                 .unwrap();
         }
-        assert!(
-            backends.get(&claude(99, "sonnet"), &default_run).is_err(),
-            "past the cap"
-        );
+        // Past the cap the refusal is `Unsupported`, never `NotFound`: the
+        // core reads only `NotFound` for a profile as a missing profile.
+        let full = backends
+            .get(&claude(99, "sonnet"), &default_run)
+            .err()
+            .expect("past the cap");
+        assert_eq!(full.code, ErrorCode::Unsupported);
+        assert!(full.message.contains(&MAX_BACKENDS.to_string()), "{full:?}");
         backends.release(1);
         assert!(backends.get(&claude(99, "sonnet"), &default_run).is_ok());
     }

@@ -40,7 +40,7 @@ pub use pi::PiCliBackend;
 pub use process::ProcessMeasurement;
 pub use program::{ItemRun, Wrapper, resolve_start};
 pub use registry::{CLI_DEFAULT_MODEL, PROVIDERS, ProviderId, build_backend};
-pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig};
+pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig, SharedAccount};
 pub use settings::{AiSettings, FallbackEntry, FallbackRefusal};
 pub use text_cli::TextCliConfig;
 pub use turns::{

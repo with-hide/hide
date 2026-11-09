@@ -1475,7 +1475,7 @@ impl Runtime {
                     .as_ref()
                     .map_or_else(Weak::new, |context| context.runtime.clone()),
             ),
-            accounts: self.ai_accounts(),
+            profiles: self.ai_profiles(),
         }
     }
 

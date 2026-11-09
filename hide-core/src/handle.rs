@@ -491,12 +491,12 @@ impl Core {
         // store imports once is what the kit's retirement deletes.
         // Taken before the match: a guard in its scrutinee would be held
         // through the arms, which lock the runtime again.
-        let (usage_gate, ai_usage, ai_accounts) = {
+        let (usage_gate, ai_usage, ai_profiles) = {
             let runtime = lock_recover(&runtime);
             (
                 runtime.usage_gate(),
                 runtime.ai_usage(),
-                runtime.ai_accounts(),
+                runtime.ai_profiles(),
             )
         };
         // The labels run on the logins of the machine each item is placed
@@ -504,7 +504,7 @@ impl Core {
         let label_machines = crate::ai::AiMachines {
             own: Arc::clone(&own_node),
             devices: crate::runtime::device_links(Arc::downgrade(&runtime)),
-            accounts: ai_accounts,
+            profiles: ai_profiles,
         };
         let labels = match crate::labels::LabelServices::start(
             std::path::Path::new(&options.app_state_path)

@@ -31,7 +31,7 @@ pub struct RouterConfig {
     /// entry is an account of its own, as a profile that keeps the agent's
     /// default account and only adds a wrapper or variables is, since those
     /// can run the agent against another provider.
-    pub accounts: BTreeMap<Item, AccountKey>,
+    pub accounts: BTreeMap<Item, SharedAccount>,
     /// Use Hide AI. Off, `execute` returns [`AiError::Disabled`] without
     /// asking any provider anything (B33).
     pub enabled: bool,
@@ -302,11 +302,20 @@ struct State {
     rollup: Rollup,
 }
 
+/// The account an item runs in, as one usage limit sees it: an account
+/// folder or name says which account only on the machine that keeps it, so
+/// one path on two machines is two accounts (`None` is the core's own).
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SharedAccount {
+    pub machine: Option<String>,
+    pub key: AccountKey,
+}
+
 /// What a usage limit parks: the account an item runs in, which items of one
 /// account share, or the item alone (`RouterConfig::accounts`).
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum Park {
-    Account(ProviderId, AccountKey),
+    Account(ProviderId, SharedAccount),
     Item(Item),
 }
 
@@ -3612,7 +3621,10 @@ mod tests {
         );
         let other = Scripted::new(ProviderId::CLAUDE, vec![ok("same account")]);
         let gateway = Scripted::new(ProviderId::CLAUDE, vec![ok("gateway")]);
-        let account = AccountKey::Folder("/accounts/team/".to_owned());
+        let account = SharedAccount {
+            machine: None,
+            key: AccountKey::Folder("/accounts/team/".to_owned()),
+        };
         let config = RouterConfig {
             priority: vec![
                 claude_profile("p-one"),
@@ -3654,6 +3666,71 @@ mod tests {
                 (claude_profile("p-two"), true),
                 (claude_profile("p-gw"), false),
             ]
+        );
+    }
+
+    /// D-07: an account folder names one account only on the machine that
+    /// keeps it, so the same path on the core's own machine and on two
+    /// devices is three accounts, and a limit on one parks none of the others.
+    #[test]
+    fn one_account_path_on_two_machines_is_two_accounts_for_a_usage_park() {
+        let sink = Arc::new(Recorder::default());
+        let own = Scripted::new(
+            ProviderId::CLAUDE,
+            vec![Err(AiError::UsageLimited { retry_after: None })],
+        );
+        let mini = Scripted::new(
+            ProviderId::CLAUDE,
+            vec![Err(AiError::UsageLimited { retry_after: None })],
+        );
+        let wsl = Scripted::new(ProviderId::CLAUDE, vec![ok("wsl")]);
+        let on = |machine: Option<&str>| SharedAccount {
+            machine: machine.map(str::to_owned),
+            key: AccountKey::Folder("/home/user/accounts/work/".to_owned()),
+        };
+        let config = RouterConfig {
+            priority: vec![
+                claude_profile("p-own"),
+                claude_profile("p-mini"),
+                claude_profile("p-wsl"),
+            ],
+            accounts: [
+                (claude_profile("p-own"), on(None)),
+                (claude_profile("p-mini"), on(Some("mini"))),
+                (claude_profile("p-wsl"), on(Some("wsl"))),
+            ]
+            .into(),
+            backoff_base: Duration::from_millis(1),
+            ..RouterConfig::default()
+        };
+        let router = AiRouter::with_sleep(
+            vec![
+                OfItem::backend(claude_profile("p-own"), &own),
+                OfItem::backend(claude_profile("p-mini"), &mini),
+                OfItem::backend(claude_profile("p-wsl"), &wsl),
+            ],
+            config,
+            sink,
+            Box::new(|_| {}),
+        );
+        let answer = router
+            .execute(&request("p1", "x"), &CancelToken::new())
+            .unwrap();
+        assert_eq!(answer.value["summary"], "wsl");
+        assert_eq!(mini.calls(), 1, "another machine's account is asked");
+        let parked: Vec<_> = router
+            .statuses()
+            .into_iter()
+            .map(|status| (status.item, status.parked_for.is_some()))
+            .collect();
+        assert_eq!(
+            parked,
+            [
+                (claude_profile("p-own"), true),
+                (claude_profile("p-mini"), true),
+                (claude_profile("p-wsl"), false),
+            ],
+            "each limit parks its own machine's account only"
         );
     }
 

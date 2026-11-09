@@ -2534,6 +2534,85 @@ fn window_readers_rest_while_no_window_draws_the_snapshot() {
     assert!(runtime.ui_attached());
 }
 
+/// Lists Claude Code profiles on the core's own machine, each at its own
+/// profile version.
+fn claude_profile_versions(runtime: &mut Runtime, list: u64, profiles: &[(&str, u64)]) {
+    let profiles: Vec<serde_json::Value> = profiles
+        .iter()
+        .map(|(id, version)| {
+            serde_json::json!({"id": id, "kind": "claude-code", "name": id.trim_start_matches("p-"),
+                "version": version, "removing": false})
+        })
+        .collect();
+    let node = runtime.node.to_string();
+    runtime.ingest_profiles(
+        &node,
+        crate::runtime::kit::ProfilesRead::Listed(
+            serde_json::from_value(serde_json::json!({"version": list, "profiles": profiles}))
+                .unwrap(),
+        ),
+    );
+}
+
+/// PRD agent-profiles-phase2 B21: a Memory pass builds its router once, so
+/// one running must not keep asking a profile the operator has since deleted
+/// or run an edited one as it was; a profile it does not ask leaves it alone.
+#[test]
+fn a_running_memory_analysis_stops_when_a_profile_it_asks_is_deleted_or_edited() {
+    let mut runtime = runtime();
+    claude_profile_versions(
+        &mut runtime,
+        1,
+        &[("p-work", 1), ("p-gw", 1), ("p-other", 1)],
+    );
+    runtime.ingest_ai_settings(hide_ai::AiSettings::default(), None);
+    let mut read = ready_read(&["claude"]);
+    read.providers[0].profile_models = ["p-work", "p-gw"]
+        .into_iter()
+        .map(|profile| crate::model::BackgroundAiProfileModels {
+            profile: profile.to_owned(),
+            state: "ready".to_owned(),
+            selectable: true,
+            ..crate::model::BackgroundAiProfileModels::default()
+        })
+        .collect();
+    runtime.ingest_background_ai(read);
+    assert!(runtime.dispatch_json(&ai_event(
+        serde_json::json!({"provider": "claude", "profile": "p-work"})
+    )));
+    assert!(runtime.dispatch_json(&ai_event(
+        serde_json::json!({"fallback_add": "claude", "profile": "p-gw"})
+    )));
+
+    let cancel = runtime.pretend_memory_pass();
+    claude_profile_versions(
+        &mut runtime,
+        2,
+        &[("p-work", 1), ("p-gw", 1), ("p-other", 2)],
+    );
+    assert!(
+        !cancel.is_cancelled(),
+        "a profile the pass does not ask leaves it alone"
+    );
+
+    claude_profile_versions(
+        &mut runtime,
+        3,
+        &[("p-work", 1), ("p-gw", 2), ("p-other", 2)],
+    );
+    assert!(
+        cancel.is_cancelled(),
+        "an edited fallback profile ends the pass"
+    );
+
+    let cancel = runtime.pretend_memory_pass();
+    claude_profile_versions(&mut runtime, 4, &[("p-gw", 2), ("p-other", 2)]);
+    assert!(
+        cancel.is_cancelled(),
+        "a deleted Runs on profile ends the pass"
+    );
+}
+
 /// A Memory analysis builds its router once; one already running must not
 /// keep sending session text to an agent the operator has since switched off
 /// or taken out of the list, and an unrelated switch must not end it.

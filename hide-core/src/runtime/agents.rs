@@ -2703,10 +2703,18 @@ impl Runtime {
             .unwrap_or_default()
     }
 
-    /// Follows a machine's profile list: the accounts the routers park by
+    /// Follows a machine's profile list: what the routers ask and park by,
     /// and which items of the order name a profile that is gone.
     pub(super) fn refresh_ai_items(&mut self) {
-        self.refresh_ai_accounts();
+        if self.refresh_ai_profiles() {
+            // A router that asks a profile that moved is let go where it
+            // runs, so its backend is released off this lock; a Memory pass
+            // that asks one stops, as a settings change stops it (B21).
+            if let Some(services) = &self.label_services {
+                services.analyzer.profiles_moved();
+            }
+            self.memory_ai_profiles_moved();
+        }
         let settings = self.ai_settings.clone().unwrap_or_default();
         let (runs_on, fallback) = self.ai_missing(&settings);
         let snapshot = &mut self.snapshot.status.background_ai;
@@ -2729,37 +2737,38 @@ impl Runtime {
         )
     }
 
-    /// Brings the account each machine's profiles run in up to date for the
-    /// routers (`crate::ai::ItemAccounts`, D-07): a profile of an account of
-    /// its own shares a usage limit's park with every item of that account;
-    /// one of the agent's default account has no entry and is parked alone.
-    fn refresh_ai_accounts(&self) {
-        let accounts = self
+    /// Brings what each machine lists of its profiles up to date for the
+    /// routers (`crate::ai::ItemProfiles`, B21, D-07): every profile item
+    /// with its version, and the account it runs in when that is an account
+    /// of its own, which items of that account share a usage limit's park
+    /// by. Says whether anything changed.
+    fn refresh_ai_profiles(&self) -> bool {
+        let profiles = self
             .kit_states
             .iter()
             .filter_map(|(machine, kit)| Some((machine, kit.profiles.as_ref()?)))
             .flat_map(|(machine, profiles)| {
                 let machine = (machine != self.node.as_str()).then(|| machine.clone());
                 profiles.profiles.iter().filter_map(move |profile| {
-                    let key = profile
-                        .account_key
-                        .clone()
-                        .filter(|key| !key.is_default())?;
                     let provider = hide_ai::ProviderId::for_agent(&profile.kind)?;
                     let item = hide_ai::Item::of(
                         provider,
                         Some(hide_agent_adapter::ProfileId(profile.id.clone())),
                     );
-                    (!item.is_default()).then(|| ((machine.clone(), item), key))
+                    let listed = crate::ai::ItemProfile {
+                        version: profile.version,
+                        account: profile.account_key.clone().filter(|key| !key.is_default()),
+                    };
+                    (!item.is_default()).then(|| ((machine.clone(), item), listed))
                 })
             })
             .collect();
-        self.ai_accounts.set(accounts);
+        self.ai_profiles.set(profiles)
     }
 
-    /// The accounts cell every Hide AI router reads.
-    pub(crate) fn ai_accounts(&self) -> Arc<crate::ai::ItemAccounts> {
-        Arc::clone(&self.ai_accounts)
+    /// The profile cell every Hide AI router reads.
+    pub(crate) fn ai_profiles(&self) -> Arc<crate::ai::ItemProfiles> {
+        Arc::clone(&self.ai_profiles)
     }
 
     /// Whether `hide agent catalog` is waiting for one read of the model

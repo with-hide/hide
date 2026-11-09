@@ -263,7 +263,7 @@ impl Harness {
                     Arc::new(NoopLogSink),
                 ))
             }),
-            Box::new(|_| Vec::new()),
+            Box::new(|_| crate::ai::RouterFacts::default()),
             Arc::default(),
         )
         .unwrap();
