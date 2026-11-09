@@ -41,6 +41,9 @@ pub struct RowFacts {
     pub(crate) operator_request: Option<Request>,
     pub(crate) other_request: Option<Request>,
     pub(crate) last_reply_at_unix_ms: Option<u64>,
+    /// The head of the agent's last message after the operator's last
+    /// request and after the newest one (`labels::facts::Reply`).
+    pub(crate) replies: Vec<crate::labels::facts::Reply>,
     /// The digests of the newest user messages the session recorded
     /// (`labels::facts::SessionFacts::prompt_digests`): an agent's own record
     /// of the input it took, which confirms a brief Hide typed
@@ -60,6 +63,9 @@ pub struct RowFacts {
     /// The label's summaries of the recent turns' requests, oldest first;
     /// empty while summaries are off.
     pub(crate) recent_turns: Vec<RecentTurn>,
+    /// The newest turns the label judged to end on a question, whoever began
+    /// them, oldest first; empty while summaries are off.
+    pub(crate) asked: Vec<crate::labels::store::AskedTurn>,
     /// The session's last turn proposed a plan and waits for the operator to
     /// approve it, as read for the agent's current engine state (PRD
     /// codex-plan-approval-hold D-05).
@@ -91,7 +97,7 @@ pub struct RowFacts {
 }
 
 /// Who sent the request a row shows.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
 #[serde(tag = "kind", content = "name", rename_all = "snake_case")]
 pub enum RequestSender {
     Operator,
@@ -182,6 +188,50 @@ pub struct AgentRequestSnapshot {
     pub later_by: Option<RequestSender>,
     /// The chip first (D-46), then the other live ones, then settled ones.
     pub pull_requests: Vec<AgentPullRequestSnapshot>,
+    /// The agent's answer to the shown request, once the turn it began is
+    /// over, for the turn card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<TurnAnswerSnapshot>,
+    /// The letters the agent sent and received, and the agents it started,
+    /// since the shown request (`delivery::correspondence`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letters: Option<crate::delivery::correspondence::LettersSinceSnapshot>,
+    /// The questions the agent's later turns put to the operator since the
+    /// shown request, oldest first; the operator has sent nothing since
+    /// each, or the shown request would be newer.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub asked: Vec<AskedSnapshot>,
+}
+
+/// The agent's answer to the shown request: the label's line for how the
+/// turn ended and the head of the agent's own last message in it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TurnAnswerSnapshot {
+    /// The offset of the shown request, which names the turn when the
+    /// whole answer is asked for (`turn_answer_read`).
+    pub offset: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<LabelEnd>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// The first lines of the agent's last message in the turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// The message says more than `head` and can be read whole: the turn's
+    /// end was judged, which keeps what a read must match.
+    pub whole: bool,
+    /// When the agent wrote it, or the turn's request was sent when only
+    /// the label's line is known.
+    pub at_unix_ms: u64,
+}
+
+/// A question a later turn put to the operator.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AskedSnapshot {
+    pub line: String,
+    pub at_unix_ms: u64,
+    /// It ended the newest turn, which the card's last line already shows.
+    pub current: bool,
 }
 
 /// A row's verb and when it took it, kept in `core-state.json`.
@@ -210,6 +260,7 @@ pub(crate) fn apply<'a>(
     rows: &mut [SidebarAgentSnapshot],
     place: impl Fn(&str) -> Option<RowPlace<'a>>,
     github: &GithubSnapshot,
+    letters: &crate::delivery::correspondence::Correspondence,
     verbs: &mut BTreeMap<String, VerbRecord>,
     now_unix_ms: u64,
 ) -> bool {
@@ -300,6 +351,43 @@ pub(crate) fn apply<'a>(
                 }
             })
             .collect();
+        let shown_at = shown.as_ref().map(|(request, _)| request.at_unix_ms);
+        let newest_offset = [&facts.operator_request, &facts.other_request]
+            .into_iter()
+            .flatten()
+            .max_by_key(|request| request.at_unix_ms)
+            .and_then(|request| request.offset);
+        let working = row.activity == "working";
+        // The shown request's turn is over once a later request began one,
+        // or the agent stopped working.
+        let turn_over = facts
+            .other_request
+            .as_ref()
+            .zip(shown_at)
+            .is_some_and(|(later, shown_at)| later.at_unix_ms > shown_at)
+            || !working;
+        let answer = shown_offset
+            .filter(|_| turn_over)
+            .and_then(|offset| answer_of(&facts, offset, shown_at.unwrap_or_default()));
+        let asked = shown_at
+            .map(|shown_at| {
+                facts
+                    .asked
+                    .iter()
+                    .filter(|asked| {
+                        asked.at_unix_ms > shown_at && Some(asked.offset) != shown_offset
+                    })
+                    .filter_map(|asked| {
+                        Some(AskedSnapshot {
+                            line: display_text::one_line(&asked.line, MAX_LINE_CHARS)?,
+                            at_unix_ms: asked.at_unix_ms,
+                            current: Some(asked.offset) == newest_offset && !working,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let letters = shown_at.and_then(|shown_at| letters.since(&row.pane_id, shown_at));
         row.request = Some(AgentRequestSnapshot {
             verb,
             verb_since_unix_ms: since,
@@ -319,6 +407,9 @@ pub(crate) fn apply<'a>(
             recent_turns,
             later_by,
             pull_requests,
+            answer,
+            letters,
+            asked,
         });
         row.state = crate::agent_state::row_state(row);
     }
@@ -352,6 +443,38 @@ pub(crate) fn open_result(
         }
         _ => false,
     }
+}
+
+/// The answer to the request at `offset`: the label's judgment of how its
+/// turn ended and the head of the agent's last message after it; `None`
+/// when neither is known.
+fn answer_of(facts: &RowFacts, offset: u64, request_at: u64) -> Option<TurnAnswerSnapshot> {
+    let turn = facts.recent_turns.iter().find(|turn| turn.offset == offset);
+    let end = turn
+        .and_then(|turn| turn.end)
+        .filter(|end| *end != LabelEnd::Working);
+    let line = end
+        .and(turn)
+        .and_then(|turn| display_text::one_line(&turn.line, MAX_LINE_CHARS));
+    let reply = facts
+        .replies
+        .iter()
+        .find(|reply| reply.request_offset == offset);
+    let head = reply
+        .map(|reply| display_text::block(&reply.head))
+        .filter(|head| !head.trim().is_empty());
+    if line.is_none() && head.is_none() {
+        return None;
+    }
+    Some(TurnAnswerSnapshot {
+        offset,
+        end,
+        line,
+        whole: reply.is_some_and(|reply| reply.more)
+            && turn.is_some_and(|turn| turn.witness.is_some()),
+        head,
+        at_unix_ms: reply.map_or(request_at, |reply| reply.at_unix_ms),
+    })
 }
 
 /// The shown request's one line: the label's summary of the message at its
@@ -405,7 +528,7 @@ const MAX_EARLIER_TURNS: usize = 2;
 /// sender can pass as either (a participant name is whatever its sender chose).
 const RESERVED_SENDERS: [&str; 3] = ["나", "에이전트", "operator"];
 
-fn named(name: &str) -> RequestSender {
+pub(crate) fn named(name: &str) -> RequestSender {
     match display_text::one_line(name, MAX_SENDER_CHARS) {
         Some(name)
             if !RESERVED_SENDERS.iter().any(|reserved| {

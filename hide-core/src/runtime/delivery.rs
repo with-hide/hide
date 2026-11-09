@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::delivery::correspondence::Correspondence;
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::{BELLS, Ledger};
 use crate::delivery::mailbox::Exchange;
@@ -1859,8 +1860,27 @@ impl Runtime {
         self.snapshot.overview_graph.available = false;
     }
 
+    /// Publishes `ledger` with its letter index built here, under the lock;
+    /// only tests and a restore before the worker runs may pay that.
+    #[cfg(test)]
     pub(crate) fn publish_delivery(&mut self, ledger: Arc<Ledger>, transitions: bool) -> bool {
+        let index = Arc::new(Correspondence::of(&ledger));
+        self.publish_delivery_indexed(ledger, index, transitions)
+    }
+
+    /// Publishes a ledger the delivery worker saved, with the letter index it
+    /// built from it outside the lock (`delivery::correspondence`).
+    pub(crate) fn publish_delivery_indexed(
+        &mut self,
+        ledger: Arc<Ledger>,
+        index: Arc<Correspondence>,
+        transitions: bool,
+    ) -> bool {
         let now = unix_milliseconds();
+        // The turn cards' letters move only when the index's digest does, so
+        // a delivery step that changes no line lays no row again.
+        let letters_moved = index.digest() != self.letter_index.digest();
+        self.letter_index = index;
         // A new letter may wait on a sleeping recipient (PRD
         // mission-worker-sleep B2).
         self.letter_wakes.touch();
@@ -1975,6 +1995,7 @@ impl Runtime {
             | lineage
             | plans
             | (human_moved && self.refresh_pane_read_state())
+            | (letters_moved && self.sync_request_rows())
             | self.sync_session_state()
             | self.refresh_agent_scopes()
     }

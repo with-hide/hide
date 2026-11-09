@@ -2843,14 +2843,31 @@ impl LabelWorker {
                             .facts
                             .requester_at(offset)
                             .is_none_or(Requester::is_operator);
+                    let outcome_kept = !stale_display || stale_turn;
                     if shown {
-                        let outcome_kept = !stale_display || stale_turn;
                         turns_changed = record.record_turn(
                             offset,
                             turn_summary.as_deref().unwrap_or_default(),
                             outcome_kept.then_some((analysis.end, analysis.line.as_str())),
                             outcome.request_at_unix_ms,
                         );
+                    }
+                    // How a turn ended is kept for the turn card whoever
+                    // began it: a question a letter's turn put to the
+                    // operator is what the card must not let a lead's letters
+                    // bury, and the witness lets the card read the whole
+                    // answer of the request it shows.
+                    if outcome.phase == AnalysisPhase::TurnEnd && outcome_kept {
+                        turns_changed |= record.note_turn_end(
+                            offset,
+                            analysis.end,
+                            &analysis.line,
+                            outcome.at_unix_ms,
+                        );
+                        if shown {
+                            turns_changed |=
+                                record.note_turn_witness(offset, outcome.turn_witness.as_deref());
+                        }
                     }
                 }
                 if stale_display {

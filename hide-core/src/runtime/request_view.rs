@@ -139,6 +139,7 @@ impl Runtime {
                     })
             },
             &self.github,
+            &self.letter_index,
             verbs,
             unix_milliseconds(),
         );
@@ -173,6 +174,7 @@ impl Runtime {
             agents,
             |_| None,
             &crate::model::GithubSnapshot::default(),
+            &self.letter_index,
             verbs,
             unix_milliseconds(),
         );

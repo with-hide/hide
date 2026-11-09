@@ -83,6 +83,9 @@ pub struct Snapshot {
     pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
     /// The brief of the one node whose folded box the operator opened.
     pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
+    /// The whole answer the operator opened on a turn card, for one card at
+    /// a time (`runtime/turn_answer.rs`).
+    pub turn_answer: crate::runtime::turn_answer::TurnAnswerReadSnapshot,
     /// Each pane's session's own plan (PRD hide-plan D-10).
     pub plans: crate::runtime::plans::PlansSnapshot,
     pub navigator: NavigatorSnapshot,
@@ -7893,6 +7896,7 @@ impl Snapshot {
             missions: Default::default(),
             mission_events: Default::default(),
             mission_brief: Default::default(),
+            turn_answer: Default::default(),
             plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
