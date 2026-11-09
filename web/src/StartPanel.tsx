@@ -276,7 +276,15 @@ function StartPanel({ actions }: { actions: Actions }) {
   const itemKey = target && selection.kind !== "terminal" ? `${target.deviceId}:${target.workspaceId}:${selection.kind}` : null;
   const [itemPick, setItemPick] = useState<{ key: string; profile: string } | null>(null);
   const picked = itemPick && itemPick.key === itemKey && menu?.items.some((item) => item.kind === selection.kind && item.profile === itemPick.profile) ? itemPick.profile : null;
-  const profile = target && selection.kind !== "terminal" && menu ? picked ?? (menu.items.some((item) => item.kind === selection.kind && item.profile === preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind)) ? preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind) : BUILT_IN_PROFILE) : BUILT_IN_PROFILE;
+  const preselected = target && selection.kind !== "terminal" && menu ? preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind) : BUILT_IN_PROFILE;
+  const preselectedItem = menu?.items.some((item) => item.kind === selection.kind && item.profile === preselected) ? preselected : BUILT_IN_PROFILE;
+  // What the panel first showed for an agent stays the item until the operator chooses another: Radix gives no change when the
+  // item already shown is pressed, so a pick is no record, and a snapshot that moves the project's choice under an open panel
+  // must not move the account the shown item starts (D-02). The panel lives only while open, so the next open reads the core again.
+  const shown = useRef(new Map<string, string>());
+  if (itemKey && menu && (menu.listed || menu.note !== null) && !shown.current.has(itemKey)) shown.current.set(itemKey, preselectedItem);
+  const firstShown = itemKey ? shown.current.get(itemKey) : undefined;
+  const profile = target && selection.kind !== "terminal" && menu ? picked ?? (firstShown && menu.items.some((item) => item.kind === selection.kind && item.profile === firstShown) ? firstShown : preselectedItem) : BUILT_IN_PROFILE;
   // A machine that keeps profiles starts the item shown, the built-in one included, even with no profile listed: the core would
   // pick again when it starts (D-02, B1). A device whose Hide predates profiles is sent none.
   const profileToSend = menu?.listed && selection.kind !== "terminal" ? profile : null;

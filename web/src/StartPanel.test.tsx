@@ -361,17 +361,29 @@ it("opens a profile item on its own default model when the remembered model is n
 });
 
 
-it("keeps a picked item through a project preselection that moves, and starts the built-in item on a machine whose profile list could not be read but is kept (agent-profiles-phase2 D-02, I-1.20)", async () => {
+it("keeps the item shown when the project's preselection moves under the open panel, and names the last list kept when a list could not be read (agent-profiles-phase2 D-02, I-1.20)", async () => {
   await withPanel(async ({ render, events, q, openItems, pickItem, root }) => {
     const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
     const work = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work")], defaults: {} };
+    const moved = async (rest: SnapshotRest) => act(async () => useShellStore.setState({ rest }));
+    // The panel opens on `Claude Code`; pressing the item already shown makes no change event, and another window then
+    // preselects work: the item shown, and started, is still `Claude Code`.
     await render(profileSnapshot(work, { blog: "default" }));
     await openItems();
     await pickItem("claude/default");
-    // Another window preselects work for the project after the operator picked `Claude Code`.
-    await render(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    await moved(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
     await act(async () => q("[data-start-submit]")!.click());
-    expect(started().at(-1)).toMatchObject({ profile: "p-work" });
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+    await act(async () => root.render(<></>));
+    // The same holds with nothing touched, and a panel opened again reads the core again.
+    await render(profileSnapshot(work, { blog: "default" }));
+    await moved(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+    await act(async () => root.render(<></>));
+    await render(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-work");
     await act(async () => root.render(<></>));
     // A list that could not be read now is the last one kept: its item is named too, the built-in one included.
     await render(profileSnapshot({ ...work, state: "unreadable" }, { blog: "default" }));
