@@ -147,8 +147,16 @@ mod tests {
     fn each_verb_reads_its_agent_name_and_options() {
         assert_eq!(
             parsed(&[
-                "add", "claude", "work", "--account", "~/accounts/work", "--env", "A=1", "--env",
-                "B=2", "--default",
+                "add",
+                "claude",
+                "work",
+                "--account",
+                "~/accounts/work",
+                "--env",
+                "A=1",
+                "--env",
+                "B=2",
+                "--default",
             ]),
             Ok(ProfileCommand::Add {
                 machine: None,
@@ -162,7 +170,14 @@ mod tests {
         );
         assert_eq!(
             parsed(&[
-                "edit", "codex", "team", "--rename", "crew", "--no-program", "--unset-env", "A",
+                "edit",
+                "codex",
+                "team",
+                "--rename",
+                "crew",
+                "--no-program",
+                "--unset-env",
+                "A",
             ]),
             Ok(ProfileCommand::Edit {
                 machine: None,

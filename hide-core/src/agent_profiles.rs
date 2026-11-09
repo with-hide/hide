@@ -144,7 +144,9 @@ impl ProfileCommand {
         let short = |value: &str| !value.is_empty() && value.len() <= 256 && text(value);
         let machine_ok = |machine: &Option<String>| machine.as_deref().is_none_or(short);
         match self {
-            Self::List { machine, kind } => machine_ok(machine) && kind.as_deref().is_none_or(short),
+            Self::List { machine, kind } => {
+                machine_ok(machine) && kind.as_deref().is_none_or(short)
+            }
             Self::Add {
                 machine,
                 kind,
@@ -544,12 +546,10 @@ impl Prepared {
                             values: Some(values),
                             added: None,
                         }),
-                        None if list.profiles.iter().any(|profile| profile.id == *id) => {
-                            Ok(Done {
-                                values: Some(Vec::new()),
-                                added: None,
-                            })
-                        }
+                        None if list.profiles.iter().any(|profile| profile.id == *id) => Ok(Done {
+                            values: Some(Vec::new()),
+                            added: None,
+                        }),
                         None => Err(Refusal::detailed(GONE, id.0.clone())),
                     };
                     Outcome {
@@ -709,7 +709,12 @@ impl Prepared {
         let list = outcome.list.as_ref();
         let listed = |id: &ProfileId| {
             list.and_then(|list| list.profiles.iter().find(|profile| profile.id == *id))
-                .map(|profile| listed(profile, list.and_then(|list| list.defaults.get(&profile.kind)) == Some(&profile.id)))
+                .map(|profile| {
+                    listed(
+                        profile,
+                        list.and_then(|list| list.defaults.get(&profile.kind)) == Some(&profile.id),
+                    )
+                })
         };
         Ok(match &self.change {
             Change::List => {
@@ -875,7 +880,10 @@ pub(crate) fn pair(text: &str) -> Result<(String, String), Refusal> {
         Some((key, value)) if !key.is_empty() => Ok((key.to_owned(), value.to_owned())),
         _ => Err(Refusal::detailed(
             INVALID,
-            format!("--env takes KEY=VALUE, not {}", text.chars().take(64).collect::<String>()),
+            format!(
+                "--env takes KEY=VALUE, not {}",
+                text.chars().take(64).collect::<String>()
+            ),
         )),
     }
 }

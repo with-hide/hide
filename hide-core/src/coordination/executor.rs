@@ -1343,7 +1343,7 @@ fn spawn(
         } else {
             crate::launch::Parent::None
         },
-        project_profile(client, &child_device, &repo, kind)?.as_ref(),
+        project_profile(client, &child_device, repo, kind)?.as_ref(),
         profiles.as_ref(),
     );
     // The child's machine answers for its profile before the spawn makes

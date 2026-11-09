@@ -1,5 +1,4 @@
 pub mod agent_cli;
-pub mod profile_cli;
 pub mod agent_exec;
 pub mod attach;
 pub mod attachments;
@@ -44,6 +43,7 @@ pub mod page_forward;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
+pub mod profile_cli;
 mod project_open;
 
 mod hook_request;

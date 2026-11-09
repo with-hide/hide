@@ -94,18 +94,25 @@ fn running(runtime: &mut Runtime, pane: &str, id: &str, title: &str) {
 
 fn change(runtime: &mut Runtime, request: &str, change: serde_json::Value) {
     let node = runtime.node.to_string();
-    assert!(runtime.dispatch_json(
-        &serde_json::to_vec(&serde_json::json!({
-            "schema_version": SCHEMA_VERSION,
-            "kind": "agent_profile_change",
-            "payload": {"device_id": node, "request_id": request, "change": change},
-        }))
-        .unwrap()
-    ));
+    assert!(
+        runtime.dispatch_json(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema_version": SCHEMA_VERSION,
+                "kind": "agent_profile_change",
+                "payload": {"device_id": node, "request_id": request, "change": change},
+            }))
+            .unwrap()
+        )
+    );
 }
 
 fn answer(runtime: &Runtime) -> &profiles::ProfileAnswer {
-    runtime.snapshot.status.agent_profile_answer.as_ref().unwrap()
+    runtime
+        .snapshot
+        .status
+        .agent_profile_answer
+        .as_ref()
+        .unwrap()
 }
 
 #[test]
@@ -141,7 +148,10 @@ fn a_new_start_takes_the_chosen_profile_then_the_projects_then_the_agents_defaul
     project_default(&mut runtime, "p-gone");
     assert_eq!(start(&runtime, Some(ROOT), None), Ok(Some("p-side".into())));
     // A start of no agent has no profile.
-    assert_eq!(runtime.new_start_profile(&node, None, Some(ROOT), None), Ok(None));
+    assert_eq!(
+        runtime.new_start_profile(&node, None, Some(ROOT), None),
+        Ok(None)
+    );
 }
 
 #[test]
@@ -149,21 +159,33 @@ fn a_removal_is_refused_while_an_agent_runs_with_the_profile_and_names_the_proje
     let mut runtime = listed();
     project_default(&mut runtime, "p-work");
     running(&mut runtime, "w1:p1", "p-work", "fix-bell");
-    change(&mut runtime, "check-1", serde_json::json!({"op": "remove_check", "id": "p-work"}));
+    change(
+        &mut runtime,
+        "check-1",
+        serde_json::json!({"op": "remove_check", "id": "p-work"}),
+    );
     let checked = answer(&runtime);
     assert_eq!(checked.state, AnswerState::Done);
     assert_eq!(checked.in_use.len(), 1);
     assert_eq!(checked.in_use[0].title, "fix-bell");
     assert!(!checked.in_use[0].asleep);
     // The removal itself is refused the same way, before the node is asked.
-    change(&mut runtime, "remove-1", serde_json::json!({"op": "remove", "id": "p-work"}));
+    change(
+        &mut runtime,
+        "remove-1",
+        serde_json::json!({"op": "remove", "id": "p-work"}),
+    );
     let refused = answer(&runtime);
     assert_eq!(refused.state, AnswerState::Refused);
     assert_eq!(refused.code.as_deref(), Some(profiles::IN_USE));
     // With no agent on it, the check names the projects that go back to the
     // agent's default (B27).
     runtime.snapshot.navigator.agents.clear();
-    change(&mut runtime, "check-2", serde_json::json!({"op": "remove_check", "id": "p-work"}));
+    change(
+        &mut runtime,
+        "check-2",
+        serde_json::json!({"op": "remove_check", "id": "p-work"}),
+    );
     let checked = answer(&runtime);
     assert!(checked.in_use.is_empty());
     assert_eq!(checked.projects, ["blog"]);
@@ -191,7 +213,11 @@ fn a_removal_is_refused_while_an_agent_runs_with_the_profile_and_names_the_proje
         .agent_sleep
         .records
         .insert("w1:p2".into(), asleep);
-    change(&mut runtime, "check-3", serde_json::json!({"op": "remove_check", "id": "p-work"}));
+    change(
+        &mut runtime,
+        "check-3",
+        serde_json::json!({"op": "remove_check", "id": "p-work"}),
+    );
     let checked = answer(&runtime);
     assert_eq!(checked.in_use.len(), 1);
     assert!(checked.in_use[0].asleep);
@@ -228,7 +254,10 @@ fn the_command_and_the_screen_refuse_the_same_profiles_by_the_same_codes() {
         env: Vec::new(),
         default: false,
     };
-    assert_eq!(refused(&mut runtime, add("cursor", None)), profiles::INVALID);
+    assert_eq!(
+        refused(&mut runtime, add("cursor", None)),
+        profiles::INVALID
+    );
     assert_eq!(
         refused(&mut runtime, add("antigravity", Some("/home/me/agy"))),
         profiles::INVALID
@@ -242,9 +271,17 @@ fn the_command_and_the_screen_refuse_the_same_profiles_by_the_same_codes() {
     // In use, by the command as on the screen.
     running(&mut runtime, "w1:p1", "p-work", "fix-bell");
     assert_eq!(refused(&mut runtime, named("work")), profiles::IN_USE);
-    change(&mut runtime, "remove", serde_json::json!({"op": "remove", "id": "p-work"}));
+    change(
+        &mut runtime,
+        "remove",
+        serde_json::json!({"op": "remove", "id": "p-work"}),
+    );
     assert_eq!(answer(&runtime).code.as_deref(), Some(profiles::IN_USE));
-    change(&mut runtime, "builtin", serde_json::json!({"op": "remove", "id": "default"}));
+    change(
+        &mut runtime,
+        "builtin",
+        serde_json::json!({"op": "remove", "id": "default"}),
+    );
     assert_eq!(answer(&runtime).code.as_deref(), Some(profiles::BUILT_IN));
     // A machine that predates profiles keeps none to change (D-04).
     let mut kit = runtime.kit_state(&node);

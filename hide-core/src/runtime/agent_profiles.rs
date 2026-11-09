@@ -37,9 +37,9 @@ impl Runtime {
             None => device.to_owned(),
         };
         let kind = match &command {
-            ProfileCommand::List { kind: Some(kind), .. } => {
-                Some(agent_of(kind).map_err(|refusal| refusal.line())?)
-            }
+            ProfileCommand::List {
+                kind: Some(kind), ..
+            } => Some(agent_of(kind).map_err(|refusal| refusal.line())?),
             _ => None,
         };
         let change = self
@@ -140,7 +140,9 @@ impl Runtime {
             .worker_context
             .as_ref()
             .ok_or_else(|| Refusal::code(profiles::UNANSWERED))?;
-        let version = self.machine_profiles(machine).map_or(0, |listed| listed.version);
+        let version = self
+            .machine_profiles(machine)
+            .map_or(0, |listed| listed.version);
         self.agent_profile_busy = true;
         Ok(Prepared {
             machine: machine.to_owned(),
@@ -156,7 +158,11 @@ impl Runtime {
     }
 
     /// A CLI command as a change of `machine`'s profiles.
-    fn plan_profile_command(&self, machine: &str, command: ProfileCommand) -> Result<Change, Refusal> {
+    fn plan_profile_command(
+        &self,
+        machine: &str,
+        command: ProfileCommand,
+    ) -> Result<Change, Refusal> {
         match command {
             ProfileCommand::List { .. } => Ok(Change::List),
             ProfileCommand::Add {
@@ -206,7 +212,11 @@ impl Runtime {
                 Ok(Change::Edit {
                     id,
                     name: rename,
-                    program: if no_program { Some(None) } else { program.map(Some) },
+                    program: if no_program {
+                        Some(None)
+                    } else {
+                        program.map(Some)
+                    },
                     env: EnvEdit::Patch {
                         set,
                         unset: unset_env,
@@ -373,8 +383,13 @@ impl Runtime {
             .collect();
         for record in sleep.dormant.values() {
             if record.node_id == machine
-                && record.profile.as_ref().is_some_and(|profile| profile.id == *id)
-                && !found.iter().any(|agent| agent.pane_id == record.old_pane_id)
+                && record
+                    .profile
+                    .as_ref()
+                    .is_some_and(|profile| profile.id == *id)
+                && !found
+                    .iter()
+                    .any(|agent| agent.pane_id == record.old_pane_id)
             {
                 found.push(InUse {
                     pane_id: record.old_pane_id.clone(),
@@ -404,9 +419,10 @@ impl Runtime {
             })
             .map(|record| {
                 record.name.clone().unwrap_or_else(|| {
-                    std::path::Path::new(&record.root)
-                        .file_name()
-                        .map_or_else(|| record.root.clone(), |name| name.to_string_lossy().into_owned())
+                    std::path::Path::new(&record.root).file_name().map_or_else(
+                        || record.root.clone(),
+                        |name| name.to_string_lossy().into_owned(),
+                    )
                 })
             })
             .collect();

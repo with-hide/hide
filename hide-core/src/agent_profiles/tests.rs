@@ -100,7 +100,10 @@ fn a_field_the_node_refuses_reaches_the_caller_with_its_field_and_words() {
     let outcome = prepared.call();
     let refused = outcome.result.as_ref().err().unwrap();
     assert_eq!(refused.code, REFUSED);
-    assert_eq!(refused.field.as_ref().unwrap().env_key.as_deref(), Some("HOME"));
+    assert_eq!(
+        refused.field.as_ref().unwrap().env_key.as_deref(),
+        Some("HOME")
+    );
     let line = prepared.answer(&outcome).unwrap_err();
     assert_eq!(
         crate::coordination::split_refusal(&line),
@@ -130,9 +133,15 @@ fn a_change_made_against_a_list_that_moved_is_made_once_more_on_the_new_one() {
     assert!(matches!(
         asked.as_slice(),
         [
-            Call::ProfileApply { expected_version: 3, .. },
+            Call::ProfileApply {
+                expected_version: 3,
+                ..
+            },
             Call::ProfileList { values: false },
-            Call::ProfileApply { expected_version: 7, .. },
+            Call::ProfileApply {
+                expected_version: 7,
+                ..
+            },
         ]
     ));
 }
@@ -172,7 +181,10 @@ fn an_edit_keeps_what_it_does_not_name_and_patches_the_variables() {
     assert_eq!(program.as_deref(), Some("claude-gateway"));
     assert_eq!(
         env,
-        &vec![("B".to_owned(), "3".to_owned()), ("C".to_owned(), "4".to_owned())]
+        &vec![
+            ("B".to_owned(), "3".to_owned()),
+            ("C".to_owned(), "4".to_owned())
+        ]
     );
 }
 
@@ -208,8 +220,17 @@ fn values_reach_only_the_request_that_asked_for_them() {
 
 #[test]
 fn a_machine_that_predates_profiles_is_refused_by_its_own_code() {
-    let link = Scripted::new(vec![Err(ErrorCode::Unsupported), Err(ErrorCode::Unsupported)]);
-    let prepared = job(link, Change::Reinstall { id: ProfileId("p".into()) }, 0);
+    let link = Scripted::new(vec![
+        Err(ErrorCode::Unsupported),
+        Err(ErrorCode::Unsupported),
+    ]);
+    let prepared = job(
+        link,
+        Change::Reinstall {
+            id: ProfileId("p".into()),
+        },
+        0,
+    );
     assert_eq!(prepared.call().result.err().unwrap().code, UNSUPPORTED);
 }
 
@@ -237,7 +258,10 @@ fn a_command_is_read_back_as_it_was_sent() {
         },
     ] {
         let wire = serde_json::to_value(&command).unwrap();
-        assert_eq!(serde_json::from_value::<ProfileCommand>(wire).unwrap(), command);
+        assert_eq!(
+            serde_json::from_value::<ProfileCommand>(wire).unwrap(),
+            command
+        );
         assert!(command.valid());
     }
     assert!(
