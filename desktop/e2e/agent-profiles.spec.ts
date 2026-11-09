@@ -171,7 +171,7 @@ test("a profile added in the Agents settings page is offered by the start panel 
     await row.locator("button").first().click();
     await expect(page.locator('[data-profile-dialog="edit"] [data-profile-env]')).toHaveAttribute("data-profile-env", "true");
     await page.locator("[data-profile-delete]").click();
-    await expect(page.locator("[data-profile-delete-projects]")).toContainText("sample", { timeout: 60_000 });
+    await expect(page.locator('[data-profile-use="project"]')).toContainText("sample", { timeout: 60_000 });
     await capture(app, page, "10-delete-check-ko-light");
     await closeAll(page);
   } finally {
