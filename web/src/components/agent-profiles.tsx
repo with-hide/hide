@@ -6,7 +6,7 @@
 // the values and the handlers in, and the gallery's `scene=agent-profiles`
 // draws every state with none.
 
-import { LockIcon, PlusIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, LockIcon, PlusIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -70,13 +70,6 @@ function profileName(profile: ProfileView, t: ReturnType<typeof useInterfaceTran
   return profile.builtIn ? t("agentProfiles.builtIn") : profile.name;
 }
 
-/** What a row says the profile runs: its account location, else its program, else how many variables it adds. */
-function ProfileWhere({ profile }: { profile: ProfileView }) {
-  const { t } = useInterfaceTranslation();
-  const text = profile.account ?? (profile.program ? t("agentProfiles.runs", { program: profile.program }) : profile.envKeys.length ? t("agentProfiles.envCount", { count: profile.envKeys.length }) : null);
-  return text ? <span className="min-w-0 max-w-full truncate font-mono text-body text-muted-foreground" title={text}>{text}</span> : null;
-}
-
 /** The row's right end: its one state with the action that answers it, or the account's usage when all is well. */
 export function ProfileStateCell({ profile, readOnly = false, onAction }: { profile: ProfileView; readOnly?: boolean; onAction?: (action: "reinstall" | "retry" | "open") => void }) {
   const { t } = useInterfaceTranslation();
@@ -115,9 +108,11 @@ function DefaultBadge() {
 }
 
 /**
- * One profile as a line: its name with the default mark, where it runs, and
- * its state. The whole line opens the profile; the state's own button stays
- * its own, so the press goes to a RowOverlayButton behind the content.
+ * One profile as a line: its name with the default mark and its state; where
+ * it runs (its account, its program) is the edit dialog's. The whole line
+ * opens that dialog, lit on hover and marked by the chevron at its end; the
+ * state's own button stays its own, so the press goes to a RowOverlayButton
+ * behind the content.
  */
 export function ProfileRow({ profile, agentLabel, readOnly = false, onOpen, onAction }: { profile: ProfileView; agentLabel: string; readOnly?: boolean; onOpen?: () => void; onAction?: (action: "reinstall" | "retry" | "open") => void }) {
   const { t } = useInterfaceTranslation();
@@ -129,10 +124,10 @@ export function ProfileRow({ profile, agentLabel, readOnly = false, onOpen, onAc
         <span className="flex min-w-0 flex-1 basis-(--size-settings-control-w) flex-wrap items-center gap-x-sm gap-y-xxs">
           <span className="min-w-0 max-w-full truncate text-subhead text-foreground">{name}</span>
           {profile.isDefault ? <DefaultBadge /> : null}
-          <ProfileWhere profile={profile} />
         </span>
-        <span className="ml-auto flex min-w-0 items-center">
+        <span className="ml-auto flex min-w-0 items-center gap-sm">
           <ProfileStateCell profile={profile} readOnly={readOnly} onAction={onAction} />
+          {onOpen && !readOnly ? <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-profile-opens="true" /> : null}
         </span>
       </div>
     </div>

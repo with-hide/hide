@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { agentProfilesView } from "./agentProfiles";
+import { agentProfilesView, signInStart } from "./agentProfiles";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
 import type { AgentProfileWire, MachineAgentProfiles } from "./snapshot";
+import type { StartTarget, StartTargets } from "./startTargets";
 
 const NOW = 1_800_000_000_000;
 
@@ -46,5 +47,27 @@ describe("agentProfilesView", () => {
   it("leaves a device's rows without usage, which is read on this machine alone", () => {
     const view = agentProfilesView(machine([wire("work")]), "claude-code", "Claude Code")!;
     expect(view.profiles.every((row) => row.usageLeft === null)).toBe(true);
+  });
+});
+
+describe("signInStart", () => {
+  const checkout = (deviceId: string, path: string, primary: boolean, disabled: StartTarget["disabled"] = null): StartTarget => ({
+    key: `checkout:${deviceId}:${path}`, deviceId, label: path, disabled, kind: "checkout", checkoutPath: path, workspaceId: path, checkoutId: path, branch: "main", primary,
+  });
+  const targets = (defaultKey: string | null, ...items: StartTarget[]): StartTargets => ({
+    groups: ["mac", "box"].map((deviceId) => ({ deviceId, deviceLabel: deviceId, connected: true, projects: [], items: items.filter((item) => item.deviceId === deviceId) })),
+    frontDeviceId: "mac", defaultKey, currentKey: null,
+  });
+
+  it("starts the profile's agent where a start over Settings would, on the profile's own machine (B10)", () => {
+    const all = targets("checkout:mac:/blog", checkout("mac", "/site", true), checkout("mac", "/blog", true), checkout("box", "/srv", false), checkout("box", "/api", true));
+    expect(signInStart(all, "mac", "claude-code")).toEqual({ provider: "claude", checkoutPath: "/blog" });
+    // Another machine's default is not this one's: its main checkout is.
+    expect(signInStart(all, "box", "codex")).toEqual({ provider: "codex", checkoutPath: "/api" });
+  });
+
+  it("leaves it to the start panel where the machine has no checkout to start in", () => {
+    expect(signInStart(targets(null, checkout("box", "/srv", true, "not_connected")), "box", "claude-code")).toBeNull();
+    expect(signInStart(targets(null), "mac", "claude-code")).toBeNull();
   });
 });

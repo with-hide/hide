@@ -4,11 +4,13 @@
 // screen reads only the answer that carries its own request id.
 
 import { agentAdapter } from "./agentAdapters";
+import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
 import { projectSettings, settingsTarget } from "./projectSettings";
 import { kitPartNeedsReinstall } from "./settings";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
 import { catalogWorkspaces, type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
+import type { StartTarget, StartTargets } from "./startTargets";
 import { limitWindow, windowPercent } from "./usage";
 
 /** The built-in profile's id on every machine (`ProfileId::default_profile`). */
@@ -276,4 +278,20 @@ export function projectAccountChoices(device: Device | undefined, chosen: Record
     const id = chosen?.[agent.id] ?? null;
     return [{ view, chosen: id && view.profiles.some((row) => row.id === id) ? id : null }];
   });
+}
+
+/**
+ * Where `열어서 로그인` starts a profile's agent on `deviceId` (B10): its start
+ * kind and the checkout a start panel opened over Settings would take there,
+ * else that device's first main checkout. Null when the agent is not one Hide
+ * starts or the device has no checkout to start in; the start panel opens then.
+ */
+export function signInStart(targets: StartTargets, deviceId: string, agent: string): { provider: ProviderKind; checkoutPath: string } | null {
+  const provider = PROVIDER_KINDS.find((kind) => kind === agentAdapter(agent)?.herdr_kind);
+  if (!provider) return null;
+  const checkouts = (targets.groups.find((group) => group.deviceId === deviceId)?.items ?? []).filter(
+    (item): item is Extract<StartTarget, { kind: "checkout" }> => item.kind === "checkout" && item.disabled === null,
+  );
+  const checkout = checkouts.find((item) => item.key === targets.defaultKey) ?? checkouts.find((item) => item.primary) ?? checkouts[0];
+  return checkout ? { provider, checkoutPath: checkout.checkoutPath } : null;
 }
