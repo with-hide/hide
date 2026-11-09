@@ -61,7 +61,7 @@ async function closeAll(page: Page): Promise<void> {
   for (let i = 0; i < 3 && (await page.locator('[data-settings="true"], [data-project-settings], [data-start-panel], [role="dialog"]').count()) > 0; i++) await page.keyboard.press("Escape");
 }
 
-test("a profile added in Settings › Agents is offered by the start panel and kept as a project's choice", async () => {
+test("a profile added in the Agents settings page is offered by the start panel and kept as a project's choice", async () => {
   const engine = await startEngine();
   const run = isolate(engine, "agent-profiles");
   let app: ElectronApplication | null = null;
