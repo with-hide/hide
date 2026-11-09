@@ -393,6 +393,39 @@ it("keeps the item shown when the project's preselection moves under the open pa
   });
 });
 
+it("holds a replacement for an item the machine stops listing, and drops the held item when the project changes (agent-profiles-phase2 D-02, I-1.8)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem }) => {
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    const moved = async (rest: SnapshotRest) => act(async () => useShellStore.setState({ rest }));
+    const both = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-side", "side")], defaults: {} };
+    const sideOnly = { ...both, version: 3, profiles: [profileFixture.listed("p-side", "side")] };
+    // The panel held work; work is deleted and the menu shows `Claude Code`, which the operator confirms; then the project's choice becomes side.
+    await render(profileSnapshot(both, { blog: "p-work", docs: "default" }, "p-work"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-work");
+    await moved(profileSnapshot(sideOnly, { blog: "default", docs: "default" }));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await openItems();
+    await pickItem("claude/default");
+    await moved(profileSnapshot(sideOnly, { blog: "p-side", docs: "default" }, "p-side"));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+  });
+});
+
+it("drops the item the operator picked when the project changes, and shows the core's choice when they return (agent-profiles I-1.8)", async () => {
+  await withPanel(async ({ render, q, openItems, pickItem }) => {
+    const both = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work"), profileFixture.listed("p-side", "side")], defaults: {} };
+    await render(profileSnapshot(both, { blog: "p-side", docs: "default" }));
+    await openItems();
+    await pickItem("claude/p-work");
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/docs")));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/default");
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/blog")));
+    expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-side");
+  });
+});
+
 it("lists a device's items by whether it is connected and whether its Hide keeps profiles (agent-profiles-phase2 B6)", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });

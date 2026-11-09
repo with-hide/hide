@@ -1,5 +1,5 @@
 import { CheckIcon, ChevronDownIcon, FolderIcon, GitBranchIcon, PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { catalogFor, rememberedSelection, modelToSend, selectKind, takesModel, type AgentSelection } from "./agentPicker";
 import { AgentPicker } from "./components/agent-picker";
@@ -274,17 +274,21 @@ function StartPanel({ actions }: { actions: Actions }) {
   const ai = useShellStore((s) => s.rest?.status?.background_ai);
   const menu = useMemo(() => (target ? startItems(rest, target.deviceId, usage, Date.now(), target.disabled === null) : null), [rest, target, usage]);
   const itemKey = target && selection.kind !== "terminal" ? `${target.deviceId}:${target.workspaceId}:${selection.kind}` : null;
-  const [itemPick, setItemPick] = useState<{ key: string; profile: string } | null>(null);
-  const picked = itemPick && itemPick.key === itemKey && menu?.items.some((item) => item.kind === selection.kind && item.profile === itemPick.profile) ? itemPick.profile : null;
   const preselected = target && selection.kind !== "terminal" && menu ? preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind) : BUILT_IN_PROFILE;
   const preselectedItem = menu?.items.some((item) => item.kind === selection.kind && item.profile === preselected) ? preselected : BUILT_IN_PROFILE;
-  // What the panel first showed for an agent stays the item until the operator chooses another: Radix gives no change when the
-  // item already shown is pressed, so a pick is no record, and a snapshot that moves the project's choice under an open panel
-  // must not move the account the shown item starts (D-02). The panel lives only while open, so the next open reads the core again.
-  const shown = useRef(new Map<string, string>());
-  if (itemKey && menu && (menu.listed || menu.note !== null) && !shown.current.has(itemKey)) shown.current.set(itemKey, preselectedItem);
-  const firstShown = itemKey ? shown.current.get(itemKey) : undefined;
-  const profile = target && selection.kind !== "terminal" && menu ? picked ?? (firstShown && menu.items.some((item) => item.kind === selection.kind && item.profile === firstShown) ? firstShown : preselectedItem) : BUILT_IN_PROFILE;
+  // The item the menu shows is held for the one target and agent it was shown for, until the operator chooses another or the target
+  // or agent changes (I-1.8): Radix gives no change when the item already shown is pressed, so a pick cannot be the only record, and a
+  // snapshot that moves the project's choice under an open panel must not move the account the shown item starts (D-02). An item the
+  // list no longer holds is replaced by what the menu then shows, which is held in turn. The panel lives only while open, so the next
+  // open reads the core again.
+  const shown = useRef<{ key: string; profile: string } | null>(null);
+  const [, rerender] = useReducer((count: number) => count + 1, 0);
+  let profile = preselectedItem;
+  if (itemKey && menu && (menu.listed || menu.note !== null)) {
+    const held = shown.current;
+    if (held?.key !== itemKey || !menu.items.some((item) => item.kind === selection.kind && item.profile === held.profile)) shown.current = { key: itemKey, profile: preselectedItem };
+    profile = shown.current!.profile;
+  }
   // A machine that keeps profiles starts the item shown, the built-in one included, even with no profile listed: the core would
   // pick again when it starts (D-02, B1). A device whose Hide predates profiles is sent none.
   const profileToSend = menu?.listed && selection.kind !== "terminal" ? profile : null;
@@ -429,7 +433,8 @@ function StartPanel({ actions }: { actions: Actions }) {
                   note: menu.note === "offline" ? t("startPanel.deviceOffline", { device: targets.groups.find((group) => group.deviceId === target?.deviceId)?.deviceLabel ?? "" }) : menu.note === "unsupported" ? t("agentProfiles.unsupported") : null,
                   onItem: (item) => {
                     setSelection(selectKind(item.kind, useShellStore.getState().rest?.ui_state?.agent_start));
-                    if (target) setItemPick({ key: `${target.deviceId}:${target.workspaceId}:${item.kind}`, profile: item.profile });
+                    if (target) shown.current = { key: `${target.deviceId}:${target.workspaceId}:${item.kind}`, profile: item.profile };
+                    rerender();
                   },
                 }
               : undefined
