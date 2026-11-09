@@ -8,7 +8,7 @@ import { dumpOnFailure } from "./failure-dump";
 import { setAgentSession } from "./fixture-agents";
 import type { HidedControl } from "./hided-control.mjs";
 import { startHided } from "./hided-fixture";
-import { chooseTheme, countSent, enterWorkspace, rest, screenshot, sendEvent } from "./wire";
+import { chooseTheme, enterWorkspace, rest, screenshot, sendEvent } from "./wire";
 
 const tabButton = (page: Page, tab: string) => page.locator(`[data-project-list] [data-sidebar-tab="${tab}"]`);
 const guide = (page: Page, tab: string) => page.locator(`[data-project-list] [data-sidebar-tab-guide="${tab}"]`);
@@ -59,74 +59,66 @@ async function startAgent(engine: AgentFixture, daemon: Awaited<ReturnType<typeo
 
 const position = async (row: ReturnType<Page["locator"]>) => (await row.boundingBox())!;
 
-test("a tab with two agents opens with a line that opens it, takes its name once renamed, and keeps it at one agent while named", { tag: "@platform" }, async ({ page }) => {
+test("a tab with agents draws its guide and segment and no line, named or not, and a second agent joins the segment", { tag: "@platform" }, async ({ page }) => {
   // The platform's engine owns pane/process existence.
   const engine = await startFixture();
   const daemon = await startHided(engine, "sidebar-tab-segments");
-  const sent = countSent(page);
   try {
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    // The core numbers a tab by the order it was made in; which number the fixture's tab holds is the fixture's setup.
-    await expect(tabButton(page, engine.tab)).toHaveAccessibleName(/^Tab \d+, 2 agents$/);
-    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(2);
-    // Unnamed: the line reads the core's stable number.
-    await expect(page.locator("[data-sidebar-tab-name]")).toHaveText(/^Tab \d+$/);
+    const agents = segment(page, engine.tab).locator("[data-agent-open]");
+    const noLine = async () => {
+      await expect(page.locator("[data-project-list] [data-sidebar-tab-line]")).toHaveCount(0);
+      await expect(tabButton(page, engine.tab)).toHaveCount(0);
+      await expect(page.locator("[data-sidebar-tab-name]")).toHaveCount(0);
+    };
+    await expect(guide(page, engine.tab)).toHaveCount(1);
+    await expect(agents).toHaveCount(2);
+    await noLine();
     await screenshot(page, "sidebar-tab-unnamed");
 
-    const tabs = page.locator(`[data-tab="${engine.tab}"]`).first();
+    // A name the operator gives it is told by the tab strip; the sidebar still draws no line for a tab with agents.
     await renameTab(page, engine.tab, "아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
-    await expect(tabButton(page, engine.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 2 agents");
-    await expect(page.locator("[data-sidebar-tab-name]")).toHaveText("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
+    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`)).toContainText("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
+    await expect(agents).toHaveCount(2);
+    await noLine();
     await screenshot(page, "sidebar-tab-named");
 
-    // The line opens the real tab; it folds nothing and persists nothing.
-    const before = sent.get("focus_pane") ?? 0;
-    await tabButton(page, engine.tab).click();
-    await expect(tabs).toHaveAttribute("aria-selected", "true");
-    expect(sent.get("focus_pane") ?? 0).toBe(before);
-    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(2);
-
-    // One agent left: the named tab keeps its guide and line, now counting one agent.
     await withControl(daemon, (control) => closePane(control, engine.panes[1]));
-    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(1);
-    await expect(tabButton(page, engine.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 1 agent");
-    await expect(page.locator("[data-sidebar-tab-name]")).toHaveText("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
+    await expect(agents).toHaveCount(1);
     await expect(guide(page, engine.tab)).toHaveCount(1);
-    await screenshot(page, "sidebar-tab-named-single");
+    await noLine();
 
-    // A second agent joins the same line under the retained name.
+    // A second agent joins the same segment under the same guide.
     await startAgent(engine, daemon, engine.tab);
-    await expect(tabButton(page, engine.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 2 agents");
+    await expect(agents).toHaveCount(2);
+    await expect(guide(page, engine.tab)).toHaveCount(1);
+    await noLine();
   } finally { daemon.stop(); engine.stop(); }
 });
 
-test("2-1-2 tab segments align every tab's guide and line, and an unnamed single agent's tab keeps its guide alone", async ({ page }) => {
+test("2-1-2 tab segments align every tab's guide with its rows, and no tab with agents draws a line", async ({ page }) => {
   const engine = await startFixture();
   let daemon: Awaited<ReturnType<typeof startHided>> | undefined;
   try {
     daemon = await startHided(engine, "sidebar-tab-boundary");
-    // An unnamed single-agent tab draws its guide like any other tab, but no tab line: `Tab N` says nothing its one row does not.
     const alone = await startAgent(engine, daemon);
     const pair = await startAgent(engine, daemon);
     await startAgent(engine, daemon, pair.tab);
-    const single = { tab: { tab_id: alone.tab } };
-    const paired = { tab: { tab_id: pair.tab } };
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await renameTab(page, engine.tab, "작업 묶음 A");
-    await renameTab(page, paired.tab.tab_id, "작업 묶음 B");
-    await expect(tabButton(page, engine.tab)).toBeVisible();
-    await expect(tabButton(page, single.tab.tab_id)).toHaveCount(0);
-    const singleAgent = segment(page, single.tab.tab_id).locator("[data-agent-open]");
-    await expect(singleAgent).toHaveCount(1);
+    const tabs = [engine.tab, alone.tab, pair.tab];
+    for (const tab of tabs) await expect(guide(page, tab)).toHaveCount(1);
+    await expect(page.locator("[data-project-list] [data-sidebar-tab-line]")).toHaveCount(0);
+    const singleAgent = segment(page, alone.tab).locator("[data-agent-open]");
     await expect(singleAgent).toBeVisible();
-    await expect(tabButton(page, paired.tab.tab_id)).toHaveAccessibleName("작업 묶음 B, 2 agents");
+    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(2);
+    await expect(segment(page, pair.tab).locator("[data-agent-open]")).toHaveCount(2);
     await page.evaluate(() => document.fonts.ready);
 
     // This checkout holds no named group, so it draws no collection header at
     // all (group-tabs D-14): its tabs and agents stand on the checkout's own
-    // columns, and each titled tab's guide hangs under the checkout's own glyph. The
+    // columns, and each tab's guide hangs under the checkout's own glyph. The
     // fixture's checkout is a plain folder, so its row is the project's.
     const owner = page.locator("[data-project-list] [data-project-menu]").first();
     const ownerRow = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
@@ -141,67 +133,45 @@ test("2-1-2 tab segments align every tab's guide and line, and an unnamed single
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));
 
-    // Every tab draws a 1px guide under the checkout's own kind glyph, the unnamed single agent's too.
+    // Every tab draws a 1px guide under the checkout's own kind glyph.
     const center = kind.x + kind.width / 2;
-    for (const tab of [engine.tab, single.tab.tab_id, paired.tab.tab_id]) {
+    for (const tab of tabs) {
       const line = await position(guide(page, tab));
       expect(line.width).toBe(1);
       expect(Math.abs(line.x + line.width / 2 - center)).toBeLessThanOrEqual(0.5);
     }
-    // A tab line stands inside its guide like a row: the guide starts beside it, its glyph is centered on the status-mark column and its
-    // name starts on the title column, so nothing of the tab stands on the checkout glyph's column.
-    const mark = marks[0]!;
-    for (const tab of [engine.tab, paired.tab.tab_id]) {
-      const head = await position(segment(page, tab).locator("[data-sidebar-tab-line] svg"));
-      expect(Math.abs(head.x + head.width / 2 - (mark.x + mark.width / 2))).toBeLessThanOrEqual(0.5);
-      expect((await position(segment(page, tab).locator("[data-sidebar-tab-name]"))).x).toBe(titles[0]!.x);
-      const line = await position(segment(page, tab).locator("[data-sidebar-tab-line]"));
-      expect((await position(guide(page, tab))).y).toBeLessThan(line.y + line.height / 2);
-    }
     const first = await position(segment(page, engine.tab));
-    const middle = await position(segment(page, single.tab.tab_id));
-    const last = await position(segment(page, paired.tab.tab_id));
+    const middle = await position(segment(page, alone.tab));
+    const last = await position(segment(page, pair.tab));
     // The first segment hangs 2px under its checkout, and segments are
-    // contiguous: the single agent's segment is its row alone, beside its guide.
+    // contiguous: a tab's segment is its rows alone, beside its guide.
     expect(first.y - ownerRow.y - ownerRow.height).toBe(2);
     expect(middle.y - first.y - first.height).toBe(0);
     expect(last.y - middle.y - middle.height).toBe(0);
-    expect((await position(segment(page, single.tab.tab_id).locator("li[data-pane]"))).height).toBe(30);
+    expect((await position(segment(page, alone.tab).locator("li[data-pane]"))).height).toBe(30);
     expect(middle.height).toBe(30);
     await rest(page);
     await screenshot(page, "sidebar-tab-segments");
 
-    // Arrow keys visit every tab line and row; the single agent's tab has no line to stop on.
-    // Home and End reach the ends.
-    await tabButton(page, engine.tab).focus();
-    await tabButton(page, engine.tab).press("ArrowDown");
-    await expect(segment(page, engine.tab).locator("[data-agent-open]").first()).toBeFocused();
+    // Arrow keys visit every agent row across the tabs; Home and End reach the ends.
+    const rowsOf = (tab: string) => segment(page, tab).locator("[data-agent-open]");
+    await rowsOf(engine.tab).first().focus();
     await page.keyboard.press("ArrowDown");
-    await expect(segment(page, engine.tab).locator("[data-agent-open]").nth(1)).toBeFocused();
+    await expect(rowsOf(engine.tab).nth(1)).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(singleAgent).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(tabButton(page, paired.tab.tab_id)).toBeFocused();
+    await expect(rowsOf(pair.tab).first()).toBeFocused();
     await page.keyboard.press("Home");
-    await expect(tabButton(page, engine.tab)).toBeFocused();
+    await expect(rowsOf(engine.tab).first()).toBeFocused();
     await page.keyboard.press("End");
-    await expect(segment(page, paired.tab.tab_id).locator("[data-agent-open]").last()).toBeFocused();
+    await expect(rowsOf(pair.tab).last()).toBeFocused();
     await singleAgent.click();
-    await expect(page.locator(`[data-tab="${single.tab.tab_id}"]`).first()).toHaveAttribute("aria-selected", "true");
-    await tabButton(page, paired.tab.tab_id).focus();
-    await tabButton(page, paired.tab.tab_id).press("Enter");
-    await expect(page.locator(`[data-tab="${paired.tab.tab_id}"]`).first()).toHaveAttribute("aria-selected", "true");
-    await tabButton(page, engine.tab).focus();
-    await tabButton(page, engine.tab).press("Space");
-    await expect(page.locator(`[data-tab="${engine.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
-
-    // Focus brings the line's hint, the name and the agent count.
-    await tabButton(page, engine.tab).focus();
-    await expect(page.getByRole("tooltip")).toHaveText("작업 묶음 A, 2 agents");
+    await expect(page.locator(`[data-tab="${alone.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
   } finally { daemon?.stop(); engine.stop(); }
 });
 
-test("long manual tab names keep their hint and line inside the sidebar at 240 and 292 in both themes", async ({ page }) => {
+test("a named tab with no agent keeps its line and hint inside the sidebar at 240 and 292 in both themes", async ({ page }) => {
   const engine = await startFixture();
   const daemon = await startHided(engine, "sidebar-tab-narrow");
   const name = "아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인 · Sidebar tab segments and long names";
@@ -209,18 +179,21 @@ test("long manual tab names keep their hint and line inside the sidebar at 240 a
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await renameTab(page, engine.tab, name);
+    // Closing its agents leaves a shell in the named tab, the one tab that still says its name here.
+    for (const pane of engine.panes) await withControl(daemon, (control) => closePane(control, pane));
+    await expect(tabButton(page, engine.tab)).toHaveAccessibleName(name);
+    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(0);
     for (const theme of ["light", "dark"] as const) {
       await chooseTheme(page, theme);
       for (const width of [240, 292]) {
         await sendEvent(page, daemon, "ui_state_update", { sidebar_width: width, expanded_paths: [], selected_path: null });
         await expect.poll(async () => Math.round((await page.locator("nav[data-sidebar]").boundingBox())!.width)).toBe(width + 48);
-        await expect(tabButton(page, engine.tab)).toHaveAccessibleName(`${name}, 2 agents`);
         expect(await segment(page, engine.tab).evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
         const label = page.locator("[data-sidebar-tab-name] > span");
         await page.evaluate(() => document.fonts.ready);
         expect(await label.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
         await tabButton(page, engine.tab).hover();
-        await expect(page.getByRole("tooltip")).toHaveText(`${name}, 2 agents`);
+        await expect(page.getByRole("tooltip")).toHaveText(name);
         await screenshot(page, `sidebar-tab-tooltip-${theme}-${width}`);
         await rest(page);
         await screenshot(page, `sidebar-tab-${theme}-${width}`);

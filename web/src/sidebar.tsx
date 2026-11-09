@@ -563,8 +563,6 @@ function rowKey(row: ProjectRow): string {
   }
 }
 
-/** What sets an open project block (its checkouts drawn under its name) off from the row above; a folded project is one line and takes only a small gap. */
-const BLOCK_GAP = "mt-sm border-t border-border pt-xs";
 
 const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack = 0, context }: { row: ProjectRow; first?: boolean; stack?: number; context: ListContext }) {
   if (row.kind === "divider") return <li role="separator" className="my-sm border-t border-border" />;
@@ -810,6 +808,11 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
   return (
     <span className="pointer-events-none absolute inset-y-0 right-full flex items-center justify-end">
       <span className={cn("pointer-events-none relative flex h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md [&_button]:pointer-events-auto", fill, menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
+        <Hint label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")}>
+          <Button variant="row-action" size="icon-sm" aria-label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")} aria-pressed={workspace.pinned} data-row-pin={workspace.id} onClick={() => onSelect(workspace.pinned ? "unpin" : "pin")}>
+            <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "text-foreground")} />
+          </Button>
+        </Hint>
         <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
           <Button
             variant="row-action"
@@ -908,7 +911,6 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
   // The project's own row stands for a main checkout nothing runs in: its row is drawn only while it holds an agent or a conversation, a purpose, or the focus.
   const main = activeDrawn.filter((checkout) => checkout.is_primary && ((rowsByCheckout.get(checkout.id) ?? NO_BOARD_ROWS).length > 0 || checkout.purpose !== null || checkout.id === context.focusedCheckoutId));
   const others = [...activeDrawn, ...emptyFold, ...inactiveDrawn].filter((checkout) => !checkout.is_primary);
-  const hasBody = main.length + others.length > 0;
   const othersOpen = workspace.inactive_checkouts.expanded;
   const othersMarks = sumMarks(others.map((checkout) => checkout.agent_summary?.marks));
   const checkoutRow = (checkout: Checkout) => (
@@ -923,7 +925,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
     />
   );
   return (
-    <li data-project={workspace.id} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && (expanded && hasBody ? BLOCK_GAP : "mt-xs"), quiet && "opacity-(--opacity-dimmed)")}>
+    <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && "mt-xs", quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => projectMenu(workspace, menuHost(), t, issueSource)}
@@ -1203,7 +1205,7 @@ const FolderRowView = memo(function FolderRowView({
   const secondLine = asleep ? !open && checkoutHasSecondLine(view, purpose, raisedFrom) : disclosure.secondLine;
   const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   return (
-    <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(!first && (open ? BLOCK_GAP : "mt-xs"))}>
+    <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-checkout-open={open ? "true" : undefined} className={cn(!first && "mt-xs")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
@@ -1270,12 +1272,12 @@ const FolderRowView = memo(function FolderRowView({
  * neither opens nor unfolds. Every other kind is the plain icon the row
  * button covers.
  */
-/** The project's mark in a box the checkout glyph's size, so a tab's guide hangs at the center of either. */
+/** The project's mark in a box the checkout glyph's size, so a tab's guide hangs at the center of either; a pinned project is told by where the list puts it, and its pin waits for the pointer in the row's buttons. */
 function ProjectMark({ workspace }: { workspace: Workspace }) {
-  const Icon = workspace.pinned ? PinIcon : workspace.is_git ? FolderGit2Icon : FolderIcon;
+  const Icon = workspace.is_git ? FolderGit2Icon : FolderIcon;
   return (
     <span className="flex size-(--size-checkout-icon) shrink-0 items-center justify-center text-muted-foreground">
-      <Icon aria-hidden="true" {...(workspace.pinned ? { "data-project-pin": workspace.id } : { "data-project-mark": workspace.id })} className="size-(--size-icon-sm)" />
+      <Icon aria-hidden="true" data-project-mark={workspace.id} className="size-(--size-icon-sm)" />
     </span>
   );
 }

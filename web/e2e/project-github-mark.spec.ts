@@ -77,7 +77,7 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
 
     // The mark is named after the repository GitHub answered for, once it has; the folder never has one.
     // It waits for the pointer, as the row's + and ⋯ do, so the pointer goes onto the row first.
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(mark).toBeVisible({ timeout: 30_000 });
     await expect(mark).toHaveAccessibleName("Open acme/repo on GitHub");
     await expect(folder.locator("[data-checkout]")).toBeVisible();
@@ -88,7 +88,7 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
     await expect(project.locator("[data-project-row]")).toHaveAccessibleName("repo");
 
     // The mark stays while the pointer is on the row, where the row's + and ⋯ show.
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(project.locator("[data-row-actions]")).toHaveCSS("opacity", "1");
     await expect(mark).toHaveCSS("opacity", "1");
     await rest(page);
@@ -97,7 +97,7 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
 
     // ⌘ asks for the default browser: the repository opens there and the project is neither opened nor selected.
     const before = new Map(sent);
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     const popup = page.context().waitForEvent("page");
     await mark.click({ modifiers: ["ControlOrMeta"] });
     const opened = await popup;

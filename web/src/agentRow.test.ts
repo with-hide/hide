@@ -1,7 +1,7 @@
 import { sectionTree, sectionCount, directChildren, unfoldedRows } from "../test/legacyRowTree";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import { asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
+import { projectTreeLine, asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
 import { createInterfaceI18n } from "./i18n/instance";
 import type { AgentRow } from "./snapshot";
 
@@ -223,6 +223,8 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     unproven.state = { ...unproven.state, line: { text: "결과 기다리는 중", mode: "waiting", tone: { kind: "subtle", read: false } } };
     expect(lineText(t, unproven, sidebarLine(unproven)!)).toBe("대기 · 결과 기다리는 중");
     expect(treeLine(said)).toMatchObject({ mode: "waiting" });
+    // The project tree keeps a row to one line, so a waiting row's sentence stays in its hint.
+    expect(projectTreeLine(said)).toBeNull();
     // A working row says its sentence alone, and a tree row draws none of it.
     const working = row("x", { detail: "파서 고치는 중", unread: true });
     expect(lineText(t, working, sidebarLine(working)!)).toBe("파서 고치는 중");

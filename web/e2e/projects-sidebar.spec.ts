@@ -248,7 +248,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(primaryToggle).toHaveCSS("opacity", "1");
     await expect(projectToggle).toHaveCSS("opacity", "0");
     await expect(page.locator("[data-project-list]").getByRole("button", { name: /actions$/ })).toHaveCount(0);
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(projectToggle).toHaveCSS("opacity", "1");
     await primaryRow.hover();
     expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);
@@ -563,8 +563,8 @@ test("Needs You and Unread are raised above the projects and stay in their tree,
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^raised/ }) });
     await project.locator("[data-project-row]").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-    // A pinned project wears the pin in place of its folder mark, and no header of its own.
-    await expect(project.locator("[data-project-pin]")).toBeVisible();
+    // A pinned project stands first and sets no header of its own; its pin waits for the pointer.
+    await expect(project).toHaveAttribute("data-project-pinned", "true");
     // Nothing needs the operator yet: no raised section is drawn.
     await expect(page.locator("[data-raised-group]")).toHaveCount(0);
 
@@ -863,9 +863,9 @@ test("a section head stays at the top of the scrolled list, and a row the keyboa
     await expect(projectItem(page, "echo-repo")).toBeVisible({ timeout: 20_000 });
     await projectItem(page, "alpha-repo").locator("[data-project-row]").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-    // B9: a pinned row wears the pin in place of its folder mark, and no head of its own.
-    await expect(projectItem(page, "alpha-repo").locator("[data-project-pin]")).toBeVisible();
-    await expect(projectItem(page, "bravo-repo").locator("[data-project-pin]")).toHaveCount(0);
+    // B9: a pinned row stands first with no head of its own; its pin waits for the pointer.
+    await expect(projectItem(page, "alpha-repo")).toHaveAttribute("data-project-pinned", "true");
+    await expect(projectItem(page, "bravo-repo")).not.toHaveAttribute("data-project-pinned", "true");
     // Two finished turns the operator has not seen make the Done section, the one head in the list.
     const elsewhere = await elsewhereTab(fixture, live);
     await finishUnseenTurn(fixture, live, panes[3]!, elsewhere);

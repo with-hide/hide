@@ -608,11 +608,11 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
       await setLanePinned(page, true);
       await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
     };
-    await (await showProjectRow(page, opener("beta"))).click();
+    await (await showProjectRow(page, opener("beta"))).click({ position: { x: 12, y: 8 } });
     await expect(row("beta")).toHaveAttribute("aria-current", "true");
     await openNotes();
     for (const theme of ["dark", "light"] as const) {
-      await (await showProjectRow(page, opener("fixture"))).click();
+      await (await showProjectRow(page, opener("fixture"))).click({ position: { x: 12, y: 8 } });
       await expect(row("fixture")).toHaveAttribute("aria-current", "true");
       await openNotes();
       await page.locator("[data-open-settings]").click();
