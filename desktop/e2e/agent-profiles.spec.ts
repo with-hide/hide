@@ -51,7 +51,7 @@ async function openStartPanel(page: Page): Promise<void> {
 
 async function openWorkingStyle(page: Page): Promise<void> {
   const gear = page.locator("[data-project]", { hasText: "sample" }).locator("[data-row-settings]");
-  await projectOpener(page.locator("[data-project]", { hasText: "sample" })).hover();
+  await projectOpener(page.locator("[data-project]", { hasText: "sample" })).hover({ position: { x: 12, y: 8 } });
   await (await showProjectRow(page, gear)).click();
   const sheet = page.locator("[data-project-settings]");
   await expect(sheet).toBeVisible();

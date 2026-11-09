@@ -21,7 +21,7 @@ async function connectRepository(page: import("@playwright/test").Page, reposito
   await page.locator('[data-sidebar-lens-option="projects"]').click();
   // It is not drawn until the pointer is on the row.
   const project = page.locator('[data-project]', { hasText: "fixture" });
-  await projectOpener(project).hover();
+  await projectOpener(project).hover({ position: { x: 12, y: 8 } });
   const gear = project.locator('[data-row-settings]').first();
   await (await showProjectRow(page, gear)).click();
   const sheet = page.locator('[data-project-settings]');

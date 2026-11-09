@@ -248,7 +248,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(primaryToggle).toHaveCSS("opacity", "1");
     await expect(projectToggle).toHaveCSS("opacity", "0");
     await expect(page.locator("[data-project-list]").getByRole("button", { name: /actions$/ })).toHaveCount(0);
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(projectToggle).toHaveCSS("opacity", "1");
     await primaryRow.hover();
     expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);

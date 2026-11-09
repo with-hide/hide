@@ -251,7 +251,8 @@ export async function rowGeometry(row: Locator, next: Locator, parts: Locator[])
  */
 export async function showProjectRow(_page: Page, row: Locator): Promise<Locator> {
   const project = row.locator("xpath=ancestor::*[@data-project][1]");
-  if ((await project.count()) > 0) await projectOpener(project).hover();
+  // The buttons draw over the end of the name, so the pointer stands at its start, where nothing is drawn over it.
+  if ((await project.count()) > 0) await projectOpener(project).hover({ position: { x: 12, y: 8 } });
   await expect(row).toBeVisible({ timeout: 20_000 });
   return row;
 }
