@@ -1305,6 +1305,15 @@ export type DetailItem =
   /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
 
+/**
+ * Which agent's 보기 slot an item opens in, where it was pressed (operator
+ * decision 2026-11-09): `here` the slot in front, over what it shows, for
+ * what a card opens inside the slot; `{ pane }` the slot of the agent whose
+ * row, head or chip was pressed, that pane taking the keyboard; `owner` the
+ * slot of the agent that owns the item, pressed where no agent is.
+ */
+export type DetailPlace = "here" | "owner" | { pane: string };
+
 /** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
 export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {
   if (!a || a.kind !== b.kind) return false;

@@ -662,7 +662,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       number={context.numberOf?.(agent.pane_id, null) ?? null}
       menu={context.agentRowMenu}
       pulls={context.familyOf(agent)}
-      onOpenMission={(id) => context.actions.openMission(id)}
+      onOpenMission={(id) => context.actions.openMission(id, { pane: agent.pane_id })}
       actions={context.actions}
     />
   );
@@ -1615,7 +1615,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
             number={depth === 0 ? context.numberOf?.(agent.pane_id, checkoutId) ?? null : null}
             menu={context.agentRowMenu}
             pulls={context.familyOf(agent)}
-            onOpenMission={depth === 0 ? (id) => context.actions.openMission(id) : undefined}
+            onOpenMission={depth === 0 ? (id) => context.actions.openMission(id, { pane: agent.pane_id }) : undefined}
             actions={context.actions}
           />
         );

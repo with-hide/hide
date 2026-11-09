@@ -92,7 +92,7 @@ export type MissionModel = {
   noted: string[];
   /** Whether the answer drops password sign-in, which adds the part that takes it out. */
   drop: boolean;
-  /** Whether the mission's card stands in front in the Conductor tab's 보기 slot, as `detail_open` puts it there and ✕ or ← takes it away. */
+  /** Whether the mission's card stands in front in the Conductor's 보기 slot, as `detail_open` puts it there and ✕ or ← takes it away. */
   card: boolean;
   /** How many times the lane was called to the 보기 slot, as the core numbers a lane call. */
   laneCalls: number;
