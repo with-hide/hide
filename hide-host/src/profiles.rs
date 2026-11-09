@@ -1292,4 +1292,82 @@ mod tests {
 
         assert_eq!(refused.code, ErrorCode::Unsupported);
     }
+
+    /// A profile's sessions are read in its account, found by the account
+    /// key its start carries; the default account does not hold them, and
+    /// an account the node never registered is refused, whatever folder it
+    /// names (PRD agent-profiles B19, B31).
+    #[test]
+    fn a_profiles_session_is_read_in_its_account_and_an_unregistered_account_is_refused() {
+        use hide_agent_adapter::AccountKey;
+        use hide_session::label_transcript::{LabelTranscript, LabelTranscriptRequest};
+
+        let node = Node::new();
+        let own = package(&node);
+        let id = node
+            .apply(add("claude-code", "work", folder("~/accounts/work/")))
+            .added
+            .unwrap();
+        let ProfileLaunch::Ready(start) =
+            launch_beside(&node.env, "claude", &id, Some(&own)).unwrap()
+        else {
+            panic!("the profile starts");
+        };
+        let session = "a1b2c3d4-0000-4000-8000-000000000001";
+        let projects = node.home().join("accounts/work/projects/-work-app");
+        hide_platform::fs::private::create_dir_all(&projects).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../hide-session/tests/fixtures/adapters/claude-2.1.288/projects/-work-app/{session}.jsonl"
+            )),
+            projects.join(format!("{session}.jsonl")),
+        )
+        .unwrap();
+        let read = |account: AccountKey| {
+            node.call(Call::LabelTranscript {
+                request: LabelTranscriptRequest {
+                    agent: hide_session::Agent::Claude,
+                    account,
+                    reference_kind: "id".to_owned(),
+                    reference_value: session.to_owned(),
+                    cwd: Some("/work/app".to_owned()),
+                    checkpoint: None,
+                    subagents: Default::default(),
+                    turns: None,
+                    tools: None,
+                },
+            })
+        };
+
+        let transcript: LabelTranscript =
+            serde_json::from_value(read(start.account.clone()).unwrap()).unwrap();
+        assert!(
+            transcript
+                .events
+                .iter()
+                .any(|event| event.text.contains("요청 보기를 만들어줘")),
+            "{transcript:?}"
+        );
+        assert_eq!(
+            read(AccountKey::Default).unwrap_err().code,
+            ErrorCode::NotFound,
+            "the default account holds no session of the profile's"
+        );
+        let stranger = AccountKey::Folder(node.home().join("accounts").display().to_string());
+        let refused = read(stranger).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::OutsideRoot);
+        assert_eq!(refused.message, hide_session::account::ACCOUNT_UNREGISTERED);
+        let listed = node
+            .call(Call::LinkFiles {
+                since_unix_ms: 0,
+                until_unix_ms: None,
+            })
+            .unwrap();
+        assert!(
+            listed.as_array().unwrap().iter().any(|row| row["path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path).starts_with(&projects))),
+            "a listing walks every registered account: {listed}"
+        );
+    }
 }

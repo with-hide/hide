@@ -6357,3 +6357,140 @@ fn a_refusal_reading_again_cannot_clear_is_kept_until_a_read_lands() {
     assert_eq!(next(&mut worker, Some(reason)).as_deref(), Some(reason));
     assert_eq!(next(&mut worker, None), None, "a read that lands");
 }
+
+/// A machine's node with one profile of its own account registered,
+/// answering label reads as `hided node serve` does there, and keeping the
+/// account each read named.
+struct ProfileHelper {
+    home: PathBuf,
+    profile: hide_agent_adapter::Profile,
+    named: Mutex<Vec<hide_agent_adapter::AccountKey>>,
+}
+
+impl crate::node_access::NodeLink for ProfileHelper {
+    fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+        static FACTS: std::sync::OnceLock<hide_node_link::sessions::ReaderFeatures> =
+            std::sync::OnceLock::new();
+        Some(FACTS.get_or_init(hide_node_link::sessions::ReaderFeatures::implemented))
+    }
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        match call {
+            hide_node_link::protocol::Call::LabelTranscript { request } => {
+                self.named.lock().unwrap().push(request.account.clone());
+                let accounts =
+                    hide_session::Accounts::new(&self.home).with_profiles([&self.profile]);
+                hide_host::serve::label_transcript(&accounts, &request)
+                    .map(crate::node_access::LinkAnswer::Parsed)
+                    .map_err(crate::node_access::LinkError::Refused)
+            }
+            call => hide_node::Local::of_process().call(call, timeout),
+        }
+    }
+
+    fn in_process(&self) -> bool {
+        true
+    }
+}
+
+/// B19: the session of an agent started with a profile is read in the
+/// profile's account, which the pane's launch record names, and the read
+/// that proves it makes the pane's label; the default account does not
+/// hold it.
+#[test]
+fn a_profile_agents_session_is_read_in_the_account_its_launch_record_names() {
+    let harness = Harness::new();
+    let written = harness.session(
+        "profiled",
+        "native-p",
+        &[
+            ("user", "프로필 계정에서 작업해줘"),
+            ("assistant", "했습니다"),
+        ],
+    );
+    let account = harness.home().join("accounts/work");
+    let project = account.join("projects/-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("profiled.jsonl");
+    std::fs::rename(&written, &path).unwrap();
+    let key = hide_agent_adapter::AccountKey::Folder(account.display().to_string());
+    harness.backend.answer("프로필 계정 작업", "done", "");
+    let helper = Arc::new(ProfileHelper {
+        home: harness.home().to_path_buf(),
+        profile: hide_agent_adapter::Profile {
+            account: Some(hide_agent_adapter::AccountRef::Folder(
+                account.display().to_string(),
+            )),
+            ..hide_agent_adapter::Profile::builtin_default("claude-code")
+        },
+        named: Mutex::default(),
+    });
+    let node: Arc<dyn crate::node_access::NodeLink> = helper.clone();
+    let (mut worker, woken) = harness.device_worker(Box::new(move || Ok(Arc::clone(&node))));
+    worker.follow_account_launches((
+        1,
+        std::collections::BTreeMap::from([(
+            "w1:p1".to_owned(),
+            crate::model::PaneLaunch {
+                kind: "claude".to_owned(),
+                name: "work".to_owned(),
+                choice: Default::default(),
+                session: None,
+                profile: Some(crate::launch::LaunchProfile {
+                    id: hide_agent_adapter::ProfileId("work".to_owned()),
+                    name: "work".to_owned(),
+                    account: key.clone(),
+                }),
+            },
+        )]),
+    ));
+    let idle = ObservedAgent {
+        account: worker.account_of("w1:p1", "claude", Some("work"), None),
+        ..agent(&path, "idle", 1)
+    };
+    assert_eq!(idle.account, key, "the launch record names the account");
+    assert_eq!(
+        worker.account_of("w1:p1", "claude", Some("someone-else"), None),
+        hide_agent_adapter::AccountKey::Default,
+        "a record that describes another agent names no account"
+    );
+
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("프로필 계정 작업")
+    );
+    assert!(
+        helper
+            .named
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|named| *named == key),
+        "every read named the profile's account"
+    );
+    let default = hide_session::label_transcript::LabelTranscriptRequest {
+        account: hide_agent_adapter::AccountKey::Default,
+        agent: hide_session::Agent::Claude,
+        reference_kind: "path".to_owned(),
+        reference_value: path.display().to_string(),
+        cwd: None,
+        checkpoint: None,
+        subagents: Default::default(),
+        turns: None,
+        tools: None,
+    };
+    assert!(
+        hide_host::serve::label_transcript(
+            &hide_session::Accounts::new(harness.home()).with_profiles([&helper.profile]),
+            &default
+        )
+        .is_err(),
+        "the default account does not hold the profile's session"
+    );
+}
