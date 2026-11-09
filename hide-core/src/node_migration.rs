@@ -308,36 +308,25 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
-    // Whose the front 보기 slot is, and the slots of the sessions not in
-    // front.
-    (CORE_STATE, "/detail_owner/pane", Mechanism::Owned, Moves::Pane),
+    // The pane the front 보기 slot belongs to, and the slots of the panes
+    // not in front.
+    (CORE_STATE, "/detail_pane", Mechanism::Owned, Moves::Pane),
+    (CORE_STATE, "/detail_panes/*/pane", Mechanism::Owned, Moves::Pane),
     (
         CORE_STATE,
-        "/detail_owner/session/device_id",
-        Mechanism::Rewritten,
-        Moves::Device,
-    ),
-    (
-        CORE_STATE,
-        "/detail_sessions/*/session/device_id",
-        Mechanism::Rewritten,
-        Moves::Device,
-    ),
-    (
-        CORE_STATE,
-        "/detail_sessions/*/slot/items/*/workspace_id",
+        "/detail_panes/*/slot/items/*/workspace_id",
         Mechanism::Owned,
         Moves::Registration,
     ),
     (
         CORE_STATE,
-        "/detail_sessions/*/slot/items/*/checkout_id",
+        "/detail_panes/*/slot/items/*/checkout_id",
         Mechanism::Owned,
         Moves::Checkout,
     ),
     (
         CORE_STATE,
-        "/detail_sessions/*/slot/items/*/session/device_id",
+        "/detail_panes/*/slot/items/*/session/device_id",
         Mechanism::Rewritten,
         Moves::Device,
     ),
@@ -1565,24 +1554,11 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
     for row in each(value, "home_retire") {
         changed |= rewrite(row.get_mut("device_id"), node);
     }
-    // The front slot, whose it is, and each other session's slot.
+    // The front slot and each other pane's.
     if let Some(detail) = value.get_mut("detail") {
         changed |= rewrite_slot_devices(detail, node);
     }
-    if let Some(owner) = value.get_mut("detail_owner") {
-        changed |= rewrite(
-            owner
-                .get_mut("session")
-                .and_then(|session| session.get_mut("device_id")),
-            node,
-        );
-    }
-    for held in each(value, "detail_sessions") {
-        changed |= rewrite(
-            held.get_mut("session")
-                .and_then(|session| session.get_mut("device_id")),
-            node,
-        );
+    for held in each(value, "detail_panes") {
         if let Some(slot) = held.get_mut("slot") {
             changed |= rewrite_slot_devices(slot, node);
         }
@@ -1976,13 +1952,10 @@ mod tests {
                 "device_add_project_folders",
                 json!({"mini": "/home/me/projects"}),
             )
+            .tap_insert("detail_pane", json!("w1:p1"))
             .tap_insert(
-                "detail_owner",
-                json!({"pane": "w1:p1", "session": {"device_id": "local", "agent": "claude", "session_id": "s1"}}),
-            )
-            .tap_insert(
-                "detail_sessions",
-                json!([{"session": {"device_id": "local", "agent": "claude", "session_id": "s2"}, "slot": {"items": [
+                "detail_panes",
+                json!([{"pane": "w1:p2", "slot": {"items": [
                     {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
                     {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
                     {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},

@@ -383,12 +383,13 @@ fn with_agents(
     payload
 }
 
-/// The slot belongs to the agent session it was opened for (operator
-/// decision 2026-11-09): another agent in front shows its own slot or none,
-/// coming back finds the card as it was, and an agent that ends takes its
-/// slot with it.
+/// The slot belongs to the pane it was opened for (operator decision
+/// 2026-11-09): another pane in front shows its own slot or none, coming back
+/// finds the card as it was, and a pane that closes takes its slot with it,
+/// so an agent that sleeps and wakes in a new pane finds that pane's slot
+/// empty.
 #[test]
-fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
+fn the_detail_slot_stays_with_the_pane_it_was_opened_for() {
     let checkout_path = "/private/tmp/hide-slot-per-agent";
     let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
@@ -418,23 +419,15 @@ fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
         runtime.snapshot.ui_state.detail.items,
         std::slice::from_ref(&cost)
     );
-    assert_eq!(
-        runtime
-            .snapshot
-            .ui_state
-            .detail_owner
-            .as_ref()
-            .and_then(|owner| owner.session.clone()),
-        Some(session(&runtime, 1))
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t1:p"));
 
-    // Another agent in front: no card of its own, so none shows; the first
-    // agent's card is kept for it.
+    // Another pane in front: no card of its own, so none shows; the first
+    // pane's card is kept for it.
     front(&mut runtime, "w-order:t2");
     assert_eq!(
         runtime.snapshot.ui_state.detail,
         crate::model::DetailSlot::default(),
-        "the other agent's card never follows"
+        "the other pane's card never follows"
     );
     assert!(
         !event(
@@ -442,7 +435,7 @@ fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
             "detail_show",
             serde_json::json!({"shown": true})
         ),
-        "the rail's 보기 has nothing of this agent's to bring forward"
+        "the rail's 보기 has nothing of this pane's to bring forward"
     );
     assert!(event(
         &mut runtime,
@@ -454,8 +447,8 @@ fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
         std::slice::from_ref(&worktrees)
     );
 
-    // Back on the first agent its card is there as it was; a second click
-    // on the same pane keeps it.
+    // Back on the first pane its card is there as it was; a second click on
+    // the same pane keeps it.
     front(&mut runtime, "w-order:t1");
     front(&mut runtime, "w-order:t1");
     let slot = &runtime.snapshot.ui_state.detail;
@@ -466,8 +459,8 @@ fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
     front(&mut runtime, "w-order:t2");
     assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees]);
 
-    // An agent that ends (its pane closes and nothing sleeps it) takes its
-    // slot, and nothing is re-homed to another.
+    // A pane that closes takes its slot, and nothing is re-homed to
+    // another.
     front(&mut runtime, "w-order:t1");
     let remaining = ["w-order:t1", "w-order:t3"];
     let mut closed = with_agents(
@@ -479,9 +472,9 @@ fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
     runtime.ingest_session(Ok(closed));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
     assert!(
-        runtime.snapshot.ui_state.detail_sessions.is_empty(),
-        "the ended agent's slot is gone: {:?}",
-        runtime.snapshot.ui_state.detail_sessions
+        runtime.snapshot.ui_state.detail_panes.is_empty(),
+        "the closed pane's slot is gone: {:?}",
+        runtime.snapshot.ui_state.detail_panes
     );
 }
 
@@ -490,24 +483,23 @@ fn the_detail_slot_stays_with_the_agent_it_was_opened_for() {
 /// (sessions 1 and 2), and agent 3 in `w-order:t2:p`.
 fn two_agents_in_one_tab(checkout_path: &str) -> SessionSnapshotPayload {
     let tabs = ["w-order:t1", "w-order:t2"];
-    let payload = tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1");
-    let mut value = serde_json::to_value(&payload).unwrap();
-    value["panes"]
-        .as_array_mut()
-        .unwrap()
-        .push(serde_json::json!({"pane_id": "w-order:t1:q", "cwd": checkout_path}));
-    let layout = value["layouts"]
-        .as_array_mut()
-        .unwrap()
+    let mut payload = tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1");
+    payload.panes.push(
+        serde_json::from_value(serde_json::json!({"pane_id": "w-order:t1:q", "cwd": checkout_path}))
+            .unwrap(),
+    );
+    let layout = payload
+        .layouts
         .iter_mut()
-        .find(|layout| layout["tab_id"] == "w-order:t1")
+        .find(|layout| layout.tab_id == "w-order:t1")
         .unwrap();
-    layout["panes"] = serde_json::json!([
+    layout.panes = serde_json::from_value(serde_json::json!([
         {"pane_id": "w-order:t1:p", "rect": {"x": 0, "y": 0, "width": 40, "height": 24}},
         {"pane_id": "w-order:t1:q", "rect": {"x": 40, "y": 0, "width": 40, "height": 24}}
-    ]);
+    ]))
+    .unwrap();
     with_agents(
-        serde_json::from_value(value).unwrap(),
+        payload,
         checkout_path,
         &[("w-order:t1:p", 1), ("w-order:t1:q", 2), ("w-order:t2:p", 3)],
     )
@@ -515,10 +507,10 @@ fn two_agents_in_one_tab(checkout_path: &str) -> SessionSnapshotPayload {
 
 /// Operator report 2026-11-09: two agents shared one Agent tab, a mission's
 /// card opened for one of them, and the other agent, pressed, showed it too.
-/// The slot is the agent's, so the other agent of the same tab shows its own
-/// slot (none), and the card comes back with its own agent.
+/// The slot is the pane's, so the other pane of the same tab shows its own
+/// slot (none), and the card comes back with its own pane.
 #[test]
-fn a_card_opened_for_one_agent_is_not_shown_on_another_agent_of_the_same_tab() {
+fn a_card_opened_for_one_pane_is_not_shown_on_another_pane_of_the_same_tab() {
     let checkout_path = "/private/tmp/hide-slot-two-agents";
     let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
     runtime.ingest_session(Ok(two_agents_in_one_tab(checkout_path)));
@@ -541,7 +533,7 @@ fn a_card_opened_for_one_agent_is_not_shown_on_another_agent_of_the_same_tab() {
     assert_eq!(
         runtime.snapshot.ui_state.detail,
         crate::model::DetailSlot::default(),
-        "the other agent of the same tab shows no mission card"
+        "the other pane of the same tab shows no mission card"
     );
     let wire = serde_json::to_value(&runtime.snapshot.ui_state).unwrap();
     assert_eq!(wire["detail"]["items"], serde_json::json!([]));
@@ -550,11 +542,10 @@ fn a_card_opened_for_one_agent_is_not_shown_on_another_agent_of_the_same_tab() {
     assert_eq!(runtime.snapshot.ui_state.detail.items, [map]);
 }
 
-/// A pane that runs no agent session (a shell) shows an empty slot, and what
-/// was opened while it stood in front is not kept once another pane comes
-/// forward.
+/// A pane that runs no agent (a shell) has a slot of its own like any other
+/// pane: what was opened there comes back with it.
 #[test]
-fn a_pane_without_a_session_shows_an_empty_slot() {
+fn a_pane_without_an_agent_keeps_its_own_slot() {
     let checkout_path = "/private/tmp/hide-slot-shell";
     let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2"];
@@ -579,105 +570,21 @@ fn a_pane_without_a_session_shows_an_empty_slot() {
         workspace_id: "workspace:order".into(),
     };
     open_at(&mut runtime, &worktrees, serde_json::json!("here"));
-    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees]);
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees.clone()]);
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
     assert!(runtime.dispatch_json(&operator_focus_event(shell)));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail,
-        crate::model::DetailSlot::default()
-    );
-}
-
-/// A sleeping agent's slot is kept while it sleeps, and comes back with its
-/// session in the pane it wakes in (operator decision 2026-11-09).
-#[test]
-fn a_sleeping_agent_keeps_its_slot_and_finds_it_in_the_pane_it_wakes_in() {
-    use crate::agent_sleep::{DormantPhase, DormantRecord};
-    let checkout_path = "/private/tmp/hide-slot-sleeper";
-    let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
-    let tabs = ["w-order:t1", "w-order:t2"];
-    runtime.ingest_session(Ok(with_agents(
-        tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1"),
-        checkout_path,
-        &[("w-order:t1:p", 1), ("w-order:t2:p", 2)],
-    )));
-    let map = DetailItem::Mission {
-        mission: "mission-41".into(),
-    };
-    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
-    open_at(&mut runtime, &map, serde_json::json!("here"));
-    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
-
-    // Agent 2 goes to sleep: a sleep record holds its session, its pane
-    // closes.
-    let (tab, owner) = runtime.sleep_place("w-order:t2:p").unwrap();
-    let context = runtime.close_context(tab).unwrap();
-    runtime
-        .snapshot
-        .ui_state
-        .agent_sleep
-        .admit_dormant(DormantRecord {
-            source_reference: None,
-            phase: DormantPhase::Sleeping,
-            revision: 1,
-            node_id: runtime.node.as_str().into(),
-            connection_generation: runtime.live_generation,
-            old_pane_id: "w-order:t2:p".into(),
-            old_state_change_seq: Some(1),
-            label_owner: hide_session::label_reference_token("claude", "id", &session_id(2))
-                .unwrap(),
-            kind: "claude".into(),
-            native_session_id: session_id(2),
-            identity_label: None,
-            cwd: context.checkout_path.clone(),
-            context,
-            close_key: None,
-            closed: true,
-            wake_pane_id: None,
-            wake_tab_id: None,
-            factory: None,
-            since_unix_ms: 1,
-            transition_started_unix_ms: 1,
-            reason: None,
-            registration: None,
-            launch: Default::default(),
-            owner: Some(owner),
-            profile: None,
-        })
-        .unwrap();
-    let asleep = ["w-order:t1"];
-    runtime.ingest_session(Ok(with_agents(
-        tab_order_payload(checkout_path, &asleep, &asleep, "w-order:t1"),
-        checkout_path,
-        &[("w-order:t1:p", 1)],
-    )));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail_sessions.0[0].session,
-        session(&runtime, 2),
-        "a sleeping agent keeps its slot"
-    );
-
-    // It wakes in a new pane of a new tab, and its card is there.
-    runtime.snapshot.ui_state.agent_sleep.dormant.clear();
-    let woken = ["w-order:t1", "w-order:t3"];
-    runtime.ingest_session(Ok(with_agents(
-        tab_order_payload(checkout_path, &woken, &woken, "w-order:t1"),
-        checkout_path,
-        &[("w-order:t1:p", 1), ("w-order:t3:p", 2)],
-    )));
-    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t3:p")));
-    assert_eq!(runtime.snapshot.ui_state.detail.items, [map]);
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees]);
 }
 
 /// The slot loaded at launch (one an older build kept for its front tab, or
-/// window-wide) attaches to the agent in front when the first event arrives,
-/// and stays with it; a kept slot of an agent that ended while Hide was not
+/// window-wide) attaches to the pane in front when the first event arrives,
+/// and stays with it; a kept slot of a pane that closed while Hide was not
 /// running is dropped by the first session, and a device's waits for that
 /// device's own session.
 #[test]
-fn a_slot_loaded_at_launch_attaches_to_the_front_agent_and_ended_agents_slots_go() {
+fn a_slot_loaded_at_launch_attaches_to_the_front_pane_and_closed_panes_slots_go() {
     let checkout_path = "/private/tmp/hide-slot-launch";
     let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
     let cost = DetailItem::Cost {
@@ -690,63 +597,46 @@ fn a_slot_loaded_at_launch_attaches_to_the_front_agent_and_ended_agents_slots_go
         });
         slot
     };
-    // As a launch loads it: a slot, no agent it belongs to yet, and the slots
-    // kept for agent 1, for an agent that ended, and for a device's agent.
+    // As a launch loads it: a slot, no pane it belongs to yet, and the slots
+    // kept for a device's pane, for a pane that closed, and for pane t1.
     runtime.snapshot.ui_state.detail.open(cost.clone());
-    assert_eq!(runtime.snapshot.ui_state.detail_owner, None);
-    let ended = session(&runtime, 9);
-    let device = crate::links::ledger::SessionIdentity {
-        device_id: "mini".into(),
-        ..session(&runtime, 7)
-    };
-    let kept = &mut runtime.snapshot.ui_state.detail_sessions;
+    assert_eq!(detail_pane(&runtime), None);
+    let device = crate::address::scoped_pane_id("mini", "w1:p2");
+    let kept = &mut runtime.snapshot.ui_state.detail_panes;
     kept.keep(device.clone(), held());
-    kept.keep(ended.clone(), held());
-    let first = session(&runtime, 1);
-    runtime
-        .snapshot
-        .ui_state
-        .detail_sessions
-        .keep(first.clone(), held());
+    kept.keep("w-order:t9:p".into(), held());
+    kept.keep("w-order:t1:p".into(), held());
 
     let tabs = ["w-order:t1", "w-order:t2"];
-    runtime.ingest_session(Ok(with_agents(
-        tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t2"),
+    runtime.ingest_session(Ok(tab_order_payload(
         checkout_path,
-        &[("w-order:t1:p", 1), ("w-order:t2:p", 2)],
+        &tabs,
+        &tabs,
+        "w-order:t2",
     )));
     let kept: Vec<_> = runtime
         .snapshot
         .ui_state
-        .detail_sessions
+        .detail_panes
         .0
         .iter()
-        .map(|held| held.session.clone())
+        .map(|held| held.pane.clone())
         .collect();
-    assert_eq!(kept, [device, first], "the ended agent's slot went");
+    assert_eq!(
+        kept,
+        [device, "w-order:t1:p".to_owned()],
+        "the closed pane's slot went"
+    );
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
-    assert_eq!(
-        runtime
-            .snapshot
-            .ui_state
-            .detail_owner
-            .as_ref()
-            .and_then(|owner| owner.session.clone()),
-        Some(session(&runtime, 2))
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t2:p"));
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     assert_eq!(runtime.snapshot.ui_state.detail, held());
 }
 
-fn owner_pane(runtime: &Runtime) -> Option<&str> {
-    runtime
-        .snapshot
-        .ui_state
-        .detail_owner
-        .as_ref()
-        .map(|owner| owner.pane.as_str())
+fn detail_pane(runtime: &Runtime) -> Option<&str> {
+    runtime.snapshot.ui_state.detail_pane.as_deref()
 }
 
 fn open_at(runtime: &mut Runtime, item: &DetailItem, at: serde_json::Value) {
@@ -759,11 +649,12 @@ fn open_at(runtime: &mut Runtime, item: &DetailItem, at: serde_json::Value) {
 }
 
 /// Operator decision 2026-11-09: a record pressed where no agent is opens in
-/// the slot of the session it records, whose pane comes forward; a session
-/// with no pane here opens in the slot in front, and a record opened inside
-/// the slot (a child's, `here`) stays in the slot it was pressed in.
+/// the slot of the pane that runs the session it records, which comes
+/// forward; a session with no pane here opens in the slot in front, and a
+/// record opened inside the slot (a child's, `here`) stays in the slot it was
+/// pressed in.
 #[test]
-fn a_record_opens_in_its_own_sessions_slot() {
+fn a_record_pressed_where_no_agent_is_opens_in_its_sessions_pane() {
     let checkout_path = "/private/tmp/hide-slot-owner-session";
     let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2"];
@@ -779,12 +670,8 @@ fn a_record_opens_in_its_own_sessions_slot() {
     };
 
     open_at(&mut runtime, &record(&session), serde_json::json!("owner"));
-    let state = &runtime.snapshot.ui_state;
-    assert_eq!(
-        state.detail_owner.as_ref().map(|owner| owner.pane.as_str()),
-        Some("w-order:t2:p")
-    );
-    assert_eq!(state.detail.items, [record(&session)]);
+    assert_eq!(detail_pane(&runtime), Some("w-order:t2:p"));
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [record(&session)]);
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
         Some("w-order:t2:p"),
@@ -794,7 +681,7 @@ fn a_record_opens_in_its_own_sessions_slot() {
     assert_eq!(
         runtime.snapshot.ui_state.detail,
         crate::model::DetailSlot::default(),
-        "the agent that was in front holds no card"
+        "the pane that was in front holds no card"
     );
 
     // No pane runs this session here: the slot in front takes it.
@@ -804,7 +691,7 @@ fn a_record_opens_in_its_own_sessions_slot() {
     };
     open_at(&mut runtime, &record(&gone), serde_json::json!("owner"));
     assert_eq!(
-        owner_pane(&runtime),
+        detail_pane(&runtime),
         Some("w-order:t1:p")
     );
     assert_eq!(runtime.snapshot.ui_state.detail.items, [record(&gone)]);
@@ -816,7 +703,7 @@ fn a_record_opens_in_its_own_sessions_slot() {
     // Opened inside the slot, the record stays where it was pressed.
     open_at(&mut runtime, &record(&session), serde_json::json!("here"));
     assert_eq!(
-        owner_pane(&runtime),
+        detail_pane(&runtime),
         Some("w-order:t1:p")
     );
     assert_eq!(
@@ -895,7 +782,7 @@ fn a_pull_request_pressed_where_no_agent_is_opens_at_its_makers_pane() {
 
     open_pull_request(&mut runtime, 42, serde_json::json!("owner"));
     assert_eq!(
-        owner_pane(&runtime),
+        detail_pane(&runtime),
         Some("w-order:t2:p")
     );
     assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42)]);
@@ -907,7 +794,7 @@ fn a_pull_request_pressed_where_no_agent_is_opens_at_its_makers_pane() {
     // Its agent has no pane here: the slot in front takes the card.
     open_pull_request(&mut runtime, 43, serde_json::json!("owner"));
     assert_eq!(
-        owner_pane(&runtime),
+        detail_pane(&runtime),
         Some("w-order:t2:p")
     );
     assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42), card(43)]);
@@ -937,7 +824,7 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
     for number in [42, 43] {
         open_pull_request(&mut runtime, number, serde_json::json!({"pane": parent}));
         assert_eq!(
-            owner_pane(&runtime),
+            detail_pane(&runtime),
             Some(parent),
             "#{number} opens where it was pressed"
         );
@@ -958,13 +845,13 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
     };
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t3:p")));
     open_at(&mut runtime, &record, serde_json::json!({"pane": child}));
-    assert_eq!(owner_pane(&runtime), Some(child));
+    assert_eq!(detail_pane(&runtime), Some(child));
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(child));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [record]);
 
     // A row whose pane closed (its agent sleeps): the slot in front takes it.
     open_pull_request(&mut runtime, 42, serde_json::json!({"pane": "w-order:t9:p"}));
-    assert_eq!(owner_pane(&runtime), Some(child));
+    assert_eq!(detail_pane(&runtime), Some(child));
     assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&card(42)));
 }
 
@@ -993,7 +880,7 @@ fn a_pull_request_pressed_inside_a_record_stacks_in_the_same_slot_and_back_retur
 
     open_pull_request(&mut runtime, 42, serde_json::json!("here"));
     assert_eq!(
-        owner_pane(&runtime),
+        detail_pane(&runtime),
         Some("w-order:t1:p")
     );
     assert_eq!(
@@ -1010,10 +897,12 @@ fn a_pull_request_pressed_inside_a_record_stacks_in_the_same_slot_and_back_retur
     assert!(runtime.snapshot.ui_state.detail.shown);
 }
 
-/// An agent's row on a connected device opens the card in that agent's
-/// slot: the device's pane comes forward only when the device answers, so
-/// the card waits in the session's slot while this machine's agent keeps
-/// its own, and shows once the device reports the pane in front.
+/// An agent's row on a connected device opens the card in that pane's slot:
+/// the device's pane comes forward only when the device answers, so the card
+/// waits in that pane's slot while this machine's pane keeps its own, and
+/// shows once the device reports the pane in front. A device's kept slot
+/// goes only when that device's session no longer lists the pane, not while
+/// the device is offline.
 #[test]
 fn a_device_agents_row_opens_its_card_when_the_device_brings_the_pane_forward() {
     let checkout_path = "/private/tmp/hide-slot-device-row";
@@ -1049,7 +938,6 @@ fn a_device_agents_row_opens_its_card_when_the_device_brings_the_pane_forward() 
     // The device's agent row, as the device's session lists it.
     let mut agent = runtime.snapshot.navigator.agents[0].clone();
     agent.pane_id = device_pane.clone();
-    agent.session_id = Some(session_id(7));
     let mut session = RemoteSessionSnapshot {
         workspaces: vec![remote_workspace],
         agents: vec![agent],
@@ -1072,34 +960,50 @@ fn a_device_agents_row_opens_its_card_when_the_device_brings_the_pane_forward() 
         catalog: Default::default(),
         unreachable_since_unix_ms: None,
     });
+    let mut device = crate::workspace::local_device(&crate::node::test_node(), None, None);
+    device.id = target_id.into();
+    device.kind = "remote".into();
+    runtime.snapshot.navigator.devices.push(device);
     runtime.install_remote_control(RemoteControlContext::new(
         target_id,
         FakeEngine::absent().engine(),
         Weak::new(),
         ChangeNotifier::noop(),
     ));
-    let device_session = crate::links::ledger::SessionIdentity {
-        device_id: target_id.to_owned(),
-        ..session(&runtime, 7)
-    };
     let cost = DetailItem::Cost {
         workspace_id: workspace_id.into(),
+    };
+    let kept = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .detail_panes
+            .0
+            .iter()
+            .map(|held| (held.pane.clone(), held.slot.items.clone()))
+            .collect::<Vec<_>>()
     };
 
     open_at(&mut runtime, &cost, serde_json::json!({"pane": device_pane}));
     assert_eq!(
         runtime.snapshot.ui_state.detail,
         crate::model::DetailSlot::default(),
-        "this machine's agent keeps its own slot until the device answers"
+        "this machine's pane keeps its own slot until the device answers"
     );
-    let kept = &runtime.snapshot.ui_state.detail_sessions.0;
-    assert_eq!(
-        kept.iter()
-            .map(|held| (held.session.clone(), held.slot.items.clone()))
-            .collect::<Vec<_>>(),
-        [(device_session.clone(), vec![cost.clone()])]
-    );
+    assert_eq!(kept(&runtime), [(device_pane.clone(), vec![cost.clone()])]);
 
+    // Offline, the device says nothing about its panes: the slot stays.
+    runtime.snapshot.status.remote[0].session = None;
+    assert!(!runtime.prune_detail_panes());
+    // Its session no longer lists the pane: the slot goes.
+    let mut closed = session.clone();
+    closed.workspaces[0].checkouts[0].tabs[0].panes.clear();
+    runtime.snapshot.status.remote[0].session = Some(closed);
+    assert!(runtime.prune_detail_panes());
+    assert!(kept(&runtime).is_empty());
+
+    runtime.snapshot.status.remote[0].session = Some(session.clone());
+    open_at(&mut runtime, &cost, serde_json::json!({"pane": device_pane}));
     // The device brings the pane forward.
     session.focused_workspace_id = Some(workspace_id.to_owned());
     session.focused_checkout_id = Some(checkout_id.to_owned());
@@ -1109,15 +1013,7 @@ fn a_device_agents_row_opens_its_card_when_the_device_brings_the_pane_forward() 
     if !runtime.device_in_front(target_id) {
         runtime.bring_device_forward(target_id.to_owned());
     }
-    runtime.sync_detail_owner();
+    runtime.sync_detail_pane();
     assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
-    assert_eq!(
-        runtime
-            .snapshot
-            .ui_state
-            .detail_owner
-            .as_ref()
-            .and_then(|owner| owner.session.clone()),
-        Some(device_session)
-    );
+    assert_eq!(detail_pane(&runtime), Some(device_pane.as_str()));
 }

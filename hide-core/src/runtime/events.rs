@@ -4467,8 +4467,8 @@ impl Runtime {
                     practice: current.practice,
                     practice_invite_closed: current.practice_invite_closed,
                     detail: current.detail,
-                    detail_owner: current.detail_owner,
-                    detail_sessions: current.detail_sessions,
+                    detail_pane: current.detail_pane,
+                    detail_panes: current.detail_panes,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the

@@ -1572,13 +1572,13 @@ mod tests {
                 "stray_dismissals": dismissals,
                 "session_open_folds": before("fold"),
             });
-            // Whose the front 보기 slot is, and the slots of the sessions not
-            // in front.
-            core["detail_owner"] = json!({"pane": panes[0], "session": {"device_id": devices[0], "agent": "claude", "session_id": "s"}});
-            core["detail_sessions"] = Value::Array(
+            // The pane the front 보기 slot belongs to, and the slots of the
+            // panes not in front.
+            core["detail_pane"] = json!(panes[0]);
+            core["detail_panes"] = Value::Array(
                 (0..3)
                     .map(|index| json!({
-                        "session": {"device_id": devices[index], "agent": "claude", "session_id": format!("s{index}")},
+                        "pane": panes[index],
                         "slot": {"items": [
                             {"kind": "remains", "workspace_id": registrations[index], "checkout_id": checkouts[index]},
                             {"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},

@@ -1989,8 +1989,8 @@ impl Runtime {
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
         self.request_home_retirements();
-        // The device's word on the pane in front, or an agent that ended.
-        let detail = self.sync_detail_owner() | self.prune_detail_sessions();
+        // The device's word on the pane in front, or a pane it closed.
+        let detail = self.sync_detail_pane() | self.prune_detail_panes();
         changed | detail | self.complete_look()
     }
 
@@ -2524,8 +2524,8 @@ impl Runtime {
         self.ingesting_session = false;
         // The projects are known now: an old Home waiting on them is asked.
         self.request_home_retirements();
-        // An agent that ended takes its 보기 slot.
-        let detail = self.prune_detail_sessions();
+        // A pane that closed takes its 보기 slot.
+        let detail = self.prune_detail_panes();
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
         let pumped = self.pump_geometry_queues();

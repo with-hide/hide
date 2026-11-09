@@ -129,7 +129,7 @@ pub struct PlansSnapshot {
 }
 
 /// The identity a row's session is saved under.
-pub(super) fn row_session(device: &str, agent: &SidebarAgentSnapshot) -> Option<SessionIdentity> {
+fn row_session(device: &str, agent: &SidebarAgentSnapshot) -> Option<SessionIdentity> {
     Some(SessionIdentity {
         device_id: device.to_owned(),
         agent: hide_session::Agent::from_kind(&agent.agent_kind)?

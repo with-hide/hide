@@ -4589,84 +4589,51 @@ impl DetailSlot {
     }
 }
 
-/// The most 보기 slots kept for agents not in front: the agents an operator
+/// The most 보기 slots kept for panes not in front: the panes an operator
 /// comes back to over a day of work, with room to spare; each holds at most
 /// [`DETAIL_HISTORY_LIMIT`] items, so the saved slots stay under 1,280 items
-/// however many sessions the machine has run. Past it the slot seen longest
+/// however many panes the machine has opened. Past it the slot seen longest
 /// ago goes (operator decision 2026-11-09).
-pub const DETAIL_SESSION_LIMIT: usize = 64;
+pub const DETAIL_PANE_LIMIT: usize = 64;
 
-/// Whose 보기 slot `UiStateSnapshot::detail` is: the agent session the pane
-/// in front runs, or that pane alone while it runs none (a shell, or an agent
-/// that has not named its session yet). A session's slot follows it to
-/// another pane, as when a sleeping agent wakes (operator decision
-/// 2026-11-09).
+/// A pane's 보기 slot, kept while another pane is in front.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DetailOwner {
+pub struct PaneDetailSlot {
     pub pane: String,
-    #[serde(default)]
-    pub session: Option<crate::links::ledger::SessionIdentity>,
-}
-
-impl DetailOwner {
-    /// Whether `other` is the same owner: the same session in any pane, or,
-    /// for a pane that ran none, the same pane, whatever session it names
-    /// now.
-    pub fn same_as(&self, other: &DetailOwner) -> bool {
-        match (&self.session, &other.session) {
-            (Some(held), Some(now)) => held == now,
-            (None, _) => self.pane == other.pane,
-            (Some(_), None) => false,
-        }
-    }
-}
-
-/// An agent session's 보기 slot, kept while another is in front.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SessionDetailSlot {
-    pub session: crate::links::ledger::SessionIdentity,
     pub slot: DetailSlot,
 }
 
-/// The 보기 slots of the sessions not in front, the one seen longest ago
-/// first, at most [`DETAIL_SESSION_LIMIT`].
+/// The 보기 slots of the panes not in front, the one seen longest ago first,
+/// at most [`DETAIL_PANE_LIMIT`].
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct SessionDetailSlots(pub Vec<SessionDetailSlot>);
+pub struct PaneDetailSlots(pub Vec<PaneDetailSlot>);
 
-impl SessionDetailSlots {
+impl PaneDetailSlots {
     /// Keeps `slot` as the one seen last; past the cap the one seen longest
     /// ago goes, and is returned.
-    pub fn keep(
-        &mut self,
-        session: crate::links::ledger::SessionIdentity,
-        slot: DetailSlot,
-    ) -> Option<SessionDetailSlot> {
-        self.0.retain(|held| held.session != session);
-        self.0.push(SessionDetailSlot { session, slot });
-        (self.0.len() > DETAIL_SESSION_LIMIT).then(|| self.0.remove(0))
+    pub fn keep(&mut self, pane: String, slot: DetailSlot) -> Option<PaneDetailSlot> {
+        self.0.retain(|held| held.pane != pane);
+        self.0.push(PaneDetailSlot { pane, slot });
+        (self.0.len() > DETAIL_PANE_LIMIT).then(|| self.0.remove(0))
     }
 
-    /// Takes `session`'s slot out, to stand in front.
-    pub fn take(&mut self, session: &crate::links::ledger::SessionIdentity) -> Option<DetailSlot> {
-        let index = self.0.iter().position(|held| held.session == *session)?;
+    /// Takes `pane`'s slot out, to stand in front.
+    pub fn take(&mut self, pane: &str) -> Option<DetailSlot> {
+        let index = self.0.iter().position(|held| held.pane == pane)?;
         Some(self.0.remove(index).slot)
     }
 
-    /// Opens `item` in `session`'s slot while another agent is in front; the
-    /// slot counts as seen now, and the one past the cap is returned.
-    pub fn open_in(
-        &mut self,
-        session: crate::links::ledger::SessionIdentity,
-        item: DetailItem,
-    ) -> Option<SessionDetailSlot> {
-        let mut slot = self.take(&session).unwrap_or_default();
+    /// Opens `item` in `pane`'s slot while another pane is in front; the slot
+    /// counts as seen now, and the one past the cap is returned.
+    pub fn open_in(&mut self, pane: String, item: DetailItem) -> Option<PaneDetailSlot> {
+        let mut slot = self.take(&pane).unwrap_or_default();
         slot.open(item);
-        self.keep(session, slot)
+        self.keep(pane, slot)
     }
 
     /// Keeps only the slots `keep` answers for, emptied ones dropped.
-    pub fn retain(&mut self, mut keep: impl FnMut(&SessionDetailSlot) -> bool) {
+    pub fn retain(&mut self, mut keep: impl FnMut(&PaneDetailSlot) -> bool) {
         self.0.retain(|held| !held.slot.items.is_empty() && keep(held));
     }
 
@@ -4792,23 +4759,24 @@ pub struct UiStateSnapshot {
     /// opened a chapter loses it through `practice` instead.
     #[serde(default)]
     pub practice_invite_closed: bool,
-    /// The lane's 보기 slot (D-50) of the agent in front: a pull request's
-    /// card, a session's record or a mission's map, which belongs to the
-    /// agent session it was opened for (`detail_owner`; operator decision
-    /// 2026-11-09). Another agent in front swaps its own slot in
-    /// (`Runtime::sync_detail_owner`), so the wire and the shell see only the
-    /// front agent's.
+    /// The lane's 보기 slot (D-50) of the pane in front: a pull request's
+    /// card, a session's record or a mission's map, which belongs to the pane
+    /// it was opened for (`detail_pane`; operator decision 2026-11-09).
+    /// Another pane in front swaps its own slot in
+    /// (`Runtime::sync_detail_pane`), so the wire and the shell see only the
+    /// front pane's.
     #[serde(default)]
     pub detail: DetailSlot,
-    /// Whose slot `detail` is; none until a pane is in front after a launch,
-    /// when the slot loaded then (one an older build kept for its front tab
-    /// or window-wide) attaches to the pane then in front. Core only.
+    /// The pane `detail` belongs to; none until a pane is in front after a
+    /// launch, when the slot loaded then (one an older build kept for its
+    /// front tab or window-wide) attaches to the pane then in front. Core
+    /// only.
     #[serde(default, skip_serializing)]
-    pub detail_owner: Option<DetailOwner>,
-    /// The 보기 slots of the sessions not in front; a slot ends with its
-    /// agent (no pane runs the session and it does not sleep). Core only.
+    pub detail_pane: Option<String>,
+    /// The 보기 slots of the panes not in front; a slot ends with its pane.
+    /// Core only.
     #[serde(default, skip_serializing)]
-    pub detail_sessions: SessionDetailSlots,
+    pub detail_panes: PaneDetailSlots,
     /// The Overview Work map's filter, hidden and folded projects, hand
     /// team folds and dragged places (PRD overview-graph-remembered D-05).
     #[serde(default)]
@@ -5785,8 +5753,8 @@ impl Default for UiStateSnapshot {
             practice: BTreeMap::new(),
             practice_invite_closed: false,
             detail: DetailSlot::default(),
-            detail_owner: None,
-            detail_sessions: SessionDetailSlots::default(),
+            detail_pane: None,
+            detail_panes: PaneDetailSlots::default(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
             selected_pane_id: None,
@@ -11198,16 +11166,11 @@ mod release_1_2_1_wire_tests {
 }
 
 #[cfg(test)]
-mod session_detail_slot_tests {
+mod pane_detail_slot_tests {
     use super::*;
-    use crate::links::ledger::SessionIdentity;
 
-    fn session(index: usize) -> SessionIdentity {
-        SessionIdentity {
-            device_id: "local".into(),
-            agent: "claude".into(),
-            session_id: format!("s-{index}"),
-        }
+    fn pane(index: usize) -> String {
+        format!("w1:p{index}")
     }
 
     fn holding(index: usize) -> DetailSlot {
@@ -11218,37 +11181,37 @@ mod session_detail_slot_tests {
         slot
     }
 
-    /// Thousands of sessions never grow the kept slots past the cap: the slot
+    /// Thousands of panes never grow the kept slots past the cap: the slot
     /// seen longest ago goes first, and one seen again counts as new.
     #[test]
     fn the_kept_slots_stop_at_the_cap_and_the_one_seen_longest_ago_goes() {
-        let mut slots = SessionDetailSlots::default();
-        for index in 0..DETAIL_SESSION_LIMIT {
-            assert_eq!(slots.keep(session(index), holding(index)), None);
+        let mut slots = PaneDetailSlots::default();
+        for index in 0..DETAIL_PANE_LIMIT {
+            assert_eq!(slots.keep(pane(index), holding(index)), None);
         }
-        // Session 0 comes in front and leaves again: it is the newest now.
-        let front = slots.take(&session(0)).unwrap();
-        assert_eq!(slots.keep(session(0), front), None);
+        // Pane 0 comes in front and leaves again: it is the newest now.
+        let front = slots.take(&pane(0)).unwrap();
+        assert_eq!(slots.keep(pane(0), front), None);
 
-        let evicted = slots.keep(session(DETAIL_SESSION_LIMIT), holding(DETAIL_SESSION_LIMIT));
-        assert_eq!(evicted.map(|gone| gone.session), Some(session(1)));
-        assert_eq!(slots.len(), DETAIL_SESSION_LIMIT);
-        assert!(slots.take(&session(0)).is_some(), "the slot seen again stays");
+        let evicted = slots.keep(pane(DETAIL_PANE_LIMIT), holding(DETAIL_PANE_LIMIT));
+        assert_eq!(evicted.map(|gone| gone.pane), Some(pane(1)));
+        assert_eq!(slots.len(), DETAIL_PANE_LIMIT);
+        assert!(slots.take(&pane(0)).is_some(), "the slot seen again stays");
 
         let evicted = slots.open_in(
-            session(DETAIL_SESSION_LIMIT + 1),
+            pane(DETAIL_PANE_LIMIT + 1),
             DetailItem::Mission {
                 mission: "new".into(),
             },
         );
-        assert_eq!(evicted, None, "taking session 0 out made room");
+        assert_eq!(evicted, None, "taking pane 0 out made room");
         let evicted = slots.open_in(
-            session(DETAIL_SESSION_LIMIT + 2),
+            pane(DETAIL_PANE_LIMIT + 2),
             DetailItem::Mission {
                 mission: "newer".into(),
             },
         );
-        assert_eq!(evicted.map(|gone| gone.session), Some(session(2)));
-        assert_eq!(slots.len(), DETAIL_SESSION_LIMIT);
+        assert_eq!(evicted.map(|gone| gone.pane), Some(pane(2)));
+        assert_eq!(slots.len(), DETAIL_PANE_LIMIT);
     }
 }
