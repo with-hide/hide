@@ -555,6 +555,71 @@ fn a_card_opened_for_one_pane_is_not_shown_on_another_pane_of_the_same_tab() {
     assert_eq!(runtime.snapshot.ui_state.detail.items, [map]);
 }
 
+/// With the kept slots at their cap and a card in front, going back to the
+/// pane seen longest ago brings its slot back whole, back history included,
+/// and keeps the slot it leaves: the slot coming back leaves the kept ones
+/// before the outgoing one joins them, so the cap drops neither.
+#[test]
+fn returning_to_the_pane_seen_longest_ago_at_the_cap_keeps_both_slots() {
+    let checkout_path = "/private/tmp/hide-slot-cap-return";
+    let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    runtime.ingest_session(Ok(two_agents_in_one_tab(checkout_path)));
+    let (p, q) = ("w-order:t1:p", "w-order:t1:q");
+    let map = DetailItem::Mission {
+        mission: "mission-41".into(),
+    };
+    let cost = DetailItem::Cost {
+        workspace_id: "workspace:order".into(),
+    };
+    assert!(runtime.dispatch_json(&operator_focus_event(q)));
+    open_at(&mut runtime, &map, serde_json::json!("here"));
+    open_at(&mut runtime, &cost, serde_json::json!("here"));
+    assert!(runtime.dispatch_json(&operator_focus_event(p)));
+    let worktrees = DetailItem::Worktrees {
+        workspace_id: "workspace:order".into(),
+    };
+    open_at(&mut runtime, &worktrees, serde_json::json!("here"));
+    // q's slot is the one seen longest ago; others fill the kept slots to the cap.
+    let kept = &mut runtime.snapshot.ui_state.detail_panes;
+    assert_eq!(kept.0.first().map(|entry| entry.pane.as_str()), Some(q));
+    for n in kept.len()..crate::model::DETAIL_PANE_LIMIT {
+        let slot = crate::model::DetailSlot {
+            items: vec![DetailItem::Mission {
+                mission: format!("mission-{n}"),
+            }],
+            shown: true,
+        };
+        assert!(kept.keep(format!("w-other:t{n}:p"), slot).is_none());
+    }
+    assert_eq!(kept.len(), crate::model::DETAIL_PANE_LIMIT);
+
+    let ((), records) = crate::diagnostics::capture(|| {
+        assert!(runtime.dispatch_json(&operator_focus_event(q)));
+    });
+    assert_eq!(detail_pane(&runtime), Some(q));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items,
+        [map.clone(), cost],
+        "q's slot comes back whole"
+    );
+    let kept = &runtime.snapshot.ui_state.detail_panes;
+    assert_eq!(kept.len(), crate::model::DETAIL_PANE_LIMIT);
+    assert!(
+        kept.0
+            .iter()
+            .any(|entry| entry.pane == p && entry.slot.items == [worktrees.clone()]),
+        "the slot p left is kept"
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["kind"] == "detail.slot_evicted"),
+        "nothing leaves at the cap: {records:?}"
+    );
+    assert!(event(&mut runtime, "detail_back", serde_json::json!({})));
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [map]);
+}
+
 /// A pane that runs no agent (a shell) has a slot of its own like any other
 /// pane: what was opened there comes back with it.
 #[test]

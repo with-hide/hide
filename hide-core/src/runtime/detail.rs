@@ -574,12 +574,15 @@ impl Runtime {
         let state = &mut self.snapshot.ui_state;
         let before = std::mem::take(&mut state.detail);
         let empty = crate::model::DetailSlot::default();
+        // The incoming slot leaves the kept ones before the outgoing one joins
+        // them, so at the cap the slot coming back is never the one dropped.
+        let incoming = state.detail_panes.take(&front).unwrap_or_default();
         let evicted = if before != empty && !home_closed {
             state.detail_panes.keep(home, before.clone())
         } else {
             None
         };
-        state.detail = state.detail_panes.take(&front).unwrap_or_default();
+        state.detail = incoming;
         state.detail_pane = Some(front);
         let changed = state.detail != before;
         let held = before != empty || state.detail != empty;
