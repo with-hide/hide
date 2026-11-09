@@ -7,7 +7,7 @@ import { LEAD, PLAN_WORLD, planInSlot, type PlanModel } from "../worlds/plan";
 
 const PANE = `[data-pane-view="${LEAD}"]`;
 const CHIP = `${PANE} [data-pane-plan-chip]`;
-/** The checklist's `크게 ›`, or, when the learner closed it, the chip that opens it again. */
+/** The checklist's `지도 열기 ›` row, or, when the learner closed it, the chip that opens it again. */
 const LARGE = `[data-pane-plan-large], body:not(:has([data-pane-plan-large])) ${CHIP}`;
 const say = (text: string) => ({ type: { pane: LEAD, text } });
 
