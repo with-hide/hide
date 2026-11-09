@@ -20,7 +20,7 @@
 //! answers from no provider, so an idle Hide starts no provider process.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -163,12 +163,24 @@ struct ItemReads {
 
 pub struct AiReader {
     inner: BackgroundRead<AiRequest, BackgroundAiSnapshot>,
+    /// Whether a screen still reads model lists, as the latest request
+    /// says: a read under way checks it before each item's backend and each
+    /// device's, so a window that closes mid-read starts no further profile
+    /// or device; the agents' own lists it is already asking are asked to
+    /// the end.
+    observing: Arc<AtomicBool>,
 }
 
 impl AiReader {
     /// A reader whose agents run on the core's own machine and on the
     /// connected devices each request lists.
     pub(crate) fn new(machines: AiMachines) -> Self {
+        Self::spaced(machines, SPACING)
+    }
+
+    /// [`AiReader::new`] with `spacing` between one read and a changed
+    /// request's next.
+    fn spaced(machines: AiMachines, spacing: Duration) -> Self {
         // One router per machine outlives the reads that use it, so a Codex
         // app-server child is started once for a screen rather than once per
         // read. It is rebuilt only when the configured models change, because
@@ -176,8 +188,12 @@ impl AiReader {
         let cached: CachedRouters = Arc::default();
         // Only the read's own worker takes it, one read at a time.
         let items: Mutex<ItemReads> = Mutex::default();
+        let observing = Arc::new(AtomicBool::new(false));
+        let still = Arc::clone(&observing);
         Self {
-            inner: BackgroundRead::new(REFRESH_INTERVAL, SPACING, move |request: &AiRequest| {
+            observing,
+            inner: BackgroundRead::new(REFRESH_INTERVAL, spacing, move |request: &AiRequest| {
+                let still = || still.load(Ordering::SeqCst);
                 let mut guard = cached.lock().unwrap_or_else(|error| error.into_inner());
                 let mut items = items.lock().unwrap_or_else(|error| error.into_inner());
                 if !request.asks() {
@@ -218,9 +234,18 @@ impl AiReader {
                     request.cli_found.as_ref(),
                 );
                 if request.observing {
-                    items.read(&machines, None, &request.items, &mut snapshot.providers);
+                    items.read(
+                        &machines,
+                        None,
+                        &request.items,
+                        &mut snapshot.providers,
+                        &still,
+                    );
                 }
                 for (device, router) in devices {
+                    if request.observing && !still() {
+                        break;
+                    }
                     let mut rows = read(
                         &router,
                         &request.models,
@@ -229,7 +254,13 @@ impl AiReader {
                     )
                     .providers;
                     if request.observing {
-                        items.read(&machines, Some(&device.id), &device.items, &mut rows);
+                        items.read(
+                            &machines,
+                            Some(&device.id),
+                            &device.items,
+                            &mut rows,
+                            &still,
+                        );
                     }
                     snapshot.providers.extend(rows.into_iter().map(|mut row| {
                         row.device_id = Some(device.id.clone());
@@ -242,6 +273,7 @@ impl AiReader {
     }
 
     pub fn read_if_due(&mut self, request: AiRequest) -> Option<BackgroundAiSnapshot> {
+        self.observing.store(request.observing, Ordering::SeqCst);
         self.inner.set_interval(if request.observing {
             REFRESH_INTERVAL
         } else {
@@ -272,30 +304,39 @@ impl ItemReads {
                     .map_or(&[], |device| device.items.as_slice()),
             }
         };
-        let still_asked = |(machine, provider, profile): &ItemKey| {
+        let still_asked = |(machine, provider, profile): &ItemKey, within: usize| {
             asked(machine)
                 .iter()
-                .take(MAX_ITEM_READS)
+                .take(within)
                 .any(|ask| ask.provider == *provider && ask.profile == *profile)
         };
-        self.backends.retain(|key, _| still_asked(key));
-        // An item's failure is forgotten with it: a profile removed, a
-        // device gone, or past the cap, where no backend reads it.
-        self.logged.retain(|key, _| still_asked(key));
+        self.backends
+            .retain(|key, _| still_asked(key, MAX_ITEM_READS));
+        // An item's failure is forgotten with it, a profile removed or a
+        // device gone; one past the cap is still asked, so its
+        // `model_reads_full` stays written once.
+        self.logged.retain(|key, _| still_asked(key, usize::MAX));
     }
 
     /// Reads the model list of each item `asks` names on `machine` and puts
     /// it on its agent's row of `rows`. A list that cannot be read is logged
     /// with its item once per reason (B9, design 13); the row then carries
-    /// the reason, and the screens offer the agent's default list.
+    /// the reason, and the screens offer the agent's default list. Once
+    /// `still` says no screen reads lists any more, no further item is read:
+    /// the one under way ends within its own read limit, and the next read
+    /// releases every backend.
     fn read(
         &mut self,
         machines: &AiMachines,
         machine: Option<&str>,
         asks: &[ItemAsk],
         rows: &mut [BackgroundAiProviderSnapshot],
+        still: &dyn Fn() -> bool,
     ) {
         for (index, ask) in asks.iter().enumerate() {
+            if !still() {
+                break;
+            }
             let key: ItemKey = (
                 machine.map(str::to_owned),
                 ask.provider,
@@ -1207,13 +1248,15 @@ mod tests {
         }
     }
 
-    /// A node whose agents list one model each and whose profile `p-gw`
-    /// lists a gateway's, and that keeps every backend it was asked to
-    /// build and release.
+    /// A node whose agents list one model each and whose profiles `p-gw`
+    /// and `p-slow` list a gateway's, and that keeps every backend it was
+    /// asked to build and release. A read of `p-slow` says on `slow`'s
+    /// sender that it started and answers once its receiver hears.
     #[derive(Default)]
     struct ProfilesNode {
         built: Mutex<Vec<BackendSpec>>,
         released: Mutex<Vec<u64>>,
+        slow: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     }
 
     impl NodeLink for ProfilesNode {
@@ -1229,9 +1272,10 @@ mod tests {
                     logged(serde_json::to_value(Availability::Ready).unwrap())
                 }
                 Call::AiModels { backend } => {
-                    let catalog = match backend.profile.as_ref().map(|profile| profile.0.as_str()) {
+                    let profile = backend.profile.as_ref().map(|profile| profile.0.clone());
+                    let catalog = match profile.as_deref() {
                         None => ModelCatalog::plain(["sonnet"]),
-                        Some("p-gw") => ModelCatalog::Offered(vec![hide_ai::Model {
+                        Some("p-gw" | "p-slow") => ModelCatalog::Offered(vec![hide_ai::Model {
                             id: "opus".to_owned(),
                             label: Some("glm-4.6".to_owned()),
                         }]),
@@ -1242,9 +1286,19 @@ mod tests {
                             )));
                         }
                     };
-                    let mut built = self.built.lock().unwrap();
-                    if !built.iter().any(|spec| spec.instance == backend.instance) {
-                        built.push(backend);
+                    {
+                        let mut built = self.built.lock().unwrap();
+                        if !built.iter().any(|spec| spec.instance == backend.instance) {
+                            built.push(backend);
+                        }
+                    }
+                    if profile.as_deref() == Some("p-slow")
+                        && let Some((started, answer)) = self.slow.lock().unwrap().as_ref()
+                    {
+                        started.send(()).unwrap();
+                        answer
+                            .recv_timeout(Duration::from_secs(10))
+                            .expect("the test lets the slow read answer");
                     }
                     logged(serde_json::to_value(catalog).unwrap())
                 }
@@ -1296,7 +1350,7 @@ mod tests {
         let read = |items: &mut ItemReads, request: &AiRequest| {
             let mut rows = BackgroundAiSnapshot::unread().providers;
             items.keep(request);
-            items.read(&machines, None, &request.items, &mut rows);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
             rows
         };
 
@@ -1377,9 +1431,15 @@ mod tests {
         let read = |items: &mut ItemReads, request: &AiRequest| {
             let mut rows = BackgroundAiSnapshot::unread().providers;
             items.keep(request);
-            items.read(&machines, None, &request.items, &mut rows);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
             for device in &request.devices {
-                items.read(&machines, Some(&device.id), &device.items, &mut rows);
+                items.read(
+                    &machines,
+                    Some(&device.id),
+                    &device.items,
+                    &mut rows,
+                    &|| true,
+                );
             }
         };
 
@@ -1420,25 +1480,41 @@ mod tests {
     }
 
     /// Past the cap a profile's list is a reported failure, never another
-    /// backend on its node (engineering 15).
+    /// backend on its node (engineering 15), written once however often the
+    /// same screen reads it and forgotten when the profile leaves.
     #[test]
     fn a_machines_profiles_past_the_cap_are_answered_without_a_backend() {
         let node = Arc::new(ProfilesNode::default());
         let machines = AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>);
         let mut items = ItemReads::default();
-        let asks: Vec<ItemAsk> = (0..=MAX_ITEM_READS)
-            .map(|index| ItemAsk {
-                provider: ProviderId::CLAUDE,
-                profile: ProfileId(if index == MAX_ITEM_READS {
-                    "p-gw".to_owned()
-                } else {
-                    format!("p-{index}")
-                }),
-                version: 1,
-            })
-            .collect();
-        let mut rows = BackgroundAiSnapshot::unread().providers;
-        items.read(&machines, None, &asks, &mut rows);
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            items: (0..=MAX_ITEM_READS)
+                .map(|index| ItemAsk {
+                    provider: ProviderId::CLAUDE,
+                    profile: ProfileId(if index == MAX_ITEM_READS {
+                        "p-gw".to_owned()
+                    } else {
+                        format!("p-{index}")
+                    }),
+                    version: 1,
+                })
+                .collect(),
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
+            rows
+        };
+
+        let (rows, records) = crate::diagnostics::capture(|| {
+            let rows = read(&mut items, &request);
+            read(&mut items, &request);
+            rows
+        });
         let claude = rows.iter().find(|row| row.id == "claude").unwrap();
         assert_eq!(
             claude.profile_models[MAX_ITEM_READS]
@@ -1447,6 +1523,94 @@ mod tests {
             Some("model_reads_full")
         );
         assert!(node.built_for("p-gw").is_empty(), "no backend past the cap");
+        let full = records
+            .iter()
+            .filter(|record| record["reason"] == "model_reads_full")
+            .count();
+        assert_eq!(full, 1, "a second read writes it no more: {records:?}");
+
+        request.items.pop();
+        read(&mut items, &request);
+        assert!(
+            !items
+                .logged
+                .keys()
+                .any(|(_, _, profile)| profile.0 == "p-gw"),
+            "the record leaves with the profile"
+        );
+    }
+
+    /// Engineering 14: once no window reads model lists, the coordinator
+    /// asks the reader for nothing and every item backend a screen's reads
+    /// made is released, whether the window left after a read or during
+    /// one; a read under way then starts no item after the one it is on.
+    #[test]
+    fn a_window_that_leaves_releases_the_item_backends_even_during_a_read() {
+        let node = Arc::new(ProfilesNode::default());
+        let (started, slow_started) = std::sync::mpsc::channel();
+        let (answer_slow, answer) = std::sync::mpsc::channel();
+        *node.slow.lock().unwrap() = Some((started, answer));
+        let mut reader = AiReader::spaced(
+            AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>),
+            Duration::ZERO,
+        );
+        let (ready, answered) = std::sync::mpsc::channel();
+        reader.inner.on_ready(move || {
+            let _ = ready.send(());
+        });
+        let reading = |profiles: &[&str]| AiRequest {
+            observing: true,
+            models: models(),
+            items: profiles
+                .iter()
+                .map(|profile| ItemAsk {
+                    provider: ProviderId::CLAUDE,
+                    profile: ProfileId((*profile).to_owned()),
+                    version: 1,
+                })
+                .collect(),
+            ..AiRequest::default()
+        };
+        let nothing = AiRequest::default();
+        let finish = |reader: &mut AiReader, request: &AiRequest| {
+            answered
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the read answers");
+            reader
+                .read_if_due(request.clone())
+                .expect("the answer is handed back on the next wake")
+        };
+        let released = |instance: u64| node.released.lock().unwrap().contains(&instance);
+
+        // A screen reads an item, then its window leaves.
+        assert!(reader.read_if_due(reading(&["p-gw"])).is_none());
+        finish(&mut reader, &reading(&["p-gw"]));
+        let gateway = node.built_for("p-gw");
+        assert_eq!(gateway.len(), 1);
+        assert!(reader.read_if_due(nothing.clone()).is_none());
+        finish(&mut reader, &nothing);
+        assert!(
+            released(gateway[0]),
+            "the window's item backend is released"
+        );
+
+        // The window leaves while a read waits on its first item.
+        assert!(reader.read_if_due(reading(&["p-slow", "p-gw"])).is_none());
+        slow_started
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the read reaches its first item");
+        assert!(reader.read_if_due(nothing.clone()).is_none());
+        answer_slow.send(()).unwrap();
+        finish(&mut reader, &nothing);
+        assert_eq!(
+            node.built_for("p-gw"),
+            gateway,
+            "no item after the one under way is started"
+        );
+        finish(&mut reader, &nothing);
+        let slow = node.built_for("p-slow");
+        assert_eq!(slow.len(), 1);
+        assert!(released(slow[0]), "the item under way is released after it");
     }
 
     /// PRD wsl-device B12: with Runs on placed on a device, a worktree name,
