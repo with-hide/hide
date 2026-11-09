@@ -2,13 +2,14 @@ import { CheckIcon, WaypointsIcon } from "lucide-react";
 import type { Actions } from "./actions";
 import { formatElapsed } from "./components/elapsed";
 import { ProgressCells, TONE_TEXT } from "./components/mission-tone";
+import { PopoverOpenRow } from "./components/popover-open-row";
 import { StatusMark } from "./components/status-mark";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { markdownPlainText } from "./markdownPlain";
-import { useWorkerRow, ResultTail } from "./missionParts";
+import { MissionNumber, useWorkerRow, ResultTail } from "./missionParts";
 import { allAgents } from "./paneAgents";
 import { liveNodes, missionCells, missionNumber, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, type PaneChipState } from "./missions";
 import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";
@@ -20,8 +21,9 @@ import { useShellStore } from "./store";
 // D-01, D-07; PRD mission-plan-visibility B8, B10, B11): in the plan chip's
 // place, the pointer or the keyboard's focus shows the popover, the nodes a
 // worker is at now while the mission runs and what it left once it ends, and
-// a press, Enter or Space on the chip opens the mission's map in the lane's
-// 보기 slot, the one place the map is drawn.
+// a press, Enter or Space on the chip, or the popover's last row `지도 열기 ›`,
+// opens the mission's map in the lane's 보기 slot, the one place the map is
+// drawn.
 
 /** A finished mission's popover lists this many results; `+N` says the rest (B11). */
 export const POPOVER_RESULTS = 3;
@@ -74,18 +76,19 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
           data-pane-mission-chip={mission.id}
           data-mission-chip-state={words.state}
           className={cn(
-            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
+            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
             CHIP_TONE[words.state],
           )}
         >
           <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
           {words.state === "decision" ? <span aria-hidden="true" className="font-semibold" data-mission-chip-decision="true">!</span> : null}
           {/* A narrow pane keeps the mark and the count; the word and the cells come back as it widens, and the chip's name always says them. */}
-          {/* The mission's number stands where the word "mission" stood (`⚑ M39 ●●●●● 1/6`), and a state word (계획 중, 머지 대기) follows it; the chip's name keeps the title. */}
-          {number ? <span className="whitespace-nowrap font-mono" data-mission-number={number}>{number}</span> : null}
+          {/* The mission's number stands where the word "mission" stood (`⚑ M39 · ●●●●● 1/6`): quiet, as a name, then a dot, then the progress in bold, so the two never read as one number. A state word (계획 중, 머지 대기) follows the dot; the chip's name keeps the title. */}
+          {number ? <MissionNumber mission={mission} /> : null}
+          {number ? <span aria-hidden="true" className={cn("text-muted-foreground", !words.counts && "pane-head-narrow:hidden")} data-mission-chip-dot="true">·</span> : null}
           {number && words.key === "mission.chip" ? null : <span className="whitespace-nowrap pane-head-narrow:hidden">{t(words.key)}</span>}
           {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="chip" className="pane-head-narrow:hidden" /> : null}
-          {words.counts ? <span className="font-mono tabular-nums">{words.counts}</span> : null}
+          {words.counts ? <span className="font-mono font-semibold tabular-nums">{words.counts}</span> : null}
         </button>
       </PopoverAnchor>
       <PopoverContent
@@ -99,6 +102,10 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
         <MissionPopover
           paneId={paneId}
           mission={mission}
+          onOpen={() => {
+            chip.close();
+            actions.openMission(mission.id);
+          }}
           onConversation={() => {
             chip.close();
             actions.openAgent(paneId);
@@ -110,40 +117,62 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
 }
 
 /**
- * The popover's body: an open mission's head, its decision, the nodes a
- * worker is at and one tally line (B10); a finished or cancelled mission's
- * head, its report's first lines and what it left (B11). No record footer:
- * the pane ⋯ menu and the sidebar row open the record (B7), and the chip
- * itself opens the map, which the head's end says.
+ * The popover's body (PRD mission-pane-chip B10, B11), headed as the chip is:
+ * the mission's number and title, then one line of its state (the cells and
+ * `n/m` while it runs, `✓ 끝남 · <걸린 시간>` once it ends) and, below it, the
+ * decision, the nodes a worker is at and the tally while it runs, or the
+ * Conductor's report and what it left once it ends. The last row, `지도 열기 ›`,
+ * is the one place that says what to press; no record footer, since the pane
+ * ⋯ menu and the sidebar row open the record (B7).
  */
-export function MissionPopover({ paneId, mission, onConversation }: { paneId: string; mission: Mission; onConversation: () => void }) {
+export function MissionPopover({ paneId, mission, onOpen, onConversation }: { paneId: string; mission: Mission; onOpen: () => void; onConversation: () => void }) {
   const { t } = useInterfaceTranslation();
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const ended = mission.status === "done" || mission.status === "cancelled";
   return (
-    <div className="flex min-w-0 flex-col gap-xs pb-sm [word-break:keep-all]" data-mission-popover={paneId} data-mission-popover-state={ended ? mission.status : "open"}>
-      <div className="flex min-w-0 items-center gap-xs px-sm pt-sm">
-        <span className="min-w-0 flex-1 truncate">{ended ? <EndedHead mission={mission} /> : <OpenHead mission={mission} />}</span>
-        <span className="shrink-0 text-micro text-muted-foreground" data-mission-mini-open="true">{t("mission.mini.open")}</span>
+    <div className="flex min-w-0 flex-col [word-break:keep-all]" data-mission-popover={paneId} data-mission-popover-state={ended ? mission.status : "open"}>
+      <div className="flex min-w-0 flex-col gap-xs px-sm pb-xs pt-sm">
+        <div className="flex min-w-0 items-baseline gap-xs">
+          <MissionNumber mission={mission} />
+          <span className="min-w-0 flex-1 truncate font-semibold" title={mission.title} data-mission-mini-title="true">{mission.title}</span>
+        </div>
+        {ended ? <EndedHead mission={mission} /> : <OpenHead mission={mission} />}
       </div>
-      {device ? <p className="px-sm text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
-      <div className={cn("flex min-w-0 flex-col gap-xs", mission.stale && "opacity-(--opacity-dimmed)")}>
+      {device ? <p className="px-sm pb-xs text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
+      <div className={cn("flex min-w-0 flex-col gap-xs pb-sm", mission.stale && "opacity-(--opacity-dimmed)")}>
         {ended ? <EndedBody mission={mission} /> : <OpenBody mission={mission} onConversation={onConversation} />}
       </div>
+      <PopoverOpenRow label={t("mission.mini.open")} onClick={onOpen} data-mission-mini-open="true" />
     </div>
   );
 }
 
-/** `미션 n/m` while it runs, else the chip's own state word (B10). */
+/** The state word each chip state reads as in the popover's head (the pill words of the map). */
+const HEAD_WORD = {
+  planning: "mission.pill.planning",
+  running: "mission.pill.running",
+  decision: "mission.pill.running",
+  merge_wait: "mission.pill.mergeWait",
+  done: "mission.pill.done",
+  cancelled: "mission.pill.cancelled",
+} as const satisfies Record<PaneChipState, string>;
+
+/** `진행 중 ●●●○ 8/11` and, under it, the tally; nothing before the first plan, whose line is `계획 중` below (B10). */
 function OpenHead({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
+  if (mission.nodes.length === 0) return null;
   // The head reads the mission's own state; the decision has its own line below it.
   const head = paneChipWords({ ...mission, decision: null });
+  const { done, next } = missionTally(mission);
   return (
-    <span className="text-muted-foreground" data-mission-mini-head={head.state}>
-      {t(head.key)}
-      {head.counts ? <span className="ml-xxs font-semibold tabular-nums text-foreground">{head.counts}</span> : null}
-    </span>
+    <div className="flex min-w-0 flex-col gap-xs" data-mission-mini-head={head.state}>
+      <span className="flex min-w-0 items-center gap-sm">
+        <span className="shrink-0 text-muted-foreground">{t(HEAD_WORD[head.state])}</span>
+        <ProgressCells tones={missionCells(mission)} size="head" />
+        {head.counts ? <span className="shrink-0 font-semibold tabular-nums text-foreground">{head.counts}</span> : null}
+      </span>
+      <span className="text-muted-foreground" data-mission-mini-tally={`${done} ${next}`}>{t("mission.mini.tally", { done, next })}</span>
+    </div>
   );
 }
 
@@ -166,7 +195,6 @@ function EndedHead({ mission }: { mission: Mission }) {
 function OpenBody({ mission, onConversation }: { mission: Mission; onConversation: () => void }) {
   const { t } = useInterfaceTranslation();
   const live = liveNodes(mission);
-  const { done, next } = missionTally(mission);
   const deciding = mission.decision !== null && missionOpen(mission);
   return (
     <>
@@ -183,16 +211,11 @@ function OpenBody({ mission, onConversation }: { mission: Mission; onConversatio
       ) : null}
       {mission.nodes.length === 0 ? (
         <p className="px-sm text-muted-foreground" data-mission-mini-planning="true">{t("mission.planning")}</p>
-      ) : (
-        <>
-          {live.length > 0 ? (
-            <ul className="flex min-w-0 flex-col px-xs">
-              {live.map((node) => <LiveRow key={node.key} node={node} />)}
-            </ul>
-          ) : null}
-          <p className="px-sm text-muted-foreground" data-mission-mini-tally={`${done} ${next}`}>{t("mission.mini.tally", { done, next })}</p>
-        </>
-      )}
+      ) : live.length > 0 ? (
+        <ul className="flex min-w-0 flex-col px-xs">
+          {live.map((node) => <LiveRow key={node.key} node={node} />)}
+        </ul>
+      ) : null}
     </>
   );
 }
