@@ -128,7 +128,6 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     devices: Vec<DeviceSnapshot> => s.devices,
     workspaces: Vec<WorkspaceSnapshot> => s.workspaces,
     inactive_projects: Vec<InactiveProjectGroupSnapshot> => s.inactive_projects,
-    no_agent_projects: Vec<InactiveProjectGroupSnapshot> => s.no_agent_projects,
     agents: Vec<SidebarAgentSnapshot> => s.agents,
     hide_ai_checkouts: Vec<HideAiCheckoutSnapshot> => s.hide_ai_checkouts,
     sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot> => s.sleeping_sessions,
@@ -145,6 +144,7 @@ section!(TerminalSections, TerminalSnapshot, s, {
 }, {});
 
 section!(StatusSections, StatusSnapshot, s, {
+    start_profiles: BTreeMap<String, StartProfilesSnapshot> => s.start_profiles,
     server_discovery: ServerDiscoverySnapshot => s.server_discovery,
     tab_rename: Option<TabRenameSnapshot> => s.tab_rename,
     engine as "herdr": ProviderStatusSnapshot => s.engine,

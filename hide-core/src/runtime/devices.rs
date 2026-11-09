@@ -404,6 +404,7 @@ impl Runtime {
                 }
             }
         }
+        self.refresh_start_profile_catalog();
         self.reconcile_remote_terminal_panes(device_id, &HashSet::new(), &HashSet::new());
         if self.look.front() == Some(device_id) {
             self.set_front_device(Some(self.node.as_str().to_owned()));
@@ -969,13 +970,10 @@ impl Runtime {
         // project registrations, expanded folders and file tabs. Its
         // panes, agents and folders are not touched.
         let theirs = |id: &str| crate::address::device_of(id) == Some(device_id);
-        let device_folds = [
-            format!("cleanup/{}", device_id),
-            crate::project_context::no_agents_fold_key(device_id),
-        ];
+        let device_fold = format!("cleanup/{}", device_id);
         self.snapshot.ui_state.session_open_folds.retain(|key| {
             let project = key.strip_prefix("asleep/").unwrap_or(key);
-            !theirs(project) && !device_folds.contains(key)
+            !theirs(project) && *key != device_fold
         });
         let registrations = self.snapshot.ui_state.workspace_registrations.len();
         self.snapshot
@@ -997,6 +995,9 @@ impl Runtime {
         self.forget_device_views(device_id);
         self.forget_device_sleep(device_id);
         self.forget_device_launches(device_id);
+        self.profile_holds.forget(device_id);
+        self.wrapper_folders
+            .retain(|(machine, _), _| machine != device_id);
         self.forget_recent_checkouts(|held| held.device_id == device_id);
         self.rebuild_device_rows();
         self.rebuild_tab_strips();

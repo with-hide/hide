@@ -9,7 +9,7 @@ import path from "node:path";
 import { openProject, withControl } from "./daemon-actions";
 import { startEngine, startFixture } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
-import { countSent, registerFolder, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
+import { countSent, projectOpener, registerFolder, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
 import { chord } from "./chords";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { onDisk } from "./wait";
@@ -43,7 +43,7 @@ test("History opens a scoped patch, then updates after editing the original file
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "history-repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "history-repo" })))).click({ position: { x: 12, y: 8 } });
     // The tool column holds one tool; Changes swaps the Explorer out (PRD
     // lane-two-columns B14).
     await showExplorer(page);
@@ -139,8 +139,8 @@ test("registered subfolder History opens inside patches and hides sibling change
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await registerFolder(page, daemon, registered);
     await expect.poll(() => sent.get("create_workspace") ?? 0).toBe(1);
-    const project = await showProjectRow(page, page.locator("[data-project]", { hasText: "registered" }));
-    await project.locator("[data-checkout]").first().click();
+    const project = page.locator("[data-project]", { hasText: "registered" });
+    await (await showProjectRow(page, projectOpener(project))).click({ position: { x: 12, y: 8 } });
     await showTool(page, "changes");
     const history = page.locator('[data-history-root]');
     await expect(history).toHaveAttribute("data-history-root", toPage(registered));

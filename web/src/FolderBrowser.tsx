@@ -164,8 +164,8 @@ export function FolderBrowser(props: FolderBrowserProps) {
     if (chosen && !chosen.is_directory) return { path: "", label: "", problem: t("addProject.browse.file"), note: null };
     const path = chosen ? childPath(listing.path, chosen.name) : listing.path;
     const label = chosen ? childPath(listing.label, chosen.name) : listing.label;
-    if (mode === "add" && alreadyRegistered(path, device, registrations)) return { path, label, problem: t("addProject.browse.added"), note: null };
-    return { path, label, problem: null, note: null };
+    if (mode === "add" && alreadyRegistered(path, device, registrations)) return { path, label, problem: null, note: t("addProject.browse.added"), existing: true };
+    return { path, label, problem: null, note: null, existing: false };
   })();
   // A typed folder the list does not show yet, still settling or named nowhere, is not what Add would take.
   const settling = typedRequest !== null && !following && outside === null;
@@ -337,11 +337,12 @@ export function FolderBrowser(props: FolderBrowserProps) {
               <>
                 <span className="min-w-0 truncate font-mono text-foreground">{target.label}</span>
                 <DeviceChip label={deviceLabel} local={local} variant="inline" className="shrink-0" />
+                {target.existing ? <span className="shrink-0" data-folder-browser-existing="true">{target.note}</span> : null}
               </>
             ) : null}
           </span>
           <Button type="button" disabled={!ready} onClick={submit} data-folder-browser-submit={mode}>
-            {mode === "pick" ? t("addProject.browse.useLocation") : t("common.add")}
+            {mode === "pick" ? t("addProject.browse.useLocation") : target?.existing ? t("addProject.browse.goTo") : t("common.add")}
           </Button>
         </div>
         {status}

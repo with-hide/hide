@@ -93,6 +93,12 @@ pub struct ListedProfile {
     /// Empty for a profile in the agent's default account.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub account_variables: Vec<(String, String)>,
+    /// The account it runs in, as this node's `resolve` keyed it (D-12,
+    /// D-15): the core compares accounts by it and never keys one itself.
+    /// `None` for a profile that does not resolve on this node, which no
+    /// start can take; protocol 92 (`crate::protocol::PROTOCOL_VERSION`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<AccountKey>,
 }
 
 /// What a node found of a profile account's sign-in.
@@ -285,6 +291,7 @@ mod tests {
             place: None,
             login,
             account_variables: variables,
+            account_key: None,
         }
     }
 
@@ -300,12 +307,19 @@ mod tests {
         let read: ListedProfile = serde_json::from_value(older.clone()).unwrap();
         assert_eq!(read, listed(None, Vec::new()));
         assert_eq!(serde_json::to_value(&read).unwrap(), older);
-        let newer = listed(
-            Some(ProfileLogin::SignedOut),
-            vec![("CLAUDE_CONFIG_DIR".into(), "/accounts/claude-a".into())],
-        );
+        let newer = ListedProfile {
+            account_key: Some(AccountKey::Folder("/accounts/claude-a".into())),
+            ..listed(
+                Some(ProfileLogin::SignedOut),
+                vec![("CLAUDE_CONFIG_DIR".into(), "/accounts/claude-a".into())],
+            )
+        };
         let written = serde_json::to_value(&newer).unwrap();
         assert_eq!(written["login"], "signed_out");
+        assert_eq!(
+            written["account_key"],
+            serde_json::json!({"folder": "/accounts/claude-a"})
+        );
         assert_eq!(
             serde_json::from_value::<ListedProfile>(written).unwrap(),
             newer

@@ -2427,7 +2427,6 @@ impl Runtime {
             permissions: self.agent_permissions_of(device),
             on_node,
             node,
-            profiles: self.machine_profiles(device).cloned(),
         })
     }
 }
@@ -2505,10 +2504,6 @@ pub(crate) struct CoordinationContext {
     /// pane's shell is reading; none for a device whose helper is not
     /// connected now, since a spawn starts no helper.
     pub(crate) node: Option<Arc<dyn crate::node_access::NodeLink>>,
-    /// The machine's agent profiles as its node last listed them, which a
-    /// spawn's profile is picked from (PRD agent-profiles D-32); `None` until
-    /// they were read.
-    pub(crate) profiles: Option<crate::model::ProfilesSnapshot>,
 }
 
 #[cfg(test)]
@@ -3580,6 +3575,88 @@ pub(crate) mod tests {
         drop(worker);
     }
 
+    /// `hide agent show` names an agent as a letter names its recipient, by
+    /// its id, its name or its pane, and an agent that ended there is
+    /// answered `ended` however it is named. Of several registrations a name
+    /// or a pane has named, the live one is answered, else the last that
+    /// ended; a key that names no agent and no spawn is `agent_unavailable`
+    /// (with-hide/hide#2299).
+    #[test]
+    fn an_agent_that_ended_is_shown_ended_by_its_id_name_or_pane() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, target, path) = fixture(root.path());
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        runtime.lock().unwrap().install_delivery_client(client);
+        let context = authority(&target.actor).context;
+        let ask = |id: &str| {
+            let prepared = runtime.lock().unwrap().prepare_delivery(
+                crate::node::TEST_NODE,
+                "sender",
+                &context,
+                None,
+                Command::Agents {
+                    command: crate::coordination::Command::Show { id: id.into() },
+                },
+            )?;
+            prepared.run(Duration::from_secs(5))
+        };
+        let shown = |key: &str| {
+            let shown = ask(key).unwrap();
+            (
+                shown["id"].as_str().unwrap().to_owned(),
+                shown["runtime"].as_str().unwrap().to_owned(),
+                shown["state"]["lifecycle"].as_str().unwrap().to_owned(),
+            )
+        };
+        let ended = |id: &str| (id.to_owned(), "ended".to_owned(), "ended".to_owned());
+        let register = |id: &str, pane: &str, ended: bool| {
+            let mut guard = runtime.lock().unwrap();
+            let actor = guard.delivery_observations[pane].actor.clone();
+            let mut ledger = (*guard.delivery_state().unwrap()).clone();
+            ledger.agents.push(crate::coordination::AgentRecord {
+                id: id.into(),
+                name: Some("reviewer".into()),
+                machine: crate::node::TEST_NODE.into(),
+                host_scope: "fixture-scope".into(),
+                native_machine: "fixture-machine".into(),
+                session: format!("{pane}-session"),
+                instance: format!("terminal-{pane}"),
+                pane: pane.into(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor,
+                ended,
+                terminal_id: None,
+                forked: false,
+            });
+            guard.delivery_ledger = Ok(Arc::new(ledger));
+        };
+        register("agent-7", "recipient", true);
+        for key in ["agent-7", "reviewer", "recipient"] {
+            assert_eq!(shown(key), ended("agent-7"), "{key}");
+        }
+        // The name and the pane went to a later agent that ended too: they
+        // answer the last, and the earlier stays shown by its id.
+        register("agent-8", "recipient", true);
+        assert_eq!(shown("reviewer"), ended("agent-8"));
+        assert_eq!(shown("recipient"), ended("agent-8"));
+        assert_eq!(shown("agent-7"), ended("agent-7"));
+        // A live agent of the name is the one the name answers.
+        register("agent-9", "sender", false);
+        assert_eq!(shown("reviewer").0, "agent-9");
+        assert_ne!(shown("reviewer").1, "ended");
+        assert_eq!(shown("recipient"), ended("agent-8"));
+        // The number alone is no id.
+        assert_eq!(ask("7").err().as_deref(), Some("agent_unavailable"));
+        drop(worker);
+    }
+
     #[test]
     fn only_a_prompt_hook_of_the_panes_own_session_is_a_submission() {
         let root = tempfile::tempdir().unwrap();
@@ -4390,7 +4467,7 @@ pub(crate) mod tests {
                 actor: None,
             },
             Command::Agents {
-                command: crate::coordination::Command::List,
+                command: crate::coordination::Command::List { live: false },
             },
         ];
         let mut guard = runtime.lock().unwrap();

@@ -11,7 +11,7 @@ import { closePane, focusTab, newTab, openProject, openWorktree, viewPane, withC
 import { agentReading, elsewhereTab, finishUnseenTurn, labelAgentPane, setAgentAsking, setAgentState, spawnChild, startAgentIn, startAgentInProject } from "./fixture-agents";
 import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, keyboardFocus, rest, rowGeometry, screenshot, sendEvent, sidebarColumns, sidebarOverflow, sidebarRowsFit } from "./wire";
+import { countSent, keyboardFocus, openOtherCheckouts, rest, rowGeometry, screenshot, sendEvent, sidebarColumns, sidebarOverflow, sidebarRowsFit } from "./wire";
 import { chord } from "./chords";
 import { animationsFinished, quietFor } from "./wait";
 import { afterCleanup } from "./worker-owned";
@@ -104,6 +104,9 @@ test("a delegated-child-only checkout follows the front checkout across project 
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature/sidebar-rows"]') });
     const toggle = project.locator("[data-project-toggle]");
     const projectRow = project.locator("[data-project-row]");
+    // The worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    // The fold is the core's, so it stays open while the worktree's row leaves and returns below.
+    await openOtherCheckouts(project);
     await expect(feature.locator("[data-checkout]")).toBeVisible({ timeout: 30_000 });
     await feature.locator("[data-checkout]").click();
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
@@ -182,6 +185,9 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
     const projectToggle = project.locator("[data-project-toggle]");
     await expect(projectToggle).toHaveAttribute("aria-expanded", "true");
+    // Every checkout but the main one, with or without an agent, waits in the project's Checkouts fold.
+    const checkouts = project.locator("[data-other-checkouts]");
+    await openOtherCheckouts(project);
     const primary = project.locator("[data-checkout-row]", { hasText: /^main/ });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="feature/sidebar-rows"]`) });
     await expect(primary.locator("[data-checkout]")).toHaveAttribute("data-checkout-kind", "primary");
@@ -237,18 +243,18 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const primaryMenu = page.getByRole("menu", { name: "main actions" });
     const beforeLooking = new Map(sent);
     await rest(page);
-    const atRest = await rowGeometry(primaryRow, feature, primaryParts);
+    const atRest = await rowGeometry(primaryRow, checkouts, primaryParts);
     expect(await projectButtonFills(page)).toBe(true);
     await expect(primaryToggle).toHaveCSS("opacity", "1");
     await expect(projectToggle).toHaveCSS("opacity", "0");
     await expect(page.locator("[data-project-list]").getByRole("button", { name: /actions$/ })).toHaveCount(0);
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(projectToggle).toHaveCSS("opacity", "1");
     await primaryRow.hover();
-    expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
+    expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);
     await rest(page);
     await keyboardFocus(page, primary.locator("[data-checkout]"));
-    expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
+    expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);
     await page.keyboard.press("Shift+F10");
     await expect(primaryMenu).toBeVisible();
     await page.keyboard.press("Escape");
@@ -257,7 +263,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await primaryRow.click({ button: "right" });
     await expect(primaryMenu).toBeVisible();
     await expect(primary.locator("[data-checkout-age]")).toHaveCSS("opacity", "1");
-    expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
+    expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);
     await screenshot(page, "projects-sidebar-menu-open");
     await page.keyboard.press("Escape");
     await expect(primaryMenu).toHaveCount(0);
@@ -299,16 +305,14 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(primaryToggle).toHaveAttribute("aria-expanded", "false");
     await expect(primary.locator("[data-purpose]")).toHaveText("메인 체크아웃 정리");
     await rest(page);
-    expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
+    expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);
 
-    // An unvisited agentless checkout uses the same single-line row height.
+    // An unvisited agentless checkout, in the same Checkouts fold, uses the same single-line row height.
     // Opening it draws no collection header: it holds no named group for an
     // ungrouped header to be told apart from, and it has no rows at all
     // (group-tabs D-14).
-    await project.locator("[data-empty-worktrees]").click();
     const emptyRow = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="empty"]') });
     const emptyButton = emptyRow.locator("[data-checkout]");
-    await expect(emptyRow.locator("[data-checkout-toggle]")).toHaveCount(0);
     expect((await emptyButton.boundingBox())!.height).toBe(await emptyButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await emptyButton.click();
     await expect(emptyButton).toHaveAttribute("aria-current", "true");
@@ -329,21 +333,21 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(feature.locator("[data-checkout-status]")).toHaveCount(0);
     await expect(feature.locator("[data-purpose]")).toHaveCount(0);
     await expect(feature.locator("[data-checkout-age]")).toBeVisible();
-    // Indent D (sidebar-quiet-mark-indent B10-B12): a project with checkouts
-    // draws no glyph, so its name and its checkouts' glyphs share one column;
-    // a checkout's name starts the next, and while the checkout holds no named
-    // group its agents' marks stand on that name column too, with no collection
-    // header and no collection indent of their own (group-tabs D-14).
-    // A title still follows its mark by the mark and one gap.
+    // Indent D (sidebar-quiet-mark-indent B10-B12): a project row wears its own
+    // mark (a Git project's folder with the branch mark), and its checkouts stand
+    // one step (8px) to the right of it; a checkout's name starts the next column, and while the
+    // checkout holds no named group its agents' marks stand on that name column
+    // too, with no collection header and no collection indent of their own
+    // (group-tabs D-14). A title still follows its mark by the mark and one gap.
     await expect(feature.locator("[data-sidebar-named-group]")).toHaveCount(0);
-    await expect(project.locator("[data-project-row] svg")).toHaveCount(0);
+    await expect(project.locator("[data-project-row] svg")).toHaveCount(1);
     const left = async (part: Locator) => (await part.boundingBox())!.x;
-    const projectName = await left(project.locator("[data-project-row] [data-row-name]"));
+    const projectMark = await left(project.locator("[data-project-mark]"));
     const checkoutGlyph = await left(feature.locator("[data-checkout-glyph]"));
     const checkoutName = await left(feature.locator("[data-checkout-menu] [data-row-name]"));
     const agentMark = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-status-mark]`));
     const agentTitle = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-title]`));
-    expect([checkoutGlyph - projectName, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([0, 18, 0, 16]);
+    expect([checkoutGlyph - projectMark, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([8, 17, 0, 16]);
     expect((await featureButton.boundingBox())!.height).toBe(await featureButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await screenshot(page, "projects-sidebar-open");
 
@@ -536,7 +540,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
   }
 });
 
-test("Needs You and Unread are raised above Pinned and stay in their tree, whatever is folded", async ({ page }) => {
+test("Needs You and Unread are raised above the projects and stay in their tree, whatever is folded", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   const fixture = await startFixture();
   let daemon: Daemon | null = null;
@@ -559,8 +563,8 @@ test("Needs You and Unread are raised above Pinned and stay in their tree, whate
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^raised/ }) });
     await project.locator("[data-project-row]").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-    const pinned = page.locator('[data-section="pinned"]');
-    await expect(pinned).toBeVisible();
+    // A pinned project stands first and sets no header of its own; its pin waits for the pointer.
+    await expect(project).toHaveAttribute("data-project-pinned", "true");
     // Nothing needs the operator yet: no raised section is drawn.
     await expect(page.locator("[data-raised-group]")).toHaveCount(0);
 
@@ -573,17 +577,19 @@ test("Needs You and Unread are raised above Pinned and stay in their tree, whate
     const needsYou = page.locator('[data-raised-group="needs_you"]');
     const done = page.locator('[data-raised-group="done"]');
     await expect(needsYou.locator(`[data-pane="${asking}"]`)).toBeVisible({ timeout: 20_000 });
-    await expect(needsYou.locator('[data-section="needs_you"]')).toHaveText("Needs You · 1");
+    await expect(needsYou.locator('[data-raised-fold="needs_you"]')).toHaveAccessibleName("Needs You 1");
     await expect(done.locator(`[data-pane="${finished}"]`)).toBeVisible();
-    await expect(done.locator('[data-section="done"]')).toHaveText("Unread · 1");
-    // Needs You, then Done, then Pinned, at the top of the list; neither is past its cap, so nothing folds.
+    await expect(done.locator('[data-raised-fold="done"]')).toHaveAccessibleName("Unread 1");
+    // Needs You, then Done, then the projects, at the top of the one list; neither is past its cap, so nothing folds.
+    // A section is its head's `display: contents` item, so its place is its head's and its first row's.
     const top = async (locator: Locator) => (await locator.boundingBox())!.y;
-    expect(await top(needsYou)).toBeLessThan(await top(done));
-    expect(await top(done)).toBeLessThan(await top(pinned));
+    expect(await top(needsYou.locator('[data-raised-fold="needs_you"]'))).toBeLessThan(await top(done.locator('[data-raised-fold="done"]')));
+    expect(await top(done.locator('[data-raised-fold="done"]'))).toBeLessThan(await top(project.locator("[data-project-row]")));
     await expect(page.locator("[data-raised-more]")).toHaveCount(0);
-    await expect(page.locator("[data-raised-list] > li").first()).toHaveAttribute("data-raised-group", "needs_you");
-    // The raised row names where the agent runs, as the Agents list does.
-    await expect(needsYou.locator(`[data-pane="${asking}"] [data-agent-place]`)).toHaveText("raised › main");
+    await expect(page.locator("[data-project-list] > li[data-raised-group]").first()).toHaveAttribute("data-raised-group", "needs_you");
+    // The raised row names its project on its first line, as the Agents list's place line does.
+    await expect(needsYou.locator(`[data-pane="${asking}"] [data-agent-place-head]`)).toHaveAttribute("data-agent-place-head", "raised › main");
+    await expect(needsYou.locator(`[data-pane="${asking}"] [data-agent-place-head]`)).toHaveText("raised");
 
     // The agent stays in its checkout tree too.
     const checkoutToggle = project.locator("[data-checkout-toggle]");
@@ -615,7 +621,7 @@ test("Needs You and Unread are raised above Pinned and stay in their tree, whate
   }
 });
 
-// docs/UI_BEHAVIOR.md, The sidebar list: Needs You and Done stand still above the projects.
+// docs/UI_BEHAVIOR.md, The sidebar list: Needs You and Done are the list's first sections, their heads stuck at its top.
 test("Done stands still above the scrolled projects, and opening its first row moves the next one up into its place", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 560 });
   const fixture = await startFixture();
@@ -630,16 +636,18 @@ test("Done stands still above the scrolled projects, and opening its first row m
     await finishUnseenTurn(fixture, live, panes[3]!, elsewhere);
     await finishUnseenTurn(fixture, live, panes[4]!, elsewhere);
     const done = page.locator('[data-raised-group="done"]');
-    await expect(done.locator('[data-section="done"]')).toHaveText("Unread · 2", { timeout: 20_000 });
+    // The section is a `display: contents` item, so its place is its sticky head's.
+    const head = page.locator('[data-section="done"]');
+    await expect(done.locator('[data-raised-fold="done"]')).toHaveAccessibleName("Unread 2", { timeout: 20_000 });
     const list = page.locator("[data-project-list]");
     expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
 
-    // The projects scroll under Done, which stays where it stood.
+    // The projects scroll under Done's head, which stays where it stood.
     const top = async (locator: Locator) => Math.round((await locator.boundingBox())!.y);
-    const held = await top(done);
+    const held = await top(head);
     await list.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
     await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-    expect(await top(done)).toBe(held);
+    expect(await top(head)).toBe(held);
     await list.evaluate((element) => element.scrollTo({ top: 0 }));
 
     // Opening the first Done row reads it: it leaves Done, and the second row stands where the first stood.
@@ -649,8 +657,8 @@ test("Done stands still above the scrolled projects, and opening its first row m
     const slot = await top(rows.first());
     await rows.first().locator("[data-agent-open]").click();
     await expect(done.locator(`[data-pane="${first}"]`)).toHaveCount(0, { timeout: 20_000 });
-    await expect(done.locator('[data-section="done"]')).toHaveText("Unread · 1");
-    expect(await top(done)).toBe(held);
+    await expect(done.locator('[data-raised-fold="done"]')).toHaveAccessibleName("Unread 1");
+    expect(await top(head)).toBe(held);
     expect(await top(done.locator(`li[data-pane="${second}"]`))).toBe(slot);
     await screenshot(page, "projects-raised-held");
   } finally {
@@ -673,9 +681,9 @@ function projectItem(page: Page, name: string): Locator {
   return page.locator("nav[data-sidebar] [data-project]").filter({ has: page.locator("[data-row-name]", { hasText: new RegExp(`^${name}$`) }) });
 }
 
-// PRD sidebar-titlebar-refresh B1-B3: the fold and the weight are the core's
-// decisions, which the list draws and a reload keeps.
-test("projects without agents fold under No agents, and only a working agent brightens a project's name", async ({ page }) => {
+// PRD sidebar-titlebar-refresh B1-B3: a project with no agent is an ordinary row,
+// and the weight is the core's decision, which the list draws.
+test("a project without agents is an ordinary row, and a working agent leaves a project's name as it was", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   const fixture = await startFixture();
   let daemon: Daemon | null = null;
@@ -688,32 +696,17 @@ test("projects without agents fold under No agents, and only a working agent bri
     const { pane: busyPane, project: busyProject } = await projectAt(fixture, live, repoAt(fixture, "busy-repo"), "빌드 고치기");
     await open(page, daemon);
 
-    // B1: the agentless project is counted in the fold after the projects with agents, and not drawn.
+    // B1: the agentless project is an ordinary row beside the project with an agent: no fold holds it back.
     const busy = projectItem(page, "busy-repo");
     const quiet = projectItem(page, "quiet-notes");
-    const fold = page.locator("[data-no-agent-projects]");
     await expect(busy).toBeVisible({ timeout: 20_000 });
-    // The project in front is never folded, so the Workspace in front is busy-repo's.
-    await busy.locator("[data-checkout]").first().click();
-    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
-    await expect(fold).toHaveText(/^No agents 1$/);
-    await expect(fold).toHaveAttribute("aria-expanded", "false");
-    await expect(quiet).toHaveCount(0);
-    expect((await fold.boundingBox())!.y).toBeGreaterThan((await busy.boundingBox())!.y);
-
-    // B2: opened, it shows the project as an ordinary row, and the core keeps it open across a reload.
-    await fold.click();
-    await expect(fold).toHaveAttribute("aria-expanded", "true");
     await expect(quiet).toBeVisible();
-    await screenshot(page, "projects-no-agents-open");
-    await page.reload();
-    await expect(fold).toHaveAttribute("aria-expanded", "true", { timeout: 20_000 });
-    await expect(quiet).toBeVisible();
+    await screenshot(page, "projects-no-agents");
 
-    // B3: an idle agent leaves the project's label muted; a working one
-    // brightens it to the ordinary text colour while its one 600 weight stays,
-    // because the label is what tells one project's block from the next
-    // (group-tabs D-16).
+    // B3: the core's `working` still reaches the row as `data-project-weight`, but the
+    // label is the ordinary text colour in its one 600 weight whether or not an agent
+    // works, because the badge says that and the label is what tells one project's
+    // block from the next (group-tabs D-16).
     const toneOf = async (token: string) => page.evaluate((name) => {
       const probe = document.createElement("span");
       probe.style.color = `var(${name})`;
@@ -725,9 +718,10 @@ test("projects without agents fold under No agents, and only a working agent bri
     const weight = busy.locator("[data-project-weight]");
     await expect(weight).toHaveAttribute("data-project-weight", "quiet");
     await expect(weight).toHaveCSS("font-weight", "600");
-    await expect(weight).toHaveCSS("color", await toneOf("--muted-foreground"));
+    await expect(weight).toHaveCSS("color", await toneOf("--foreground"));
     await setAgentState(live, busyPane, "working");
     await expect(weight).toHaveAttribute("data-project-weight", "working", { timeout: 20_000 });
+    await expect(weight).toHaveCSS("font-weight", "600");
     await expect(weight).toHaveCSS("color", await toneOf("--foreground"));
     await expect(quiet.locator("[data-project-weight]")).toHaveAttribute("data-project-weight", "quiet");
 
@@ -743,9 +737,9 @@ test("projects without agents fold under No agents, and only a working agent bri
         return !pane || pane.transport_state === "released";
       }, "the background shell outside the attach window");
     });
-    // B2: an agent started in the folded project takes it out of the fold, which goes with its last project.
+    // B2: an agent started in the agentless project shows in its row, in its place in the list.
     await startAgentIn(fixture, live, quietPane);
-    await expect(fold).toHaveCount(0, { timeout: 20_000 });
+    await expect(quiet.locator("li[data-pane]")).toHaveCount(1, { timeout: 20_000 });
     await expect(quiet).toBeVisible();
   } finally {
     await daemon?.stop();
@@ -802,19 +796,22 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     const pair = project.locator("[data-row-actions]");
     await expect(row).toBeVisible({ timeout: 20_000 });
     await rest(page);
-    const name = row.locator("[data-row-name]");
-    const nameWidth = (await name.boundingBox())!.width;
+    // The pair waits unseen until the pointer or the keyboard comes.
     await expect(pair).toHaveCSS("opacity", "0");
 
-    // B6: the pointer shows the pair and the name keeps its width.
+    // B6: the pointer shows the pair.
     await row.hover();
     await expect(pair).toHaveCSS("opacity", "1");
-    expect((await name.boundingBox())!.width).toBe(nameWidth);
     await screenshot(page, "projects-row-actions-hover");
     await rest(page);
     await expect(pair).toHaveCSS("opacity", "0");
 
-    // B8: each has its own name, and the keyboard reaches and presses them.
+    // Focus on the row's button draws the pair.
+    await keyboardFocus(page, row);
+    await expect(pair).toHaveCSS("opacity", "1");
+    await rest(page);
+    // B8: each has its own name, and the keyboard reaches and presses them,
+    // from outside the row too, as a closing dialog hands focus back to one.
     await expect(start).toHaveAccessibleName("Start agent in tools-repo");
     await expect(more).toHaveAccessibleName("More actions for tools-repo");
     await keyboardFocus(page, start);
@@ -830,6 +827,7 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     await row.click({ button: "right" });
     const contextItems = await page.locator('[role="menu"] [data-menu-item]').evaluateAll((items) => items.map((item) => item.getAttribute("data-menu-item")));
     await page.keyboard.press("Escape");
+    await keyboardFocus(page, row);
     await keyboardFocus(page, more);
     await page.keyboard.press("Space");
     const menu = page.locator('[role="menu"]');
@@ -847,8 +845,8 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
   }
 });
 
-// PRD sidebar-titlebar-refresh B9, B10.
-test("section headers stay at the top of the scrolled list, and a row the keyboard reaches is not under one", async ({ page }) => {
+// PRD sidebar-titlebar-refresh B9, B10: the heads that stick are the raised sections' (Needs You, Done).
+test("a section head stays at the top of the scrolled list, and a row the keyboard reaches is not under one", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 560 });
   const fixture = await startFixture();
   let daemon: Daemon | null = null;
@@ -858,61 +856,56 @@ test("section headers stay at the top of the scrolled list, and a row the keyboa
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
     daemon = await startHided(fixture, "projects-sticky", fixture.root);
-    for (const name of names) await projectAt(fixture, daemon, repoAt(fixture, name), `${name} 작업`);
+    const live = daemon;
+    const panes: string[] = [];
+    for (const name of names) panes.push((await projectAt(fixture, live, repoAt(fixture, name), `${name} 작업`)).pane);
     await open(page, daemon);
     await expect(projectItem(page, "echo-repo")).toBeVisible({ timeout: 20_000 });
     await projectItem(page, "alpha-repo").locator("[data-project-row]").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-    const pinned = page.locator('[data-section="pinned"]');
-    const recent = page.locator('[data-section="recent"]');
-    // B9: the Pinned header carries the pin, and the pinned row none.
-    await expect(pinned.locator("[data-section-pin]")).toBeVisible();
-    await expect(projectItem(page, "alpha-repo").locator("svg.lucide-pin")).toHaveCount(0);
+    // B9: a pinned row stands first with no head of its own; its pin waits for the pointer.
+    await expect(projectItem(page, "alpha-repo")).toHaveAttribute("data-project-pinned", "true");
+    await expect(projectItem(page, "bravo-repo")).not.toHaveAttribute("data-project-pinned", "true");
+    // Two finished turns the operator has not seen make the Done section, the one head in the list.
+    const elsewhere = await elsewhereTab(fixture, live);
+    await finishUnseenTurn(fixture, live, panes[3]!, elsewhere);
+    await finishUnseenTurn(fixture, live, panes[4]!, elsewhere);
+    const head = page.locator('[data-section="done"]');
+    await expect(head.locator('[data-raised-fold="done"]')).toHaveAccessibleName("Unread 2", { timeout: 20_000 });
+    await expect(page.locator("[data-section-sticky]")).toHaveCount(1);
 
-    // B9: scrolled to the end, the Projects header is stuck at the list's top with its hairline, the Pinned one pushed off.
+    // B9: scrolled to the end, the Done head is stuck at the list's top while the projects pass under it.
     const list = page.locator("[data-project-list]");
     await list.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
-    await expect(recent).toHaveAttribute("data-stuck", "true");
+    await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const listTop = (await list.boundingBox())!.y;
-    const header = (await recent.boundingBox())!;
-    expect(Math.round(header.y)).toBe(Math.round(listTop));
-    await expect(recent).toHaveCSS("border-bottom-width", "1px");
-    expect((await pinned.boundingBox())!.y + (await pinned.boundingBox())!.height).toBeLessThanOrEqual(listTop + 0.5);
+    await expect.poll(async () => Math.round((await head.boundingBox())!.y)).toBe(Math.round(listTop));
     await screenshot(page, "projects-sticky-header");
 
-    // B10: the keyboard brings the first project under the header into view below it, whole.
-    const first = recent.locator("xpath=..").locator("[data-project-row]").first();
+    // B10: the keyboard brings the first project row under the head into view below it, whole.
+    const first = page.locator("[data-project-list] > li[data-project] [data-project-row]").first();
+    // The pin's menu returned focus to this row, and focusing a focused element scrolls nothing.
+    await first.evaluate((element) => element.blur());
     await keyboardFocus(page, first);
-    const row = (await first.boundingBox())!;
-    const stuck = (await recent.boundingBox())!;
-    expect(row.y).toBeGreaterThanOrEqual(stuck.y + stuck.height - 0.5);
+    await expect.poll(async () => (await first.boundingBox())!.y).toBeGreaterThanOrEqual((await head.boundingBox())!.y + (await head.boundingBox())!.height - 0.5);
 
-    // Keep the cached paint marker stale while a real core focus change arrives.
-    // The first agent fits in the viewport but is covered by the header.
-    const target = recent.locator("xpath=..").locator("[data-agent-open]").first();
+    // A real core focus change brings its row in below the head too: the first tree agent fits in
+    // the viewport but is covered by the head.
+    const target = page.locator("[data-project-list] > li[data-project] [data-agent-open]").first();
     await target.evaluate((element) => {
       const list = element.closest<HTMLElement>("[data-project-list]")!;
       list.scrollTop += element.getBoundingClientRect().top - list.getBoundingClientRect().top - 4;
-      const headers = [...list.querySelectorAll<HTMLElement>("[data-section-sticky]")];
-      const stale = () => { for (const header of headers) if (header.dataset.stuck !== "false") header.dataset.stuck = "false"; };
-      stale();
-      const observer = new MutationObserver(stale);
-      for (const header of headers) observer.observe(header, { attributes: true, attributeFilter: ["data-stuck"] });
-      // Fixture ends with this page; keep other animation frames and core deltas live.
-      window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
     });
-    await expect(recent).toHaveAttribute("data-stuck", "false");
     await expect(target).not.toHaveAttribute("aria-current", "true");
     const covered = (await target.boundingBox())!;
-    const covering = (await recent.boundingBox())!;
+    const covering = (await head.boundingBox())!;
     const viewport = (await list.boundingBox())!;
     expect(covered.y).toBeGreaterThanOrEqual(viewport.y);
     expect(covered.y).toBeLessThan(covering.y + covering.height);
     expect(covered.y + covered.height).toBeLessThanOrEqual(viewport.y + viewport.height);
     await target.dispatchEvent("click");
     await expect(target).toHaveAttribute("aria-current", "true");
-    expect((await target.boundingBox())!.y).toBeGreaterThanOrEqual((await recent.boundingBox())!.y + (await recent.boundingBox())!.height - 0.5);
-    await expect(recent).toHaveAttribute("data-stuck", "false");
+    await expect.poll(async () => (await target.boundingBox())!.y).toBeGreaterThanOrEqual((await head.boundingBox())!.y + (await head.boundingBox())!.height - 0.5);
   } finally {
     await daemon?.stop();
     await fixture.stop();

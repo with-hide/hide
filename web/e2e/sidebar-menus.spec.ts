@@ -20,7 +20,7 @@ import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
 import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { rest, screenshot } from "./wire";
+import { openOtherCheckouts, rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
@@ -117,6 +117,8 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
     const projectRow = project.locator("[data-project-menu]").first();
     const main = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="main"]') });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
+    // The linked worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     await expect(feature).toBeVisible({ timeout: 30_000 });
     const agentRow = page.locator(`nav[data-sidebar] li[data-pane="${worktreePane}"]`);
     if (options.pinned) {
@@ -124,7 +126,7 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
       // the registered project's, so these contracts start from it.
       const menu = await openMenu(page, projectRow, "repo actions");
       await menu.locator('[data-menu-item="pin"]').click();
-      await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
+      await expect(project).toHaveAttribute("data-project-pinned", "true");
     }
     return { engine, daemon, opened, worktreePane, project, projectRow, main, feature, agentRow, stop: () => { daemon.stop(); engine.stop(); } };
   } catch (error) {
@@ -134,9 +136,9 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
 }
 
 test("the project row's menu lists the board's items, and Pin pins it", async ({ page }) => {
-  const { projectRow, stop } = await startMenus(page);
+  const { project, projectRow, stop } = await startMenus(page);
   try {
-    await expect(page.locator('[data-section="pinned"]')).toHaveCount(0);
+    await expect(project).not.toHaveAttribute("data-project-pinned", "true");
     // B1, B3: in the board's order. A browser tab has no OS file manager, so
     // its reveal is absent; the row offers both Pin and removal. Project Settings B4 adds the settings
     // entry to this same project menu without removing its existing actions,
@@ -146,8 +148,8 @@ test("the project row's menu lists the board's items, and Pin pins it", async ({
     await screenshot(page, "sidebar-menus-project-dark");
     await menu.locator('[data-menu-item="pin"]').click();
     await expect(menu).toHaveCount(0);
-    // Pin pinned the row: it now stands under Pinned, once.
-    await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
+    // Pin pinned the row: it now wears the pin mark in place of its folder icon, once.
+    await expect(project).toHaveAttribute("data-project-pinned", "true");
     await expect(page.locator("[data-project-row]", { hasText: /^repo/ })).toHaveCount(1);
     menu = await openMenu(page, projectRow, "repo actions");
     await expect(menu.locator('[data-menu-item="unpin"]')).toHaveText(/Unpin/);

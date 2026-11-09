@@ -1400,7 +1400,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
         }
         "target_ambiguous" => {
-            "More than one agent answers to that name, on different machines; send to its registration ID from hide agent list (agent-N), or to the pane's full address remote:<device>:pane:<id>"
+            "More than one agent answers to that name, on different machines; name it by its registration ID from hide agent list (agent-N), or by the pane's full address remote:<device>:pane:<id>"
+        }
+        // `hide agent show` and `hide agent end` named no registration and
+        // no spawn: the same key answers the same until it names one.
+        "agent_unavailable" => {
+            "Hide knows no agent by that: take its id from hide agent list (agent-N); hide agent show also takes a spawn's id (spawn-N), the agent's name or its pane"
         }
         "target_unavailable" => {
             "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
@@ -5488,12 +5493,19 @@ mod tests {
     }
 
     /// A caller refused for lacking an agent pane is told where to run the
-    /// command; every other delivery refusal keeps the retry advice.
+    /// command, and one that named no agent how agents are named; every
+    /// other delivery refusal keeps the retry advice.
     #[test]
     fn a_missing_agent_pane_names_where_to_run_the_command() {
         let next = delivery_next_action("agent_pane_required");
         assert!(next.contains("pane where the agent is running"), "{next}");
         assert!(next.contains("--no-daemon"), "{next}");
+        // Asking again about a key that names no agent answers the same
+        // (with-hide/hide#2299).
+        assert_eq!(
+            delivery_next_action("agent_unavailable"),
+            "Hide knows no agent by that: take its id from hide agent list (agent-N); hide agent show also takes a spawn's id (spawn-N), the agent's name or its pane"
+        );
         assert_eq!(
             delivery_next_action("caller_identity_conflict"),
             "Check the current agent pane and retry the same intent"

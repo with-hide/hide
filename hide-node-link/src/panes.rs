@@ -25,6 +25,9 @@ pub fn refusal_next_action(reason: &str) -> &'static str {
     match reason {
         "checkout_not_registered" | "caller_unavailable" => CHECKOUT_NEXT_ACTION,
         "pane_not_moved" => PANE_NOT_MOVED_NEXT_ACTION,
+        crate::holders::PANE_STARTING => {
+            "The pane's program is still starting; run the same command again in a moment"
+        }
         _ => PANE_NEXT_ACTION,
     }
 }

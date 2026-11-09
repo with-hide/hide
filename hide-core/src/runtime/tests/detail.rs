@@ -507,3 +507,159 @@ fn a_device_tab_slot_is_kept_until_that_devices_session_says_the_tab_closed() {
         "this machine's own catalog lists no such tab"
     );
 }
+
+/// Operator decision 2026-11-09: a record pressed outside the slot opens in
+/// the tab of the session it records, which comes forward with the
+/// session's pane, so the card stays with that agent; a session with no pane
+/// here opens in the tab in front, and a record opened inside the slot (a
+/// child's, with no `in_owner_tab`) stays in the slot it was pressed in.
+#[test]
+fn a_record_opens_in_its_own_sessions_tab() {
+    let checkout_path = "/private/tmp/hide-slot-owner-tab";
+    let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    let tabs = ["w-order:t1", "w-order:t2"];
+    let mut payload = tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1");
+    let owned: SessionSnapshotPayload =
+        crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [{
+            "id": "worker", "pane_id": "w-order:t2:p", "agent": "claude",
+            "agent_status": "working", "state_change_seq": 1, "cwd": checkout_path,
+            "agent_session": {"kind": "id", "value": "11111111-2222-3333-4444-555555555555"}
+        }]}))
+        .unwrap();
+    payload.agents.extend(owned.agents);
+    runtime.ingest_session(Ok(payload));
+    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
+    let session = crate::links::ledger::SessionIdentity {
+        device_id: runtime.node.as_str().to_owned(),
+        agent: "claude".into(),
+        session_id: "11111111-2222-3333-4444-555555555555".into(),
+    };
+    let record = |session: &crate::links::ledger::SessionIdentity| DetailItem::Record {
+        session: session.clone(),
+    };
+    let open = |runtime: &mut Runtime, item: &DetailItem, in_owner_tab: bool| {
+        assert!(event(
+            runtime,
+            "detail_open",
+            serde_json::json!({"item": item, "in_owner_tab": in_owner_tab})
+        ));
+    };
+
+    open(&mut runtime, &record(&session), true);
+    let state = &runtime.snapshot.ui_state;
+    assert_eq!(state.detail_home.as_deref(), Some("w-order:t2"));
+    assert_eq!(state.detail.items, [record(&session)]);
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t2:p"),
+        "the session's pane takes the keyboard"
+    );
+    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail,
+        crate::model::DetailSlot::default(),
+        "the tab that was in front holds no card"
+    );
+
+    // No pane runs this session here: the tab in front takes it.
+    let gone = crate::links::ledger::SessionIdentity {
+        session_id: "ended".into(),
+        ..session.clone()
+    };
+    open(&mut runtime, &record(&gone), true);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_home.as_deref(),
+        Some("w-order:t1")
+    );
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [record(&gone)]);
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t1:p")
+    );
+
+    // Opened inside the slot, the record stays where it was pressed.
+    open(&mut runtime, &record(&session), false);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_home.as_deref(),
+        Some("w-order:t1")
+    );
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items,
+        [record(&gone), record(&session)]
+    );
+}
+
+/// Operator decision 2026-11-09: a pull request's card opens in the tab of
+/// the agent that made it, which comes forward with its pane; a pull request
+/// whose agent has no pane here opens in the tab in front.
+#[test]
+fn a_pull_request_card_opens_in_its_agents_tab() {
+    let checkout_path = "/private/tmp/hide-slot-owner-pr";
+    let (runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    let mut runtime = super::workspace_view::with_new_views(runtime, "slot-owner-pr");
+    let tabs = ["w-order:t1", "w-order:t2"];
+    runtime.ingest_session(Ok(tab_order_payload(
+        checkout_path,
+        &tabs,
+        &tabs,
+        "w-order:t1",
+    )));
+    assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
+    let pull = |number: u32| -> crate::model::PullRequestSnapshot {
+        serde_json::from_value(serde_json::json!({
+            "number":number,"title":"Ship","url":format!("https://github.com/acme/app/pull/{number}"),
+            "head_branch":format!("feature-{number}"),"base_branch":"main","badge":"open","checks":"passing",
+            "is_draft":false,"closing_issues":[]
+        }))
+        .unwrap()
+    };
+    let row = |number: u32, pane: &str| crate::agent_state::work::board::Row {
+        number,
+        group: "open",
+        fold: None,
+        reason: Default::default(),
+        agents: vec![crate::agent_state::tally::scope::RowRef {
+            pane_id: pane.into(),
+            occurrence: 0,
+        }],
+        agent_pane: None,
+        checkout_id: None,
+        checkout_ids: Vec::new(),
+        issue: None,
+    };
+    let project = &mut runtime.snapshot.navigator.workspaces[0];
+    project.is_git = true;
+    project.pull_requests = vec![pull(42), pull(43)];
+    project.agent_scope.prs.rows = vec![row(42, "w-order:t2:p"), row(43, "gone")];
+    let open = |runtime: &mut Runtime, number: u32| {
+        assert!(event(
+            runtime,
+            "pr_open",
+            serde_json::json!({"workspace_id": "workspace:order", "pr_number": number})
+        ));
+        assert_eq!(runtime.snapshot.status.last_error, None);
+    };
+    let card = |number: u32| DetailItem::PullRequest {
+        workspace_id: "workspace:order".into(),
+        number,
+    };
+
+    open(&mut runtime, 42);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_home.as_deref(),
+        Some("w-order:t2")
+    );
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42)]);
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t2:p")
+    );
+
+    // Its agent has no pane here: the tab in front takes the card.
+    open(&mut runtime, 43);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail_home.as_deref(),
+        Some("w-order:t2")
+    );
+    assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42), card(43)]);
+}

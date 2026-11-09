@@ -2958,7 +2958,11 @@ impl Runtime {
             Ok(crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(outcome)) => {
                 // Only this machine's closes reopen, so each pane id is the
                 // core's own.
-                for agent in &outcome.agents {
+                for agent in outcome
+                    .agents
+                    .iter()
+                    .filter(|agent| agent.profile.is_none())
+                {
                     self.record_pane_launch(
                         &agent.pane_id,
                         &agent.kind,

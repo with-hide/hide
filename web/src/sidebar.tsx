@@ -1,10 +1,9 @@
 import { useCenterReconnect } from "./centerReconnect";
 import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
-import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
-import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -19,7 +18,7 @@ import { PR_LOOK, rowPulls } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
-import { asksOperator, badgeWords } from "./agentRow";
+import { asksOperator, badgeWords, sumMarks } from "./agentRow";
 import { Badge } from "./components/ui/badge";
 import { cn } from "./lib/utils";
 import { agentNumber, sidebarAgentNumbers } from "./numbering";
@@ -72,7 +71,6 @@ import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
-import { observeStuckHeaders } from "./sidebarSticky";
 import { SidebarLensSwitch, TaskLens } from "./TaskLens";
 import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
@@ -411,7 +409,6 @@ function ProjectList({ actions }: { actions: Actions }) {
   const workspaces = useShellStore((s) => contextWorkspaces(s.rest));
   // The device folds are this machine's, like pins: a selected SSH device's tree has none.
   const inactiveFold = useShellStore((s) => (remote ? undefined : s.rest?.navigator?.inactive_projects));
-  const noAgentsFold = useShellStore((s) => (remote ? undefined : s.rest?.navigator?.no_agent_projects));
   const focusedCheckoutId = useShellStore((s) =>
     remote ? (remoteView(remoteContext(s.rest)?.session ?? null, s.rest?.workspace_view)?.checkout.id ?? null) : (s.rest?.navigator?.focused_checkout_id ?? null),
   );
@@ -452,13 +449,12 @@ function ProjectList({ actions }: { actions: Actions }) {
   // It reads the devices and their connections alone, so it is read again only when those move.
   const elsewhere = useMemo(() => elsewhereNeedsYou(useShellStore.getState().rest, localAgents, frontId), [devices, remoteStatuses, localAgents, frontId]);
   const rows = useMemo(
-    () => projectRows(workspaces, { inactive_projects: inactiveFold, no_agent_projects: noAgentsFold }, listedAgents, frontScope, raisedOpen, asks, elsewhere),
-    [workspaces, inactiveFold, noAgentsFold, listedAgents, frontScope, raisedOpen, asks, elsewhere],
+    () => projectRows(workspaces, { inactive_projects: inactiveFold }, listedAgents, frontScope, raisedOpen, asks, elsewhere),
+    [workspaces, inactiveFold, listedAgents, frontScope, raisedOpen, asks, elsewhere],
   );
   // The device's Needs You and Done come first, then the projects in their sections; Working and Seen are the Agents tab's.
   const raised = useMemo(() => rows.filter((row) => row.kind === "raised"), [rows]);
-  const sections = useMemo(() => projectSections(rows), [rows]);
-  useStuckHeaders(list, loaded);
+  const listRows = useMemo(() => rows.filter((row) => row.kind !== "raised"), [rows]);
   const agentRowMenu = useAgentRowMenu(actions);
   const children = useMemo(() => new Map(agents.map((agent) => [agent.pane_id, directChildren(agent, agents)])), [agents]);
   // A row Hide AI started names its task in its place line, so the place reads the agents too.
@@ -495,35 +491,23 @@ function ProjectList({ actions }: { actions: Actions }) {
   return (
     // The arrow keys move through both lists as one.
     <div ref={lists} className="flex min-h-0 flex-1 flex-col" onKeyDown={moveSidebarKey}>
-      {/* Needs You and Done stand still above the projects, so opening one row
-          after another never scrolls them away: an opened row leaves its
-          section and the next one moves up into its place. Up to half the
-          height, past which they scroll on their own. */}
-      {catalogLine || raised.length > 0 ? (
-        <ul className="max-h-1/2 shrink-0 overflow-auto px-sm" data-raised-list="true">
-          {catalogLine ? (
-            <li role="status" className="px-md py-xs text-caption text-muted-foreground" data-device-catalog={catalogLine.state}>
-              {catalogLine.text}
-            </li>
-          ) : null}
-          {raised.map((row) => (
-            <ProjectRowView key={rowKey(row)} row={row} context={context} />
-          ))}
-        </ul>
-      ) : null}
-      <ul ref={list} className="min-h-0 flex-1 overflow-auto px-sm" data-project-list="true">
-        {/* Each section is its own box, so its header sticks to the list's top only while its rows pass under it, and the next section's header pushes it away (D-05). */}
-        {sections.map((section, index) => (
-          <li key={`section:${section.header.section}`} data-project-section={section.header.section} className={index > 0 || raised.length > 0 ? "mt-sm border-t border-border" : undefined}>
-            <ul>
-              <SectionHeader row={section.header} />
-              {section.rows.map((row, index) => (
-                <ProjectRowView key={rowKey(row)} row={row} first={index === 0} context={context} />
-              ))}
-              {index === sections.length - 1 ? <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} /> : null}
-            </ul>
+      {/* One scrolling list: Needs You and Done are its first sections, each head
+          sticking at the top and stacking under the heads above it while the
+          rows pass under (as the 태스크 list's do), and each folds to its head. */}
+      <ul ref={list} className="min-h-0 flex-1 overflow-auto px-sm" style={{ scrollPaddingTop: `calc(var(--size-sidebar-section-header) * ${raised.length})` }} data-project-list="true">
+        {catalogLine ? (
+          <li role="status" className="px-md py-xs text-caption text-muted-foreground" data-device-catalog={catalogLine.state}>
+            {catalogLine.text}
           </li>
+        ) : null}
+        {raised.map((row, stack) => (
+          <ProjectRowView key={rowKey(row)} row={row} stack={stack} context={context} />
         ))}
+        {raised.length > 0 && listRows.length > 0 ? <li role="separator" className="my-xs border-t border-border" /> : null}
+        {listRows.map((row, index) => (
+          <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
+        ))}
+        <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} />
         {!remote && workspaces.length === 0 ? (
           <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true">
             {t("sidebar.noProjects")}
@@ -568,110 +552,22 @@ type ListContext = {
   agentRowMenu: AgentRowMenu;
 };
 
-const PROJECT_SECTION_TITLE: Record<Extract<ProjectRow, { kind: "header" }>["section"], MessageKey> = {
-  pinned: "overview.pinned",
-  recent: "sidebar.recentActivity",
-};
-
 function rowKey(row: ProjectRow): string {
   switch (row.kind) {
-    case "header":
-      return `header:${row.section}`;
+    case "divider":
+      return "divider";
     case "raised":
       return `raised:${row.group}`;
     case "workspace":
       return `workspace:${row.workspace.id}`;
-    case "inactive_projects":
-      return `inactive-projects:${row.group.device_id}`;
-    case "no_agents":
-      return `no-agents:${row.group.device_id}`;
   }
 }
 
-type SectionRow = Extract<ProjectRow, { kind: "header" }>;
 
-/** The list cut at its section headers: each header with the rows under it. */
-function projectSections(rows: ProjectRow[]): { header: SectionRow; rows: ProjectRow[] }[] {
-  const sections: { header: SectionRow; rows: ProjectRow[] }[] = [];
-  for (const row of rows) {
-    if (row.kind === "raised") continue;
-    if (row.kind === "header") sections.push({ header: row, rows: [] });
-    else sections.at(-1)?.rows.push(row);
-  }
-  return sections;
-}
-
-/** What sets an open project block (its checkouts drawn under its name) off from the row above; a folded project is one line and takes only a small gap. */
-const BLOCK_GAP = "mt-sm border-t border-border pt-xs";
-
-/**
- * A section's header, stuck to the top of the list while its rows scroll
- * under it, with a hairline under it only while it is stuck (D-05). The
- * Pinned header carries the pin, which no pinned row repeats; with no project
- * the Projects title is the bare word, over the empty list's line.
- */
-function SectionHeader({ row }: { row: SectionRow }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <li
-      className="sticky top-0 z-10 flex h-(--size-sidebar-section-header) items-end gap-xs bg-sidebar pr-sm pb-xs pl-sm text-micro font-medium text-muted-foreground data-[stuck=true]:border-b data-[stuck=true]:border-border"
-      data-section={row.section}
-      data-section-sticky="true"
-    >
-      {row.section === "pinned" ? <PinIcon aria-hidden="true" data-section-pin="true" className="size-(--size-icon-sm) shrink-0" /> : null}
-      <span className="min-w-0 flex-1 truncate">
-        {row.section === "recent" && row.count === 0 ? t("sidebar.projects") : `${t(PROJECT_SECTION_TITLE[row.section])} · ${row.count}`}
-      </span>
-    </li>
-  );
-}
-
-/**
- * Marks each section header that is stuck to the top of the list, which draws
- * its hairline; read on scroll and on any size change of the list or a row of
- * it, written straight to the element so scrolling renders nothing.
- */
-function useStuckHeaders(list: { current: HTMLUListElement | null }, loaded: boolean) {
-  // Set up once per list, not per snapshot: what moves a header is a scroll,
-  // a size change, or a row of the list arriving or leaving.
-  useEffect(() => {
-    const element = list.current;
-    if (!element) return undefined;
-    return observeStuckHeaders(element);
-  }, [list, loaded]);
-}
-
-const ProjectRowView = memo(function ProjectRowView({ row, first = false, context }: { row: ProjectRow; first?: boolean; context: ListContext }) {
-  const { t } = useInterfaceTranslation();
-  if (row.kind === "header") throw new Error("A section header is drawn by its section");
-  if (row.kind === "raised") return <RaisedSection row={row} context={context} />;
-  if (row.kind === "inactive_projects" || row.kind === "no_agents") {
-    const current = !row.group.expanded && context.focusedProjectId !== null && row.group.project_ids.includes(context.focusedProjectId);
-    return (
-      <li>
-        {row.kind === "no_agents" ? (
-          <FoldRow
-            label={t("sidebar.noAgentProjects")}
-            count={row.count}
-            expanded={row.group.expanded}
-            current={current}
-            onToggle={() => context.actions.toggleSessionFold(`no_agents/${row.group.device_id}`)}
-            data-no-agent-projects={row.group.device_id}
-          />
-        ) : (
-          <FoldRow
-            label={t("sidebar.inactiveProjects")}
-            count={row.count}
-            expanded={row.group.expanded}
-            current={current}
-            onToggle={() => context.actions.toggleInactiveProjects(row.group.device_id)}
-            data-inactive-projects={row.group.device_id}
-          />
-        )}
-      </li>
-    );
-  }
-  return <WorkspaceRows workspace={row.workspace} level={row.level} first={first} context={context} />;
+const ProjectRowView = memo(function ProjectRowView({ row, first = false, stack = 0, context }: { row: ProjectRow; first?: boolean; stack?: number; context: ListContext }) {
+  if (row.kind === "divider") return <li role="separator" className="my-sm border-t border-border" />;
+  if (row.kind === "raised") return <RaisedSection row={row} stack={stack} context={context} />;
+  return <WorkspaceRows workspace={row.workspace} quiet={row.quiet === true} first={first} context={context} />;
 });
 
 /**
@@ -682,36 +578,69 @@ const ProjectRowView = memo(function ProjectRowView({ row, first = false, contex
  * same row does in Agents. Past its cap the older rows wait behind a fold
  * row, as an inactive fold's do.
  */
-function RaisedSection({ row, context }: { row: Extract<ProjectRow, { kind: "raised" }>; context: ListContext }) {
+function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kind: "raised" }>; stack: number; context: ListContext }) {
   const { t } = useInterfaceTranslation();
   const toggleRaised = useUiStore((s) => s.toggleRaised);
+  const folded = useUiStore((s) => s.raisedFolded.includes(row.group));
+  const toggleFolded = useUiStore((s) => s.toggleRaisedFolded);
+  const Chevron = folded ? ChevronRightIcon : ChevronDownIcon;
+  const name = agentGroupTitle(row.group, t);
+  const count = row.missions.length + row.agents.length + row.more.length;
+  // Pressed while stuck at the top it goes back to its rows; otherwise it folds or unfolds them.
+  const press = (event: MouseEvent<HTMLElement>) => {
+    const head = event.currentTarget.parentElement!;
+    const scroller = head.closest<HTMLElement>("[data-project-list]");
+    const stuck = scroller !== null && scroller.scrollTop > 0 && head.getBoundingClientRect().top - scroller.getBoundingClientRect().top <= stack * head.offsetHeight + 1;
+    if (stuck) scroller.scrollTo({ top: 0 });
+    else toggleFolded(row.group);
+  };
   return (
-    <li data-raised-group={row.group}>
-      <div className="px-sm pt-sm pb-xxs text-micro font-medium text-muted-foreground" data-section={row.group} id={`raised-group-${row.group}`}>
-        {agentGroupTitle(row.group, t)} · {row.missions.length + row.agents.length + row.more.length}
+    <li data-raised-group={row.group} className="contents">
+      <div
+        data-section={row.group}
+        data-section-sticky="true"
+        id={`raised-group-${row.group}`}
+        className="sticky z-20 h-(--size-sidebar-section-header) bg-sidebar"
+        style={{ top: `calc(var(--size-sidebar-section-header) * ${stack})` }}
+      >
+        <RowButton
+          aria-expanded={!folded}
+          aria-label={`${name} ${count}`}
+          data-raised-fold={row.group}
+          className={cn("h-full gap-xs rounded-xs pl-sm text-micro font-medium outline-none focus-visible:ring-1 focus-visible:ring-ring", row.group === "needs_you" ? "text-warning" : "text-subtle-foreground")}
+          onClick={press}
+        >
+          <span>{name}</span>
+          <span className="flex-1 tabular-nums">{count}</span>
+          <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
+            <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
+          </span>
+        </RowButton>
       </div>
-      <ul aria-labelledby={`raised-group-${row.group}`}>
-        {row.missions.map((ask) => (
-          <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={PROJECT_COLUMN} actions={context.actions} />
-        ))}
-        {row.agents.map((listed) => (
-          <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />
-        ))}
-        {row.more.length > 0 ? (
-          <li>
-            <FoldRow
-              label={t("sidebar.raisedMore")}
-              count={row.more.length}
-              expanded={row.expanded}
-              onToggle={() => toggleRaised(row.group)}
-              data-raised-more={row.group}
-            />
-          </li>
-        ) : null}
-        {row.expanded
-          ? row.more.map((listed) => <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />)
-          : null}
-      </ul>
+      {folded ? null : (
+        <ul aria-labelledby={`raised-group-${row.group}`}>
+          {row.missions.map((ask) => (
+            <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={PROJECT_COLUMN} actions={context.actions} />
+          ))}
+          {row.agents.map((listed) => (
+            <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />
+          ))}
+          {row.more.length > 0 ? (
+            <li>
+              <FoldRow
+                label={t("sidebar.raisedMore")}
+                count={row.more.length}
+                expanded={row.expanded}
+                onToggle={() => toggleRaised(row.group)}
+                data-raised-more={row.group}
+              />
+            </li>
+          ) : null}
+          {row.expanded
+            ? row.more.map((listed) => <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />)
+            : null}
+        </ul>
+      )}
     </li>
   );
 }
@@ -723,6 +652,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       // The device in front is the whole list, so no row of its own names it (PRD home-device-rail B2); another device's Needs You row does.
       device={chip ?? null}
       place={context.placeOf(device, agent.pane_id)}
+      placeInHead
       depth={0}
       ask={agent.state.needs_you}
       selected={agent.pane_id === context.focusRowPane}
@@ -769,7 +699,7 @@ const ROW_REVEALED =
 
 /** A row's time and fold slot, a step apart as on an agent row, so every row's time ends on one column. */
 function RowEnd({ children }: { children: ReactNode }) {
-  return <span className="flex shrink-0 items-center gap-xs">{children}</span>;
+  return <span className="relative flex shrink-0 items-center gap-xs self-stretch">{children}</span>;
 }
 
 /**
@@ -781,6 +711,7 @@ function FoldRow({
   count,
   expanded,
   current = false,
+  badge,
   onToggle,
   ...data
 }: {
@@ -788,6 +719,8 @@ function FoldRow({
   count: number;
   expanded: boolean;
   current?: boolean;
+  /** The marks of what the fold holds (a `StatusBadge`), so a demand inside a fold is seen without opening it. */
+  badge?: ReactNode;
   onToggle: () => void;
 } & Record<`data-${string}`, string>) {
   const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
@@ -795,7 +728,7 @@ function FoldRow({
     <RowButton
       aria-expanded={expanded}
       aria-current={current ? "true" : undefined}
-      className={cn("min-h-(--size-control-lg) gap-sm rounded-sm py-0 text-caption font-medium hover:text-foreground", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-subtle-foreground")}
+      className={cn("min-h-(--size-control-lg) gap-sm rounded-sm py-0 text-caption hover:text-foreground", current ? "bg-secondary text-foreground hover:bg-secondary" : "text-muted-foreground")}
       style={{ paddingLeft: PROJECT_COLUMN }}
       onClick={onToggle}
       {...data}
@@ -803,6 +736,7 @@ function FoldRow({
       <span className="min-w-0 flex-1 truncate">
         {label} {count}
       </span>
+      {badge}
       <span className="flex w-(--size-lineage-chevron) shrink-0 justify-center text-muted-foreground">
         <Chevron aria-hidden="true" className="size-(--size-icon-sm)" />
       </span>
@@ -811,7 +745,7 @@ function FoldRow({
 }
 
 /** The fold on a project or checkout row: a folded one is always shown, an open one waits for the pointer (D-3). */
-function FoldToggle({ open, label, onToggle, disabled, ...data }: { open: boolean; label: string; onToggle: () => void; disabled?: boolean } & Record<`data-${string}`, string>) {
+function FoldToggle({ open, label, onToggle, disabled, quiet = false, ...data }: { open: boolean; label: string; onToggle: () => void; disabled?: boolean; /** Waits for the pointer open or folded. */ quiet?: boolean } & Record<`data-${string}`, string>) {
   const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <Button
@@ -820,7 +754,7 @@ function FoldToggle({ open, label, onToggle, disabled, ...data }: { open: boolea
       disabled={disabled}
       aria-expanded={open}
       aria-label={label}
-      className={cn("pointer-events-auto relative h-(--size-icon-button-toolbar) w-(--size-lineage-chevron)", open && ROW_REVEALED)}
+      className={cn("pointer-events-auto relative h-(--size-icon-button-toolbar) w-(--size-lineage-chevron)", (open || quiet) && ROW_REVEALED)}
       onClick={onToggle}
       {...data}
     >
@@ -847,7 +781,7 @@ function ProjectName({ workspace, hidden = false, grow = true, label = false }: 
         "min-w-0 truncate",
         grow && "flex-1",
         label
-          ? cn("text-caption font-semibold", working ? "text-foreground" : "text-muted-foreground")
+          ? "text-body font-semibold text-foreground"
           : cn("text-subhead text-foreground", working ? "font-semibold" : "font-normal"),
       )}
     >
@@ -861,15 +795,24 @@ function ProjectName({ workspace, hidden = false, grow = true, label = false }: 
  * B6-B8): `+` opens the start panel aimed at the project's main checkout, `⋯`
  * the row's own menu under the button. They wait for the pointer or the
  * keyboard, as the row's other revealed controls do, and stay while their
- * menu is open; the cell keeps its width so showing them never moves the name.
+ * menu is open; they take no width at rest, and the badge of a folded project
+ * stands aside while they show, so the row's end never holds both. They wait
+ * at opacity 0, never `display: none`: a hidden button cannot take focus, so
+ * the keyboard could not reach them from outside the row and a closing
+ * Project settings could not hand focus back to the gear that opened it.
  */
-function RowActions({ workspace, items, onSelect }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void }) {
+function RowActions({ workspace, items, onSelect, fill, children }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void; /** The `from-*` classes of the row's own fill, which the fade starts from; the row's own fill is what the buttons cover the name's end with. */ fill: string; children?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const more = useRef<HTMLButtonElement>(null);
   return (
-    <span className="grid shrink-0 items-center justify-items-end">
-      <span className={cn("pointer-events-auto relative col-start-1 row-start-1 flex items-center gap-xxs", menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
+    <span className="pointer-events-none absolute inset-y-0 right-full flex items-center justify-end">
+      <span className={cn("pointer-events-none relative flex h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md [&_button]:pointer-events-auto", fill, menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
+        <Hint label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")}>
+          <Button variant="row-action" size="icon-sm" aria-label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")} aria-pressed={workspace.pinned} data-row-pin={workspace.id} onClick={() => onSelect(workspace.pinned ? "unpin" : "pin")}>
+            <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "text-foreground")} />
+          </Button>
+        </Hint>
         <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
           <Button
             variant="row-action"
@@ -900,6 +843,7 @@ function RowActions({ workspace, items, onSelect }: { workspace: Workspace; item
             </Button>
           }
         />
+        {children}
       </span>
     </span>
   );
@@ -932,7 +876,7 @@ function RepositoryMark({ workspace, actions }: { workspace: Workspace; actions:
   );
 }
 
-function WorkspaceRows({ workspace, level, first = false, context }: { workspace: Workspace; level: "root" | "child"; first?: boolean; context: ListContext }) {
+function WorkspaceRows({ workspace, quiet = false, first = false, context }: { workspace: Workspace; quiet?: boolean; first?: boolean; context: ListContext }) {
   const { t } = useInterfaceTranslation();
   const { treeAgents, actions, disclosure } = context;
   const active = activeCheckouts(workspace);
@@ -941,7 +885,6 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
   const hideAiListed = useShellStore((s) => s.rest?.navigator?.hide_ai_checkouts);
   const issueSource = useShellStore((s) => projectIssueSource(s.rest, workspace));
   const expanded = !disclosure || projectExpanded(workspace);
-  const inset = level === "child" ? "pl-(--size-lineage-indent)" : "";
   const folder = folderCheckout(workspace);
   if (folder) {
     if (workspace.session_folds?.cleanup.includes(folder.id)) return null;
@@ -951,7 +894,6 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
         checkout={folder}
         agentRows={rowsByCheckout.get(folder.id) ?? NO_BOARD_ROWS}
         focused={context.workspaceScreen && folder.id === context.focusedCheckoutId}
-        inset={inset}
         first={first}
         context={context}
       />
@@ -964,6 +906,13 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
   const drawn = (checkout: Checkout) => drawnInTree(hideAiListed, workspace, checkout, checkout.id === context.focusedCheckoutId, (rowsByCheckout.get(checkout.id) ?? NO_BOARD_ROWS).length > 0);
   const emptyFold = workspace.session_folds ? workspace.checkouts.filter((checkout) => workspace.session_folds!.empty.includes(checkout.id) && drawn(checkout)) : [];
   const inactiveDrawn = inactive.filter(drawn);
+  // The project's main checkout is its row; every other checkout, with or without an agent, waits in one fold whose badge carries what runs or asks inside it.
+  const activeDrawn = active.filter(drawn);
+  // The project's own row stands for a main checkout nothing runs in: its row is drawn only while it holds an agent or a conversation, a purpose, or the focus.
+  const main = activeDrawn.filter((checkout) => checkout.is_primary && ((rowsByCheckout.get(checkout.id) ?? NO_BOARD_ROWS).length > 0 || checkout.purpose !== null || checkout.id === context.focusedCheckoutId));
+  const others = [...activeDrawn, ...emptyFold, ...inactiveDrawn].filter((checkout) => !checkout.is_primary);
+  const othersOpen = workspace.inactive_checkouts.expanded;
+  const othersMarks = sumMarks(others.map((checkout) => checkout.agent_summary?.marks));
   const checkoutRow = (checkout: Checkout) => (
     <CheckoutRowView
       key={checkout.id}
@@ -976,7 +925,7 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
     />
   );
   return (
-    <li data-project={workspace.id} className={cn(inset, !first && (expanded ? BLOCK_GAP : "mt-xs"))}>
+    <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && "mt-xs", quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => projectMenu(workspace, menuHost(), t, issueSource)}
@@ -996,48 +945,52 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
             className="flex min-w-0 flex-1 self-stretch items-center gap-sm rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
             onClick={() => actions.openProject(workspace, projectRowExpansion(workspace, target, context.workspaceScreen ? context.focusedCheckoutId : null, disclosure))}
           >
+            {/* A project's own mark, so its checkouts read as standing under it; a pinned one wears the pin in its place, and a Git project a folder with the branch mark. */}
+            <ProjectMark workspace={workspace} />
             <ProjectName workspace={workspace} label />
+            {/* A folded project still says what runs and asks inside it; open, its own rows say it. */}
+            {expanded ? null : <StatusBadge counts={sumMarks(workspace.checkouts.map((checkout) => checkout.agent_summary?.marks))} className="group-hover:hidden group-focus-within:hidden" data-project-status={workspace.id} />}
           </button>
-          <RowActions
-            workspace={workspace}
-            items={() => projectMenu(workspace, menuHost(), t, issueSource)}
-            onSelect={(item) => runProjectItem(actions, workspace, item)}
-          />
-          <RepositoryMark workspace={workspace} actions={actions} />
-          {disclosure ? (
-            <FoldToggle
-              open={expanded}
-              label={expanded ? t("sidebar.foldProject", { name: workspace.label }) : t("sidebar.unfoldProject", { name: workspace.label })}
-              onToggle={() => actions.toggleProjectCheckouts(workspace)}
-              data-project-toggle={workspace.id}
-            />
-          ) : (
-            <FoldLane />
-          )}
+          <RowEnd>
+            <RowActions
+              workspace={workspace}
+              items={() => projectMenu(workspace, menuHost(), t, issueSource)}
+              onSelect={(item) => runProjectItem(actions, workspace, item)}
+              fill={hiding === "project" ? "from-secondary" : "from-sidebar group-hover:from-accent group-focus-within:from-accent"}
+            >
+              <RepositoryMark workspace={workspace} actions={actions} />
+            </RowActions>
+            {disclosure ? (
+              <FoldToggle
+                open={expanded}
+                quiet
+                label={expanded ? t("sidebar.foldProject", { name: workspace.label }) : t("sidebar.unfoldProject", { name: workspace.label })}
+                onToggle={() => actions.toggleProjectCheckouts(workspace)}
+                data-project-toggle={workspace.id}
+              />
+            ) : (
+              <FoldLane />
+            )}
+          </RowEnd>
         </div>
       </EntryContextMenu>
       {expanded ? (
-        <ul>
-          {active.filter(drawn).map(checkoutRow)}
-          {emptyFold.length > 0 ? <li>
-            <FoldRow label={[t("agentSessions.emptyWorktrees"), workspace.session_folds!.open_prs > 0 ? t("agentSessions.openPrs", { count: workspace.session_folds!.open_prs }) : null].filter(Boolean).join(" · ")}
-              count={emptyFold.length} expanded={workspace.session_folds!.empty_open} current={hiding === "empty"}
-              onToggle={() => actions.toggleSessionFold(workspace.id)} data-empty-worktrees={workspace.id} />
-            {workspace.session_folds!.empty_open ? <ul>{emptyFold.map(checkoutRow)}</ul> : null}
-          </li> : null}
-          {inactiveDrawn.length > 0 ? (
+        <ul className="pl-sm">
+          {main.map(checkoutRow)}
+          {others.length > 0 ? (
             <li>
               <FoldRow
-                label={t("sidebar.inactive")}
-                count={inactiveDrawn.length}
-                expanded={workspace.inactive_checkouts.expanded}
-                current={hiding === "inactive"}
+                label={t("sidebar.otherCheckouts")}
+                count={others.length}
+                expanded={othersOpen}
+                current={!othersOpen && context.workspaceScreen && others.some((checkout) => checkout.id === context.focusedCheckoutId)}
+                badge={<StatusBadge counts={othersMarks} data-other-checkouts-status={workspace.id} />}
                 onToggle={() => actions.toggleInactiveCheckouts(workspace.path)}
-                data-inactive-checkouts={workspace.path}
+                data-other-checkouts={workspace.id}
               />
+              {othersOpen ? <ul>{others.map(checkoutRow)}</ul> : null}
             </li>
           ) : null}
-          {workspace.inactive_checkouts.expanded ? inactiveDrawn.map(checkoutRow) : null}
         </ul>
       ) : null}
     </li>
@@ -1227,7 +1180,6 @@ const FolderRowView = memo(function FolderRowView({
   checkout,
   agentRows,
   focused,
-  inset,
   first,
   context,
 }: {
@@ -1235,7 +1187,6 @@ const FolderRowView = memo(function FolderRowView({
   checkout: Checkout;
   agentRows: BoardRow[];
   focused: boolean;
-  inset: string;
   /** The first row of its list: no project-block hairline above it. */
   first: boolean;
   context: ListContext;
@@ -1254,7 +1205,7 @@ const FolderRowView = memo(function FolderRowView({
   const secondLine = asleep ? !open && checkoutHasSecondLine(view, purpose, raisedFrom) : disclosure.secondLine;
   const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   return (
-    <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(inset, !first && (open ? BLOCK_GAP : "mt-xs"))}>
+    <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-checkout-open={open ? "true" : undefined} className={cn(!first && "mt-xs")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
@@ -1281,8 +1232,8 @@ const FolderRowView = memo(function FolderRowView({
             projectExpanded={asleep ? checkoutRowExpansion(true, context.workspaceScreen && focused, open) : undefined}
           />
           <span className="pointer-events-none flex h-(--size-sidebar-line) min-w-0 items-center gap-sm">
-            <FolderIcon aria-hidden="true" className={cn("size-(--size-checkout-icon) shrink-0", view.kindTone)} />
-            <ProjectName workspace={workspace} hidden grow={false} />
+            <ProjectMark workspace={workspace} />
+            <ProjectName workspace={workspace} hidden grow={false} label />
             <CheckoutBadge checkout={checkout} />
             <span className="flex-1" />
             <RowEnd>
@@ -1290,6 +1241,7 @@ const FolderRowView = memo(function FolderRowView({
                 workspace={workspace}
                 items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
                 onSelect={(item) => (FOLDER_CHECKOUT_ITEMS.has(item) ? runCheckoutItem(actions, workspace, checkout, item) : runProjectItem(actions, workspace, item))}
+                fill={focused ? "from-secondary" : "from-sidebar group-hover:from-accent group-focus-within:from-accent"}
               />
               {foldable ? (
                 <FoldToggle
@@ -1320,6 +1272,16 @@ const FolderRowView = memo(function FolderRowView({
  * neither opens nor unfolds. Every other kind is the plain icon the row
  * button covers.
  */
+/** The project's mark in a box the checkout glyph's size, so a tab's guide hangs at the center of either; a pinned project is told by where the list puts it, and its pin waits for the pointer in the row's buttons. */
+function ProjectMark({ workspace }: { workspace: Workspace }) {
+  const Icon = workspace.is_git ? FolderGit2Icon : FolderIcon;
+  return (
+    <span className="flex size-(--size-checkout-icon) shrink-0 items-center justify-center text-muted-foreground">
+      <Icon aria-hidden="true" data-project-mark={workspace.id} className="size-(--size-icon-sm)" />
+    </span>
+  );
+}
+
 function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; deviceId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const pr = view.kind === "pull_request" ? view.pullRequest : null;
@@ -1345,7 +1307,7 @@ function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; de
     );
   }
   const KindIcon = CHECKOUT_KIND_ICON[view.kind];
-  return <KindIcon aria-hidden="true" data-checkout-glyph="true" className={cn("size-(--size-checkout-icon) shrink-0", view.kindTone)} />;
+  return <KindIcon aria-hidden="true" data-checkout-glyph="true" className={cn("m-px size-(--size-icon-sm) shrink-0", view.kindTone)} />;
 }
 
 /**

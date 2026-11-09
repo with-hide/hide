@@ -7,7 +7,7 @@ import { setAgentState } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, labelMarker, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, reseedWork, seedFirstWork, startWork, workFixture, workRepositoryReady } from "./session-work-fixture";
-import { enterWorkspace, showProjectRow, taskRow } from "./wire";
+import { enterWorkspace, projectOpener, showProjectRow, taskRow } from "./wire";
 import { chord } from "./chords";
 import { openOverview } from "./overview-entry";
 
@@ -19,8 +19,11 @@ const RECORD = 'aside[data-lane="detail"][data-detail="record"] [data-session-re
 async function connectRepository(page: import("@playwright/test").Page, repository: string) {
   // The project's gear is on its row in the sidebar's 프로젝트 tree.
   await page.locator('[data-sidebar-lens-option="projects"]').click();
-  const gear = page.locator('[data-project]', { hasText: "fixture" }).locator('[data-row-settings]').first();
-  await (await showProjectRow(page, gear)).click();
+  // It is not drawn until the pointer is on the row.
+  const project = page.locator('[data-project]', { hasText: "fixture" });
+  await projectOpener(project).hover({ position: { x: 12, y: 8 } });
+  const gear = project.locator('[data-row-settings]').first();
+  await (await showProjectRow(page, gear)).click({ position: { x: 12, y: 8 } });
   const sheet = page.locator('[data-project-settings]');
   await sheet.getByRole("combobox", { name: "GitHub repository", exact: true }).click();
   await page.getByRole("option", { name: "Choose repository", exact: true }).click();

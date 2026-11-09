@@ -300,6 +300,7 @@ impl Runtime {
             // its View tabs back.
             self.restore_front_when_ready();
         }
+        self.refresh_start_profile_catalog();
         changed |= self.refresh_browser_inventory_scope();
         changed
     }

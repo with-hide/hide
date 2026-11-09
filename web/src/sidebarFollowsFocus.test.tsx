@@ -111,9 +111,9 @@ it("selects and brings into view the row that stands for the focused pane, openi
     expect(current()).toEqual([betaRow]);
     expect(scrolled.at(-1)).toBe(betaRow);
 
-    // A checkout under the folded Inactive group: the fold that holds it stands for it, and stays closed.
+    // A checkout under the folded Checkouts group: the fold that holds it stands for it, and stays closed.
     await show("checkout:alpha-old", "pane:old");
-    const inactive = container.querySelector('[data-inactive-checkouts="/fixture/alpha"]');
+    const inactive = container.querySelector('[data-other-checkouts="workspace:alpha"]');
     expect(inactive?.getAttribute("aria-expanded")).toBe("false");
     expect(current()).toEqual([inactive]);
     expect(scrolled.at(-1)).toBe(inactive);
@@ -134,8 +134,11 @@ it("selects and brings into view the row that stands for the focused pane, openi
 
     // A section can cover a row before the next paint updates data-stuck (issue 1025).
     // Current geometry, rather than that stale marker, decides visibility.
-    const header = container.querySelector<HTMLElement>("[data-section-sticky]")!;
+    // The fixture has nothing for Needs You or Done to raise, so the sticky head the list would carry is stood in by one.
+    const header = document.createElement("div");
+    header.dataset.sectionSticky = "true";
     header.dataset.stuck = "false";
+    container.querySelector("[data-project-list]")!.prepend(header);
     layout.mockImplementation(function (this: HTMLElement) {
       if (this.matches("[data-project-list]")) return rect(0, 100);
       if (this.matches("[data-section-sticky]")) return rect(0, 26);

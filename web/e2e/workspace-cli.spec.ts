@@ -6,7 +6,7 @@ import { fixtureExecutable } from "./platform-fixture";
 import { openProject, runInPaneKeepingFocus, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, showDocuments, showProjectRow } from "./wire";
+import { enterWorkspace, projectOpener, showDocuments, showProjectRow } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 90_000 });
@@ -68,11 +68,13 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     await withControl(daemon, (control) => openProject(control, beta, "beta"));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page);
-    // Neither project has an agent, so the one not in front waits behind the
-    // No agents fold; which one starts in front is the catalog's order, so
-    // beta is opened the way the operator would, through the fold when it is there.
-    const betaRow = page.locator("nav[data-sidebar] [data-project]", { hasText: "beta" }).locator("[data-checkout]").first();
-    await (await showProjectRow(page, betaRow)).click();
+    // Neither project has an agent; which one starts in front is the catalog's order, so
+    // beta is opened the way the operator would, through its project row. Its main
+    // checkout's row is drawn once it is in front.
+    const betaProject = page.locator("nav[data-sidebar] [data-project]", { hasText: "beta" });
+    const betaRow = betaProject.locator("[data-checkout]").first();
+    // A project already in front folds when its row is pressed again, so beta is pressed only when it is not.
+    if ((await betaRow.getAttribute("aria-current", { timeout: 1_000 }).catch(() => null)) !== "true") await (await showProjectRow(page, betaProject.locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
     await expect(betaRow).toHaveAttribute("aria-current", "true");
     const foregroundPaneLocator = page.locator('[data-pane-view][data-focused="true"]');
     await expect(foregroundPaneLocator).toHaveAttribute("data-pane-view", /./);
@@ -109,9 +111,10 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     if (process.env.HIDE_E2E_SCREENSHOT_DIR) {
       await page.screenshot({ path: path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "workspace-cli-background.png") });
     }
-    const firstRow = await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first());
-    await firstRow.click();
-    await expect(firstRow).toHaveAttribute("aria-current", "true");
+    const firstProject = page.locator("[data-project]", { hasText: "fixture" });
+    await (await showProjectRow(page, projectOpener(firstProject))).click({ position: { x: 12, y: 8 } });
+    // Opened, the project's main checkout is its row, which the focus keeps drawn.
+    await expect(firstProject.locator("button[data-checkout]").first()).toHaveAttribute("aria-current", "true");
     // Background opens kept beta intact and left the caller's lane alone
     // (PRD right-lane B17): its documents button counts the prepared views,
     // and pressing it shows them.

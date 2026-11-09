@@ -365,6 +365,7 @@ mod tests {
         let (home, cwd, writer) = database(70);
         let (mut open, page) = Open::open(
             &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
             "pane",
             source(&cwd),
         )
@@ -397,6 +398,7 @@ mod tests {
         let (home, cwd, writer) = database(1);
         let (mut open, page) = Open::open(
             &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
             "pane",
             source(&cwd),
         )
@@ -435,6 +437,7 @@ mod tests {
         let (home, cwd, writer) = database(40);
         let (mut open, page) = Open::open(
             &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
             "pane",
             source(&cwd),
         )
@@ -482,11 +485,15 @@ mod tests {
             identity: SessionIdentity::id("ses_child"),
             ..source(&cwd)
         };
-        let refused =
-            |source| match Open::open(&hide_session::Accounts::new(home.path()), "pane", source) {
-                Err(SessionError::Checkpoint(reason)) => reason,
-                other => panic!("{other:?}"),
-            };
+        let refused = |source| match Open::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        ) {
+            Err(SessionError::Checkpoint(reason)) => reason,
+            other => panic!("{other:?}"),
+        };
         assert_eq!(refused(child), "label_session_not_root");
         assert_eq!(
             refused(source(&home.path().display().to_string())),
@@ -497,12 +504,18 @@ mod tests {
             ..source(&cwd)
         };
         assert!(matches!(
-            Open::open(&hide_session::Accounts::new(home.path()), "pane", path),
+            Open::open(
+                &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
+                "pane",
+                path
+            ),
             Err(SessionError::UnsupportedSessionKind)
         ));
 
         let (mut open, _) = Open::open(
             &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
             "pane",
             source(&cwd),
         )
@@ -600,6 +613,7 @@ mod tests {
             let (home, cwd, writer) = database(70);
             let (mut open, page) = Open::open(
                 &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
                 "pane",
                 source(&cwd),
             )
@@ -632,6 +646,7 @@ mod tests {
             let (home, cwd, writer) = database(1);
             let (mut open, page) = Open::open(
                 &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
                 "pane",
                 source(&cwd),
             )
@@ -670,6 +685,7 @@ mod tests {
             let (home, cwd, writer) = database(40);
             let (mut open, page) = Open::open(
                 &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
                 "pane",
                 source(&cwd),
             )
@@ -718,6 +734,7 @@ mod tests {
             };
             let refused = |source| match Open::open(
                 &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
                 "pane",
                 source,
             ) {
@@ -732,6 +749,7 @@ mod tests {
 
             let (mut open, _) = Open::open(
                 &hide_session::Accounts::new(home.path()),
+                &AccountKey::Default,
                 "pane",
                 source(&cwd),
             )
@@ -752,7 +770,7 @@ mod tests {
                 .execute_batch("ALTER TABLE session_message RENAME TO session_messages;")
                 .unwrap();
             assert!(matches!(
-                Open::open(&hide_session::Accounts::new(home.path()), "pane", source(&cwd)),
+                Open::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source(&cwd)),
                 Err(SessionError::Checkpoint(reason)) if reason == "opencode_db_schema_unknown"
             ));
         }

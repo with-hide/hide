@@ -24,6 +24,20 @@ mod tests {
         assert_eq!(TEXT.matches(SESSION_RULES).count(), 1);
         let guide = text();
         assert_eq!(guide.matches(hide_agent_hooks::PURPOSE_CONTEXT).count(), 1);
+        // B9: the top-level guide routes planning to missions; workers keep
+        // their node steps in the mission guide.
+        assert!(!guide.contains("hide task help"));
+        assert!(guide.contains("run `hide mission help`"));
+        assert!(guide.contains("A worker or reviewer of a mission node"));
+        for rule in [
+            "explicitly asks for, invokes with `/hide-mission`",
+            "without asking which way to work again",
+            "first ask in one line: Shall I run this as a mission, or do it directly?",
+            "Wait for the operator's answer and follow it",
+            "With none of these signals, work directly without asking",
+        ] {
+            assert!(guide.contains(rule), "{rule}");
+        }
     }
 
     #[test]

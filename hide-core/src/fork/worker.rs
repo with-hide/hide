@@ -34,9 +34,10 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                     // (`launch::holds`), on this machine.
                     &|start| {
                         let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
-                        let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+                        let mut runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+                        let machine = runtime.node().to_string();
                         runtime
-                            .hold_profile_start(runtime.node().as_str(), start)
+                            .hold_profile_start(&machine, start)
                             .map_err(String::from)
                     },
                     &|| fork_execution_current(&context, &request),
@@ -195,10 +196,10 @@ fn run_agent_fork_with_registration(
     // D-26, D-27).
     let agent = crate::launch::resolve(
         Some(node),
-        &hold(crate::launch::Request::recorded(
-            request.agent.kind(),
-            request.profile.as_ref(),
-        ))?,
+        &hold(
+            crate::launch::Request::recorded(request.agent.kind(), request.profile.as_ref())
+                .with_choice(&request.launch),
+        )?,
     )
     .map_err(String::from)?;
     let (mut args, made) = fork_arguments(node, request, &agent)?;

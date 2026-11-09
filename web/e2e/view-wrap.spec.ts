@@ -10,7 +10,7 @@ import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { startHided } from "./hided-fixture";
-import { showExplorer, showProjectRow, showTool, screenshot } from "./wire";
+import { showExplorer, projectOpener, showProjectRow, showTool, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 90_000 });
@@ -38,7 +38,7 @@ test("file and diff views open wrapped and Wrap turns it off per tab", async ({ 
     daemon = await startHided(engine, "view-wrap");
     await withControl(daemon, (control) => openProject(control, repo, "wrap-repo"));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "wrap-repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "wrap-repo" })))).click({ position: { x: 12, y: 8 } });
 
     await showExplorer(page);
     await page.locator(`[data-explorer-row="${toPage(file)}"]`).click();

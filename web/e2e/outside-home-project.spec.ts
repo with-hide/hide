@@ -10,7 +10,7 @@ import path from "node:path";
 import { dumpOnFailure } from "./failure-dump";
 import { startFixture } from "./engine-fixture";
 import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
-import { sendEvent, showExplorer } from "./wire";
+import { openOtherCheckouts, sendEvent, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 180_000 });
@@ -114,8 +114,9 @@ test("a project outside home is asked about again after its removal, and its wor
     }, { timeout: 60_000 }).toBe(1);
     const worktree = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     // The made worktree comes forward as the front checkout once the core
-    // lists its pane, so it stands on its own line rather than in the fold of
-    // worktrees with no agents (docs/ARCHITECTURE.md, a created worktree's pane).
+    // lists its pane (docs/ARCHITECTURE.md, a created worktree's pane); it is
+    // not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     await expect(worktree).toBeVisible({ timeout: 60_000 });
     const [made] = worktreesOf(repo);
     await worktree.locator("[data-checkout]").first().click();

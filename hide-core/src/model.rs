@@ -873,12 +873,6 @@ pub struct NavigatorSnapshot {
     /// list. `workspaces` remains the one authoritative row collection so
     /// search, focus, and project navigation never lose a folded project.
     pub inactive_projects: Vec<InactiveProjectGroupSnapshot>,
-    /// Each device's projects with no agent row and no sleeping
-    /// conversation, folded after its active projects and before its
-    /// Inactive fold (PRD sidebar-titlebar-refresh D-01). Pinned projects,
-    /// the project in front and Inactive projects are never here; the open
-    /// state is the `no_agents/<device>` key of `session_open_folds`.
-    pub no_agent_projects: Vec<InactiveProjectGroupSnapshot>,
     pub agents: Vec<SidebarAgentSnapshot>,
     /// The checkouts Hide AI started an agent in, by device and path. A list
     /// beside the checkouts, not a field on them, because a checkout row is
@@ -1146,10 +1140,16 @@ pub struct ProfileSnapshot {
     /// hook reported (D-35, B25): its program sets a folder of its own.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub wrapper_folder: bool,
-    /// Its account's identity (`hide_agent_adapter::AccountKey`); the shell
-    /// does not see it.
+    /// A new start may take it now: it is not being removed (D-30). The one
+    /// judgment every start, the account a hook reported and the screen's
+    /// preselection read (`ProfilesSnapshot::startable`); laid by the list
+    /// and the kit's judgment of it ([`ProfilesSnapshot::judged`]).
+    pub startable: bool,
+    /// Its account's identity as its node's `resolve` keyed it
+    /// (`ListedProfile::account_key`, D-12); `None` for a profile that does
+    /// not resolve there. The shell does not see it.
     #[serde(skip)]
-    pub account_key: hide_agent_adapter::AccountKey,
+    pub account_key: Option<hide_agent_adapter::AccountKey>,
     /// The account variables a start of it sets, as a hook reports them
     /// (`ListedProfile::account_variables`); the shell does not see them.
     #[serde(skip)]
@@ -1208,15 +1208,8 @@ impl ProfilesSnapshot {
                     skill: None,
                     login: profile.login,
                     wrapper_folder: false,
-                    account_key: match &profile.account {
-                        None => hide_agent_adapter::AccountKey::Default,
-                        Some(hide_agent_adapter::AccountRef::Folder(folder)) => {
-                            hide_agent_adapter::AccountKey::Folder(folder.clone())
-                        }
-                        Some(hide_agent_adapter::AccountRef::Name(name)) => {
-                            hide_agent_adapter::AccountKey::Name(name.clone())
-                        }
-                    },
+                    startable: !profile.removing,
+                    account_key: profile.account_key.clone(),
                     account_variables: profile.account_variables.clone(),
                 })
                 .collect(),
@@ -1275,10 +1268,52 @@ impl ProfilesSnapshot {
                 }
             };
             profile.install = Some(install);
+            profile.startable = !matches!(
+                install,
+                ProfileInstall::Removing | ProfileInstall::RemoveFailed
+            );
             profile.folder = folder;
             profile.hook = hook;
             profile.skill = skill;
         }
+    }
+
+    /// The profile `id` of the agent `kind` (any spelling) as this list holds
+    /// it, when a new start may take it now ([`ProfileSnapshot::startable`]).
+    /// A start that came to it on its own (a project's or the machine's
+    /// default) falls through past one that may not; one the operator chose
+    /// is refused (`launch::chosen_id`); one an agent's record names is asked
+    /// of its machine, which refuses it by name (`launch::resolve`).
+    pub(crate) fn startable(&self, kind: &str, id: &str) -> Option<&ProfileSnapshot> {
+        let agent = hide_agent_adapter::adapter(kind).map_or(kind, |adapter| adapter.id);
+        self.profiles
+            .iter()
+            .find(|profile| profile.kind == agent && profile.id == id && profile.startable)
+    }
+
+    /// The profiles of the agent `kind` (any spelling) a new start may take
+    /// in the account `key`, the agent's default on this machine first, then
+    /// the list's order: what a session found in that account resumes with,
+    /// and what an agent whose hook reported that account runs with (PRD
+    /// agent-profiles D-03, B19, B24).
+    pub(crate) fn in_account<'a>(
+        &'a self,
+        kind: &str,
+        key: &hide_agent_adapter::AccountKey,
+    ) -> Vec<&'a ProfileSnapshot> {
+        let agent = hide_agent_adapter::adapter(kind).map_or(kind, |adapter| adapter.id);
+        let default = self.defaults.get(agent);
+        let mut found: Vec<&ProfileSnapshot> = self
+            .profiles
+            .iter()
+            .filter(|profile| {
+                profile.kind == agent
+                    && profile.startable
+                    && profile.account_key.as_ref() == Some(key)
+            })
+            .collect();
+        found.sort_by_key(|profile| Some(&profile.id) != default);
+        found
     }
 }
 
@@ -5056,6 +5091,13 @@ pub struct PaneCompletion {
 /// started it with.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneLaunch {
+    /// The start may run but no matching agent row has been observed yet.
+    /// Its record protects the account until that observation or pane removal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+    /// In-process ordering of profile attempts; restored records precede all.
+    #[serde(skip)]
+    pub start: u64,
     /// The agent kind, in the engine's spelling.
     pub kind: String,
     /// The engine name Hide started the agent under (a task's, a wake's, a
@@ -7225,8 +7267,17 @@ pub struct PaneMovePreviewSnapshot {
     pub message: Option<String>,
 }
 
+/// A project's automatic start choice, from the same picker a start uses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StartProfilesSnapshot {
+    pub device_id: String,
+    pub root: String,
+    pub profiles: BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StatusSnapshot {
+    pub start_profiles: BTreeMap<String, StartProfilesSnapshot>,
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
     #[serde(rename = "herdr")]
@@ -7915,7 +7966,6 @@ impl Snapshot {
                 )],
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
-                no_agent_projects: Vec::new(),
                 agents: Vec::new(),
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
@@ -7989,6 +8039,7 @@ impl Snapshot {
                 replacement_range: None,
             },
             status: StatusSnapshot {
+                start_profiles: BTreeMap::new(),
                 tab_rename: None,
                 // The engine's status until the session sync first answers.
                 engine: ProviderStatusSnapshot {

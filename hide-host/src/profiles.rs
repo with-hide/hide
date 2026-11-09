@@ -253,29 +253,20 @@ fn launch_beside(
 ) -> HostResult<ProfileLaunch> {
     let place = place(env)?;
     let file = read(&place.file)?;
-    let Some(stored) = file
-        .profiles
-        .iter()
-        .find(|stored| stored.profile.id == *id && !id.is_default())
-    else {
-        return Ok(ProfileLaunch::Gone);
-    };
-    let profile = &stored.profile;
     let refused = |text: String| Ok(ProfileLaunch::Refused { text });
-    if stored.removing {
-        return refused(format!("the profile {} is being removed", profile.name));
-    }
-    let Some(adapter) =
-        hide_agent_adapter::adapter(kind).filter(|adapter| adapter.id == profile.kind)
-    else {
-        return refused(format!(
-            "the profile {} is not one of {kind}'s",
-            profile.name
-        ));
-    };
-    let account = match adapter.resolve(profile, &NodeEnv::new(Some(place.home.clone()))) {
-        Ok(account) => account,
-        Err(refusal) => {
+    let (profile, account) = match account_of(&place.home, &file, id, kind) {
+        Ok(found) => found,
+        Err(Unusable::Gone) => return Ok(ProfileLaunch::Gone),
+        Err(Unusable::Removing(profile)) => {
+            return refused(format!("the profile {} is being removed", profile.name));
+        }
+        Err(Unusable::OtherAgent(profile)) => {
+            return refused(format!(
+                "the profile {} is not one of {kind}'s",
+                profile.name
+            ));
+        }
+        Err(Unusable::Unresolved(profile, refusal)) => {
             return refused(format!(
                 "the profile {} cannot start here: {refusal}",
                 profile.name
@@ -331,20 +322,26 @@ pub fn trust_account(
     }
     let place = place(env)?;
     let file = read(&place.file)?;
-    let Some(stored) = file.profiles.iter().find(|stored| stored.profile.id == *id) else {
-        return refused(format!("the profile {} is no longer on this machine", id.0));
-    };
-    let profile = &stored.profile;
-    if stored.removing {
-        return refused(format!("the profile {} is being removed", profile.name));
-    }
-    let Some(adapter) =
-        hide_agent_adapter::adapter(kind).filter(|adapter| adapter.id == profile.kind)
-    else {
-        return refused(format!(
-            "the profile {} is not one of {kind}'s",
-            profile.name
-        ));
+    let (profile, account) = match account_of(&place.home, &file, id, kind) {
+        Ok(found) => found,
+        Err(Unusable::Gone) => {
+            return refused(format!("the profile {} is no longer on this machine", id.0));
+        }
+        Err(Unusable::Removing(profile)) => {
+            return refused(format!("the profile {} is being removed", profile.name));
+        }
+        Err(Unusable::OtherAgent(profile)) => {
+            return refused(format!(
+                "the profile {} is not one of {kind}'s",
+                profile.name
+            ));
+        }
+        Err(Unusable::Unresolved(profile, refusal)) => {
+            return refused(format!(
+                "the profile {} cannot start here: {refusal}",
+                profile.name
+            ));
+        }
     };
     if profile.account.is_none() {
         return Ok(None);
@@ -358,15 +355,54 @@ pub fn trust_account(
             ),
         )
     })?;
-    adapter
-        .resolve(profile, &NodeEnv::new(Some(place.home.clone())))
-        .map(Some)
-        .map_err(|refusal| {
-            HostError::new(
-                ErrorCode::InvalidPath,
-                format!("the profile {} cannot start here: {refusal}", profile.name),
-            )
-        })
+    Ok(Some(account))
+}
+
+/// Why the profile a call names cannot be used now ([`account_of`]).
+enum Unusable<'f> {
+    /// The file holds no such profile (or names the built-in one).
+    Gone,
+    Removing(&'f Profile),
+    /// Another agent's.
+    OtherAgent(&'f Profile),
+    /// It does not resolve on this node.
+    Unresolved(&'f Profile, Refusal),
+}
+
+/// The profile `id` of the `kind` agent as `file` holds it, with the account
+/// it runs in on this node, resolved as when it was added: the one lookup a
+/// start, a trust write and a usage read make of a profile, each wording
+/// why not in its own terms.
+fn account_of<'f>(
+    home: &Path,
+    file: &'f File,
+    id: &ProfileId,
+    kind: &str,
+) -> Result<(&'f Profile, hide_agent_adapter::Account), Unusable<'f>> {
+    let stored = file
+        .profiles
+        .iter()
+        .find(|stored| stored.profile.id == *id && !id.is_default())
+        .ok_or(Unusable::Gone)?;
+    let profile = &stored.profile;
+    if stored.removing {
+        return Err(Unusable::Removing(profile));
+    }
+    let adapter = hide_agent_adapter::adapter(kind)
+        .filter(|adapter| adapter.id == profile.kind)
+        .ok_or(Unusable::OtherAgent(profile))?;
+    let account = resolved(adapter, home, profile)
+        .map_err(|refusal| Unusable::Unresolved(profile, refusal))?;
+    Ok((profile, account))
+}
+
+/// The account `profile` runs in on the node whose home is `home`.
+fn resolved(
+    adapter: &hide_agent_adapter::AgentAdapter,
+    home: &Path,
+    profile: &Profile,
+) -> Result<hide_agent_adapter::Account, Refusal> {
+    adapter.resolve(profile, &NodeEnv::new(Some(home.to_path_buf())))
 }
 
 /// How the profile's `program` starts here: a bare name found as a pane's
@@ -595,31 +631,29 @@ fn kit_profiles(file: &File) -> KitProfiles {
     }
 }
 
-/// What a list says of a profile's account beside its pieces: whether it
-/// is signed in (`crate::login`), for a profile in an account of its own
-/// that runs the agent's own program (a program of its own signs in its own
-/// way, D-16), and the account variables a start of it sets, exactly as it
-/// sets them and a hook reports them (D-15), by which the core knows a pane
-/// the operator started by hand (D-03). A
-/// profile this node cannot resolve has neither; its add was refused for
-/// that reason already.
-fn account_facts(
-    home: &Path,
-    stored: &Stored,
-) -> (
-    Option<hide_node_link::profiles::ProfileLogin>,
-    Vec<(String, String)>,
-) {
+/// What a list says of a profile's account beside its pieces: the account
+/// this node resolves it in, keyed as `resolve` keys it (D-12, D-15), which
+/// the core compares accounts by; whether it is signed in (`crate::login`),
+/// for a profile in an account of its own that runs the agent's own program
+/// (a program of its own signs in its own way, D-16); and the account
+/// variables a start of it sets, exactly as it sets them and a hook reports
+/// them, by which the core knows a pane the operator started by hand
+/// (D-03). A profile this node cannot resolve has none of them: its add was
+/// refused for that reason already, and no start can take it.
+fn account_facts(home: &Path, stored: &Stored) -> AccountFacts {
     let profile = &stored.profile;
-    if stored.removing || profile.account.is_none() {
-        return (None, Vec::new());
-    }
     let Some(adapter) = hide_agent_adapter::adapter(&profile.kind) else {
-        return (None, Vec::new());
+        return AccountFacts::default();
     };
-    let Ok(account) = adapter.resolve(profile, &NodeEnv::new(Some(home.to_path_buf()))) else {
-        return (None, Vec::new());
+    let Ok(account) = resolved(adapter, home, profile) else {
+        return AccountFacts::default();
     };
+    if stored.removing || profile.account.is_none() {
+        return AccountFacts {
+            key: Some(account.key),
+            ..AccountFacts::default()
+        };
+    }
     let variables = adapter
         .account_rule()
         .into_iter()
@@ -637,7 +671,19 @@ fn account_facts(
         .is_none()
         .then(|| crate::login::login(&profile.kind, &account))
         .flatten();
-    (login, variables)
+    AccountFacts {
+        key: Some(account.key),
+        login,
+        variables,
+    }
+}
+
+/// [`account_facts`]' answer.
+#[derive(Default)]
+struct AccountFacts {
+    key: Option<hide_agent_adapter::AccountKey>,
+    login: Option<hide_node_link::profiles::ProfileLogin>,
+    variables: Vec<(String, String)>,
 }
 
 /// The account of the profile `id` that a usage read of `source` reads
@@ -661,30 +707,25 @@ pub fn usage_account(
     .adapter();
     let place = place(env)?;
     let file = read(&place.file)?;
-    let stored = file
-        .profiles
-        .iter()
-        .find(|stored| stored.profile.id == *id && !stored.removing)
-        .ok_or_else(|| {
-            HostError::new(
-                ErrorCode::NotFound,
-                format!("This machine has no profile {}", id.0),
-            )
-        })?;
-    let profile = &stored.profile;
-    if profile.kind != kind.id || profile.account.is_none() {
-        return Err(refused(format!(
+    let own = |profile: &Profile| {
+        refused(format!(
             "the profile {} has no {} account of its own",
             profile.name, kind.label
-        )));
+        ))
+    };
+    match account_of(&place.home, &file, id, kind.id) {
+        Ok((profile, _)) if profile.account.is_none() => Err(own(profile)),
+        Ok((_, account)) => Ok(account),
+        Err(Unusable::Gone | Unusable::Removing(_)) => Err(HostError::new(
+            ErrorCode::NotFound,
+            format!("This machine has no profile {}", id.0),
+        )),
+        Err(Unusable::OtherAgent(profile)) => Err(own(profile)),
+        Err(Unusable::Unresolved(profile, refusal)) => Err(refused(format!(
+            "the profile {} cannot be read here: {refusal}",
+            profile.name
+        ))),
     }
-    kind.resolve(profile, &NodeEnv::new(Some(place.home.clone())))
-        .map_err(|refusal| {
-            refused(format!(
-                "the profile {} cannot be read here: {refusal}",
-                profile.name
-            ))
-        })
 }
 
 fn listed(home: &Path, file: &File, judged: Judged, values: bool) -> ProfileList {
@@ -699,7 +740,7 @@ fn listed(home: &Path, file: &File, judged: Judged, values: bool) -> ProfileList
         .iter()
         .map(|stored| {
             let profile = &stored.profile;
-            let (login, account_variables) = account_facts(home, stored);
+            let facts = account_facts(home, stored);
             ListedProfile {
                 id: profile.id.clone(),
                 kind: profile.kind.clone(),
@@ -713,8 +754,9 @@ fn listed(home: &Path, file: &File, judged: Judged, values: bool) -> ProfileList
                 place: places
                     .get(&(&profile.id, profile.version))
                     .map(|place| (*place).clone()),
-                login,
-                account_variables,
+                login: facts.login,
+                account_variables: facts.variables,
+                account_key: facts.key,
             }
         })
         .collect();
@@ -1495,6 +1537,12 @@ mod tests {
         ));
         let id = added.added.clone().unwrap();
         let account = format!("{}/", node.home().join("accounts/work").display());
+        // The list keys the account as the start does (D-12): the core
+        // compares accounts by it and keys none itself.
+        assert_eq!(
+            added.list.profiles[0].account_key,
+            Some(hide_agent_adapter::AccountKey::Folder(account.clone()))
+        );
 
         let start = launch_beside(&node.env, "claude", &id, Some(&own)).unwrap();
 

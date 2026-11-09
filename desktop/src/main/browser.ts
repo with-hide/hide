@@ -9,6 +9,8 @@
 //   not shown  -> hidden, still alive; a move between areas never reloads
 //   closed     -> the core's inventory no longer names it: destroyed,
 //                 which ends its renderer process
+//   closed itself -> the page's `window.close()` ended its contents: closed,
+//                 and a fresh unloaded page on its slot says so until reloaded
 //
 // A hidden page past `MAX_LIVE_VIEWS`, or one hidden and idle for
 // `IDLE_UNLOAD_MS`, is unloaded: closed, reported `gone`, and loaded again
@@ -63,6 +65,8 @@ type Page = {
   workspace: string;
   id: string;
   view: WebContentsView;
+  /** Its contents' id, kept because a view whose contents were destroyed no longer names them. */
+  readonly contentsId: number;
   /** The load stamp this page last loaded. */
   applied: number;
   visible: boolean;
@@ -253,7 +257,7 @@ export class BrowserViews {
     // An ineligible document/frame invalidates the bound generation before
     // another protocol request can use it. Area moves are handled by scope.
     const excluded = this.cdpObserved.filter((previous) => !next.some((row) => row.key === previous.key)
-      && [...this.pages.values()].some((page) => page.key === previous.key && page.view.webContents.id === previous.contents));
+      && [...this.pages.values()].some((page) => page.key === previous.key && page.contentsId === previous.contents));
     if (changed || retirement || this.cdpObservedRevision !== this.cdpScopesRevision) {
       this.cdpObserved = next;
       this.cdpObservedRevision = this.cdpScopesRevision;
@@ -561,7 +565,7 @@ export class BrowserViews {
     this.publishCdp();
     if (attachmentEpoch && /^[A-Za-z0-9-]{1,64}$/.test(attachmentEpoch) && attachmentEpoch !== this.attachmentEpoch) {
       this.attachmentEpoch = attachmentEpoch;
-      for (const page of this.pages.values()) this.sendCdpAttached(page, this.cdpLeases.has(page.view.webContents.id));
+      for (const page of this.pages.values()) this.sendCdpAttached(page, this.cdpLeases.has(page.contentsId));
     }
   }
 
@@ -607,7 +611,13 @@ export class BrowserViews {
   }
 
   private create(window: BrowserWindow, workspace: string, display: BrowserPlacement): Page {
-    const partition = this.partitionOf(workspace, display);
+    const page = this.construct(window, workspace, display, this.partitionOf(workspace, display));
+    this.load(page, this.addressOf(display));
+    return page;
+  }
+
+  /** A page for `display` in its own new contents, added to the window hidden and not loaded. */
+  private construct(window: BrowserWindow, workspace: string, display: Pick<BrowserPlacement, "id" | "url" | "load" | "grant">, partition: string): Page {
     const view = new WebContentsView({
       webPreferences: { session: this.sessionFor(partition), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true },
     });
@@ -616,6 +626,7 @@ export class BrowserViews {
       workspace,
       id: display.id,
       view,
+      contentsId: view.webContents.id,
       applied: display.load,
       visible: false,
       placed: false,
@@ -645,9 +656,29 @@ export class BrowserViews {
     window.contentView.addChildView(view);
     this.pages.set(page.key, page);
     this.watch(page);
-    this.load(page, this.addressOf(display));
     this.log.event("browser.view_created", { live: this.pages.size });
     return page;
+  }
+
+  /**
+   * A page that ended its own contents (`window.close()`, which Chromium
+   * allows a page that opened with one history entry) leaves its view with
+   * none. It is closed as the core's close would close it and a fresh, unloaded
+   * page takes its place on the same slot, showing why with the toolbar's
+   * reload; loading it again on its own would loop on a page that closes
+   * itself as it loads.
+   */
+  private closedItself(page: Page): void {
+    this.log.event("browser.page_closed_itself", { id: page.id, contents: page.contentsId });
+    this.destroy(page, "closed");
+    const window = this.window;
+    if (!window || window.isDestroyed()) return;
+    const fresh = this.construct(window, page.workspace, { id: page.id, url: page.state.url, load: page.applied, grant: page.grant }, page.partition);
+    Object.assign(fresh, { placed: page.placed, shownAt: page.shownAt, idleSince: page.idleSince, device: page.device, bounds: page.bounds });
+    if (fresh.bounds) fresh.view.setBounds(fresh.bounds);
+    this.emulate(fresh);
+    this.show(fresh, page.visible);
+    this.update(fresh, { url: page.state.url, title: page.state.title, loading: false, failure: this.words()("native.browser.closedItself") });
   }
 
   private sessionFor(partition: string): Session {
@@ -813,11 +844,16 @@ export class BrowserViews {
    */
   private loadStage(page: Page, owned: CoreLoad, event: "browser.load_routed" | "browser.load_committed" | "browser.load_stopped", fields: Record<string, string | number | null> = {}): void {
     if (page.loading !== owned) return;
-    this.log.event(event, { id: page.id, contents: page.view.webContents.id, load: owned.load, ms: this.idle.now() - owned.at, ...fields });
+    this.log.event(event, { id: page.id, contents: page.contentsId, load: owned.load, ms: this.idle.now() - owned.at, ...fields });
   }
 
   private watch(page: Page): void {
     const contents = page.view.webContents;
+    // `destroy` takes the page out of the map before it closes the contents,
+    // so a page still in it lost them some other way.
+    contents.once("destroyed", () => {
+      if (this.pages.get(page.key) === page) this.closedItself(page);
+    });
     const history = () => ({ canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() });
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => {
@@ -889,7 +925,7 @@ export class BrowserViews {
     contents.on("did-frame-navigate", (_event, url) => {
       if (!isFileAddress(url) || page.cdpFileFrame) return;
       page.cdpFileFrame = true;
-      this.publishCdp({ contentsId: page.view.webContents.id, reason: "replaced" });
+      this.publishCdp({ contentsId: page.contentsId, reason: "replaced" });
     });
     contents.setWindowOpenHandler(({ url, disposition, features, referrer }) => this.openWindow(page, contents, url, isPopup(disposition, features), referrer.url));
     const forget = () => this.declined.delete(contents.id);
@@ -1018,14 +1054,14 @@ export class BrowserViews {
 
   /** Whether the contents asking are on screen: a page shown in the front Workspace, or a popup's visible window. */
   private shown(page: Page, contents: WebContents): boolean {
-    if (contents.id === page.view.webContents.id) return page.visible;
+    if (contents.id === page.contentsId) return page.visible;
     return this.popups.get(contents.id)?.window.isVisible() ?? false;
   }
 
   /** The page a request or a question comes from: a page's own contents, or a popup it owns. */
   private ownerOf(contentsId: number | undefined): Page | undefined {
     if (contentsId === undefined) return undefined;
-    for (const page of this.pages.values()) if (page.view.webContents.id === contentsId) return page;
+    for (const page of this.pages.values()) if (page.contentsId === contentsId) return page;
     return this.popups.get(contentsId)?.owner;
   }
 
@@ -1230,7 +1266,7 @@ export class BrowserViews {
     if (page.visible || page.placed || page.playing || page.downloads > 0) return true;
     // A second player still heard after the first one paused.
     if (page.view.webContents.isCurrentlyAudible()) return true;
-    if (this.cdpLeases.has(page.view.webContents.id)) return true;
+    if (this.cdpLeases.has(page.contentsId)) return true;
     for (const popup of this.popups.values()) if (popup.owner === page) return true;
     return false;
   }
@@ -1327,7 +1363,7 @@ export class BrowserViews {
     if (this.returnTo === page) this.returnTo = null;
     if (this.keyboard === page) this.keyboard = null;
     this.pages.delete(page.key);
-    this.publishCdp({ contentsId: page.view.webContents.id, reason: reason === "idle" ? "evicted" : reason });
+    this.publishCdp({ contentsId: page.contentsId, reason: reason === "idle" ? "evicted" : reason });
     // An outside file's page resolved no route, so the daemon has none to let go.
     if (!page.grant) this.release(page.workspace, page.id, page.applied);
     if (page.report) clearTimeout(page.report);
@@ -1335,7 +1371,8 @@ export class BrowserViews {
     if (window && !window.isDestroyed()) window.contentView.removeChildView(page.view);
     // Closing the contents ends the page's renderer process; a view left
     // alone keeps it running after the view is gone.
-    if (!page.view.webContents.isDestroyed()) page.view.webContents.close();
+    const contents = page.view.webContents as WebContents | undefined;
+    if (contents && !contents.isDestroyed()) contents.close();
     this.log.event("browser.view_closed", { reason, live: this.pages.size });
   }
 }

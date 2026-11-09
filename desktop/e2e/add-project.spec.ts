@@ -101,16 +101,6 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(dialog).toHaveCount(0, { timeout: 20_000 });
     await expect(page.locator("[data-project-list]")).toContainText("alpha", { timeout: 20_000 });
 
-    // ⌘⇧N opens it again; the same folder is refused by the shell before anything is sent.
-    await page.keyboard.press(chord("new_workspace", "electron"));
-    await expect(dialog).toBeVisible();
-    await stubPicker(app, [{ canceled: false, filePaths: [alpha] }]);
-    await page.keyboard.press("Enter");
-    await expect(alert).toHaveAttribute("data-registration-reason", "already_registered");
-    await expect(alert).toContainText(toPage(alpha));
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-
     // Over All projects, the page a first run stays on, with a project listed, the Projects title's + still opens the same dialog, and its × closes it.
     await expect(page.locator("[data-overview-page]")).toBeVisible();
     await expect(page.locator("[data-main-add-project]")).toHaveCount(0);
@@ -138,6 +128,15 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(dialog).toHaveAttribute("data-add-project", nodeOf(run.env));
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+
+    // The same folder is already a project, so the dialog closes and goes to it, adding nothing.
+    await page.keyboard.press(chord("new_workspace", "electron"));
+    await expect(dialog).toBeVisible();
+    await stubPicker(app, [{ canceled: false, filePaths: [alpha] }]);
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator("[data-project]", { hasText: "alpha" })).toHaveCount(1);
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
   } finally {
     await app?.close();
     run.cleanup();

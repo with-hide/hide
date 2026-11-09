@@ -53,7 +53,8 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+    // The repository's own row opens its main checkout, whose row is drawn only while it holds an agent or the focus.
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
     await chooseTheme(page, "light");
     if (options.agentOn) {
       // A working agent in the worktree of that branch. The core lists a repository's worktrees once the
@@ -349,14 +350,14 @@ test("the lane chord brings the card back with its tool and alone, and another c
     await page.locator('[data-sidebar-lens-option="projects"]').click();
     const otherRow = page.locator("[data-project]", { hasText: "other" });
     await expect(otherRow).toHaveCount(1, { timeout: 20_000 });
-    await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     await expect(slot).toHaveCount(0);
     await expect(card).toHaveCount(0);
 
     // Back in the first checkout's tab its card is there, and its button
     // is the way to it.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
     await expect(slot).toHaveCount(1);
     await expect(card).toBeVisible();
   });

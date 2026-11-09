@@ -147,7 +147,7 @@ async function startFlow(page: Page, { tabLabels = ["second", "third"] } = {}): 
 
     // Two checkouts in the Projects sidebar. Which one the core focuses at
     // boot is its own choice, so the flow starts by choosing the first.
-    // beta runs no agent, so unless it is in front it waits under No agents.
+    // beta runs no agent; it is an ordinary row of the list, which this waits to see drawn.
     await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first());
     await expect(page.locator("[data-checkout]")).toHaveCount(2);
     // The core names projects by directory, not by the engine's label or id.

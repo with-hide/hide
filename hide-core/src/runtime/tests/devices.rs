@@ -47,7 +47,7 @@ fn device<'a>(runtime: &'a Runtime, id: &str) -> &'a DeviceSnapshot {
 /// A removed device takes its Explorer expansion with it, so the map stays
 /// bounded by the registered machines.
 #[test]
-fn removing_a_device_forgets_its_expanded_paths() {
+fn removing_a_device_forgets_its_expanded_paths_and_profile_start_state() {
     let mut runtime = runtime();
     assert!(register_device(&mut runtime, "studio"));
     runtime
@@ -56,8 +56,28 @@ fn removing_a_device_forgets_its_expanded_paths() {
         .device_expanded_paths
         .insert("studio".to_owned(), vec!["/srv/p".to_owned()]);
 
+    runtime
+        .wrapper_folders
+        .insert(("studio".into(), "p-work".into()), (7, true));
+    runtime
+        .wrapper_folders
+        .insert((runtime.node.to_string(), "p-work".into()), (8, false));
+    let holds = runtime.profile_holds.clone();
+    let profile = hide_agent_adapter::ProfileId("p-work".into());
+    let held = holds
+        .hold("studio", &profile, "claude", 0, 8, &Default::default())
+        .unwrap();
     assert!(dispatch_device(&mut runtime, "remove_device", "studio"));
     assert!(runtime.snapshot.ui_state.device_expanded_paths.is_empty());
+    assert!(holds.starting("studio", &profile).is_empty());
+    assert!(
+        !runtime
+            .wrapper_folders
+            .keys()
+            .any(|(machine, _)| machine == "studio")
+    );
+    assert_eq!(runtime.wrapper_folders.len(), 1);
+    drop(held);
 }
 
 /// A registered device has a remote status entry from the moment it is
@@ -92,7 +112,6 @@ fn registering_a_device_opens_its_remote_status_and_removing_it_closes_it() {
     runtime.snapshot.ui_state.session_open_folds = vec![
         "remote:studio:project".to_owned(),
         "cleanup/studio".to_owned(),
-        "no_agents/studio".to_owned(),
         "asleep/remote:studio:project".to_owned(),
         "local-project".to_owned(),
     ];

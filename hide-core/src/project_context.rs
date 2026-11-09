@@ -198,11 +198,6 @@ pub(crate) fn project_is_inactive(
         && is_stale(project_activity(workspace, by_pane), now_unix_ms)
 }
 
-/// The `session_open_folds` key that holds a device's No agents fold open.
-pub(crate) fn no_agents_fold_key(device_id: &str) -> String {
-    format!("no_agents/{device_id}")
-}
-
 /// The `session_open_folds` key that holds a sleeping project open until
 /// one of its agents wakes (D-19).
 pub(crate) fn asleep_fold_key(project_id: &str) -> String {
@@ -291,7 +286,6 @@ pub(crate) fn refresh_inactive_groups(
     now_unix_ms: u64,
 ) -> bool {
     let before_projects = navigator.inactive_projects.clone();
-    let before_no_agents = navigator.no_agent_projects.clone();
     let before_checkouts = navigator
         .workspaces
         .iter()
@@ -322,7 +316,6 @@ pub(crate) fn refresh_inactive_groups(
         .collect::<HashSet<_>>();
 
     let mut inactive_projects = Vec::<InactiveProjectGroupSnapshot>::new();
-    let mut no_agent_projects = Vec::<InactiveProjectGroupSnapshot>::new();
     let sleeping = &navigator.sleeping_sessions;
     for workspace in &mut navigator.workspaces {
         workspace.inactive_checkouts = inactive_checkout_group(
@@ -343,38 +336,19 @@ pub(crate) fn refresh_inactive_groups(
         // fold above.
         let project_is_inactive =
             project_is_inactive(workspace, &by_pane, focused_checkout_id, now_unix_ms);
-        let (presence, has_rows) =
+        let (presence, _) =
             agent_presence(workspace, &by_pane, sleeping, &ui_state.session_open_folds);
         workspace.agent_presence = presence;
-        let in_front = focused_checkout_id.is_some_and(|focused| {
-            workspace
-                .checkouts
-                .iter()
-                .any(|checkout| checkout.id == focused)
-        });
+        // A project with no agent is an ordinary row; the list dims the ones
+        // nothing touched for a week, which the snapshot names here.
         if project_is_inactive {
             let expanded = expanded_project_devices.contains(workspace.device_id.as_str());
             add_to_group(&mut inactive_projects, workspace, expanded);
-        } else if !has_rows
-            && !workspace.checkouts.iter().any(holds_named_tab)
-            && !workspace.pinned
-            && !in_front
-        {
-            // A project with no agent and no sleeping conversation waits in
-            // its device's No agents fold (D-01); the Inactive fold keeps
-            // the projects nothing has touched for a week. A tab the
-            // operator named and left without agents is one they kept.
-            let expanded = ui_state
-                .session_open_folds
-                .contains(&no_agents_fold_key(&workspace.device_id));
-            add_to_group(&mut no_agent_projects, workspace, expanded);
         }
     }
     navigator.inactive_projects = inactive_projects;
-    navigator.no_agent_projects = no_agent_projects;
 
     navigator.inactive_projects != before_projects
-        || navigator.no_agent_projects != before_no_agents
         || navigator.workspaces.iter().zip(before_checkouts).any(
             |(workspace, (id, group, session_folds, presence))| {
                 workspace.id != id
@@ -1019,10 +993,9 @@ mod tests {
     }
 
     /// A tab the operator named and left without agents is one they kept:
-    /// its worktree keeps its line and its project stays out of No agents.
-    /// The same name given by a spawn keeps neither.
+    /// its worktree keeps its line. The same name given by a spawn keeps none.
     #[test]
-    fn a_tab_the_operator_named_keeps_its_worktree_and_project_out_of_no_agents() {
+    fn a_tab_the_operator_named_keeps_its_worktree_line() {
         let now_ms = 20 * 24 * 60 * 60 * 1_000;
         let recent = Some(now_ms / 1_000);
         let named = |by_operator| crate::model::TabNaming {
@@ -1046,12 +1019,6 @@ mod tests {
 
         refresh_inactive_groups(&mut navigator, &UiStateSnapshot::default(), now_ms);
 
-        let no_agents: Vec<_> = navigator
-            .no_agent_projects
-            .iter()
-            .flat_map(|group| group.project_ids.clone())
-            .collect();
-        assert_eq!(no_agents, ["spawned"]);
         assert_eq!(
             navigator.workspaces[2].session_folds.empty,
             ["spawned-tree"]
@@ -1168,13 +1135,11 @@ mod tests {
         }
     }
 
-    /// PRD sidebar-titlebar-refresh B1, B3. A project with no agent row and
-    /// no sleeping conversation waits in its device's No agents fold, in the
-    /// list's order and with the fold's open key; a pinned project, the
-    /// project in front and a week-old project stay out of it. Only an agent
-    /// with a mark other than the resting ring makes a project working.
+    /// A project with no agent row is an ordinary project: nothing sets it
+    /// apart, only a week-old one is named in the Inactive group. Only an
+    /// agent with a mark other than the resting ring makes a project working.
     #[test]
-    fn projects_without_agents_fold_and_only_marked_agents_weigh() {
+    fn only_marked_agents_weigh_and_a_week_old_project_is_inactive() {
         let now_ms = 20 * 24 * 60 * 60 * 1_000;
         let recent = Some(now_ms / 1_000);
         let old = Some((now_ms - 8 * 24 * 60 * 60 * 1_000) / 1_000);
@@ -1195,35 +1160,12 @@ mod tests {
             {"pane_id": "idle-pane", "agent_status": "idle", "state_change_seq": 1}
         ]));
         navigator.focused_checkout_id = Some("front".to_owned());
-        let ui_state = UiStateSnapshot {
-            session_open_folds: vec![no_agents_fold_key("local")],
-            ..UiStateSnapshot::default()
-        };
+        assert!(refresh_inactive_groups(
+            &mut navigator,
+            &UiStateSnapshot::default(),
+            now_ms
+        ));
 
-        assert!(refresh_inactive_groups(&mut navigator, &ui_state, now_ms));
-
-        let groups: Vec<_> = navigator
-            .no_agent_projects
-            .iter()
-            .map(|group| {
-                (
-                    group.device_id.as_str(),
-                    group.expanded,
-                    group.project_ids.clone(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            groups,
-            [
-                (
-                    "local",
-                    true,
-                    vec!["empty-one".to_owned(), "empty-two".to_owned()]
-                ),
-                ("mini", false, vec!["device-empty".to_owned()]),
-            ]
-        );
         assert_eq!(navigator.inactive_projects[0].project_ids, ["week-old"]);
         let working: Vec<_> = navigator
             .workspaces
@@ -1236,7 +1178,7 @@ mod tests {
 
     /// B4, B5. A project whose every agent sleeps carries the newest sleep
     /// time and starts folded; its open key opens it, an awake agent ends
-    /// the sleeping state, and a sleeping project is not a No agents one.
+    /// the sleeping state.
     #[test]
     fn a_project_whose_agents_all_sleep_carries_its_newest_sleep() {
         let now_ms = 20 * 24 * 60 * 60 * 1_000;
@@ -1266,7 +1208,6 @@ mod tests {
             })
         );
         assert_eq!(navigator.workspaces[1].agent_presence.asleep, None);
-        assert!(navigator.no_agent_projects.is_empty());
 
         let opened = UiStateSnapshot {
             session_open_folds: vec![asleep_fold_key("asleep")],

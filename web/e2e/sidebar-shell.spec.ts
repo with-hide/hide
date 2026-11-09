@@ -236,7 +236,7 @@ test("at the smallest window and the largest Interface text, long names shorten 
       const box = (await toggle.boundingBox())!;
       expect(box.x + box.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);
     }
-    // The sidebar's long Korean name, the No agents fold, Search and the footer overlap nothing.
+    // The sidebar's long Korean name, the project rows, Search and the footer overlap nothing.
     expect(await sidebarRowsFit(page)).toEqual([]);
     await screenshot(page, "title-row-smallest-largest-text");
   }, async (engine, daemon) => {

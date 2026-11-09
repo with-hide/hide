@@ -5,9 +5,11 @@
 //! Each agent keeps its sign-in its own way, so the check is the agent's:
 //! Claude Code's keychain item on macOS (asked whether it is there, never
 //! read) or its credentials file; the sign-in file Codex, pi and Grok write
-//! in the account (`AccountPath::Login`). An agent with no such place, or
-//! one whose sign-in is a database Hide does not read (omp), has no check,
-//! and its profiles show none.
+//! in the account (`AccountPath::Login`). A file is read as its agent writes
+//! it (`credentials`): signed in only while it holds the values the agent
+//! runs with. An agent with no such place, or one whose sign-in is a
+//! database Hide does not read (omp), has no check, and its profiles show
+//! none.
 //!
 //! A list asks for every profile at once, and the screen lists again as it
 //! opens and after each change, so each answer is kept for
@@ -15,19 +17,17 @@
 //! list never starts one per profile again within that time.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::{Account, AccountPath, AgentId};
+use hide_agent_adapter::Account;
 use hide_node_link::profiles::ProfileLogin;
-use serde_json::Value;
+
+use crate::credentials;
 
 /// How long one account's answer stands before it is looked at again.
 pub(crate) const LOGIN_TTL: Duration = Duration::from_secs(30);
-/// The largest sign-in file read: the agents' own are a few KiB.
-const LOGIN_FILE_LIMIT: u64 = 64 * 1024;
 /// The most answers kept, one per profile a machine can keep.
 const KEPT: usize = hide_node_link::profiles::MAX_PROFILES;
 
@@ -64,87 +64,40 @@ fn answers() -> std::sync::MutexGuard<
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-type Check = fn(&Account) -> ProfileLogin;
+mod claude;
 
-/// The check of the `kind` agent's sign-in, if it has one.
-fn check_of(kind: &str) -> Option<Check> {
-    let id = hide_agent_adapter::adapter(kind)?.id;
-    let is = |agent: AgentId| agent.adapter().id == id;
-    if is(AgentId::ClaudeCode) {
-        Some(claude)
-    } else if is(AgentId::Codex) || is(AgentId::Pi) || is(AgentId::Grok) {
-        Some(signed_in_file)
-    } else {
-        None
-    }
-}
-
-/// Claude Code's sign-in: its keychain item on macOS, else (and on macOS
-/// with no item) the credentials file in the account's folder.
-fn claude(account: &Account) -> ProfileLogin {
-    #[cfg(target_os = "macos")]
-    match crate::usage::claude_keychain_item(
-        &crate::usage::claude_keychain_service(&account.key),
-        false,
-    ) {
-        Ok(Some(_)) => return ProfileLogin::SignedIn,
-        Ok(None) => {}
-        Err(_) => {
-            log(account, "keychain_unreadable");
-            return ProfileLogin::Unknown;
+/// A definition's sign-in rule; only Claude's keychain needs code of its own.
+fn check_of(kind: &str) -> Option<impl Fn(&Account) -> ProfileLogin> {
+    let adapter = hide_agent_adapter::adapter(kind)?;
+    let rule = adapter.account_rule()?.login.as_ref()?;
+    let keychain = adapter.id == hide_agent_adapter::AgentId::ClaudeCode.adapter().id;
+    Some(move |account: &Account| {
+        if keychain && let Some(answer) = claude::keychain(account) {
+            return answer;
         }
-    }
-    match account.path(AccountPath::Usage) {
-        Some(file) => match file.try_exists() {
-            Ok(true) => ProfileLogin::SignedIn,
-            Ok(false) => ProfileLogin::SignedOut,
-            Err(_) => {
-                log(account, "credentials_unreadable");
-                ProfileLogin::Unknown
-            }
-        },
-        None => ProfileLogin::Unknown,
-    }
+        match account.path(rule.at) {
+            Some(file) => signed_in(account, file, rule),
+            None => ProfileLogin::Unknown,
+        }
+    })
 }
 
-/// A sign-in file the agent writes in the account (`AccountPath::Login`):
-/// signed in while it holds a JSON object with something in it; missing or
-/// empty, signed out.
-fn signed_in_file(account: &Account) -> ProfileLogin {
-    let Some(file) = account.path(AccountPath::Login) else {
-        return ProfileLogin::Unknown;
-    };
-    match read_object(file) {
-        Ok(Some(object)) if !object.is_empty() => ProfileLogin::SignedIn,
+/// Signed in while `file` holds what its agent needs (`holds`); missing, or
+/// without those values, signed out.
+fn signed_in(
+    account: &Account,
+    file: &Path,
+    rule: &hide_agent_adapter::definition::LoginRule,
+) -> ProfileLogin {
+    match credentials::read(file)
+        .and_then(|bytes| bytes.map(|bytes| credentials::object(&bytes)).transpose())
+    {
+        Ok(Some(login)) if credentials::signed_in(&login, rule) => ProfileLogin::SignedIn,
         Ok(_) => ProfileLogin::SignedOut,
         Err(kind) => {
             log(account, kind);
             ProfileLogin::Unknown
         }
-    }
-}
-
-/// The JSON object in `file`; `None` when there is no file.
-fn read_object(file: &Path) -> Result<Option<serde_json::Map<String, Value>>, &'static str> {
-    let opened = match std::fs::File::open(file) {
-        Ok(opened) => opened,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("login_unreadable"),
-    };
-    let mut bytes = Vec::new();
-    opened
-        .take(LOGIN_FILE_LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "login_unreadable")?;
-    if bytes.len() as u64 > LOGIN_FILE_LIMIT {
-        return Err("login_too_large");
-    }
-    if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok(Some(serde_json::Map::new()));
-    }
-    match serde_json::from_slice::<Value>(&bytes) {
-        Ok(Value::Object(object)) => Ok(Some(object)),
-        _ => Err("login_damaged"),
     }
 }
 
@@ -165,7 +118,7 @@ fn log(account: &Account, kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hide_agent_adapter::{AccountRef, NodeEnv, Profile, ProfileId};
+    use hide_agent_adapter::{AccountPath, AccountRef, NodeEnv, Profile, ProfileId};
 
     fn account(kind: &str, folder: &Path) -> Account {
         let profile = Profile {
@@ -188,13 +141,114 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let codex = account("codex", folder.path());
         let file = codex.path(AccountPath::Login).unwrap().to_path_buf();
-        assert_eq!(signed_in_file(&codex), ProfileLogin::SignedOut);
+        let check = check_of("codex").unwrap();
+        assert_eq!(check(&codex), ProfileLogin::SignedOut);
         std::fs::write(&file, "{}").unwrap();
-        assert_eq!(signed_in_file(&codex), ProfileLogin::SignedOut);
-        std::fs::write(&file, r#"{"tokens":{"access_token":"t"}}"#).unwrap();
-        assert_eq!(signed_in_file(&codex), ProfileLogin::SignedIn);
+        assert_eq!(check(&codex), ProfileLogin::SignedOut);
+        std::fs::write(
+            &file,
+            r#"{"tokens":{"access_token":"t","refresh_token":"r"}}"#,
+        )
+        .unwrap();
+        assert_eq!(check(&codex), ProfileLogin::SignedIn);
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(signed_in_file(&codex), ProfileLogin::Unknown);
+        assert_eq!(check(&codex), ProfileLogin::Unknown);
+    }
+
+    #[test]
+    fn a_sign_in_file_that_keeps_no_credentials_reads_signed_out() {
+        // Each file as its agent writes it, with and without the values the
+        // agent needs to run signed in.
+        let cases = [
+            (
+                "codex",
+                r#"{"OPENAI_API_KEY":null,"tokens":null,"last_refresh":null}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "codex",
+                r#"{"tokens":{"id_token":"","access_token":"","refresh_token":""}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "codex",
+                r#"{"tokens":{"access_token":"a"}}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "codex",
+                r#"{"OPENAI_API_KEY":"sk-x","tokens":null}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "codex",
+                r#"{"tokens":{"id_token":"i","access_token":"a","refresh_token":"r","account_id":"c"},"last_refresh":"2026-11-09T00:00:00Z"}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "pi",
+                r#"{"anthropic":{"type":"oauth"}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "pi",
+                r#"{"anthropic":{"type":"api_key","key":""}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "pi",
+                r#"{"anthropic":{"type":"api_key","key":"k"}}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "pi",
+                r#"{"openrouter":{"type":"oauth","access":"a","refresh":"r","expires":1}}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "grok",
+                r#"{"https://auth.x.ai::u":{"auth_mode":"oidc","email":"e"}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "grok",
+                r#"{"https://auth.x.ai::u":{"key":"k","auth_mode":"oidc"}}"#,
+                ProfileLogin::SignedIn,
+            ),
+        ];
+        for (kind, written, expected) in cases {
+            let folder = tempfile::tempdir().unwrap();
+            let account = account(kind, folder.path());
+            std::fs::write(account.path(AccountPath::Login).unwrap(), written).unwrap();
+            assert_eq!(
+                check_of(kind).unwrap()(&account),
+                expected,
+                "{kind} {written}"
+            );
+        }
+        // Claude Code's credentials file; a keychain item is asked for first
+        // on macOS, and an account folder of a test has none.
+        for (written, expected) in [
+            ("{}", ProfileLogin::SignedOut),
+            (r#"{"claudeAiOauth":null}"#, ProfileLogin::SignedOut),
+            (
+                r#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":1}}"#,
+                ProfileLogin::SignedIn,
+            ),
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let claude = account("claude-code", folder.path());
+            std::fs::write(claude.path(AccountPath::Usage).unwrap(), written).unwrap();
+            assert_eq!(
+                check_of("claude-code").unwrap()(&claude),
+                expected,
+                "{written}"
+            );
+        }
     }
 
     #[test]
@@ -213,7 +267,7 @@ mod tests {
         let pi = account("pi", folder.path());
         let file = pi.path(AccountPath::Login).unwrap().to_path_buf();
         assert_eq!(login("pi", &pi), Some(ProfileLogin::SignedOut));
-        std::fs::write(&file, r#"{"anthropic":{"type":"oauth"}}"#).unwrap();
+        std::fs::write(&file, r#"{"anthropic":{"type":"api_key","key":"k"}}"#).unwrap();
         // Within the time an answer stands, the list says what it said.
         assert_eq!(login("pi", &pi), Some(ProfileLogin::SignedOut));
         answers().clear();

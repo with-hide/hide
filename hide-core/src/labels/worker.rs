@@ -1131,9 +1131,9 @@ impl LabelWorker {
 
     /// The account the `kind` agent started under `name` whose
     /// conversation is `session` reads its sessions in, in this machine's
-    /// pane `pane_id`, decided as `Runtime::pane_account` decides it: the
-    /// one its hook reported, else its launch record's profile's when the
-    /// record describes it, else the default.
+    /// pane `pane_id`, by the rule `Runtime::pane_account` follows
+    /// (`agent_choice::pane_run`) over the reports and records the core
+    /// handed this worker.
     pub(crate) fn account_of(
         &self,
         pane_id: &str,
@@ -1142,24 +1142,19 @@ impl LabelWorker {
         session: Option<&str>,
     ) -> hide_agent_adapter::AccountKey {
         let reads = self.account_launches.as_ref().map(|(_, reads)| reads);
-        if let Some((_, key)) =
-            reads
-                .and_then(|reads| reads.reported.get(pane_id))
-                .filter(|(agent, _)| {
-                    hide_agent_adapter::adapter(kind).map(|adapter| adapter.id)
-                        == Some(agent.as_str())
-                })
-        {
-            return key.clone();
-        }
-        reads
+        let reported = reads
+            .and_then(|reads| reads.reported.get(pane_id))
+            .filter(|(agent, _)| {
+                hide_agent_adapter::adapter(kind).map(|adapter| adapter.id) == Some(agent.as_str())
+            })
+            .map(|(_, key)| (key, None));
+        let recorded = reads
             .and_then(|reads| reads.launches.get(pane_id))
             .filter(|launch| {
                 crate::runtime::agent_choice::launch_describes(launch, kind, name, session)
             })
-            .and_then(|launch| launch.profile.as_ref())
-            .map(|profile| profile.account.clone())
-            .unwrap_or_default()
+            .and_then(|launch| launch.profile.as_ref());
+        crate::runtime::agent_choice::pane_run(reported, recorded).account
     }
 
     /// Takes what the core says labels follow: the operator's agent-summary

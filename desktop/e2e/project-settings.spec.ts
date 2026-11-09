@@ -34,7 +34,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     app = launched.app;
     let page = launched.page;
     const gear = () => page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-settings]');
-    await (await showProjectRow(page, gear())).click();
+    await (await showProjectRow(page, gear())).click({ position: { x: 12, y: 8 } });
     let sheet = page.locator('[data-project-settings]');
     await expect(sheet).toBeVisible();
     await expect(sheet.getByRole("tab")).toHaveText(["Connections", "Working style", "Memory"]);
@@ -118,13 +118,13 @@ test("Project settings keep confirmed values through a failed save and restart",
     launched = await launchShell(run.env);
     app = launched.app;
     page = launched.page;
-    await (await showProjectRow(page, gear())).click();
+    await (await showProjectRow(page, gear())).click({ position: { x: 12, y: 8 } });
     sheet = page.locator('[data-project-settings]');
     await sheet.getByRole("tab", { name: "Working style" }).click();
     await expect(sheet.getByRole("combobox", { name: "Start new work in" })).toContainText("New worktree");
     // B18: project + opens the same confirmation, never starts blindly.
     await page.keyboard.press("Escape");
-    await page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-start]').click();
+    await (await showProjectRow(page, page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-start]'))).click({ position: { x: 12, y: 8 } });
     const confirmation = page.locator('[data-start-worktree]');
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByRole("combobox")).toContainText("main");
@@ -152,7 +152,7 @@ test("Project settings fit a narrow native window in every language and theme", 
     app = launched.app;
     const page = launched.page;
     const gear = () => page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-settings]');
-    await (await showProjectRow(page, gear())).click();
+    await (await showProjectRow(page, gear())).click({ position: { x: 12, y: 8 } });
     const sheet = page.locator('[data-project-settings]');
     // Actual narrow window and largest supported interface text in all scripts.
     await fitWindow(app, { width: 720, height: 480 });

@@ -9,7 +9,7 @@ import path from "node:path";
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { openProject, withControl } from "../../web/e2e/daemon-actions";
 import { startEngine } from "../../web/e2e/engine-fixture";
-import { showProjectRow } from "../../web/e2e/wire";
+import { projectOpener, showProjectRow } from "../../web/e2e/wire";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { connectHome, fitWindow, isolate, launchShell, test } from "./fixture";
 
@@ -51,7 +51,8 @@ async function openStartPanel(page: Page): Promise<void> {
 
 async function openWorkingStyle(page: Page): Promise<void> {
   const gear = page.locator("[data-project]", { hasText: "sample" }).locator("[data-row-settings]");
-  await (await showProjectRow(page, gear)).click();
+  await projectOpener(page.locator("[data-project]", { hasText: "sample" })).hover({ position: { x: 12, y: 8 } });
+  await (await showProjectRow(page, gear)).click({ position: { x: 12, y: 8 } });
   const sheet = page.locator("[data-project-settings]");
   await expect(sheet).toBeVisible();
   await sheet.getByRole("tab", { name: "Working style" }).click();

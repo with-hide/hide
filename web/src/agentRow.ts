@@ -87,6 +87,12 @@ export function treeLine(agent: Pick<AgentRow, "state" | "status_code" | "mark">
   return agent.status_code === "error" || stateLine(agent) || line.mode === "waiting" ? line : null;
 }
 
+/** A project tree's row keeps to one line, so it draws a tree line but a waiting one: its ring says it waits and its hint says what for. */
+export function projectTreeLine(agent: Pick<AgentRow, "state" | "status_code" | "mark">): RowLine | null {
+  const line = treeLine(agent);
+  return line?.mode === "waiting" ? null : line;
+}
+
 /** The background tasks a finished turn left, as its line's tail (B27), or null when none. */
 export function backgroundTail(t: TFunction<"translation">, agent: { background_left?: number | null }): string | null {
   return agent.background_left ? t("agents.line.backgroundLeft", { count: agent.background_left }) : null;
@@ -254,6 +260,15 @@ const BADGE_ORDER: (keyof MarkCounts)[] = ["turn", "going", "done", "unread"];
 export function badgeParts(counts: BadgeCounts | undefined): BadgePart[] {
   if (!counts) return [];
   return BADGE_ORDER.filter((state) => (counts[state] ?? 0) > 0).map((state) => ({ state, mark: state, count: counts[state] ?? 0 }));
+}
+
+/** The counts of several rows' agents added up, for the badge of a fold that holds them. */
+export function sumMarks(counts: readonly (BadgeCounts | undefined)[]): BadgeCounts {
+  const total: BadgeCounts = {};
+  for (const row of counts) {
+    for (const state of BADGE_ORDER) total[state] = (total[state] ?? 0) + (row?.[state] ?? 0);
+  }
+  return total;
 }
 
 /** A status badge in words, for the accessible name of the row it sits on: `내 차례 1개, 읽을 것 2개`. */
