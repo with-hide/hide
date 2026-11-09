@@ -154,32 +154,35 @@ impl Runtime {
 
     /// The live registrations whose agent Hide holds asleep now: put to
     /// sleep, waking, or not reopened, in its pane or with its pane closed
-    /// (`asleep_route`). One whose end still runs is not: its agent runs
-    /// until the end lands. The one source `hide agent list`, `hide agent
-    /// show` and `hide ps` read a registration's life from
+    /// (`asleep_route`), and those whose pane was closed for Reopen closed
+    /// (`closed_registrations.rs`). One whose end still runs is not asleep:
+    /// its agent runs until the end lands. The one source `hide agent list`,
+    /// `hide agent show` and `hide ps` read a registration's life from
     /// (`coordination::life`), and a mission's map for its workers. With no
-    /// sleep record, no registration is looked at.
+    /// sleep record and nothing closed, no registration is looked at.
     pub(crate) fn sleeping_registrations<'a>(
         &self,
         records: impl IntoIterator<Item = &'a crate::coordination::AgentRecord>,
     ) -> crate::coordination::RegistrationFacts {
+        let mut facts = crate::coordination::RegistrationFacts::default();
+        let closed = self.closed_registration_ids();
         let store = &self.snapshot.ui_state.agent_sleep;
-        if store.records.is_empty() && store.dormant.is_empty() {
-            return crate::coordination::RegistrationFacts::default();
+        let sleep = !store.records.is_empty() || !store.dormant.is_empty();
+        if !sleep && closed.is_empty() {
+            return facts;
         }
-        crate::coordination::RegistrationFacts {
-            asleep: records
-                .into_iter()
-                .filter(|record| {
-                    !record.ended
-                        && self
-                            .asleep_route(&record.actor)
-                            .is_some_and(|(_, stage)| stage != Stage::Ending)
-                })
-                .map(|record| record.id.clone())
-                .collect(),
-            profiles: Default::default(),
+        for record in records.into_iter().filter(|record| !record.ended) {
+            if sleep
+                && self
+                    .asleep_route(&record.actor)
+                    .is_some_and(|(_, stage)| stage != Stage::Ending)
+            {
+                facts.asleep.insert(record.id.clone());
+            } else if closed.contains(&record.id) {
+                facts.closed.insert(record.id.clone());
+            }
         }
+        facts
     }
 
     /// [`Self::sleeping_registrations`] with the profile each live agent
@@ -277,9 +280,12 @@ impl Runtime {
     }
 
     /// Whether `actor` is a recipient a letter may still be sent to at the
-    /// store's commit: the agent in its pane now, or the same agent asleep.
+    /// store's commit: the agent in its pane now, the same agent asleep, or
+    /// closed for Reopen closed (`closed_registrations.rs`).
     pub(crate) fn delivery_recipient_current(&self, actor: &Actor) -> bool {
-        self.delivery_identity_current(actor) || self.asleep_route(actor).is_some()
+        self.delivery_identity_current(actor)
+            || self.asleep_route(actor).is_some()
+            || self.reopen_holds_actor(actor)
     }
 
     /// Settles the letter wakes when something moved (B2, B4, B6, B7): the

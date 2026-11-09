@@ -1,15 +1,15 @@
-import { MailIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { MailIcon, XIcon } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
-import { AttentionChoices } from "./components/mission-attention";
+import { AttentionChoices, AttentionFacts, failedLine, failedLines } from "./components/mission-attention";
 import { MissionPrMark } from "./components/mission-pr";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { attentionReasonText, heldLettersText, turnItems, type TurnItem } from "./missions";
+import { attentionReasonText, heldLettersText, raisedWhy, turnItems, type TurnItem } from "./missions";
 import { useWorkerEscalation } from "./missionWorkers";
-import type { Mission, MissionNode } from "./snapshot";
+import type { Mission, MissionAttention, MissionNode } from "./snapshot";
 
 // What only the operator can do in a mission now, above its map (PRD
 // mission-map-git-criteria D-03, D-18, B18, B20, B25; PRD mission-node-simple
@@ -66,21 +66,8 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
           {item.node.pane_id ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(item.node.pane_id!)} data-mission-turn-terminal="true">{t("mission.toTerminal")}</Button> : null}
         </Row>
       );
-    case "attention": {
-      const why = attentionReasonText(item.attention.reason, item.attention.pr, t, item.attention.unmet_nodes);
-      return (
-        // The choices wrap under the line in a narrow slot rather than overflow it (B30).
-        <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>
-          <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-sm">
-            <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span>
-            {/* The pull request stands beside the choices, with its state. */}
-            <NodeChip node={item.node} onSelect={onSelect} pr={false} />
-            <span className="min-w-0 flex-1 truncate text-body" title={why}>{why}</span>
-          </span>
-          <AttentionChoices key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} />
-        </div>
-      );
-    }
+    case "attention":
+      return <AttentionCard key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} onSelect={onSelect} />;
     case "landing":
       return (
         <Row data-mission-turn-item={item.git ? "join" : "merge"}>
@@ -99,14 +86,68 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
   }
 }
 
+/**
+ * A node raised to the operator, as a card in the 내 차례 colour (operator
+ * report on M41): the node with 노드 보기, what happened with the facts behind
+ * it, why it came to the operator and not the Conductor, the choices, and
+ * 자세히 with the worker's one line on each failed finish line, the line after it.
+ */
+function AttentionCard({ mission, node, attention, actions, onSelect }: { mission: Mission; node: MissionNode; attention: MissionAttention; actions: Actions; onSelect: (key: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const lines = failedLines(node, false);
+  const what = attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes);
+  const why = raisedWhy(mission, attention);
+  return (
+    <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-mission-hold/10 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>
+      <div className="flex min-w-0 items-center gap-sm">
+        <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full bg-mission-hold" />
+        <span className="min-w-0 flex-1 truncate text-body font-semibold" title={node.title}>{node.title}</span>
+        <Button size="sm" variant="ghost" onClick={() => onSelect(node.key)} data-mission-turn-node={node.key}>{t("mission.turn.openNode")}</Button>
+      </div>
+      <dl className="grid min-w-0 grid-cols-[auto_1fr] items-baseline gap-x-md gap-y-xxs text-body">
+        <dt className="text-caption text-muted-foreground">{t("mission.turn.what")}</dt>
+        <dd className="flex min-w-0 flex-wrap items-center gap-x-sm" data-mission-turn-what="true">
+          <span className="min-w-0 truncate" title={what}>{what}</span>
+          <AttentionFacts mission={mission} node={node} attention={attention} />
+        </dd>
+        <dt className="text-caption text-muted-foreground">{t("mission.turn.why")}</dt>
+        <dd className="min-w-0 truncate" data-mission-turn-why={why}>{t(`mission.turn.why.${why}`)}</dd>
+      </dl>
+      <div className="flex min-w-0 flex-wrap items-center gap-xs">
+        <AttentionChoices mission={mission} node={node} attention={attention} actions={actions} facts={false} />
+        {lines.length > 0 ? (
+          <Button variant="text" size="inline" className="text-caption" aria-expanded={open} onClick={() => setOpen(!open)} data-mission-turn-details-toggle="true">
+            {t(open ? "mission.turn.less" : "mission.turn.more")}
+          </Button>
+        ) : null}
+      </div>
+      {open ? (
+        <ul className="flex min-w-0 flex-col gap-xs text-caption" data-mission-turn-details={lines.length}>
+          {lines.map((line) => (
+            // The worker's one line on the result leads, in plain words; the finish line it failed follows quietly.
+            <li key={line.key} className="flex min-w-0 items-start gap-xs">
+              <XIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0 text-destructive" />
+              <span className="flex min-w-0 flex-col">
+                <span className="break-words text-body text-foreground">{line.summary ?? failedLine(line, t)}</span>
+                {line.summary ? <span className="break-words text-muted-foreground">{failedLine(line, t)}</span> : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function Row({ children, ...data }: { children: ReactNode } & Record<`data-${string}`, string>) {
   return <div className="flex min-w-0 items-center gap-sm" {...data}>{children}</div>;
 }
 
 /** A node named in 내 차례, which picks it on the map (B25): its title, with its pull request's mark when it has one (PRD mission-tool B18). */
-function NodeChip({ node, onSelect, pr: withPr = true }: { node: MissionNode; onSelect: (key: string) => void; pr?: boolean }) {
+function NodeChip({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
   // The pull request a node waits on now is its last one (D-10).
-  const pr = withPr ? (node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null)) : null;
+  const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
   return (
     <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs bg-muted px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-mission-turn-node={node.key}>
       <span className="min-w-0 truncate">{node.title}</span>

@@ -268,7 +268,7 @@ fn node_work(mission: &Mission, view: &NodeView, row_activity: Option<&str>) -> 
     }
     let waiting = || view.waiting_on.clone().map(|on| NodeWork::Waiting { on });
     match view.agent_runtime {
-        None | Some(Life::Ended) => Some(NodeWork::NoWorker),
+        None | Some(Life::Ended | Life::Closed) => Some(NodeWork::NoWorker),
         Some(Life::Asleep) => waiting(),
         Some(Life::Running) => match row_activity? {
             "working" => Some(NodeWork::Working),
@@ -444,6 +444,10 @@ pub struct AttentionView {
 pub struct MissionAdmission {
     pub mission: String,
     pub cap: u8,
+    /// The registrations closed now, which Reopen closed holds and which
+    /// hold no place under the cap (`closed_registrations.rs`).
+    #[serde(default)]
+    pub closed: Vec<String>,
 }
 
 /// One wake for a Conductor, made under the lock and sent off it.
@@ -2372,6 +2376,7 @@ impl Runtime {
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
+            closed: self.closed_registration_ids().into_iter().collect(),
         }))
     }
 
@@ -3131,7 +3136,7 @@ impl Runtime {
                     delivery: node.delivery,
                     worker: node.worker.clone(),
                     agent_id: node.agent_id.clone(),
-                    agent_runtime: record.map(|record| crate::coordination::life(record, sleeping)),
+                    agent_runtime: record.map(|record| worker_life(record, sleeping)),
                     launched: node.launched.clone().filter(|launch| {
                         node.agent_id.as_deref() == Some(launch.agent_id.as_str())
                     }),
@@ -3217,10 +3222,12 @@ impl Runtime {
                 view
             })
             .collect();
+        let closed = sleeping.closed.iter().cloned().collect::<Vec<_>>();
         let running = ledger.map_or(0, |ledger| {
             crate::coordination::mission_workers(
                 ledger,
                 &mission.id,
+                &closed,
                 crate::delivery::worker::now(),
             )
         });
@@ -3548,6 +3555,20 @@ fn node_checker_letters(
             letter.sender.same_identity(checker) && letter.recipient.same_identity(conductor)
         })
     })
+}
+
+/// A worker's life as its mission reads it (`coordination::life`): a
+/// worker whose pane was closed is no worker to the mission, as when its
+/// registration ended, until a reopen brings it back.
+pub(super) fn worker_life(
+    record: &crate::coordination::AgentRecord,
+    sleeping: &crate::coordination::RegistrationFacts,
+) -> crate::delivery::answer::Runtime {
+    use crate::delivery::answer::Runtime as Life;
+    match crate::coordination::life(record, sleeping) {
+        Life::Closed => Life::Ended,
+        life => life,
+    }
 }
 
 /// The registrations `missions` name: their nodes' workers and bound

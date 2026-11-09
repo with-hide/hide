@@ -245,6 +245,15 @@ pub fn from_wire(wire: &str) -> Result<PathBuf, PathError> {
 /// that does not. On Windows a `\\?\` prefix on either side is read as the
 /// path it names, and a path on another drive is [`PathError::OtherVolume`].
 pub fn relative(root: &Path, path: &Path) -> Result<RelPath, PathError> {
+    RelPath::from_native(strip_prefix(root, path)?)
+}
+
+/// The native remainder after an absolute `root`, comparing volumes,
+/// prefixes and case as [`relative`] does. The remainder is neither
+/// normalized nor validated: `..` stays `..`, and names need not be UTF-8.
+/// This proves a spelling's prefix, not permission to read its target;
+/// callers must still validate its components and any filesystem links.
+pub fn strip_prefix<'a>(root: &Path, path: &'a Path) -> Result<&'a Path, PathError> {
     if !root.is_absolute() || !path.is_absolute() {
         return Err(PathError::NotAbsolute);
     }
@@ -279,7 +288,7 @@ pub fn relative(root: &Path, path: &Path) -> Result<RelPath, PathError> {
     if folded && crate::fs::identity::case_sensitive(root).unwrap_or(true) {
         return Err(PathError::Outside);
     }
-    RelPath::from_native(below.as_path())
+    Ok(below.as_path())
 }
 
 /// Whether a wire spelling is absolute: `/...`, or a Windows drive or

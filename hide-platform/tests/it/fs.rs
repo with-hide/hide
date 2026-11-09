@@ -15,6 +15,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_platform::fs::Access;
+
+use crate::widen::widen;
 use hide_platform::fs::atomic::{self, DurableAccess, EXCHANGE_IS_ATOMIC};
 use hide_platform::fs::identity::{self, FileId};
 use hide_platform::fs::link;
@@ -503,38 +505,6 @@ fn names(folder: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
-}
-
-/// Gives everyone read access (`write` false) or write access to `path`,
-/// the way an operator or another program might.
-fn widen(path: &Path, write: bool) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = fs::metadata(path).unwrap().is_dir();
-        let mode = match (write, directory) {
-            (true, true) => 0o777,
-            (true, false) => 0o666,
-            (false, true) => 0o755,
-            (false, false) => 0o644,
-        };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
-    }
-    #[cfg(windows)]
-    {
-        let grant = if write {
-            "Everyone:(M)"
-        } else {
-            "Everyone:(R)"
-        };
-        let status = Command::new("icacls")
-            .arg(path)
-            .args(["/grant", grant])
-            .stdout(Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
 }
 
 // ---- private ------------------------------------------------------------

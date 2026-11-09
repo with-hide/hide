@@ -205,7 +205,7 @@ impl StateFacts {
             observed_at_unix_ms,
             pending,
         } = self;
-        let resting = matches!(life, Some(Life::Asleep | Life::Ended));
+        let resting = matches!(life, Some(Life::Asleep | Life::Closed | Life::Ended));
         let activity = match &row {
             _ if resting => Activity::Stopped,
             Some(row) if !unknown => match row.activity.as_str() {

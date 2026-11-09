@@ -100,6 +100,11 @@ pub struct ClosedAgent {
     /// The profile it ran with, which its reopen runs it with again; `None`
     /// for the built-in default.
     pub profile: Option<crate::launch::LaunchProfile>,
+    /// The delivery registration the agent held when its close started,
+    /// which the closed item holds while it can be reopened and the reopen
+    /// continues in the pane its conversation resumes in. Boxed: a closed
+    /// agent rarely holds one, and every closed item carries the field.
+    pub registration: Option<Box<crate::agent_sleep::DormantRegistration>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -108,6 +113,13 @@ pub struct ClosedPane {
     pub label: Option<String>,
     pub cwd: String,
     pub agent: Option<ClosedAgent>,
+}
+
+impl ClosedPane {
+    /// The registration of the agent the pane ran when its close started.
+    pub fn registration(&self) -> Option<&crate::agent_sleep::DormantRegistration> {
+        self.agent.as_ref()?.registration.as_deref()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -210,29 +222,30 @@ pub enum ClosedItem {
     },
 }
 
-/// One closed node of a tree close: its own pane or tab item, the
-/// registrations of the agents it held, which the unit holds until the
-/// member reopens or the unit leaves the list, and the member its agent's
+/// One closed node of a tree close: its own pane or tab item, which holds
+/// the registrations of the agents it closed, and the member its agent's
 /// parent closed with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeMember {
     pub item: ClosedItem,
-    pub registrations: Vec<crate::agent_sleep::DormantRegistration>,
     /// The key of the member whose agent is this one's parent; none for the
     /// target, and for a child whose parent stayed open.
     pub parent: Option<String>,
 }
 
 impl ClosedItem {
-    /// The registrations a tree unit holds for its members.
-    pub fn held_registrations(
-        &self,
-    ) -> impl Iterator<Item = &crate::agent_sleep::DormantRegistration> {
-        let members: &[TreeMember] = match self {
-            Self::Tree { members, .. } => members,
-            _ => &[],
-        };
-        members.iter().flat_map(|member| &member.registrations)
+    /// The registrations the item holds while it can be reopened: those of
+    /// the agents its panes ran, a tree's members' included.
+    pub fn held_registrations(&self) -> Vec<&crate::agent_sleep::DormantRegistration> {
+        match self {
+            Self::Pane { pane, .. } => pane.registration().into_iter().collect(),
+            Self::Tab { panes, .. } => panes.iter().filter_map(ClosedPane::registration).collect(),
+            Self::Tree { members, .. } => members
+                .iter()
+                .flat_map(|member| member.item.held_registrations())
+                .collect(),
+            Self::Draft { .. } | Self::File { .. } => Vec::new(),
+        }
     }
 
     fn clear_start_claims(&mut self) {

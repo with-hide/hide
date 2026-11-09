@@ -565,6 +565,97 @@ mod windows {
         }
     }
 
+    /// `PATH` with `folder` first, then the test's own, where Node and
+    /// `cmd.exe` are.
+    fn path_with(folder: &std::path::Path) -> String {
+        let own = std::env::var_os("PATH").unwrap_or_default();
+        std::env::join_paths(
+            std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(&own)),
+        )
+        .unwrap()
+        .into_string()
+        .unwrap()
+    }
+
+    /// An agent a batch file starts, one that is not npm's launcher, is
+    /// found by its name on the profile's `PATH` as `PATHEXT` finds it and
+    /// runs through `cmd.exe` (journey run 42586901056: Pi's profile start
+    /// ended with "program not found" while its start without a profile ran).
+    #[test]
+    fn a_windows_start_runs_a_batch_file_the_name_finds_on_the_profiles_path() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(
+            folder.path().join("agent.cmd"),
+            "@echo off\r\necho %PROFILE_VAR%\r\necho %1\r\nexit /b 5\r\n",
+        )
+        .unwrap();
+        let path = path_with(folder.path());
+        let node = Node::taking(start(
+            "Pi · work",
+            &[("PROFILE_VAR", "a=b"), ("PATH", &path)],
+            None,
+            &[],
+        ));
+        let (code, stdout, stderr) =
+            finished(exec(&node, &["agent".to_owned(), "first".to_owned()]));
+        assert_eq!(code, Some(5), "{stderr}");
+        assert_eq!(stdout.lines().collect::<Vec<_>>(), ["a=b", "first"]);
+        assert!(
+            matches!(
+                node.reports().as_slice(),
+                [
+                    AgentExecEvent::Profile,
+                    AgentExecEvent::Ready,
+                    AgentExecEvent::Spawned { .. }
+                ]
+            ),
+            "{:?}",
+            node.reports()
+        );
+    }
+
+    /// npm 11's launcher for `@openai/codex`'s `bin/codex.js` (cmd-shim 8.0.0).
+    const NPM_LAUNCHER: &str =
+        include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd");
+
+    /// An agent npm installed starts by its name as the Node and script its
+    /// launcher runs, never through `cmd.exe`, so an argument holding what
+    /// `cmd.exe` reads (`&`, `"`, `%`, `^`) reaches it whole, with the
+    /// profile's variables and its exit code (PRD agent-profiles D-26).
+    #[test]
+    fn a_windows_start_runs_npms_launcher_as_its_node_and_script_with_each_argument_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let modules = root.path().join("node_modules");
+        let package = modules.join("@openai").join("codex");
+        std::fs::create_dir_all(package.join("bin")).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("bin").join("codex.js"),
+            "process.stdout.write(JSON.stringify([process.env.PROFILE_VAR, ...process.argv.slice(2)]));\nprocess.exit(4);\n",
+        )
+        .unwrap();
+        let bin = modules.join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("codex.cmd"), NPM_LAUNCHER).unwrap();
+        let path = path_with(&bin);
+        let node = Node::taking(start(
+            "Codex · work",
+            &[("PROFILE_VAR", "a=b"), ("PATH", &path)],
+            None,
+            &[],
+        ));
+        let word = r#"a & b "c" %PATH% ^x"#;
+        let argv = ["codex", "--model", word].map(str::to_owned);
+        let (code, stdout, stderr) = finished(exec(&node, &argv));
+        assert_eq!(code, Some(4), "{stderr}");
+        let words: Vec<String> = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(words, ["a=b", "--model", word]);
+    }
+
     /// The program's tree ends with the start, whatever it left running.
     #[test]
     fn a_windows_start_ends_the_programs_whole_tree_with_it() {

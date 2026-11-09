@@ -12,9 +12,9 @@ import { MissionPrMark } from "./mission-pr";
 import { Button } from "./ui/button";
 
 // The map's right column while no node is picked (PRD mission-tool D-13,
-// B19; PRD mission-node-simple B5): an open mission's nodes by the three
-// groups the map reads, 확인 필요 first (each with who looks), 진행 (each
-// with its line) and 끝, each counted; its pull requests and the workers at
+// B19; PRD mission-node-simple B5): an open mission's nodes in progress
+// (each with its line, a node waiting on the Conductor saying so first) and
+// done, each counted, leaving what waits on the operator to 내 차례 alone; its pull requests and the workers at
 // work of the most allowed; a closed one's time and date, its result pull
 // requests, and the workers and checkers it took. Every value is the
 // record's; a row with nothing in it is not drawn. A node named here picks it
@@ -45,30 +45,23 @@ function OpenRows({ mission, onSelect }: { mission: Mission; onSelect: (key: str
   const escalationOf = useWorkerEscalation();
   const { attention, working, done } = summaryGroups(mission, escalationOf);
   const pulls = missionPulls(mission);
+  // What waits on the operator stands in 내 차례 above the map and nowhere else here; what waits on the Conductor is work in progress, said in its line.
+  const held = attention.flatMap((node) => {
+    const reason = holdReason(mission, node, escalationOf);
+    const words = reason ? holdWords(reason, t) : null;
+    return words?.to === "operator" ? [] : [{ node, words }];
+  });
+  const going = [...held, ...working.map((node) => ({ node, words: null }))];
   return (
     <>
-      {attention.length > 0 ? (
-        <SummaryRow name={t("mission.summary.attention", { count: attention.length })} field="attention">
-          {attention.map((node) => {
-            const reason = holdReason(mission, node, escalationOf);
-            const words = reason ? holdWords(reason, t) : null;
+      {going.length > 0 ? (
+        <SummaryRow name={t("mission.summary.working", { count: going.length })} field="working">
+          {going.map(({ node, words }) => {
+            const line = words ? `${words.who} · ${words.why}` : (cardLine(mission, node, node.plan ? planNowLine(node.plan, t) : null, t)?.text ?? t(stageWord(node)));
             return (
               <span key={node.key} className="flex min-w-0 flex-col">
                 <NodeName node={node} onSelect={onSelect} />
-                {words ? <span className="truncate text-caption text-mission-hold" title={words.why} data-mission-summary-attention={words.to} data-mission-summary-hold={reason?.kind}>! {words.who} · {words.why}</span> : null}
-              </span>
-            );
-          })}
-        </SummaryRow>
-      ) : null}
-      {working.length > 0 ? (
-        <SummaryRow name={t("mission.summary.working", { count: working.length })} field="working">
-          {working.map((node) => {
-            const line = cardLine(mission, node, node.plan ? planNowLine(node.plan, t) : null, t)?.text ?? t(stageWord(node));
-            return (
-              <span key={node.key} className="flex min-w-0 flex-col">
-                <NodeName node={node} onSelect={onSelect} />
-                <span className="truncate text-caption text-muted-foreground" title={line} data-mission-summary-line={node.key}>{line}</span>
+                <span className="truncate text-caption text-muted-foreground" title={line} data-mission-summary-line={node.key} data-mission-summary-attention={words?.to}>{line}</span>
               </span>
             );
           })}

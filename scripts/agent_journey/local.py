@@ -169,6 +169,13 @@ ROUTES = {
 
 # Telemetry and self-update stay off in every measured agent.
 QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
+# The folder under the run's HOME that holds every profile account the
+# `profile` cell makes (fake_lane.profile_account). An agent's wrapper keeps
+# an account variable a start set only when it names a folder here: a start
+# with the built-in default profile names none, and a value the pane carried
+# from elsewhere under HOME (the daemon's own XDG folders) would point the
+# agent at a configuration the run never wrote.
+PROFILE_ROOT = ".journey-profile"
 
 
 def route(kind, home):
@@ -187,8 +194,9 @@ def wrapper(directory, executable, operator, state, kind, home, sandbox, path, e
     Herdr's environment, whose PATH reaches neither node nor the account's tools.
     Each (variable, file) of `keys` is set to that file's content at each
     start, so no key is written into the program or the report. An account
-    variable a start with a profile set to an account under `home` keeps
-    the start's value over the route's (the `profile` cell)."""
+    variable a start with a profile set to an account under `home`'s
+    PROFILE_ROOT keeps the start's value over the route's (the `profile`
+    cell)."""
     private_directory(directory)
     target = directory / Path(executable).name
     # The route goes on every start, the product's own restarts (Wake's
@@ -202,7 +210,7 @@ def wrapper(directory, executable, operator, state, kind, home, sandbox, path, e
     lines.extend(f'hide_kept_{name}="${{{name}-}}"' for name in account_vars)
     lines.extend("unset " + name for name in route(kind, home)["unset"])
     lines.append("export " + " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items()))
-    prefix = shlex.quote(str(home).rstrip("/") + "/")
+    prefix = shlex.quote(str(home / PROFILE_ROOT) + "/")
     lines.extend(f'case "$hide_kept_{name}" in {prefix}*) {name}="$hide_kept_{name}"; export {name};; esac'
                  for name in account_vars)
     lines.extend(f"{name}=$(cat {shlex.quote(str(file))}) && export {name}" for name, file in (keys or {}).items())

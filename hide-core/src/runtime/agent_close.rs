@@ -212,6 +212,7 @@ impl Runtime {
         }
         self.clear_close_guards(&operation);
         self.close_operations.remove(key);
+        self.release_close_registrations(&operation);
         self.close_capture_order.retain(|id| id != key);
         self.promote_close_reservations();
         self.sync_recent_closed_snapshot();

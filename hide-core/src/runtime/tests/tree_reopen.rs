@@ -9,16 +9,16 @@ use super::*;
 
 const CLOSED: [&str; 4] = ["w1:p1", "w1:p2", "w1:p3", "w1:p4"];
 
-fn session_of(pane: &str) -> String {
+pub(super) fn session_of(pane: &str) -> String {
     format!("s-{}", pane.replace(':', "-"))
 }
 
 /// The pane a closed pane comes back in.
-fn reopened(pane: &str) -> String {
+pub(super) fn reopened(pane: &str) -> String {
     pane.replace(":p", ":p1")
 }
 
-fn registration_of(pane: &str) -> &'static str {
+pub(super) fn registration_of(pane: &str) -> &'static str {
     match pane {
         "w1:p1" => "agent-1",
         "w1:p2" => "agent-2",
@@ -28,7 +28,7 @@ fn registration_of(pane: &str) -> &'static str {
     }
 }
 
-fn observe(runtime: &mut Runtime, panes: &[(&str, &str)]) {
+pub(super) fn observe(runtime: &mut Runtime, panes: &[(&str, &str)]) {
     let node = runtime.node.as_str().to_owned();
     let payload = delivery_panes(
         panes
@@ -41,7 +41,7 @@ fn observe(runtime: &mut Runtime, panes: &[(&str, &str)]) {
 
 /// Every agent registered as `hide agent spawn --parent` leaves it, with the
 /// root watching p2 and a letter from p2 to p3 still pending.
-fn registered_tree() -> Runtime {
+pub(super) fn registered_tree() -> Runtime {
     use crate::coordination::AgentRecord;
     let mut runtime = tree_runtime(&[]);
     let node = runtime.node.as_str().to_owned();
@@ -118,7 +118,7 @@ fn close_tree(runtime: &mut Runtime) {
 
 /// The engine answers the capture of every close that started, as a pane close
 /// records it for Reopen closed.
-fn capture_started(runtime: &mut Runtime) {
+pub(super) fn capture_started(runtime: &mut Runtime) {
     let requests = runtime
         .close_operations
         .values()
@@ -143,6 +143,7 @@ fn capture_started(runtime: &mut Runtime) {
                 agent: Some(crate::recent_closed::ClosedAgent {
                     kind: "claude".into(),
                     session_id: Some(session_of(pane_id)),
+                    registration: pane.registration().cloned().map(Box::new),
                     ..Default::default()
                 }),
                 ..pane
@@ -244,6 +245,12 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
                             launch: Default::default(),
                             session_id: Some(session_of(&old)),
                             profile: None,
+                            registration: member
+                                .item
+                                .held_registrations()
+                                .first()
+                                .copied()
+                                .cloned(),
                         }],
                     },
                 ),
@@ -258,7 +265,7 @@ fn reopen_answering(runtime: &mut Runtime, fail: &[&str]) -> Vec<String> {
 /// its own tab, with the parent its registration names (what the lineage
 /// worker writes on the pane: `parent_pane` is the parent registration's
 /// pane, `coordination::lineage`).
-fn reopened_session(runtime: &mut Runtime, back: &[&str]) {
+pub(super) fn reopened_session(runtime: &mut Runtime, back: &[&str]) {
     let ledger = runtime.delivery_state().unwrap();
     let pane_of = |id: &str| {
         ledger
@@ -317,7 +324,7 @@ fn reopened_session(runtime: &mut Runtime, back: &[&str]) {
 
 /// The delivery store applies the moves the core asked for, as its worker
 /// does on each pass (`coordination::rebind`).
-fn apply_rebinds(runtime: &mut Runtime) -> Vec<String> {
+pub(super) fn apply_rebinds(runtime: &mut Runtime) -> Vec<String> {
     let rebinds = runtime.delivery_registration_rebinds();
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     let moved = crate::coordination::rebind(&mut ledger, &rebinds);
@@ -364,7 +371,8 @@ fn one_reopen_brings_a_closed_tree_back_with_its_registrations_and_parents() {
     panes.sort();
     assert_eq!(panes, CLOSED);
     for member in &members {
-        let [held] = member.registrations.as_slice() else {
+        let held = member.item.held_registrations();
+        let [held] = held.as_slice() else {
             panic!("one registration per pane");
         };
         assert_eq!(held.id, registration_of(member_pane(member)));
@@ -414,7 +422,7 @@ fn one_reopen_brings_a_closed_tree_back_with_its_registrations_and_parents() {
         Some("scope"),
         None,
     );
-    runtime.advance_tree_reopens();
+    runtime.advance_reopens();
     let rebinds = runtime.delivery_registration_rebinds();
     for pane in CLOSED {
         assert_eq!(
@@ -471,8 +479,8 @@ fn one_reopen_brings_a_closed_tree_back_with_its_registrations_and_parents() {
         Some("scope"),
         None,
     );
-    runtime.advance_tree_reopens();
-    assert!(runtime.tree_reopen_continuations.is_empty());
+    runtime.advance_reopens();
+    assert!(runtime.reopen_continuations.is_empty());
 }
 
 /// A member that does not come back keeps the members under it, unstarted,

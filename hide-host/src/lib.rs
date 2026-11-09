@@ -57,6 +57,10 @@ pub mod sessions;
 pub mod shell_integration;
 pub mod usage;
 pub mod worktrees;
+// Opening a folder to everyone in a test, on every system.
+#[cfg(test)]
+#[path = "../../hide-platform/tests/it/widen.rs"]
+mod widen;
 
 pub use hide_node_link::{ErrorCode, HostError, HostResult};
 pub use hide_node_link::{error, protocol};

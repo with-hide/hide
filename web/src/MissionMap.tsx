@@ -326,8 +326,8 @@ const LOOK_CARD: Record<NodeLook, string> = {
   dropped: "border-dashed border-border bg-transparent",
 };
 
-/** A card someone has to look at wears the decision colour's border over its look (PRD mission-node-simple B2). */
-const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
+/** A card waiting on the operator wears 내 차례's card colour as a thick border and ring over its look, readable at the map's smallest zoom (PRD mission-node-simple B2). */
+const ATTENTION_CARD = "border-2 border-mission-hold ring-4 ring-mission-hold/20";
 
 /**
  * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
@@ -350,6 +350,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const look = nodeLook(mission, node);
   const result = cardResult(node, mission.github_stale, t);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
+  // Only a card waiting on the operator is the operator's turn; one waiting on the Conductor reads as work in progress.
+  const yours = attention !== null && node.attention!.to === "operator";
   const warning = warningWords(mission, node, t);
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
@@ -398,7 +400,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
       data-node-dimmed={dimmed || undefined}
       className={cn(
         "relative flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
-        attention ? ATTENTION_CARD : LOOK_CARD[look],
+        yours ? ATTENTION_CARD : LOOK_CARD[look],
         // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
         node.kind === "external" && "border-dotted",
         selected && "outline-2 outline-offset-2 outline-primary",
@@ -407,6 +409,8 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
     >
       {/* A node that runs on another device wears that device's colour on its edge, the one the workspace's header band wears; a node here stays quiet. */}
       {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
+      {/* The operator's turn wears a dot on its corner in the colour of 내 차례's card. */}
+      {yours ? <span aria-hidden="true" className="absolute -top-xs -right-xs size-(--size-agent-mark) rounded-full border-2 border-card bg-mission-hold" data-node-turn="true" /> : null}
       <span className="flex min-w-0 items-center gap-xs">
         <MissionNodeMark look={look} label={word} still={doing != null && doing.state !== "working"} />
         {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
@@ -455,7 +459,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
           {attention ? (
             <Hint label={attention.why}>
-              <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
+              <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>{yours ? t("agents.mark.turn") : attention.who}</span>
             </Hint>
           ) : null}
         </span>
