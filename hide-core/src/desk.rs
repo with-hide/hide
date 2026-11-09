@@ -535,7 +535,7 @@ mod tests {
         };
         let restored = decode(&encode(&stored).unwrap()).unwrap();
         assert_eq!(restored.settings.permissions, stored.settings.permissions);
-        // A store written before Settings › Desk › 권한 existed.
+        // A store written before Settings › Labs › Desk › 권한 existed.
         let mut older: serde_json::Value =
             serde_json::from_slice(&encode(&stored).unwrap()).unwrap();
         older["settings"]

@@ -64,8 +64,8 @@ export const DESK_SCENES = [
   { state: "chat-states", label: "채팅 상태: 승인 답 (이 대화에서 계속 허용, 한 줄과 거절), 알림 줄, 생각 중 · 중단 (B5-B8, B11, B13-B15, B47)" },
   { state: "thread-states", label: "스레드 읽기 실패 · 읽는 중 · 빈 · 연결 안 됨 (B23, B27)" },
   { state: "chips", label: "답 속 칩 전부 · 흐린 칩 · 칩 상세 카드 (B50, D-86)" },
-  { state: "settings", label: "Settings › Desk, 권한의 파일 수정을 묻기로 (B4, B19, B21, B46)" },
-  { state: "settings-off", label: "Settings › Desk 꺼짐, 기본값 (D-76, B41)" },
+  { state: "settings", label: "Settings › Labs › Desk, 권한의 파일 수정을 묻기로 (B4, B19, B21, B46)" },
+  { state: "settings-off", label: "Settings › Labs › Desk 꺼짐, 기본값 (D-76, B41)" },
 ] as const;
 
 type SceneState = (typeof DESK_SCENES)[number]["state"];

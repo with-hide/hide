@@ -75,7 +75,7 @@ pub(super) struct Send {
     pub resume: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// Where Settings › Desk puts each task's work (B19).
+    /// Where Settings › Labs › Desk puts each task's work (B19).
     pub placement: hide_desk::Placement,
 }
 

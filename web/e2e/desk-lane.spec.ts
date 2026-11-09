@@ -8,7 +8,7 @@ import { chord } from "./chords";
 import { enterWorkspace } from "./wire";
 
 // PRD session-docs-and-assistant B28, B29, B32, B35, B41: Desk's lane, its
-// rail, its pin, ⌘J between a thread and its Agent tab, and Settings › Desk's
+// rail, its pin, ⌘J between a thread and its Agent tab, and Settings › Labs › Desk's
 // switch, off on a new install. Each test starts one stack and asserts one
 // contract.
 //
@@ -42,10 +42,10 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
   };
 }
 
-/** Settings › Desk's switch, turned to `on` and closed again; every window follows the core without a restart. */
+/** Settings › Labs › Desk's switch, turned to `on` and closed again; every window follows the core without a restart. */
 async function switchDesk(page: Page, on: boolean) {
   await page.locator("[data-open-settings]").click();
-  await page.locator('[data-settings-tab="desk"]').click();
+  await page.locator('[data-settings-tab="labs"]').click();
   const use = page.locator("[data-desk-use]");
   if ((await use.getAttribute("data-desk-use")) !== String(on)) await use.click();
   await expect(use).toHaveAttribute("data-desk-use", String(on));

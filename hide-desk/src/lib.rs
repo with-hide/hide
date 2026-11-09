@@ -20,7 +20,7 @@ pub use adapter::AdapterId;
 /// operator's own agent instructions, settings or skills (PRD Desk D-53).
 pub const INSTRUCTIONS: &str = include_str!("instructions.md");
 
-/// Where the operator's Settings › Desk put each task's work (PRD Desk
+/// Where the operator's Settings › Labs › Desk put each task's work (PRD Desk
 /// B19).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Placement {

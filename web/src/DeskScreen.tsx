@@ -38,7 +38,7 @@ import { windowIsActive } from "./viewFocus";
 const NO_JOBS: DeskJob[] = [];
 const NO_TABS: DeskKeptTab[] = [];
 
-/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Desk switched it on (B41). */
+/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Labs › Desk switched it on (B41). */
 export function DeskSidebarEntry({ actions }: { actions: Actions }) {
   const shown = useShellStore((s) => deskOn(s.desk));
   const selected = useUiStore((s) => s.screen?.kind === "desk");
@@ -51,7 +51,7 @@ export function DeskSidebarEntry({ actions }: { actions: Actions }) {
   );
 }
 
-/** Settings › Desk (B4, B19, B21). */
+/** Settings › Labs › Desk (B4, B19, B21). */
 export function DeskSettingsPage({ actions }: { actions: Actions }) {
   const desk = useShellStore((s) => s.desk);
   if (!desk) return null;

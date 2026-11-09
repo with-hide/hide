@@ -6,7 +6,7 @@
 //! Codex's read-only sandbox blocks loopback, so a `hide` command run inside
 //! it never reaches hided. Codex reads its rules once per session, so a rule
 //! that let a command out of the sandbox without asking would keep the
-//! Settings › Desk › 권한 table of the session's start and skip Hide's
+//! Settings › Labs › Desk › 권한 table of the session's start and skip Hide's
 //! decision. The rules therefore allow nothing: a command that needs more
 //! than the sandbox, a `hide` command included, asks to run outside it, and
 //! that request reaches Hide, which answers it from the table as it is then
@@ -53,7 +53,7 @@ enabled = false
 const RULES: &str = "\
 # Written by Hide for Desk's Codex before every start; edits are replaced.
 # No command runs outside the sandbox without asking: Hide answers each
-# request from Settings > Desk > Permissions.
+# request from Settings > Labs > Desk > Permissions.
 ";
 
 /// The files Desk writes into `home` before Codex starts: path, body and

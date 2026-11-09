@@ -13,7 +13,7 @@ import { cn } from "../../lib/utils";
 const LOCATIONS = ["desk", "worktree", "checkout"] as const;
 /** The cap's choices (D-23): 8 by default. */
 const CAP_CHOICES = [1, 2, 4, 6, 8, 12, 16];
-/** Settings › Desk › 권한's rows, in the mockup's order (D-82). */
+/** Settings › Labs › Desk › 권한's rows, in the mockup's order (D-82). */
 const PERMISSION_ROWS: { row: DeskPermissionRow; label: MessageKey; detail?: MessageKey }[] = [
   { row: "hide", label: "desk.settings.permissions.hide", detail: "desk.settings.permissions.hideDetail" },
   { row: "read", label: "desk.settings.permissions.read" },
@@ -23,7 +23,7 @@ const PERMISSION_ROWS: { row: DeskPermissionRow; label: MessageKey; detail?: Mes
 const ANSWERS: DeskPermissionAnswer[] = ["run", "ask"];
 
 /**
- * Settings › Desk (D-20, D-23, D-76, B4, B19, B21, B41): the switch that
+ * Settings › Labs › Desk (D-20, D-23, D-76, B4, B19, B21, B41): the switch that
  * shows Desk, off by default, then the agent Desk starts with, where its
  * tasks run (Desk decides, by default) and how many run at once. An agent
  * that cannot ask before acting is not offered. 권한 (D-82) is one table for
