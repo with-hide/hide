@@ -422,9 +422,9 @@ pub(crate) enum WakeOutcome {
 /// so the same wake asked again a few seconds later may start: the pane's
 /// node could not take the input now (a pane it did not list yet, input it
 /// could not hold, as for a device pane no screen attached,
-/// with-hide/hide-private#660, or a node busy with other calls), a program
-/// still held the pane's terminal past the start's wait, or another change
-/// of the pane's holder held its turn. Every other refusal is answered the
+/// with-hide/hide-private#660, or a node busy with other calls), its
+/// shell could not be read, a program still held the pane's terminal past
+/// the start's wait, or another change of the pane's holder held its turn. Every other refusal is answered the
 /// same way when asked again, or came after the start was typed (a profile
 /// the engine refused or could not confirm, `launch::ends_a_start`), so it
 /// is never asked again.
@@ -435,6 +435,7 @@ pub(crate) fn passes(code: &str) -> bool {
             | "pane_input_limit"
             | "pane_input_cancelled"
             | "node_busy"
+            | crate::agent_start::SHELL_UNREADABLE
             | crate::agent_start::PANE_BUSY
             | hide_node_link::holders::RENEWAL_BUSY
     )
@@ -576,10 +577,13 @@ pub(crate) fn start_launched(
             detail,
             passing: false,
         },
-        Err(StartError::NotStarted { detail, .. }) => WakeOutcome::Failed {
+        Err(StartError::NotStarted {
+            reason: code,
+            detail,
+        }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
             detail,
-            passing: true,
+            passing: passes(&code),
         },
         // A shell that stopped in its startup files waits for a key.
         Err(StartError::ShellStarting { waited, screen }) => WakeOutcome::Failed {
@@ -1330,7 +1334,10 @@ mod tests {
             ("node_busy", true),
             ("agent_pane_busy", true),
             ("holder_renewal_busy", true),
+            ("agent_start.shell_unreadable", true),
             ("agent_name_taken", false),
+            ("agent_start.line_unchecked", false),
+            ("session_route_unconfirmed", false),
             ("profile_unconfirmed", false),
             ("profile_refused", false),
             ("agent_blocked", false),

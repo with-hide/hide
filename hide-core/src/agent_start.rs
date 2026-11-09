@@ -340,9 +340,12 @@ impl StartError {
 }
 
 /// A start whose pane's shell could not be read: nothing was typed.
+/// The code of a start whose pane's shell could not be read.
+pub(crate) const SHELL_UNREADABLE: &str = "agent_start.shell_unreadable";
+
 fn shell_unreadable(message: String) -> StartError {
     StartError::NotStarted {
-        reason: "agent_start.shell_unreadable".into(),
+        reason: SHELL_UNREADABLE.into(),
         detail: format!(
             "The pane's shell could not be read, so the agent was not started: {message}"
         ),
