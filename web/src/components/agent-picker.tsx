@@ -26,7 +26,7 @@ const DEFAULT_ITEM = "__cli_default";
  * its machine's profiles, `profile` the chosen item's profile id for the
  * chosen kind, `showLeft` whether each item shows its account's percent left.
  */
-export type ItemMenu = { list: readonly StartItem[]; profile: string; showLeft: boolean; onItem: (item: StartItem) => void };
+export type ItemMenu = { list: readonly StartItem[]; profile: string; showLeft: boolean; onItem: (item: StartItem) => void; defaultOpen?: boolean };
 
 const itemKey = (kind: ProviderKind | "terminal", profile: string) => `${kind}/${profile}`;
 
@@ -122,6 +122,7 @@ export function AgentPickerView({
       {items ? (
         <Select
           value={itemKey(value.kind, items.profile)}
+          defaultOpen={items.defaultOpen}
           disabled={disabled}
           onValueChange={(next) => {
             const item = items.list.find((row) => itemKey(row.kind, row.profile) === next);

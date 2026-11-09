@@ -39,6 +39,8 @@ export const AGENT_PROFILES_STATES = [
   "form-refused",
   "states",
   "start",
+  "start-default",
+  "start-none",
   "project",
   "delete-refused",
   "delete-confirm",
@@ -154,7 +156,19 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
         </>
       );
     }
-    case "start": {
+    case "start":
+    case "start-default":
+    case "start-none": {
+      const none = state === "start-none";
+      const list = none
+        ? ["claude", "codex", "grok", "opencode", "pi", "omp", "agy"].map((kind) => ({ kind, profile: "default", name: null, version: null, left: null }))
+        : [
+            { kind: "claude", profile: "default", name: null, version: null, left: 62 },
+            { kind: "claude", profile: "work", name: "work", version: 1, left: 15 },
+            { kind: "claude", profile: "gateway", name: "opengateway", version: 1, left: null },
+            { kind: "codex", profile: "default", name: null, version: null, left: 88 },
+            { kind: "opencode", profile: "default", name: null, version: null, left: null },
+          ];
       return (
         <div className="flex w-(--size-search-sheet-w) max-w-full flex-col overflow-hidden rounded-lg border border-border bg-dialog text-body text-popover-foreground [--accent:var(--dialog-raised)] [--secondary:var(--dialog-raised)] shadow-lg" data-start-panel-mock="true">
           <div className="px-sm pt-sm text-caption text-subtle-foreground">blog › main</div>
@@ -162,16 +176,11 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
           <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm">
             <AgentPickerView variant="ghost" value={{ kind: "claude", model: null }} catalog={{ state: "ready", models: [] }} onKind={() => {}} onModel={() => {}}
               items={{
-                list: [
-                  { kind: "claude", profile: "default", name: null, version: null, left: 40 },
-                  { kind: "claude", profile: "work", name: "work", version: 1, left: 72 },
-                  { kind: "claude", profile: "gateway", name: "opengateway", version: 1, left: null },
-                  { kind: "codex", profile: "default", name: null, version: null, left: 88 },
-                  { kind: "opencode", profile: "default", name: null, version: null, left: null },
-                ],
-                profile: "work",
-                showLeft: true,
+                list: list as never,
+                profile: state === "start" ? "work" : "default",
+                showLeft: !none,
                 onItem: () => {},
+                defaultOpen: state !== "start-default",
               }} />
             <span className="flex-1" />
             <Button>{t("common.start")}<span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span></Button>

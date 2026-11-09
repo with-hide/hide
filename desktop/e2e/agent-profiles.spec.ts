@@ -92,6 +92,11 @@ test("a profile added in the Agents settings page is offered by the start panel 
       await openStartPanel(page);
       await expect(page.locator("[data-profile-pick]")).toHaveCount(0);
       await capture(app, page, `02-start-panel-none-${theme}`);
+      // B1: the opened menu is the agent names alone, with no figure column.
+      await page.locator("[data-agent-kind]").click();
+      await expect(page.locator('[data-agent-kind-option="claude"]')).toBeVisible();
+      await expect(page.locator("[data-slot=select-item-trailing]")).toHaveCount(0);
+      await capture(app, page, `02b-start-panel-none-open-${theme}`);
       await closeAll(page);
       await openWorkingStyle(page);
       await expect(page.locator("[data-project-agent-accounts]")).toHaveCount(0);
@@ -164,6 +169,10 @@ test("a profile added in the Agents settings page is offered by the start panel 
       await expect(page.locator(`[data-agent-item-option="claude/${gateway.id}"]`)).toContainText("Claude Code · opengateway");
       await expect(page.locator(`[data-agent-item-option="claude/${work.id}"]`)).toContainText("Claude Code · work");
       await capture(app, page, `07-start-panel-items-${theme}`);
+      // The trigger names the chosen item as its menu line does.
+      await page.locator('[data-agent-item-option="claude/default"]').click();
+      await expect(page.locator("[data-agent-item]")).toHaveText("Claude Code");
+      await capture(app, page, `07b-start-panel-default-chosen-${theme}`);
       await closeAll(page);
       await openWorkingStyle(page);
       await expect(page.locator('[data-project-agent-account-value]')).toHaveAttribute("data-project-agent-account-value", work.id);
