@@ -214,6 +214,18 @@ pub(crate) trait Engine: Send + Sync {
         })
     }
 
+    /// What the executor of the attempt `attempt` in `pane` is answered from
+    /// when it asks for its profile (`AgentExecEvent::Profile`): the profile
+    /// and version the start was checked with, which the caller asks the
+    /// pane's machine for off every lock (`launch::exec_start`). Refused,
+    /// like a report, unless that attempt runs there and has no `Ready`.
+    fn exec_attempt(&self, _pane: &str, attempt: &str) -> Answer<crate::launch::ExecAttempt> {
+        Err(EngineError::Refused {
+            code: ATTEMPT_UNKNOWN.to_owned(),
+            message: format!("no start with attempt {attempt} runs here"),
+        })
+    }
+
     // The session as a whole.
 
     /// Every workspace, tab, pane, layout and agent, with the focus.

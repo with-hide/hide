@@ -1144,8 +1144,8 @@ impl OwnEngine<'static> {
         // that thread has it, whatever ends this call ends the attempt.
         let finish = line
             .attempt
-            .as_deref()
-            .map(|id| super::attempt::Finish::new(self, &resume.pane, id));
+            .as_ref()
+            .map(|attempt| super::attempt::Finish::new(self, &resume.pane, &attempt.id));
         self.type_agent_start(
             &resume.pane,
             PaneAgent::resumed(&resume.kind, resume.name.as_deref(), resume.session.clone()),

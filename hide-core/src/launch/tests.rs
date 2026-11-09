@@ -82,13 +82,14 @@ fn the_built_in_default_starts_with_the_line_every_agent_always_had() {
 }
 
 #[test]
-fn a_profiles_line_runs_hide_agent_exec_with_its_variables_and_the_agents_words() {
+fn a_profiles_line_names_its_attempt_and_the_agents_words_and_nothing_of_its_profile() {
     let launch = Launch::answered("claude", "p1", start("work"));
     let line = launch.line(argv(&["claude", "--resume", "abc"])).unwrap();
     let attempt = line
         .attempt
+        .clone()
         .expect("a profile's start runs under an attempt");
-    assert!(hide_agent_hooks::hook_request::valid_attempt(&attempt));
+    assert!(hide_agent_hooks::hook_request::valid_attempt(&attempt.id));
     assert_eq!(
         line.words,
         argv(&[
@@ -96,18 +97,24 @@ fn a_profiles_line_runs_hide_agent_exec_with_its_variables_and_the_agents_words(
             "agent",
             "exec",
             "--attempt",
-            &attempt,
-            "--profile",
-            "Claude · work",
-            "--env",
-            "CLAUDE_CONFIG_DIR=/home/me/.claude-work",
-            "--env",
-            "ROUTE=a=b c",
+            &attempt.id,
             "--",
             "claude",
             "--resume",
             "abc",
         ])
+    );
+    // What the executor asks for is the profile and version the start was
+    // checked with, kept by the attempt rather than typed.
+    assert_eq!(
+        attempt,
+        ExecAttempt {
+            id: attempt.id.clone(),
+            kind: "claude".to_owned(),
+            profile: ProfileId("p1".to_owned()),
+            name: "work".to_owned(),
+            version: 3,
+        }
     );
     assert_eq!(
         launch.record(),
@@ -120,20 +127,18 @@ fn a_profiles_line_runs_hide_agent_exec_with_its_variables_and_the_agents_words(
 }
 
 #[test]
-fn a_profiles_own_program_runs_in_place_of_the_agents_with_its_leading_words() {
+fn a_profiles_own_program_stays_off_its_line_and_each_start_has_its_own_attempt() {
     let mut answered = start("gateway");
-    answered.env.clear();
     answered.program = Some(hide_node_link::profiles::ProfileProgram {
         file: "C:/tools/node.exe".to_owned(),
         leading: vec!["C:/tools/gw.js".to_owned()],
     });
     let launch = Launch::answered("codex", "p2", answered);
     let line = launch.line(argv(&["codex", "--no-daemon"])).unwrap();
-    let attempt = line.attempt.clone().unwrap();
-    // Every start runs under an attempt of its own.
+    let attempt = line.attempt.clone().unwrap().id;
     assert_ne!(
-        launch.line(argv(&["codex"])).unwrap().attempt,
-        Some(attempt.clone())
+        launch.line(argv(&["codex"])).unwrap().attempt.unwrap().id,
+        attempt
     );
     assert_eq!(
         line.words,
@@ -143,12 +148,6 @@ fn a_profiles_own_program_runs_in_place_of_the_agents_with_its_leading_words() {
             "exec",
             "--attempt",
             &attempt,
-            "--profile",
-            "Codex · gateway",
-            "--program",
-            "C:/tools/node.exe",
-            "--leading",
-            "C:/tools/gw.js",
             "--",
             "codex",
             "--no-daemon",
@@ -390,4 +389,104 @@ fn a_profile_gone_refused_or_unsupported_starts_nothing_and_says_why() {
             PROFILE_UNANSWERED
         );
     }
+}
+
+fn asked(version: u64) -> ExecAttempt {
+    ExecAttempt {
+        id: "9e4eedfa8bf06be0".to_owned(),
+        kind: "claude".to_owned(),
+        profile: ProfileId("p1".to_owned()),
+        name: "work".to_owned(),
+        version,
+    }
+}
+
+fn answered(launch: ProfileLaunch) -> Node {
+    Node::answering(Ok(serde_json::to_value(launch).unwrap()))
+}
+
+fn failure(answer: hide_agent_hooks::hook_request::ExecProfile) -> String {
+    match answer {
+        hide_agent_hooks::hook_request::ExecProfile::Refused { failure } => failure,
+        ready => panic!("expected a refusal, got {ready:?}"),
+    }
+}
+
+#[test]
+fn an_executor_is_handed_its_profile_as_its_machine_has_it_at_the_checked_version() {
+    let mut gateway = start("work");
+    gateway.program = Some(hide_node_link::profiles::ProfileProgram {
+        file: "C:/tools/node.exe".to_owned(),
+        leading: vec!["C:/tools/gw.js".to_owned()],
+    });
+    let node = answered(ProfileLaunch::Ready(gateway));
+    assert_eq!(
+        exec_start(Some(&node), &asked(3)),
+        hide_agent_hooks::hook_request::ExecProfile::Ready(
+            hide_agent_hooks::hook_request::ExecStart {
+                label: "Claude · work".to_owned(),
+                env: start("work").env,
+                program: Some("C:/tools/node.exe".to_owned()),
+                leading: vec!["C:/tools/gw.js".to_owned()],
+            }
+        )
+    );
+    // The machine is asked as a start asks it, by agent and profile.
+    assert_eq!(
+        *node.calls.lock().unwrap(),
+        [Call::ProfileLaunch {
+            kind: "claude".to_owned(),
+            profile: ProfileId("p1".to_owned()),
+        }]
+    );
+}
+
+#[test]
+fn an_executor_whose_profile_changed_went_or_is_refused_now_is_refused_naming_it() {
+    // An edit since the start was checked: the start runs nothing rather
+    // than values its record and its words were not made from.
+    let changed = failure(exec_start(
+        Some(&answered(ProfileLaunch::Ready(start("work")))),
+        &asked(2),
+    ));
+    assert!(changed.contains("profile work changed"), "{changed}");
+    let gone = failure(exec_start(Some(&answered(ProfileLaunch::Gone)), &asked(3)));
+    assert!(gone.contains("profile work is gone"), "{gone}");
+    let removing = failure(exec_start(
+        Some(&answered(ProfileLaunch::Refused {
+            text: "the profile work is being removed".to_owned(),
+        })),
+        &asked(3),
+    ));
+    assert!(
+        removing.ends_with("the profile work is being removed"),
+        "{removing}"
+    );
+    // A machine that does not answer, or cannot be reached, runs nothing.
+    for node in [Some(Node::answering(Err(ErrorCode::Io))), None] {
+        let unanswered = failure(exec_start(
+            node.as_ref().map(|node| node as &dyn NodeLink),
+            &asked(3),
+        ));
+        assert!(
+            unanswered.contains("with the profile work was not started"),
+            "{unanswered}"
+        );
+    }
+}
+
+#[test]
+fn an_executors_start_larger_than_one_answer_is_refused() {
+    let mut large = start("work");
+    large.env = (0..3)
+        .map(|n| (format!("LARGE_{n}"), "x".repeat(32 * 1024)))
+        .collect();
+    let refused = failure(exec_start(
+        Some(&answered(ProfileLaunch::Ready(large))),
+        &asked(3),
+    ));
+    assert!(
+        refused.contains("more variables than a start takes"),
+        "{refused}"
+    );
 }
