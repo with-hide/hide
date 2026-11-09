@@ -1,10 +1,13 @@
 // The record restores the exact retained native conversation after its pane closes.
+// The slot goes with its pane (operator decision 2026-11-09), so the record
+// shown for the pane closes with it and is found again by its session in ⌘K.
 import { expect, test } from "@playwright/test";
 import { CLAUDE_FULL_ACCESS_LINE } from "./pane-fixture";
 import { agentIn, closePane, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { labelAgentPane } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
+import { chord } from "./chords";
 import { countSent, enterWorkspace } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
@@ -28,6 +31,17 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     const sourceRow = page.locator(`nav[data-sidebar] [data-pane="${source}"] [data-agent-title]`);
     await expect(sourceRow).toHaveText("Restore this conversation", { timeout: 30_000 });
     await withControl(daemon, (control) => closePane(control, source));
+    // The record was the closed pane's slot, so it leaves the screen with the pane.
+    await expect(record).toHaveCount(0, { timeout: 30_000 });
+    // ⌘K finds the session by its title, and its record opens again in the slot in front.
+    await page.keyboard.press(chord("search"));
+    const search = page.locator('[data-palette="Search"]');
+    await expect(search.locator("[data-palette-input]")).toBeFocused();
+    await search.locator("[data-palette-input]").fill("Restore this conversation");
+    const found = search.locator(`[data-palette-row^="session:"][data-palette-row$="${session}"]`);
+    await expect(found).toHaveCount(1, { timeout: 30_000 });
+    await found.click();
+    await expect(record).toContainText("Restore this conversation 진행해줘", { timeout: 30_000 });
     const restore = record.getByRole("button", { name: "Restore session", exact: true });
     await expect(restore).toBeEnabled({ timeout: 30_000 });
     await restore.click();

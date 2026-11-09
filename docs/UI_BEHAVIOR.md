@@ -165,6 +165,7 @@ A card opens where it was pressed (operator decision 2026-11-09):
 With no such agent on this machine (it ended or sleeps, a person made the pull request, the mission has no Conductor, or the owner runs on a connected device) the card opens in the slot in front; an agent's row whose pane has closed (its agent sleeps) does the same.
 A row of an agent on a connected device opens the card in that pane's slot and asks the device to bring the pane forward; the card shows when the device answers.
 Back on the pane its card is there as it was, with its ← history; a closed pane takes its slot with it, so an agent that sleeps and wakes in a new pane finds an empty slot, at most 64 panes' slots are kept with the one seen longest ago going first, and a slot saved by an older build for its front tab attaches to the pane in front on the first event after the launch.
+The pane in front closing closes its slot on the screen too, a record shown there included; ⌘K finds that session again (an archived one also has its `보관됨` row), and its record opens in the slot in front with Restore session.
 With no Workspace in front the Overview's own panel opens the items as before (B22).
 
 ⌘⇧P shows and focuses the sidebar.
