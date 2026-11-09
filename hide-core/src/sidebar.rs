@@ -3207,6 +3207,12 @@ mod tests {
         );
         let wire = serde_json::to_value(&finished).unwrap();
         assert_eq!(wire["children_left"], 2);
+        // Shown Done, it still has work in progress: Sleep, Reopen and
+        // Resolve, which ask this gate, stay refused.
+        assert_eq!(
+            crate::agent_state::rest_refusal(&finished),
+            Some(crate::model::AgentActionRefusal::Working)
+        );
         let (sent, _) = notice(&finished);
         assert_eq!(
             sent.iter().map(|notice| notice.state).collect::<Vec<_>>(),
@@ -3247,7 +3253,17 @@ mod tests {
         );
         assert!(notice(&one_done).0.is_empty());
 
-        // Work left, or a wait nothing proves, keeps the root waiting.
+        // A next turn finished is announced again; judged again as work
+        // left, or a wait nothing proves, it waits on the children, and
+        // that is no read: the notice stays.
+        let again = root_of(pass_payload(
+            labeled(LabelEnd::Done, 12, working),
+            &mut connection,
+            &mut saved,
+            None,
+        ));
+        assert_eq!(again.group, "done");
+        assert_eq!(notice(&again).0.len(), 1);
         for end in [LabelEnd::Unfinished, LabelEnd::Waiting] {
             let root = root_of(pass_payload(
                 labeled(end, 12, working),
@@ -3261,6 +3277,8 @@ mod tests {
                 ("working", Some(AgentWait::Children), 0),
                 "{end:?}"
             );
+            let (sent, taken_back) = notice(&root);
+            assert!(sent.is_empty() && taken_back.is_empty(), "{end:?}");
         }
     }
 
