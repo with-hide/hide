@@ -117,8 +117,8 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것 and �
   // Each part's sticky heads stack, each under the ones above it, so a head passed stays in view.
   const stack = (selector: string) => [...container.querySelectorAll<HTMLElement>(`${selector} [data-section-sticky]`)].map((head) => head.style.top);
   const place = (n: number) => `calc(var(--size-sidebar-section-header) * ${n})`;
-  expect(stack('[data-task-scroll="raised"]')).toEqual([place(0), place(1)]);
-  expect(stack('[data-task-scroll="list"]')).toEqual([place(0), place(1), place(2)]);
+  // 내 차례 and 읽을 것 are the list's first sections, so the heads of all three groups and the two folds stack in one scroll.
+  expect(stack('[data-task-scroll="list"]')).toEqual([place(0), place(1), place(2), place(3), place(4)]);
   await act(async () => folds[0]!.click());
   expect(rows(container)).toContain("rest");
   await act(async () => container.querySelector<HTMLElement>('[data-task-focus="fold-close"]')!.click());
@@ -142,25 +142,21 @@ it.each(["status", "project"] as const)("in %s keeps a read question's core-owne
   expect(task.querySelector('[data-task-line="needs_you"] [data-line-part]')?.textContent).toContain("질문");
 });
 
-it("in 상태별 holds 내 차례 and 읽을 것 still above the rest, arrows crossing both, and not when nothing is under them", async () => {
+it("in 상태별 draws 내 차례 and 읽을 것 as the first sections of the one list, arrows crossing them, and only 상태별 does", async () => {
   const agents = [row("ask", {}, { group: "needs_you" }), row("done"), row("works"), row("rest")];
   const cards = [card("ask", "needs_you", "hide-main"), card("done", "done", "hide-main"), card("works", "working", "hide-main"), card("rest", "resting", "hide-main")];
-  const groupsIn = (container: HTMLElement, part: string) => [...container.querySelectorAll(`[data-task-scroll="${part}"] [data-task-group]`)].map((group) => group.getAttribute("data-task-group"));
   const status = await render(snapshot(agents, cards), agents);
-  expect(groupsIn(status.container, "raised")).toEqual(["needs_you", "done"]);
-  expect(groupsIn(status.container, "list")).toEqual(["working"]);
+  // No part of its own: the sections scroll together, so a head stays only where its rows have passed.
+  expect(status.container.querySelectorAll("[data-task-scroll]")).toHaveLength(1);
+  expect([...status.container.querySelectorAll('[data-task-scroll="list"] [data-task-group]')].map((group) => group.getAttribute("data-task-group"))).toEqual(["needs_you", "done", "working"]);
   const doneRow = status.container.querySelector<HTMLElement>('[data-task-row="done"] [data-task-focus="row"]')!;
   doneRow.focus();
   await act(async () => doneRow.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
   expect(document.activeElement?.closest('[data-task-group="working"]')).not.toBeNull();
   await cleanup?.();
-  // With only those groups and no fold under them, they are the whole list.
-  const alone = await render(snapshot(agents.slice(0, 2), cards.slice(0, 2)), agents.slice(0, 2));
-  expect(alone.container.querySelector('[data-task-scroll="raised"]')).toBeNull();
-  expect(groupsIn(alone.container, "list")).toEqual(["needs_you", "done"]);
-  await cleanup?.();
   const project = await render(snapshot(agents, cards, "project"), agents);
-  expect(project.container.querySelector('[data-task-scroll="raised"]')).toBeNull();
+  expect(project.container.querySelectorAll("[data-task-scroll]")).toHaveLength(1);
+  expect(project.container.querySelectorAll("[data-section-sticky]")).toHaveLength(0);
 });
 
 it("narrows to the project the chip chose, leaves the project's name off its rows, and keeps the other projects' 내 차례 as +N that lifts the choice", async () => {
