@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 0's words (`practice/chapters/mission.ts`) and its world's (`practice/worlds/mission.ts`, `practice.mission.world.*`).
+// Flow 3's words (`practice/chapters/mission.ts`) and its world's (`practice/worlds/mission.ts`, `practice.mission.world.*`).
 const en = {
   "practice.mission.title": "Hand over a mission",
   "practice.mission.summary": "Hand a Conductor a sign-in rewrite of six parts, approve its plan, see the workers it starts, answer the one question it brings to Needs You, and find what was decided in Memory",
@@ -36,6 +36,9 @@ const en = {
   "practice.mission.finishing.kick": "It finishes",
   "practice.mission.finishing.title": "The rest runs by itself",
   "practice.mission.finishing.text": "Your answer changes the plan. The workers finish the rest and the Conductor reports; every PR is ready to merge, and the merge is yours.",
+  "practice.mission.settings.kick": "Defaults live in Settings",
+  "practice.mission.settings.title": "Missions have their own settings",
+  "practice.mission.settings.text": "Press **⚙** here, or open **Settings › Mission**. Choose the **default scope** (stop before main, or through the merge) and the **worker candidates**: **agent, model, effort and purpose**. A change applies from the next mission.",
   "practice.mission.needsyou.quest": "Open it from Needs You",
   "practice.mission.needsyou.kick": "A question came",
   "practice.mission.needsyou.title": "It landed in Needs You",
@@ -148,6 +151,9 @@ const ko = {
   "practice.mission.finishing.kick": "마무리",
   "practice.mission.finishing.title": "나머지는 알아서 돌아가요",
   "practice.mission.finishing.text": "내 답이 계획을 바꿔요. 일꾼들이 나머지를 끝내고 Conductor가 보고해요. PR은 모두 머지만 남고, 머지는 직접 해요.",
+  "practice.mission.settings.kick": "기본값은 설정에서",
+  "practice.mission.settings.title": "미션은 설정에서 고를 수 있어요",
+  "practice.mission.settings.text": "여기 **⚙**나 **설정 › 미션**에서 **기본 범위**(main에 넣기 직전까지 / 머지까지)와 **작업자 후보**(**에이전트, 모델, 생각 깊이, 용도**)를 골라요. 바꾼 값은 다음 미션부터 적용돼요.",
   "practice.mission.needsyou.quest": "내 차례에서 열기",
   "practice.mission.needsyou.kick": "질문이 왔어요",
   "practice.mission.needsyou.title": "내 차례에 떴어요",
@@ -260,6 +266,9 @@ const zhCN = {
   "practice.mission.finishing.kick": "收尾",
   "practice.mission.finishing.title": "剩下的会自己运行",
   "practice.mission.finishing.text": "你的回答改变了计划。执行者完成剩下的部分，Conductor 随后报告；所有 PR 都只差合并，合并由你来做。",
+  "practice.mission.settings.kick": "默认值在设置里",
+  "practice.mission.settings.title": "任务有自己的设置",
+  "practice.mission.settings.text": "点这里的 **⚙**，或打开 **设置 › 任务**，可以选择 **默认范围**（到合入 main 之前 / 到合并）和 **候选执行者**（**智能体、模型、思考深度、用途**）。更改从下一个任务开始生效。",
   "practice.mission.needsyou.quest": "从“轮到我”打开",
   "practice.mission.needsyou.kick": "来了一个问题",
   "practice.mission.needsyou.title": "出现在“轮到我”",
@@ -372,6 +381,9 @@ const ja = {
   "practice.mission.finishing.kick": "仕上げ",
   "practice.mission.finishing.title": "あとは自動で進みます",
   "practice.mission.finishing.text": "あなたの答えで計画が変わります。ワーカーが残りを仕上げ、Conductorが報告します。PRはすべてマージを待つだけで、マージはあなたがします。",
+  "practice.mission.settings.kick": "既定値は設定にあります",
+  "practice.mission.settings.title": "ミッションには専用の設定があります",
+  "practice.mission.settings.text": "ここの **⚙** か **設定 › ミッション** で、**既定の範囲**（main に入れる直前まで / マージまで）と **作業者の候補**（**エージェント、モデル、思考の深さ、目的**）を選べます。変更は次のミッションから使われます。",
   "practice.mission.needsyou.quest": "「自分の番」から開く",
   "practice.mission.needsyou.kick": "質問が来ました",
   "practice.mission.needsyou.title": "「自分の番」に出ました",

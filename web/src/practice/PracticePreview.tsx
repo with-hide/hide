@@ -115,17 +115,6 @@ const DRAWINGS: Record<PracticePreviewKind, () => ReactElement> = {
       </div>
     </>
   ),
-  // A plan's steps ticked one by one.
-  checklist: () => (
-    <>
-      <Side />
-      <div className="pv-main">
-        <div className="pv-pane pv-full pv-list">
-          {[70, 55, 80, 45].map((width, at) => <span key={at} className="pv-item"><b className="pv-box" style={{ animationDelay: `${0.6 + at * 0.8}s` }} /><Line width={width} /></span>)}
-        </div>
-      </div>
-    </>
-  ),
 };
 
 /** The chapter's picture; `playing` runs its move, and a still one holds the move's middle. */
@@ -218,10 +207,4 @@ export const PREVIEW_CSS = `
 .pv-bars{display:flex;align-items:flex-end;gap:var(--spacing-xxs);height:45%;margin-top:var(--spacing-sm)}
 .pv-bars i{flex:1;border-radius:var(--radius-xs) var(--radius-xs) 0 0;background:var(--practice-accent-strong);transform-origin:bottom;animation-name:pv-bar}
 @keyframes pv-bar{0%,28%{transform:scaleY(0)}40%,86%{transform:scaleY(1)}96%,100%{transform:scaleY(0)}}
-
-.pv-list{padding:var(--spacing-sm)}
-.pv-item{display:flex;align-items:center;gap:var(--spacing-xs);margin-bottom:var(--spacing-sm)}
-.pv-item .pv-ln{flex:1;margin:0}
-.pv-box{flex:none;width:var(--spacing-sm);aspect-ratio:1;border-radius:var(--radius-xs);box-shadow:inset 0 0 0 var(--size-hairline) color-mix(in srgb,var(--foreground) 14%,transparent);animation-name:pv-tick}
-@keyframes pv-tick{0%{background:transparent}6%,72%{background:var(--practice-zone-work);box-shadow:none}82%,100%{background:transparent}}
 `;
