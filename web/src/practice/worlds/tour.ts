@@ -8,7 +8,7 @@
 import tour from "../data/tour.json";
 import { missionNode as node } from "../../missionFixture";
 import type { DirectoryList } from "../../store";
-import type { AgentRow, EditorDocumentSnapshot, EditorTabSnapshot, Mission, ViewDisplaySnapshot } from "../../snapshot";
+import type { AgentRow, ChangedFileSnapshot, ChangesSnapshot, EditorDocumentSnapshot, EditorTabSnapshot, Mission, ViewDisplaySnapshot } from "../../snapshot";
 import type { PracticeScene } from "../chapter";
 import type { PracticeWorld, WorldSnapshot } from "../world";
 
@@ -170,6 +170,16 @@ function listings(): Record<string, DirectoryList> {
   };
 }
 
+/** What the agent changed in its checkout, as the Explorer marks it: two files it edited and the one it made. */
+function changes(): ChangesSnapshot {
+  const entry = (relative: string, status: ChangedFileSnapshot["status"], added: number | null, removed: number | null): ChangedFileSnapshot => ({ path: `${ROOT}/${relative}`, relative_path: relative, previous_relative_path: null, status, added_lines: added, removed_lines: removed });
+  return {
+    root_path: ROOT,
+    entries: [entry("api/router.ts", "modified", 4, 1), entry("api/tasks.ts", "modified", 42, 3), entry("release-notes.md", "untracked", null, null)],
+    committed: [], base_branch: "main", selected_path: null, selected_committed: false, diff: null, unavailable_reason: null,
+  };
+}
+
 /** One pane alone, on the cards whose lane takes the room of the other three. */
 const solo = (pane: string) => ({ type: "pane", pane_id: pane }) as const;
 
@@ -206,6 +216,8 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
         Object.assign(view, { tool: "explorer" });
         ui_state = { ...ui_state, expanded_paths: Object.keys(listings()), selected_path: NOTES_PATH };
         extra.listings = listings();
+        extra.changes = changes();
+        rest.navigator!.changes_root_path = ROOT;
         // Both columns side by side, as the lane's Expand draws them: at this width they would otherwise stack.
         extra.laneExpanded = true;
       }

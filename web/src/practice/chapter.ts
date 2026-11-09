@@ -28,6 +28,10 @@ export type PracticeStep = {
   target?: string | string[];
   /** Parts of the screen the card talks about without ringing them: the card floats clear of them too. */
   keepClear?: string[];
+  /** Parts of the shell hidden while the card is up, so what the card rings fills its place. */
+  hides?: string[];
+  /** Small tags with a leader line to a part of the ringed screen: `target` is the part, `say` the tag's word (`practice.<chapter>.<card>.tag.<say>`). */
+  callouts?: { target: string; say: string }[];
   /** A button the card presses when it opens and again when it is left, so the popover it holds is open exactly while the card talks about it. */
   opens?: string;
   /** The three parts of the screen, drawn as labeled zones. */

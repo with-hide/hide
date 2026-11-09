@@ -70,8 +70,11 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
   }
 }
 
+/** The tags a card hangs on the parts of what it rings (`callouts`), by card. */
+const CALLOUTS: Record<string, number> = { projects: 5, needs: 2, read: 1, work: 1 };
+
 /** The first-run cards, in order: one screen each, the real part they point at on screen. */
-const FIRST_RUN = ["parts", "projects", "rows", "tasks", "work", "agents", "files", "explorer", "conduct", "find", "devices"];
+const FIRST_RUN = ["parts", "projects", "needs", "read", "work", "agents", "explorer", "conduct", "find", "devices"];
 
 test("the first-run cards play with Enter alone, each pointing at a part of the screen, with the card clear of it", async ({ page }) => {
   await withPractice(page, async (practice) => {
@@ -97,23 +100,28 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       await expect.poll(ringed, { message: `${id}'s ring is missing, off screen, or under its card`, timeout: 5_000 }).toBe(true);
       // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
-      if (id === "tasks") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
-      // The project view's ring takes in the whole list, the 내 차례 · 읽을 것 on top included.
-      if (id === "projects") {
-        const top = await practice.locator("[data-raised-list]").boundingBox();
-        const rings = await practice.locator("[data-practice-ring]").evaluateAll((spots) => spots.map((spot) => spot.getBoundingClientRect().toJSON() as { y: number }));
-        expect(top && rings.some((ring) => ring.y <= top.y)).toBe(true);
+      if (id === "needs") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
+      // The project view folds 내 차례 · 읽을 것 away, so its ring takes the projects alone, and each mark of a row has a tag that covers no tag or card.
+      if (id === "projects") await expect(practice.locator("[data-raised-list]")).toBeHidden();
+      await expect(practice.locator("[data-practice-callout]")).toHaveCount(CALLOUTS[id] ?? 0);
+      const tags = await practice.locator("[data-practice-callout]").evaluateAll((all) => all.map((tag) => tag.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
+      const card = await practice.locator("[data-practice-card]").boundingBox();
+      const view = practice.viewportSize()!;
+      for (const [at, tag] of tags.entries()) {
+        expect(tag.x >= 0 && tag.y >= 0 && tag.x + tag.width <= view.width && tag.y + tag.height <= view.height, `${id}'s tag ${at} is off screen`).toBe(true);
+        expect(!card || card.x + card.width <= tag.x || tag.x + tag.width <= card.x || card.y + card.height <= tag.y || tag.y + tag.height <= card.y, `${id}'s tag ${at} is under its card`).toBe(true);
+        for (const other of tags.slice(at + 1)) expect(tag.y + tag.height <= other.y || other.y + other.height <= tag.y, `${id}'s tags touch`).toBe(true);
       }
       // The agents card opens the lead's children list from the chip, and leaving the card closes it.
       if (id === "agents") await expect(practice.locator('[data-agent-tree="a1"]')).toBeVisible();
       else await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);
-      // The files card brings the agent that opened the file forward in the middle.
-      if (id === "files") {
+      // The Explorer card shows what the agent changed, marked in the tree, with a result opened beside it.
+      if (id === "explorer") {
+        await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");
+        await expect(practice.locator('[data-decoration="modified"]').first()).toBeVisible();
+        await expect(practice.locator('[data-decoration="untracked"]')).toBeVisible();
         await expect(practice.locator('[data-pane-view="q1"]')).toBeVisible();
-        await expect(practice.locator('[data-pane-view="a1"]')).toHaveCount(0);
       }
-      if (id === "files") await expect(practice.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-pressed", "true");
-      if (id === "explorer") await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");
       if (id === "conduct") await expect(practice.locator("[data-pane-mission-chip]")).toBeVisible();
       if (at === FIRST_RUN.length - 1) break;
       await practice.keyboard.press("Enter");

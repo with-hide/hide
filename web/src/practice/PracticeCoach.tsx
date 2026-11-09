@@ -14,6 +14,7 @@ import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import type { PracticeChapter, PracticeScene } from "./chapter";
 import { placeCard, type Box } from "./cardPlace";
+import { placeCallouts } from "./calloutPlace";
 import { cardLines } from "./cardText";
 import { COACH_CSS } from "./coachStyle";
 
@@ -58,6 +59,9 @@ const ZONES = [
   { selector: "[data-lane-slot], [data-tool-rail]", key: "project" },
 ] as const;
 
+/** A callout as drawn: the point it names, and where its tag sits. */
+type Call = { text: string; ax: number; ay: number; x: number; y: number; h: number };
+
 type Props = {
   chapter: PracticeChapter;
   onStep: (step: number, finished: boolean) => void;
@@ -75,6 +79,11 @@ const boxOf = (element: Element | null): Box | null => {
 
 /** How much the ring stands off its target, and how round it is. */
 const RING = 3;
+/** A callout's tag: how far it stands from what it names, its height before it is drawn, and the gap between two. */
+const CALL_OFFSET = 28;
+const CALL_HEIGHT = 26;
+const CALL_GAP = 8;
+const CALL_DOT = 4;
 const ROUND = 12;
 
 export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Props) {
@@ -84,6 +93,7 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
   const [rings, setRings] = useState<Rect[]>([]);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [place, setPlace] = useState<{ x: number; y: number } | null>(null);
+  const [calls, setCalls] = useState<Call[]>([]);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   const go = useRef<HTMLButtonElement>(null);
@@ -124,8 +134,9 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
     let scrolled = false;
     let frame = requestAnimationFrame(function follow() {
       // What the card points at may sit below the fold of its own list: bring it into view once, then ring it.
-      if (!scrolled && targets.length && targets.every((selector) => document.querySelector(selector))) {
-        for (const selector of targets) document.querySelector(selector)?.scrollIntoView({ block: "nearest" });
+      const named = (step.callouts ?? []).map((call) => call.target);
+      if (!scrolled && targets.length && [...targets, ...named].every((selector) => document.querySelector(selector))) {
+        for (const selector of [...targets, ...named]) document.querySelector(selector)?.scrollIntoView({ block: "nearest" });
         scrolled = true;
       }
       const marked = targets.flatMap((selector) => rectOf(selector) ?? []);
@@ -134,11 +145,22 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
-      // The card floats where nothing it talks about, nor the zone tags, nor the mode bar is.
+      // Each callout's tag stands in one column right of the sidebar, level with the right edge of what it names, and a line joins them.
+      const found = (step.callouts ?? []).flatMap((call) => {
+        const box = rectOf(call.target);
+        return box ? [{ text: say(`practice.${chapter.id}.${step.id}.tag.${call.say}`), ax: box.x + box.w + CALL_DOT * 2, ay: box.y + box.h / 2 }] : [];
+      });
+      const side = boxOf(document.querySelector("[data-sidebar-box]"));
+      const column = Math.max((side ? side.x + side.w : 0) + CALL_OFFSET, ...found.map((call) => call.ax + CALL_OFFSET));
+      const height = document.querySelector(".pc-call")?.getBoundingClientRect().height || CALL_HEIGHT;
+      const tops = placeCallouts(found.map((call) => call.ay), height, CALL_GAP, { top: bar.current?.getBoundingClientRect().bottom ?? 0, bottom: window.innerHeight - CALL_OFFSET });
+      const next = found.map((call, at) => ({ ...call, x: Math.round(column), y: tops[at]!, h: height }));
+      setCalls((before) => (JSON.stringify(before) === JSON.stringify(next) ? before : next));
+      // The card floats where nothing it talks about, nor the zone tags, nor the callouts, nor the mode bar is.
       const own = boxOf(card.current);
       if (own) {
         const kept = (step.keepClear ?? []).flatMap((selector) => [...document.querySelectorAll(selector)]);
-        const avoid = [...document.querySelectorAll(".pc-tag"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
+        const avoid = [...document.querySelectorAll(".pc-tag, .pc-call"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
         const at = placeCard(own, marked, avoid, { w: window.innerWidth, h: window.innerHeight });
         setPlace((before) => (before && before.x === at.x && before.y === at.y ? before : at));
       }
@@ -174,6 +196,7 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
   return (
     <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} onPointerDown={(event) => event.stopPropagation()}>
       <style>{COACH_CSS}</style>
+      {step.hides?.length ? <style>{step.hides.map((selector) => `${selector}{display:none !important}`).join("\n")}</style> : null}
       {zones.length ? <div className="pc-zdim" /> : null}
       {zones.map((rect, at) => rect ? (
         <div key={ZONES[at]!.key} className={`pc-zone ${ZONES[at]!.key}`} style={{ left: rect.x + 6, top: rect.y + 6, width: rect.w - 12, height: rect.h - 12, animationDelay: `${150 + at * 260}ms` }}>
@@ -192,6 +215,12 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         </svg>
       ) : null}
       {rings.map((rect, at) => <div key={at} className="pc-spot" data-practice-ring style={{ left: rect.x - RING, top: rect.y - RING, width: rect.w + 2 * RING, height: rect.h + 2 * RING }} />)}
+      {calls.length ? (
+        <svg className="pc-leads" aria-hidden="true">
+          {calls.map((call) => <g key={call.text}><line x1={call.ax} y1={call.ay} x2={call.x} y2={call.y + call.h / 2} /><circle cx={call.ax} cy={call.ay} r={CALL_DOT} /></g>)}
+        </svg>
+      ) : null}
+      {calls.map((call) => <div key={call.text} className="pc-call" data-practice-callout style={{ left: call.x, top: call.y }}>{call.text}</div>)}
       <div className="pc-mode" ref={bar}>
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>

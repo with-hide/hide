@@ -26,7 +26,7 @@ export const PRACTICE_COPY = "practice_copy";
 export const PRACTICE_OUTSIDE = "practice_outside";
 
 /** Shell state a world holds beside the core's snapshot: the documents a lane shows. */
-export type WorldExtra = Partial<Pick<ReturnType<typeof useShellStore.getState>, "editor" | "documents" | "listings">> & {
+export type WorldExtra = Partial<Pick<ReturnType<typeof useShellStore.getState>, "editor" | "documents" | "listings" | "changes">> & {
   /** The lane spread over the agents, both its columns drawn side by side, as the lane menu's Expand does. */
   laneExpanded?: boolean;
 };

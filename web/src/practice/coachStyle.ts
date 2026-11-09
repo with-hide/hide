@@ -44,6 +44,10 @@ ${ZONES}
 .pc-go.pc-sub{background:color-mix(in srgb,var(--practice-ink) 8%,transparent)}
 .pc-kc{display:inline-flex;align-items:center;justify-content:center;min-width:var(--size-control-compact);height:var(--size-control-compact);padding:0 var(--spacing-xs);border-radius:var(--radius-sm);font-size:var(--text-body);font-weight:700;background:var(--practice-keycap);color:var(--practice-keycap-ink);box-shadow:0 var(--size-hairline) 0 var(--practice-line);border:var(--size-hairline) solid var(--practice-line)}
 .pc-go .pc-kc{background:color-mix(in srgb,var(--practice-keycap) 55%,transparent);border-color:transparent;box-shadow:none}
+.pc-leads{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.pc-leads line{stroke:var(--practice-accent);stroke-width:var(--size-tab-indicator)}
+.pc-leads circle{fill:var(--practice-accent)}
+.pc-call{position:absolute;z-index:61;box-sizing:border-box;display:flex;align-items:center;padding:0 var(--spacing-md);height:var(--size-control-compact);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-ink);font-size:var(--text-body);font-weight:600;white-space:nowrap;box-shadow:${SHADOW},0 0 0 var(--size-tab-indicator) var(--practice-accent);pointer-events:none;transition:top .5s ${EASE}}
 .pc-mode{position:absolute;left:50%;top:var(--spacing-xs);transform:translateX(-50%);display:flex;align-items:center;gap:var(--spacing-md);font-size:var(--text-body);font-weight:600;padding:var(--spacing-xxs) var(--spacing-xs);white-space:nowrap;border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto}
 .pc-mode button{font:inherit;font-weight:500;border:0;border-radius:var(--radius-xl);padding:var(--spacing-xxs) var(--spacing-md);background:color-mix(in srgb,var(--practice-accent) 30%,transparent);color:var(--practice-ink);cursor:pointer}
 .pc-mode button.pc-leave{background:var(--practice-accent);font-weight:600}
