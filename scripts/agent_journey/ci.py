@@ -21,7 +21,7 @@ from agent_live_check.runtime import XDG_FOLDERS
 from agent_live_check.system import WINDOWS, home_env, launcher, temp_env
 
 from . import cells, opencode_service
-from .local import QUIET
+from .local import PROFILE_ROOT, QUIET
 
 # What a set-up omp 18.7.0 keeps in its config.yml: without it the first
 # start runs omp's setup wizard over the prompt.
@@ -115,14 +115,14 @@ def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None, sa
     `kind`. Its PATH and temporary folder are set here as well as on the
     daemon, since a Windows pane takes what the daemon lacks from the
     account's registry. The contract's `account_vars`, which a start with a
-    profile sets to an account under the run's HOME, keep the start's value
-    (the `profile` cell)."""
+    profile sets to an account under the run's PROFILE_ROOT, keep the
+    start's value (the `profile` cell); a default start keeps none."""
     folder = folder or runtime.bin
     private_directory(folder)
     environment = agent_environment(runtime, kind, path, journey_config, fake_env)
     command = sandbox.command([str(program)]) if sandbox else [program]
     return launcher(folder / kind, command, environment=environment, unset=["CLAUDE_CONFIG_DIR"],
-                    keep=account_vars, within=runtime.home)
+                    keep=account_vars, within=runtime.home / PROFILE_ROOT)
 
 
 def runs_as_installed(row, fixture_bin):

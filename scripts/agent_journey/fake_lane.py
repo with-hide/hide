@@ -16,6 +16,7 @@ from .fake_private import configure_update
 from agent_live_check.protection import private_directory, write_private
 
 from . import ci, opencode_service
+from .local import PROFILE_ROOT
 from .fake_model import MODEL
 
 # Not a secret: the fake model takes any key, and a CLI needs one to start.
@@ -182,10 +183,10 @@ def opencode_files(folder, url):
 # front of its resume (run 42586901056).
 PROFILE_NAME = "journey"
 PROFILE_ACCOUNTS = {
-    "claude": (".journey-profile/claude", lambda folder, url, root, key: claude_files(folder, root, key)),
-    "codex": (".journey-profile/codex", lambda folder, url, root, key: codex_files(folder, url)),
-    "grok": (".journey-profile/grok", lambda folder, url, root, key: grok_files(folder, url)),
-    "pi": (".journey-profile/pi", lambda folder, url, root, key: pi_files(folder, url)),
+    "claude": (PROFILE_ROOT + "/claude", lambda folder, url, root, key: claude_files(folder, root, key)),
+    "codex": (PROFILE_ROOT + "/codex", lambda folder, url, root, key: codex_files(folder, url)),
+    "grok": (PROFILE_ROOT + "/grok", lambda folder, url, root, key: grok_files(folder, url)),
+    "pi": (PROFILE_ROOT + "/pi", lambda folder, url, root, key: pi_files(folder, url)),
 }
 # The file of a profile's account that holds what `auto_update`'s `path`
 # names in the default account, relative to the folder the account names.
@@ -213,7 +214,7 @@ def profile_account(kind, home, url, root, key=KEY):
         # Its XDG folders under the account; its background server takes a
         # port of its own there (opencode_service), which the run ends as it
         # ends the default account's.
-        folder = home / ".journey-profile/opencode"
+        folder = home / PROFILE_ROOT / "opencode"
         config = folder / "config/opencode"
         opencode_files(config, url)
         opencode_service.configure(config)

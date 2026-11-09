@@ -462,3 +462,30 @@ class AccountVariables(unittest.TestCase):
                                          env={**env, **({"ACCOUNT": given} if given else {})})
                     self.assertEqual(ran.returncode, 0, ran.stderr)
                     self.assertEqual(ran.stdout.decode().strip(), expected)
+
+    def test_an_agents_wrapper_keeps_only_a_profile_accounts_folder_never_another_under_home(self):
+        # A default start whose pane carried the daemon's own XDG folders
+        # got them back, and OpenCode read a configuration with no fake
+        # provider (run 42586901056).
+        import subprocess
+        from types import SimpleNamespace
+        from agent_journey import ci, local
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder).resolve()
+            runtime = SimpleNamespace(home=folder / "home", bin=folder / "bin", state=folder / "state",
+                                      run=folder / "run")
+            program = ci.wrapper(runtime, sys.executable, "opencode", os.environ.get("PATH", ""),
+                                 account_vars=["XDG_CONFIG_HOME"])
+            # The wrapper runs the agent with its own arguments after it.
+            env = {key: value for key, value in os.environ.items() if key != "XDG_CONFIG_HOME"}
+            own = ci.AGENT_ENV["opencode"]["XDG_CONFIG_HOME"]
+            profile = runtime.home / local.PROFILE_ROOT / "opencode" / "config"
+            for given, expected in ((str(profile), str(profile)),
+                                    (str(runtime.home / ".config-daemon"), str(runtime.home / own)),
+                                    (None, str(runtime.home / own))):
+                with self.subTest(given=given):
+                    ran = subprocess.run([str(program), "-c", "import os; print(os.environ['XDG_CONFIG_HOME'])"],
+                                         capture_output=True, timeout=60,
+                                         env={**env, **({"XDG_CONFIG_HOME": given} if given else {})})
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    self.assertEqual(ran.stdout.decode().strip(), expected)
