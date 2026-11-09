@@ -280,6 +280,7 @@ impl Runtime {
         id: &str,
         line: Option<String>,
         asked: (Option<String>, Vec<String>, Option<u8>, Option<String>),
+        shown: Option<(&crate::delivery::Actor, &[String])>,
         now: u64,
     ) -> Result<bool, String> {
         let (why, options, recommend, node) = asked;
@@ -309,8 +310,35 @@ impl Runtime {
                 && recommend.is_none()
                 && node.is_none());
         if same {
-            return Ok(false);
+            // The same question again may name more Views to show with it.
+            let Some((actor, show)) = shown.filter(|(_, show)| !show.is_empty()) else {
+                return Ok(false);
+            };
+            let Some(key) = current.map(|question| question.key) else {
+                return Ok(false);
+            };
+            let links = self.question_view_links(id, actor, show, key)?;
+            let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+            let question = target.question.as_mut().ok_or("mission_unknown")?;
+            let mut changed = false;
+            for link in links {
+                changed |= crate::missions::push_view_link(&mut question.views, link);
+            }
+            if changed {
+                self.save_missions();
+            }
+            return Ok(changed);
         }
+        // A new question takes the Views `--show` names and the ones its
+        // turn opened; a cleared one leaves the turn's for the next.
+        let views = match (&line, shown) {
+            (Some(_), Some((actor, show))) => {
+                let key = mission.question_seq + 1;
+                self.question_view_links(id, actor, show, key)?
+            }
+            _ => Vec::new(),
+        };
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
         let mut events = Vec::new();
         let key_before = mission.question.as_ref().map_or(0, |question| question.key);
         let asked = mission
@@ -359,7 +387,7 @@ impl Runtime {
                     recommend,
                     node,
                     asked_at_unix_ms: now,
-                    views: Vec::new(),
+                    views,
                     material_asked: false,
                 })
             }

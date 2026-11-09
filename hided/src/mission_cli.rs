@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -435,15 +435,20 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             // `--option` is the one flag given more than once, in order.
             let args: Vec<&String> = args.collect();
             let mut options = Vec::new();
+            let mut show = Vec::new();
             let mut rest = Vec::new();
             let mut words = args.into_iter();
             while let Some(arg) = words.next() {
-                if arg == "--option" {
-                    let value = words.next().ok_or("--option needs a value")?;
+                if arg == "--option" || arg == "--show" {
+                    let value = words.next().ok_or_else(|| format!("{arg} needs a value"))?;
                     if value.starts_with("--") || value.trim().is_empty() {
-                        return Err("--option needs a value".to_owned());
+                        return Err(format!("{arg} needs a value"));
                     }
-                    options.push(value.clone());
+                    if arg == "--option" {
+                        options.push(value.clone());
+                    } else {
+                        show.push(value.clone());
+                    }
                 } else {
                     rest.push(arg);
                 }
@@ -455,6 +460,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             let line = one(&values, &set, "--line", "--clear")?
                 .ok_or("give --line <text> or --clear")?
                 .map(str::to_owned);
+            if line.is_none() && !show.is_empty() {
+                return Err("--show goes with --line".to_owned());
+            }
             let recommend = values
                 .get("--recommend")
                 .map(|value| {
@@ -472,7 +480,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 options,
                 recommend,
                 node: values.get("--node").map(|node| key(node)).transpose()?,
-                show: Vec::new(),
+                show,
             }
         }
         "delay" => {
@@ -627,7 +635,10 @@ pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
             }
             return print_answer(answer);
         }
-        MissionCli::Command(command) => command,
+        MissionCli::Command(command) => match shown_as_views(env, command) {
+            Ok(command) => command,
+            Err(reason) => return Err(reason),
+        },
         MissionCli::PlanFile { mission, path } => {
             let plan = match read_file(&path).and_then(|text| plan_input(&text)) {
                 Ok(plan) => plan,
@@ -648,6 +659,40 @@ pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
         return refuse("mission_text_invalid", next_action("mission_text_invalid"));
     }
     print_answer(request(env, &command))
+}
+
+/// `decide --show`'s paths opened as Views and named by their ids: a value
+/// that names an existing path is opened, any other is a View id already.
+fn shown_as_views(env: &Env, command: MissionCommand) -> Result<MissionCommand, String> {
+    let MissionCommand::Decide {
+        mission,
+        line,
+        why,
+        options,
+        recommend,
+        node,
+        show,
+    } = command
+    else {
+        return Ok(command);
+    };
+    let mut views = Vec::with_capacity(show.len());
+    for target in show {
+        if std::path::Path::new(&target).exists() {
+            views.push(crate::cli::open_view_for_decision(env, &target)?);
+        } else {
+            views.push(target);
+        }
+    }
+    Ok(MissionCommand::Decide {
+        mission,
+        line,
+        why,
+        options,
+        recommend,
+        node,
+        show: views,
+    })
 }
 
 fn request(env: &Env, command: &MissionCommand) -> Result<Value, String> {

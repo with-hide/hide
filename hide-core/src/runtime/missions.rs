@@ -82,6 +82,10 @@ pub struct MissionView {
     /// mission-plan-visibility B25); a decision from before it has key 0
     /// and nothing beside its line.
     pub question: Option<Question>,
+    /// The Views linked to that decision that are still open, for the
+    /// operator to look at before answering (`mission_views`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decision_views: Vec<super::mission_views::DecisionView>,
     /// The operator's answer from the banner to that decision (B26, B28).
     pub answer: Option<AnswerView>,
     /// Why the last answer did not reach the Conductor (B28).
@@ -489,6 +493,9 @@ pub(crate) struct MissionRuntime {
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
     pub(crate) answers_held: std::collections::HashSet<String>,
+    /// The Views each mission's Conductor opened in its current turn
+    /// (`mission_views`). Memory only.
+    pub(crate) turn_views: HashMap<String, super::mission_views::TurnViews>,
     /// The answers whose `agent.prompt` the doorbell has asked and not yet
     /// heard back from, by mission: shown as sending. Memory only; the book
     /// already holds them as unconfirmed, so a stop in between never types
@@ -567,6 +574,10 @@ struct ViewsMadeFrom {
     /// a node's `work` reads, and of the doorbell's holds, which its
     /// Conductor's held letters read; zero with none running.
     rows_and_holds: u64,
+    /// While a decision links Views: the View layouts' change count, since
+    /// its card lists the ones still open and whether each was seen; zero
+    /// with none linked.
+    views_generation: u64,
     made: bool,
 }
 
@@ -752,6 +763,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
         WakeEvent::EndAsked => format!(
             "The operator asked from the map to end mission {} \"{}\".\nTreat it as the operator saying \"cancel\" and follow that item of `hide mission help`: ask about the open pull requests with `hide mission decide`, end the workers, then `hide mission close --as cancelled`.",
             mission.id, mission.title
+        ),
+        WakeEvent::MaterialAsked => format!(
+            "The operator asks for something to look at before answering your decision on mission {} \"{}\": {}\nMake one page that starts with three lines (what changed, the 2-3 things to check, what good looks like), then ask again with `hide mission decide ... --show <page>`: Hide opens the page as a View and lists it on the decision.",
+            mission.id,
+            mission.title,
+            mission.decision.as_deref().unwrap_or("-")
         ),
         WakeEvent::Attention => {
             let (what, act) = attention_words(wake.reason, &pr);
@@ -1719,11 +1736,16 @@ impl Runtime {
                 options,
                 recommend,
                 node,
-                show: _,
+                show,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
-                let changed =
-                    self.decide_mission(&id, line, (why, options, recommend, node), now)?;
+                let changed = self.decide_mission(
+                    &id,
+                    line,
+                    (why, options, recommend, node),
+                    Some((&actor, &show)),
+                    now,
+                )?;
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Delay { mission, line } => {
@@ -3207,7 +3229,14 @@ impl Runtime {
             decision: mission.decision.clone(),
             // A decision from before questions has nothing beside its line
             // and no time it was asked (answered under key 0).
-            question: mission.decision.as_ref().and(mission.question.clone()),
+            question: mission.decision.as_ref().and(mission.question.clone()).map(
+                |mut question| {
+                    // The links are the book's; the map draws `decision_views`.
+                    question.views.clear();
+                    question
+                },
+            ),
+            decision_views: self.decision_views(mission),
             answer: mission.answer.as_ref().map(|answer| AnswerView {
                 key: answer.key,
                 text: answer.text.clone(),
@@ -3322,6 +3351,7 @@ impl Runtime {
         }));
         let laid = self.laid_panes();
         let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
+        let views_generation = self.decision_views_generation();
         let before = &self.missions.views;
         let same_ledger = match (&before.ledger, &ledger) {
             (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
@@ -3340,6 +3370,7 @@ impl Runtime {
             && before.present == present
             && before.unreadable == unreadable
             && before.rows_and_holds == rows_and_holds
+            && before.views_generation == views_generation
             && now < before.until
             && self.snapshot.missions.failed == failed
         {
@@ -3408,6 +3439,7 @@ impl Runtime {
             sleeping,
             laid,
             rows_and_holds,
+            views_generation,
             made: true,
         };
     }

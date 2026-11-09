@@ -625,6 +625,9 @@ pub enum WakeEvent {
     /// A node shows signs its worker is stuck; `warning` says which
     /// (with-hide/hide-private#552).
     Warning,
+    /// The operator asked for something to look at before answering the
+    /// open question (`자료 요청`).
+    MaterialAsked,
 }
 
 impl WakeEvent {
@@ -644,6 +647,7 @@ impl WakeEvent {
             Self::Fix => "fix",
             Self::Reopened => "reopened",
             Self::Warning => "warning",
+            Self::MaterialAsked => "material_asked",
         }
     }
 }
@@ -2614,6 +2618,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_no_nodes" => "Set a plan with hide mission plan before starting",
         "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
+        "mission_show_unknown" => {
+            "Name a View of your own checkout from hide view list, or give --show a path to open"
+        }
         "mission_too_many_nodes" => "Plan at most 64 nodes; merge or split the work differently",
         "mission_node_unknown" => "Run hide mission show to see the plan's node keys",
         "mission_node_in_progress" => {

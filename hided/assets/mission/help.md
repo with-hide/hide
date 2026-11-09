@@ -18,7 +18,7 @@ hide mission record <node> <line> (--pass | --fail) --evidence <text> [--summary
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
 hide mission start
-hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)
+hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)
 hide mission delay (--line <text> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
@@ -220,6 +220,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
 - When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered in conversation.
   When the answer is one of a few choices, give each with `--option` (at most 5, one line each) saying what follows from it, what it gains and what it costs, mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`; the node stays `working` and the map shows the decision on it.
+  When the operator has to look at something to answer (screens, a report), give it with `--show <path or View id>`: one page that starts with three lines (what changed, the 2-3 things to check, what good looks like); Hide opens a path as a View and lists it on the decision with the Views you and the node's worker opened in that turn.
   Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
   The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it; that answer has already taken the decision off the map, so there is nothing to clear.
   Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.
