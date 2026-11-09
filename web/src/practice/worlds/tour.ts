@@ -2,15 +2,14 @@
 // asking to merge, and the Project tool beside them), which shows all three
 // parts of the screen with work in them. Its snapshot is `../data/tour.json`,
 // kept as the core would send it with each time written as how long before
-// now it was. It answers the sidebar's list, so the learner can turn it
-// through its three lenses, and notes that ⌘K was opened.
+// now it was. The sidebar opens on the task list, where what waits for the
+// learner is grouped; nothing the learner does changes the window.
 
-import { nextSidebarLens, type SidebarLens } from "../../snapshot";
 import tour from "../data/tour.json";
 import type { PracticeWorld, WorldSnapshot } from "../world";
 
-/** `searched` is whether ⌘K was opened, which asks the core for sessions; `tool` is the tool the lane shows, none while it is closed, and `pinned` whether it docks beside the agents. */
-export type TourModel = { lens: SidebarLens; seen: SidebarLens[]; searched: boolean; tool: "project" | null; pinned: boolean };
+/** The window never changes. */
+export type TourModel = null;
 
 /** A time in the data file: milliseconds, seconds or an ISO time that long before now, or a date that many days before today. */
 type Ago = { $msAgo?: number; $sAgo?: number; $isoAgo?: number; $daysAgo?: number };
@@ -96,24 +95,13 @@ const TERMINALS: Record<string, string> = {
 };
 
 export const TOUR_WORLD: PracticeWorld<TourModel> = {
-  initial: () => ({ lens: "projects", seen: ["projects"], searched: false, tool: null, pinned: false }),
-  apply(model, event) {
-    if (event.kind === "session_work_search") return model.searched ? null : { ...model, searched: true };
-    // The rail's tool pressed opens the lane on it, and pressed again, or closed, puts it away.
-    if (event.kind === "workspace_view") {
-      const tool = event.payload.open === false ? null : "tool" in event.payload ? (event.payload.tool === "project" ? "project" : null) : model.tool;
-      const pinned = typeof event.payload.pinned === "boolean" ? event.payload.pinned : model.pinned;
-      return tool === model.tool && pinned === model.pinned ? null : { ...model, tool, pinned };
-    }
-    if (event.kind !== "sidebar_lens_set") return null;
-    const lens = (event.payload.lens as SidebarLens | undefined) ?? nextSidebarLens(model.lens);
-    return { ...model, lens, seen: model.seen.includes(lens) ? model.seen : [...model.seen, lens] };
-  },
-  snapshot(model, nowMs) {
+  initial: () => null,
+  apply: () => null,
+  snapshot(_model, nowMs) {
     const { rest, agents, usage } = dated(tour, nowMs) as Omit<WorldSnapshot, "focused">;
-    // The window opens with the lane closed: nothing has asked for a tool yet.
-    const view = { ...rest.workspace_view!, open: model.tool !== null, tool: model.tool, pinned: model.pinned };
-    return { rest: { ...rest, ui_state: { ...rest.ui_state, sidebar_lens: model.lens }, workspace_view: view }, agents, focused: null, usage };
+    // The window opens with the lane closed, on the list of tasks.
+    const view = { ...rest.workspace_view!, open: false, tool: null, pinned: false };
+    return { rest: { ...rest, ui_state: { ...rest.ui_state, sidebar_lens: "tasks" as const }, workspace_view: view }, agents, focused: null, usage };
   },
   panes: () => Object.keys(TERMINALS),
   screen: (_model, paneId, cols) => TERMINALS[paneId]!.replaceAll(RULE, "─".repeat(cols)),

@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 // Every chapter's world against what the shell can send it. A learner may
-// press any chord or click any pane on a practice screen, so at each step a
-// chapter reaches, every command the shell's keyboard runs and every pane
-// focus is sent, and the world must answer it (or answer nothing) and still
-// draw its snapshot and every pane's screen (docs/UI_BEHAVIOR.md, Adding a
-// chapter), and a step done inside a palette names the command that opens it.
-// A new chapter is checked here by being added.
+// press any chord or click any pane on a practice screen, so every command the
+// shell's keyboard runs and every pane focus is sent, and the world must
+// answer it (or answer nothing) and still draw its snapshot and every pane's
+// screen (docs/UI_BEHAVIOR.md, Practice window). A new chapter is checked here
+// by being added.
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
@@ -27,11 +26,6 @@ const browserCanvas = vi.hoisted(() => {
 });
 
 const NOW = Date.UTC(2026, 9, 23, 12);
-/** How many events deep a step's state is looked for from the step before it. */
-const DEPTH = 3;
-/** The states one step's search may visit, so a world with many states stays bounded. */
-const STATES = 400;
-
 /** The app menu's command listener the shell installs: a command run by id, as a chord or the menu would. */
 let menu: ((id: string) => void) | null = null;
 
@@ -99,71 +93,21 @@ function stage(chapter: PracticeChapter) {
 }
 
 describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practice chapter %s", (_id, chapter) => {
-  it("answers every command and pane focus at each step, and still draws", () => {
+  it("answers every command and pane focus, and still draws", () => {
     expect(menu).toBeNull();
     const { inputs, after, uninstall, initial } = stage(chapter);
     try {
       expect(menu).not.toBeNull();
-      const key = (model: unknown) => JSON.stringify(model);
-      const answered = new Map<string, { model: unknown; name: string }[]>();
-      /** Sends every input once from `model`, naming the step and the path when a world fails. */
-      const everyInput = (model: unknown, where: string) => {
-        const known = answered.get(key(model));
-        if (known) return known;
-        const results = inputs(model).map((input) => {
-          try {
-            return { model: after(model, input), name: input.name };
-          } catch (error) {
-            throw new Error(`${where}, then ${input.name}: ${String(error)}`, { cause: error });
-          }
-        });
-        answered.set(key(model), results);
-        return results;
-      };
-      let current = initial;
-      for (const step of chapter.steps) {
-        // A step's state is looked for among what the shell can send; a step
-        // only a palette, a drag or typing reaches keeps the state before it.
-        if (step.done && !step.done(current)) {
-          const seen = new Set([key(current)]);
-          let found = false;
-          let frontier: { model: unknown; path: string }[] = [{ model: current, path: step.id }];
-          search: for (let depth = 0; depth < DEPTH && frontier.length; depth += 1) {
-            const next: typeof frontier = [];
-            for (const { model, path } of frontier) {
-              for (const reached of everyInput(model, path)) {
-                if (seen.has(key(reached.model)) || seen.size >= STATES) continue;
-                seen.add(key(reached.model));
-                const there = { model: reached.model, path: `${path} > ${reached.name}` };
-                if (step.done(reached.model)) {
-                  current = reached.model;
-                  found = true;
-                  break search;
-                }
-                next.push(there);
-              }
-            }
-            frontier = next;
-          }
-          // Not found within the bound is not the same as unreachable by the shell: say so, as the step is checked from the state before it.
-          if (!found && seen.size >= STATES) console.warn(`practice chapter ${chapter.id}: ${step.id} was not reached within ${STATES} states; checked from the state before it`);
+      for (const input of inputs(initial)) {
+        try {
+          after(initial, input);
+        } catch (error) {
+          throw new Error(`${input.name}: ${String(error)}`, { cause: error });
         }
-        everyInput(current, `at ${step.id}`);
       }
     } finally {
       uninstall();
       menu = null;
     }
-    // The search visits up to STATES states for each step no keyboard command reaches (a step done by typing words keeps the state before it),
-    // and the several-agents flow has several, each started from states its own splits widen: 1.5 s here, past vitest's 5 s on a Windows runner.
-    // The work is bounded by DEPTH and STATES, so the limit is sized to it, not raised to cover a stall.
   }, 30_000);
-
-  // Esc closes a palette mid-step; ⏎ alone has to bring it back (docs/UI_BEHAVIOR.md, Adding a chapter).
-  it("gives every step done inside a palette the command that opens it", () => {
-    for (const step of chapter.steps) {
-      const inPalette = step.target?.includes("[data-palette]") || (step.gesture !== undefined && "type" in step.gesture && "input" in step.gesture.type && step.gesture.type.input.includes("[data-palette"));
-      if (inPalette) expect(step.command, step.id).toBeDefined();
-    }
-  });
 });

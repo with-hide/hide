@@ -48,12 +48,12 @@ it("invites only an operator with no practice progress who never closed it, proj
   }
 });
 
-it("opens the practice window on the mission flow, and its × tells the core to close it for good", async () => {
+it("opens the practice window on the first run, and its × tells the core to close it for good", async () => {
   const openPractice = vi.fn();
   window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
   const { container, events, unmount } = await render({});
   await act(async () => container.querySelector<HTMLButtonElement>("[data-practice-invite-open]")!.click());
-  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "mission");
+  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "overview");
   expect(events).toEqual([]);
   await act(async () => container.querySelector<HTMLButtonElement>("[data-practice-invite-close]")!.click());
   expect(events).toEqual([{ schema_version: 2, kind: "practice_invite_close", payload: {} }]);

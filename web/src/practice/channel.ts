@@ -9,7 +9,8 @@ import { useEffect } from "react";
 import type { Actions } from "../actions";
 import { hostBridge } from "../host";
 import { clientI18n } from "../i18n/translator";
-import type { SnapshotRest } from "../snapshot";
+import { catalogWorkspaces, type SnapshotRest } from "../snapshot";
+import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
 
 export const PRACTICE_CHANNEL = "hide-practice";
@@ -31,11 +32,30 @@ export type ShellAnswer = {
   color_theme: UiState["color_theme"];
 };
 
-/** The window's hello and the steps it reaches; the shell's ask to play a chapter in a window that is already open. */
-export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress) | { kind: "play"; chapter: string };
+/**
+ * The window's hello, the steps it reaches and its ask for a real mission (the last card's button); the shell's
+ * ask to play a chapter in a window that is already open.
+ */
+export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress) | { kind: "mission" } | { kind: "play"; chapter: string };
 
-/** The chapter a newcomer starts on: handing over a mission (`chapters/mission.ts`). */
-export const FIRST_CHAPTER = "mission";
+/** The chapter a newcomer starts on: the three parts of the screen and a mission to try (`chapters/overview.ts`). */
+export const FIRST_CHAPTER = "overview";
+
+/** The blank in the mission sentence (`startPanel.missionSentence`) the operator fills. */
+const MISSION_BLANK = "___";
+
+/**
+ * A real mission from the practice's last card: the Start panel opens with the sentence in its input, not sent, the
+ * blank selected; Enter starts the agent with it. With no project yet the sentence is kept as the draft and adding a
+ * project comes first.
+ */
+function startMission(actions: Actions) {
+  const sentence = clientI18n.t("startPanel.missionSentence");
+  const at = sentence.indexOf(MISSION_BLANK);
+  useStartPanel.getState().prefill(sentence, at < 0 ? null : [at, at + MISSION_BLANK.length]);
+  if (catalogWorkspaces(useShellStore.getState().rest).length === 0) actions.openAddProject();
+  else actions.openStartPanel();
+}
 
 /**
  * Whether the sidebar invites the operator to practice: never practiced (the
@@ -69,6 +89,7 @@ export function usePracticeChannel(actions: Actions): void {
     channel.onmessage = (event: MessageEvent<PracticeMessage>) => {
       const message = event.data;
       if (message.kind === "hello") channel.postMessage(answer());
+      else if (message.kind === "mission") startMission(actions);
       else if (message.kind === "progress") actions.setPracticeProgress(message.chapter, { version: message.version, step: message.step, finished: message.finished });
     };
     const unsubscribe = useShellStore.subscribe((state, previous) => {

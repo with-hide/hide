@@ -206,7 +206,7 @@ test("with every agent off, the first project closes the wizard and opens no sta
   await expect(page.locator("[data-start-panel]")).toHaveCount(0);
 });
 
-test("practice first ends the wizard over the empty Home and opens the practice window on chapter 0", async () => {
+test("practice first ends the wizard over the empty Home and opens the practice window on the first run", async () => {
   let page;
   ({ app, page } = await launch(run.env));
   const wizard = page.locator("[data-first-run]");
@@ -218,8 +218,8 @@ test("practice first ends the wizard over the empty Home and opens the practice 
   const opened = app.waitForEvent("window");
   await page.locator('[data-first-run-way="practice"]').click();
   const practice = await opened;
-  await expect(practice.locator('[data-practice-chapter="mission"]')).toBeVisible({ timeout: 30_000 });
-  expect(new URL(practice.url()).searchParams.get("chapter")).toBe("mission");
+  await expect(practice.locator('[data-practice-chapter="overview"]')).toBeVisible({ timeout: 30_000 });
+  expect(new URL(practice.url()).searchParams.get("chapter")).toBe("overview");
   await expect(wizard).toHaveCount(0);
   // Opening the chapter is practicing: the sidebar's invitation is gone with it.
   await expect(page.locator("[data-practice-invite]")).toHaveCount(0);

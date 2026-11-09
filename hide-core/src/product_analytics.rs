@@ -74,21 +74,13 @@ pub enum MissionOutcome {
 /// adds sends nothing until it is named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PracticeChapter {
-    Mission,
     Overview,
-    Agents,
-    Devices,
-    Day,
 }
 
 impl PracticeChapter {
     pub(crate) fn of(id: &str) -> Option<Self> {
         Some(match id {
-            "mission" => Self::Mission,
             "overview" => Self::Overview,
-            "agents" => Self::Agents,
-            "devices" => Self::Devices,
-            "day" => Self::Day,
             _ => return None,
         })
     }
@@ -251,11 +243,7 @@ impl Event {
                 (
                     "chapter",
                     match chapter {
-                        PracticeChapter::Mission => "mission",
                         PracticeChapter::Overview => "overview",
-                        PracticeChapter::Agents => "agents",
-                        PracticeChapter::Devices => "devices",
-                        PracticeChapter::Day => "day",
                     },
                 ),
                 (

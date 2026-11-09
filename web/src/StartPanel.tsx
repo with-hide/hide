@@ -284,7 +284,10 @@ function StartPanel({ actions }: { actions: Actions }) {
   };
   useEscapeLayer(true, dismiss);
   useEffect(() => {
-    field.current?.focus();
+    const box = field.current;
+    box?.focus();
+    const blank = useStartPanel.getState().takeBlank();
+    if (box && blank) box.setSelectionRange(blank[0], blank[1]);
   }, []);
   // A press outside closes, except inside the menus the panel opened: they render in their own portal.
   useEffect(() => {

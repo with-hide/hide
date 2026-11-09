@@ -121,57 +121,29 @@ fn practice_progress_is_kept_per_chapter_and_an_identical_write_changes_nothing(
     );
 }
 
-/// A practice chapter counts its start and its end once each per
-/// installation: later steps, a replay that keeps the chapter finished, and
-/// a chapter the statistics do not name send nothing.
+/// The first-run chapter counts its start and its end once each per
+/// installation: later steps, a replay that keeps it finished, and a chapter
+/// the statistics do not name (the flows that were removed included) send nothing.
 #[test]
 fn a_practice_chapter_counts_its_start_and_end_once() {
     use crate::product_analytics::{Event, PracticeChapter, PracticeStage};
     let practice = |stage| Event::Practice {
-        chapter: PracticeChapter::Mission,
+        chapter: PracticeChapter::Overview,
         stage,
     };
     let mut runtime = runtime();
     let statistics = Arc::new(RecordedStatistics::default());
     runtime.install_product_analytics(statistics.clone());
-    assert!(practice_event(&mut runtime, "mission", 0, false));
-    assert!(practice_event(&mut runtime, "mission", 4, false));
+    assert!(practice_event(&mut runtime, "overview", 0, false));
+    assert!(practice_event(&mut runtime, "overview", 4, false));
     assert_eq!(statistics.take(), [practice(PracticeStage::Started)]);
-    assert!(practice_event(&mut runtime, "mission", 9, true));
-    assert!(practice_event(&mut runtime, "mission", 2, true));
+    assert!(practice_event(&mut runtime, "overview", 6, true));
+    assert!(practice_event(&mut runtime, "overview", 2, true));
     assert_eq!(statistics.take(), [practice(PracticeStage::Finished)]);
-    assert!(practice_event(&mut runtime, "first-agent", 9, true));
+    for removed in ["mission", "agents", "devices", "day", "first-agent", "plan"] {
+        assert!(practice_event(&mut runtime, removed, 9, true));
+    }
     assert_eq!(statistics.take(), []);
-    // A flow that was folded into another sends nothing; the one it was folded into counts.
-    assert!(practice_event(&mut runtime, "screen", 9, true));
-    assert!(practice_event(&mut runtime, "find", 9, true));
-    assert!(practice_event(&mut runtime, "project", 9, true));
-    // The step-by-step flow was removed, so its id sends nothing either.
-    assert!(practice_event(&mut runtime, "plan", 9, true));
-    assert_eq!(statistics.take(), []);
-    assert!(practice_event(&mut runtime, "agents", 0, false));
-    assert_eq!(
-        statistics.take(),
-        [Event::Practice {
-            chapter: PracticeChapter::Agents,
-            stage: PracticeStage::Started
-        }]
-    );
-    assert!(practice_event(&mut runtime, "devices", 0, false));
-    assert!(practice_event(&mut runtime, "day", 0, false));
-    assert_eq!(
-        statistics.take(),
-        [
-            Event::Practice {
-                chapter: PracticeChapter::Devices,
-                stage: PracticeStage::Started
-            },
-            Event::Practice {
-                chapter: PracticeChapter::Day,
-                stage: PracticeStage::Started
-            }
-        ]
-    );
 }
 
 /// A chapter id outside `^[a-z0-9-]{1,32}$` and a step past 255 are refused

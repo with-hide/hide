@@ -1,4 +1,7 @@
-// Flow 1: the three parts of the screen, pointed at on a window with work in them, and ⌘K to find.
+// Flow 1, what a newcomer meets first, on a window with work in every state:
+// the three parts, the left list read two ways, what each state means, more
+// agents, what an agent opened to look at, search, and a button that hands over
+// to a real mission. One card a screen, ⏎ once each.
 
 import { chapter } from "../chapter";
 import { TOUR_WORLD, type TourModel } from "../worlds/tour";
@@ -6,23 +9,19 @@ import { TOUR_WORLD, type TourModel } from "../worlds/tour";
 export default chapter<TourModel>({
   id: "overview",
   number: 1,
-  version: 5,
+  version: 7,
   world: TOUR_WORLD,
-  quest: true,
   preview: "zones",
   steps: [
-    { id: "parts", zones: true, side: "center" },
-    { id: "left", target: "[data-sidebar-box] [data-sidebar]", side: "right" },
-    { id: "lenses", quest: true, target: "[data-sidebar-lens]", side: "right", command: "toggle_sidebar_lens", done: (model) => model.seen.length === 3 },
-    { id: "search", quest: true, target: "[data-sidebar-search]", side: "right", command: "search", gesture: { click: true }, done: (model) => model.searched, afterClose: true },
-    // While the palette is up it holds the keyboard and the guide stays here; the next step comes when Esc or ⏎ closes it.
-    { id: "center", target: "[data-agent-area]", side: "right" },
-    // The lane starts closed; the tool rail opens it on the tool pressed.
-    { id: "lane", quest: true, target: '[data-lane-tool="project"]', side: "left", gesture: { click: true }, done: (model) => model.tool === "project" },
-    // Pinned, the lane docks beside the agents, which narrow; unpinned, it is drawn over them.
-    { id: "pin", quest: true, target: "[data-lane-pin]", side: "left", gesture: { click: true }, done: (model) => model.pinned },
-    { id: "tools", target: "[data-lane-tool]", side: "left" },
-    { id: "devices", target: "[data-device-rail]", side: "right" },
-    { id: "end", zones: true, side: "center" },
+    { id: "parts", zones: true },
+    { id: "left", target: "[data-sidebar-box] [data-sidebar]" },
+    // Needs You holds only what waits for the operator; finished work goes quietly to Unread, and a working row that waits says so on its second line.
+    { id: "states", target: "[data-task-list]" },
+    // The lead whose children list under it, and the split that opens another agent beside one.
+    { id: "spawn", target: '[data-task-row="a1"]', command: "split_right" },
+    // The row marked To look at: pressing it shows what the agent opened on the right.
+    { id: "look", target: '[data-task-row="q1"]' },
+    { id: "find", target: "[data-sidebar-search]", command: "search" },
+    { id: "mission", mission: true },
   ],
 });
