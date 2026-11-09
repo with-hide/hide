@@ -246,9 +246,12 @@ export async function rowGeometry(row: Locator, next: Locator, parts: Locator[])
 
 /**
  * A sidebar row of a project, shown. A project with no agent is an ordinary
- * row of the one Projects list, so this only waits for the row to be drawn.
+ * row of the one Projects list; its buttons (+, settings, more) wait for the
+ * pointer, so the project is hovered before the row is waited for.
  */
 export async function showProjectRow(_page: Page, row: Locator): Promise<Locator> {
+  const project = row.locator("xpath=ancestor::*[@data-project][1]");
+  if ((await project.count()) > 0) await projectOpener(project).hover();
   await expect(row).toBeVisible({ timeout: 20_000 });
   return row;
 }
@@ -362,4 +365,10 @@ export async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<
   await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
   // Controls fade their colors into the new theme; a capture waits them out.
   await animationsFinished(page);
+}
+
+/** A checkout row of a project's "Checkouts" fold, with the fold opened. */
+export async function otherCheckoutRow(page: Page, project: Locator, branch: string): Promise<Locator> {
+  await openOtherCheckouts(project);
+  return page.locator(`[data-checkout][aria-label^="${branch}"]`).first();
 }

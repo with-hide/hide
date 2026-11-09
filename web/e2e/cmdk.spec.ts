@@ -25,7 +25,7 @@ import { startEngine, startFixture } from "./engine-fixture";
 import { startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { countSent, enterWorkspace, openOtherCheckouts, registerFolder, screenshot } from "./wire";
+import { countSent, enterWorkspace, otherCheckoutRow, registerFolder, screenshot } from "./wire";
 import { chord, field, label, SYSTEM } from "./chords";
 import { fieldChord } from "../src/shortcuts";
 import { initGithubRepository } from "./github-remote";
@@ -231,9 +231,7 @@ test("⌘K relates the agent in front to its issue and pull request, finds them 
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
     const agent = await titledAgents(engine, daemon, repo, worktree);
-    // The worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
-    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }));
-    await page.locator(`[data-checkout][aria-label^="${BRANCH}"]`).first().click();
+    await (await otherCheckoutRow(page, page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }), BRANCH)).click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await focusAgent(page, agent);
 
