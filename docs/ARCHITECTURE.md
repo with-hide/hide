@@ -1455,6 +1455,11 @@ The seven agents' accounts (Cursor is retired and keeps none):
 | Grok | folder | `GROK_HOME`: `~/.grok` to `{account}` | none |
 | agy | none | none: only a different `HOME` moves its folders | none |
 
+An optional `[account.login]` names the account path (`at = "login"` or `"usage"`) and `any`, 1 to 16 JSON pointers to nonblank credential strings.
+An initial `/*/` visits each provider or scope in a JSON object; a pointer has at most eight parts and 256 bytes, and no other wildcard.
+The shared reader (`hide_host::credentials`) applies these rules to bounded files for every agent, and the usage readers use its same JSON and credential-string interpretation.
+Only Claude Code's macOS keychain presence needs agent-specific code (`hide_host::login::claude`); no token or file contents leave the node's readers.
+
 #### `resolve`
 
 `hide_agent_adapter::resolve(definition, profile, node)` is a pure function: no file, no process, no network.
@@ -1485,7 +1490,8 @@ A path a hook, a request or another machine names is read only when it lies in o
 A path in a profile's account is proven down from the account's folder with no link and no `..` on the way, as Pi's, omp's and Grok's readers prove every account's (`hide_session::inside_session_root`), and a listing walks a profile's `sessions` place only once it is proven so (`session_roots`): a link under a profile's folder never makes an account the node did not register readable.
 Claude Code's and Codex's default account keeps following every link, as it did before profiles (B29): an operator's `~/.claude/projects` or `~/.codex/sessions` may be a link, and is read and listed through it.
 A read of one agent's session names the account its start ran in (`LabelTranscriptRequest::account`, `SessionActivityRequest`, a session thread's reference), and the node reads in that account alone (`Accounts::reading`): the core takes it from the one pure decision over its hook-reported account and matching launch record (`runtime::agent_choice::pane_run`, used by `Runtime::pane_account`, the label reads and the phone's conversation), and the label worker gets those records with its switch only when they changed (`missions.launches_edit`), so a publish adds a counter compare (B19).
-A listing that has no one session to name (the session links a resume list reads, usage, the catalog) walks each registered account on its own reader thread; the phone's conversation opens a session by its path's account, or tries each account in turn for an id (`hided/src/mobile/conversation.rs`).
+A listing that has no one session to name (the session links a resume list reads, usage, the catalog) walks each registered account on its own reader thread.
+The phone's conversation asks the core for its pane's account and opens the session in that account alone, for both paths and ids (`hided/src/mobile/conversation.rs`).
 A resume whose record kept the profile it ran with (an archive's, a feedback opener's) runs with it, and a record kept before profiles with the built-in default (D-27).
 A resume of a session line or record names no account, so before its tab is made the start asks the machine that holds the session which of its registered accounts holds it (`Call::SessionAccount`, `hide_session::session_account::read`, by the file its line names, or OpenCode's id in each account's database, one database read once however many accounts name it) and runs with that account's profile (`Runtime::settle_session_profile`): the built-in default for the default account, else that agent's profile of the account, its default among several first, then the list's order (B19).
 An account no profile names now, an id two accounts' databases hold, or a machine that keeps profiles and does not answer starts nothing, never the default account in its place; a node on the older protocol the core still admits keeps no profile, so its sessions are the default account's.
@@ -1493,6 +1499,12 @@ A mission keeps the profile its Conductor started with (`Conductor::profile`), a
 A Conductor no launch record describes (one started by hand) keeps its profile as unknown (`Conductor::profile_unknown`), and its take-over asks the session's machine as a resume by id alone does.
 A Claude Code or Codex resume that names its session by id alone, with no file and no recorded profile, is the start these agents always had, whose own command finds the session and resumes it; as a policy of compatibility, not a proof of the session, its machine answers the default account only while its profile file, read, keeps no other account of that agent, a profile being removed included and a wrapper in the default account adding none (`Accounts::default_alone`).
 Another account of the agent refuses it (`session_account_unproven`), as does a profile file the machine could not read or a profile whose account it could not register (`session_accounts_unsettled`), and the core never puts the default account in its place.
+Before a delegated start, its one picked request names the account whose hook is judged: another account's hook from its profile report, or the ordinary agent hook for the default account, including a wrapper profile of that account (`runtime::start_hook`).
+An unread or missing account hook is never treated as installed; the same pass and refusal policy applies as to the default account.
+The judgment keeps that profile's account and version, and the node's launch answer must match both before anything is typed; node calls remain outside the runtime lock.
+The start panel reads the final automatic choice from `status.start_profiles`, by project and agent, made by `Runtime::new_start_profile` and the same `launch::pick` as an actual start.
+Profile lists, project profile settings and project identity, root or device changes refresh this nonpersistent projection; ordinary pane catalog updates keep it without running the picker again.
+An explicit start still validates its chosen profile when it starts.
 A profile agent keeps the title its agent has on the built-in default; its row carries the profile's name (`SidebarAgentSnapshot::profile`, absent for the default profile), which the screens show as a mark beside its logo, and `hide agent list` and `show` name it after its agent, `Claude · a` (`AgentView::profile`, `null` for the default profile, `launch::shown`).
 agy's module keeps only what lies inside its default account's `sessions` place and beside it, the transcript's form and the index's name.
 

@@ -163,6 +163,12 @@ impl Launch {
         &self.kind
     }
 
+    pub(crate) fn profile_facts(&self) -> Option<(&AccountKey, u64)> {
+        self.profile
+            .as_ref()
+            .map(|(_, start)| (&start.account, start.version))
+    }
+
     pub(crate) fn finish(&self) -> holds::Finish {
         holds::Finish::new(self.hold.clone())
     }
