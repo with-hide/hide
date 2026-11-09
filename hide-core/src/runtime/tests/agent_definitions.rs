@@ -18,7 +18,7 @@ const SEVEN: [&str; 7] = [
     "antigravity",
 ];
 /// The fields every catalog row carried before definitions existed.
-const ROW_FIELDS: [&str; 14] = [
+const ROW_FIELDS: [&str; 17] = [
     "agent",
     "cli_default_model",
     "efforts",
@@ -26,9 +26,12 @@ const ROW_FIELDS: [&str; 14] = [
     "id",
     "installed",
     "label",
+    "model_labels",
     "models",
+    "models_from_default",
     "models_unavailable_reason",
     "past_usage_limit",
+    "profile",
     "signed_in",
     "takes_model",
     "weekly_resets_at_ms",

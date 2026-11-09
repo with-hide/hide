@@ -418,19 +418,20 @@ impl Models {
 
     /// The list `profile`'s own environment gave, or the agent's when it gave
     /// none (B9): the reason is in the log, and the row says it is the
-    /// agent's list.
+    /// agent's list. A profile the last read did not reach is unread.
     fn of_profile(provider: &BackgroundAiProviderSnapshot, profile: &str) -> Self {
         match provider
             .profile_models
             .iter()
             .find(|models| models.profile == profile)
         {
+            None => Self::missing("models_unread"),
             Some(models) if !models.models.is_empty() => Self {
                 models: json!(models.models),
                 labels: json!(models.model_labels),
                 ..Self::none()
             },
-            _ => Self {
+            Some(_) => Self {
                 from_default: true,
                 ..Self::of_agent(provider)
             },
