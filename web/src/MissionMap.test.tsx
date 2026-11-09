@@ -504,9 +504,9 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     // The operator's turn wears 내 차례's word and mark in the decision colour's border; one waiting on the Conductor names it quietly in its own border (B2).
     expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["Needs you", "Conductor"]);
     expect(card(map, "raised").dataset.nodeAttention).toBe("operator");
-    expect(card(map, "raised").className).toContain("border-mission-turn");
+    expect(card(map, "raised").className).toContain("border-mission-hold");
     expect(card(map, "raised").querySelector("[data-node-turn]")).not.toBeNull();
-    expect(card(map, "asked").className).not.toContain("border-mission-turn");
+    expect(card(map, "asked").className).not.toContain("border-mission-hold");
     expect(card(map, "asked").querySelector("[data-node-turn]")).toBeNull();
     expect(card(map, "raised").getAttribute("aria-label")).toBe(`Node raised · In progress · PR ${"#"}1840 · Needs a look · You · PR ${"#"}1840 merged, a finish line missing or failed`);
     // Hide's mark on the card it changed last, what it did and why in the name (B3).

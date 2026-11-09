@@ -98,9 +98,9 @@ function AttentionCard({ mission, node, attention, actions, onSelect }: { missio
   const lines = failedLines(node, false);
   const what = attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes);
   return (
-    <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-turn bg-mission-turn/10 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>
+    <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-mission-hold/10 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>
       <div className="flex min-w-0 items-center gap-sm">
-        <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full bg-mission-turn" />
+        <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full bg-mission-hold" />
         <span className="min-w-0 flex-1 truncate text-body font-semibold" title={node.title}>{node.title}</span>
         <Button size="sm" variant="ghost" onClick={() => onSelect(node.key)} data-mission-turn-node={node.key}>{t("mission.turn.openNode")}</Button>
       </div>
