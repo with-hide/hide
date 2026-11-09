@@ -231,3 +231,69 @@ fn an_opencode_session_belongs_to_the_one_account_whose_database_holds_it() {
         "a database that cannot be read is no answer"
     );
 }
+
+fn by_id(accounts: &Accounts, agent: Agent, id: &str) -> Result<AccountKey, String> {
+    session_account::read(
+        accounts,
+        &SessionAccountRequest {
+            agent,
+            reference_kind: "id".into(),
+            reference_value: id.into(),
+        },
+    )
+    .map_err(String::from)
+}
+
+/// A Claude Code or Codex resume by id alone keeps the default account while
+/// that is the only one the node keeps for the agent, a profile that runs in
+/// it included; another account of the agent, or registered accounts that
+/// may not be all there are, refuse it rather than name the default.
+#[test]
+fn a_session_named_by_id_alone_keeps_the_default_account_only_while_it_is_the_agents_one() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let wrapper = Profile {
+        name: "wrapper".into(),
+        program: Some("claude-gw".into()),
+        ..Profile::builtin_default("claude-code")
+    };
+    let alone = Accounts::new(&home).with_profiles([&wrapper]);
+    for agent in [Agent::Claude, Agent::Codex] {
+        assert_eq!(by_id(&alone, agent, "019a-s"), Ok(AccountKey::Default));
+    }
+    assert_eq!(
+        by_id(&alone, Agent::Claude, "--resume"),
+        Err("session_id_invalid".to_owned())
+    );
+    assert_eq!(
+        by_id(&alone, Agent::Pi, "019a-s"),
+        Err("session_kind_unsupported".to_owned()),
+        "an agent whose reader proves its sessions names their file"
+    );
+
+    let claude_work =
+        Accounts::new(&home).with_profiles([&wrapper, &profile("claude-code", &root.join("a"))]);
+    assert_eq!(
+        by_id(&claude_work, Agent::Claude, "019a-s"),
+        Err(session_account::UNPROVEN.to_owned())
+    );
+    assert_eq!(
+        by_id(&claude_work, Agent::Codex, "019a-s"),
+        Ok(AccountKey::Default)
+    );
+
+    let unsettled = hide_session::account::ACCOUNTS_UNSETTLED.to_owned();
+    let unresolved = Accounts::new(&home).with_profiles([&Profile {
+        account: Some(AccountRef::Folder("relative/work".into())),
+        ..Profile::builtin_default("claude-code")
+    }]);
+    assert_eq!(
+        by_id(&unresolved, Agent::Claude, "019a-s"),
+        Err(unsettled.clone())
+    );
+    let unread = Accounts::new(&home).unread();
+    for agent in [Agent::Claude, Agent::Codex] {
+        assert_eq!(by_id(&unread, agent, "019a-s"), Err(unsettled.clone()));
+    }
+}

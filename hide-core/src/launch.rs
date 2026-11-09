@@ -372,6 +372,9 @@ pub(crate) const SESSION_ACCOUNT_AMBIGUOUS: &str = "session_account_ambiguous";
 /// The session's machine did not say which of its accounts holds the
 /// session a resume names.
 pub(crate) const SESSION_ACCOUNT_UNANSWERED: &str = "session_account_unanswered";
+/// A resume names its session by id alone while the session's machine keeps
+/// another account for the agent besides the default.
+pub(crate) const SESSION_ACCOUNT_UNPROVEN: &str = "session_account_unproven";
 
 /// The account `node`, the machine that holds the `kind` session
 /// `reference` names, registered and holds it in
@@ -414,34 +417,43 @@ pub(crate) fn session_account(
             Ok(AccountKey::Default)
         }
         Err(error) => {
-            let ambiguous = matches!(
-                &error,
-                LinkError::Refused(refusal)
-                    if refusal.message == hide_session::session_account::AMBIGUOUS
-            );
+            let reason = match &error {
+                LinkError::Refused(refusal) => Some(refusal.message.as_str()),
+                _ => None,
+            };
             crate::diagnostic!(serde_json::json!({
                 "component": "launch",
                 "kind": "session_account.unanswered",
                 "agent": kind,
                 "reason": error.to_string(),
             }));
-            Err(if ambiguous {
-                refused(
-                    SESSION_ACCOUNT_AMBIGUOUS,
-                    format!(
-                        "{} was not resumed: two of its accounts on this machine hold the session",
-                        label(kind)
-                    ),
-                )
-            } else {
-                refused(
-                    SESSION_ACCOUNT_UNANSWERED,
-                    format!(
-                        "{} was not resumed: its machine did not say which account holds the session",
-                        label(kind)
-                    ),
-                )
-            })
+            Err(
+                if reason == Some(hide_session::session_account::AMBIGUOUS) {
+                    refused(
+                        SESSION_ACCOUNT_AMBIGUOUS,
+                        format!(
+                            "{} was not resumed: two of its accounts on this machine hold the session",
+                            label(kind)
+                        ),
+                    )
+                } else if reason == Some(hide_session::session_account::UNPROVEN) {
+                    refused(
+                        SESSION_ACCOUNT_UNPROVEN,
+                        format!(
+                            "{} was not resumed: it keeps more than one account on this machine, and the session names no file",
+                            label(kind)
+                        ),
+                    )
+                } else {
+                    refused(
+                        SESSION_ACCOUNT_UNANSWERED,
+                        format!(
+                            "{} was not resumed: its machine did not say which account holds the session",
+                            label(kind)
+                        ),
+                    )
+                },
+            )
         }
     }
 }

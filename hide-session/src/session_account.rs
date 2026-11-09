@@ -16,6 +16,11 @@ use crate::{Accounts, Agent, ReadRefusal, RootRefusal};
 /// account can be named for it.
 pub const AMBIGUOUS: &str = "session_account_ambiguous";
 
+/// A Claude Code or Codex resume names its session by id alone while the
+/// node keeps an account of a profile for the agent besides the default, so
+/// which account holds it is not known.
+pub const UNPROVEN: &str = "session_account_unproven";
+
 /// The session a resume names: its file (`path`) or, for an agent that keeps
 /// no file per session, its id (`id`), as the agent's proof reference kind.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,19 +38,40 @@ pub struct SessionAccountRequest {
 /// accounts name it; one that two databases hold is [`AMBIGUOUS`]. A
 /// database that is not there, or holds no such session, is passed over; one
 /// that cannot be read refuses the answer rather than naming another account.
+///
+/// A Claude Code or Codex id with no file is the start these agents always
+/// had, which their own command finds and resumes: it keeps the default
+/// account while that is the only one the node keeps for the agent, and is
+/// [`UNPROVEN`] once a profile adds another; this proves nothing of the
+/// session itself.
 pub fn read(
     accounts: &Accounts,
     request: &SessionAccountRequest,
 ) -> Result<AccountKey, ReadRefusal> {
-    if request.reference_kind != request.agent.proof_reference_kind() {
+    let agent = request.agent;
+    if request.reference_kind == "id" && !agent.requires_native_proof() {
+        return default_alone(accounts, agent, &request.reference_value);
+    }
+    if request.reference_kind != agent.proof_reference_kind() {
         return Err("session_kind_unsupported".into());
     }
-    match request.agent {
+    match agent {
         Agent::OpenCode => opencode(accounts, &request.reference_value),
         // agy's sessions stay in the default account (it keeps no profile
         // account), as do retired Cursor's.
         Agent::Antigravity | Agent::Cursor => Ok(AccountKey::Default),
         agent => file(accounts, agent, Path::new(&request.reference_value)),
+    }
+}
+
+fn default_alone(accounts: &Accounts, agent: Agent, id: &str) -> Result<AccountKey, ReadRefusal> {
+    if !crate::valid_plain_id(id) {
+        return Err("session_id_invalid".into());
+    }
+    if accounts.default_alone(agent)? {
+        Ok(AccountKey::Default)
+    } else {
+        Err(UNPROVEN.into())
     }
 }
 

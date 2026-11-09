@@ -96,6 +96,19 @@ pub fn valid_native_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// A session id a resume no reader proves (Claude Code's, Codex's) passes
+/// to the agent's command line: a letter or digit first, then letters,
+/// digits, `-` and `_`, 128 bytes at most.
+pub fn valid_plain_id(id: &str) -> bool {
+    id.bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 /// Read at most one incremental-read budget of metadata from a regular file.
 /// A native id must agree with the file; a path must contain a provider id.
 /// Errors contain stable reason codes, never a transcript or personal path.

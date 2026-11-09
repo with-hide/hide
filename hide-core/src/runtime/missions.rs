@@ -2049,11 +2049,72 @@ impl Runtime {
                 .find(|record| !record.ended && record.actor.same_identity(&actor))
                 .map(|record| record.id.clone())
         });
+        // The profile its pane's launch record says the session started
+        // with, by the rule a child's start reads its parent's.
+        let profile = match self.caller_launch_profile(&actor, &actor.kind) {
+            crate::launch::Parent::Profile(profile) => Some(profile),
+            crate::launch::Parent::Default | crate::launch::Parent::None => None,
+        };
         Conductor {
             actor,
             session,
             agent_id,
+            profile,
         }
+    }
+
+    /// The profile a resume of the session `payload` names by its id alone
+    /// (이어받기, PRD mission-tool D-11) runs with when a mission's
+    /// Conductor record names that session on that machine: the one the
+    /// record kept, `None` for the built-in default (PRD agent-profiles
+    /// D-27); no record names it is `Ok(None)`. Records that name it with
+    /// different profiles answer none of them.
+    pub(super) fn conductor_resume_profile(
+        &self,
+        payload: &super::events::AgentStartInCheckoutPayload,
+    ) -> Result<Option<Option<crate::launch::LaunchProfile>>, &'static str> {
+        let Some(session_id) = payload.resume_session_id.as_deref() else {
+            return Ok(None);
+        };
+        // A resume that names its file is the file's (`SessionAccount`).
+        if payload
+            .resume_session_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+        {
+            return Ok(None);
+        }
+        let Some(agent) = hide_session::Agent::from_kind(&payload.provider) else {
+            return Ok(None);
+        };
+        let device = payload
+            .device_id
+            .as_deref()
+            .filter(|device| !device.is_empty())
+            .unwrap_or(self.node.as_str());
+        let mut found: Option<&Option<crate::launch::LaunchProfile>> = None;
+        for conductor in self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| &mission.conductor)
+            .filter(|conductor| {
+                conductor.session.as_ref().is_some_and(|session| {
+                    session.device_id == device
+                        && session.agent == agent.as_str()
+                        && session.session_id == session_id
+                })
+            })
+        {
+            match found {
+                Some(profile) if *profile != conductor.profile => {
+                    return Err("agent_start.invalid_resume");
+                }
+                _ => found = Some(&conductor.profile),
+            }
+        }
+        Ok(found.cloned())
     }
 
     /// What GitHub says now of pull request `number` in `mission`'s
@@ -2115,11 +2176,17 @@ impl Runtime {
         let now = crate::delivery::worker::now();
         let mut moved = false;
         for (id, pane, actor) in moves {
-            let conductor = self.conductor_of(device, &pane, actor);
+            let mut conductor = self.conductor_of(device, &pane, actor);
             let agent_id = conductor.agent_id.clone();
             let Some(mission) = self.missions.book.get_mut(&id) else {
                 continue;
             };
+            // The conversation that came back is the one the record named:
+            // a pane whose own record does not say its profile keeps the one
+            // the conversation started with.
+            if conductor.profile.is_none() && conductor.session == mission.conductor.session {
+                conductor.profile = mission.conductor.profile.clone();
+            }
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
             if let Err(code) =

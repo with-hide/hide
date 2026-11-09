@@ -4583,7 +4583,26 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
-        self.start_in_checkout(payload, true, None, StartProfile::Unrecorded)
+        // 이어받기 resumes its gone Conductor's session by its id alone, which
+        // the mission's record kept with the profile it started with.
+        match self.conductor_resume_profile(&payload) {
+            Ok(Some(recorded)) => self.start_in_checkout(
+                payload,
+                true,
+                None,
+                StartProfile::Recorded(recorded.as_ref()),
+            ),
+            Ok(None) => self.start_in_checkout(payload, true, None, StartProfile::Unrecorded),
+            Err(kind) => {
+                self.set_request_error(
+                    kind,
+                    "Two missions name this session with different profiles".to_owned(),
+                    false,
+                    payload.request_id.as_deref(),
+                );
+                true
+            }
+        }
     }
 
     /// A start in a checkout's new tab; `remember` false keeps the start out
@@ -4754,6 +4773,34 @@ impl Runtime {
             }
             None => None,
         };
+        // A resume that names no account asks the session's machine which
+        // account holds the session its proof or its line names: the file
+        // for Claude Code and Codex, whose resume is proven by no reader,
+        // else the id their own command resumes by, which keeps the default
+        // account only while that is the one the machine keeps for the agent.
+        let from_session = (matches!(recorded, StartProfile::Unrecorded) && resume.is_some())
+            .then(|| {
+                resume_reference.clone().or_else(|| {
+                    let path = payload.resume_session_path.as_ref().filter(|path| {
+                        !path.is_empty()
+                            && path.len() <= 4096
+                            && !path.chars().any(char::is_control)
+                    });
+                    match path {
+                        Some(path) => Some(crate::sidebar::SessionAgentSessionPayload {
+                            kind: "path".into(),
+                            value: path.clone(),
+                        }),
+                        None => payload.resume_session_id.clone().map(|id| {
+                            crate::sidebar::SessionAgentSessionPayload {
+                                kind: "id".into(),
+                                value: id,
+                            }
+                        }),
+                    }
+                })
+            })
+            .flatten();
         let retry = (!payload.confirm_only)
             .then(|| {
                 self.snapshot
@@ -4795,29 +4842,6 @@ impl Runtime {
         if remember && !payload.confirm_only {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         }
-        // A resume that names no account asks the session's machine which
-        // account holds the session its proof or its line names: the file
-        // for Claude Code and Codex, whose resume is proven by no reader. A
-        // resume that names neither (a mission's take-over names its id
-        // alone) keeps the built-in default it always ran with.
-        let from_session = (matches!(recorded, StartProfile::Unrecorded) && resume.is_some())
-            .then(|| {
-                resume_reference.clone().or_else(|| {
-                    payload
-                        .resume_session_path
-                        .as_ref()
-                        .filter(|path| {
-                            !path.is_empty()
-                                && path.len() <= 4096
-                                && !path.chars().any(char::is_control)
-                        })
-                        .map(|path| crate::sidebar::SessionAgentSessionPayload {
-                            kind: "path".into(),
-                            value: path.clone(),
-                        })
-                })
-            })
-            .flatten();
         let profile = match (&resume, recorded) {
             (_, StartProfile::Recorded(Some(recorded))) => {
                 Some((recorded.id.clone(), recorded.name.clone()))
@@ -5625,14 +5649,7 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
     let plain = if proven {
         hide_session::valid_native_id(session_id) && !session_id.ends_with(".jsonl")
     } else {
-        session_id
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-            && session_id.len() <= 128
-            && session_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        hide_session::valid_plain_id(session_id)
     };
     if !plain {
         return None;

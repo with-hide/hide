@@ -890,6 +890,7 @@ mod tests {
             actor: actor.clone(),
             session: Some(session(device)),
             agent_id: None,
+            profile: None,
         };
         mission.nodes = vec![
             serde_json::from_value(json!({

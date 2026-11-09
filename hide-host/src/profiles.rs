@@ -445,7 +445,9 @@ pub(crate) fn settle_after_kit(env: &Env, reports: &[ProfileReport]) {
 /// the account of every profile the file holds, one being removed included,
 /// whose sessions stay readable until it leaves the file. A node that keeps
 /// no profiles, or whose file cannot be read, reads the default accounts
-/// alone, and the log says why. The answer is kept while the file's stamp
+/// alone, and the log says why; one whose file cannot be read never answers
+/// that the default account is all it keeps
+/// (`hide_session::Accounts::default_alone`). The answer is kept while the file's stamp
 /// holds, so a session read costs one stat of the file.
 pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::Accounts> {
     static KEPT: Mutex<Option<KeptAccounts>> = Mutex::new(None);
@@ -460,19 +462,22 @@ pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::
     {
         return Arc::clone(&kept.accounts);
     }
-    let profiles = match file.as_deref().map(read).transpose() {
-        Ok(read) => read.map_or_else(Vec::new, |read| {
-            read.profiles
-                .into_iter()
-                .map(|stored| stored.profile)
-                .collect()
-        }),
+    let accounts = match file.as_deref().map(read).transpose() {
+        Ok(read) => {
+            let profiles: Vec<_> = read.map_or_else(Vec::new, |read| {
+                read.profiles
+                    .into_iter()
+                    .map(|stored| stored.profile)
+                    .collect()
+            });
+            hide_session::Accounts::new(home).with_profiles(&profiles)
+        }
         Err(error) => {
             log("profiles.session_accounts_unread", &error.message);
-            Vec::new()
+            hide_session::Accounts::new(home).unread()
         }
     };
-    let accounts = Arc::new(hide_session::Accounts::new(home).with_profiles(&profiles));
+    let accounts = Arc::new(accounts);
     *kept = Some(KeptAccounts {
         home: home.to_path_buf(),
         file,
@@ -1397,6 +1402,68 @@ mod tests {
     /// key its start carries; the default account does not hold them, and
     /// an account the node never registered is refused, whatever folder it
     /// names (PRD agent-profiles B19, B31).
+    /// A Claude Code or Codex resume by id alone keeps the default account
+    /// only while the profile file, read, keeps no other account for the
+    /// agent: a wrapper in the default account adds none, a profile being
+    /// removed still keeps its own, and a file that cannot be read answers
+    /// nothing rather than the default account.
+    #[test]
+    fn a_resume_by_id_alone_keeps_the_default_account_only_while_the_file_read_keeps_no_other() {
+        use hide_agent_adapter::AccountKey;
+        use hide_session::Agent;
+        use hide_session::session_account::{SessionAccountRequest, UNPROVEN};
+
+        let node = Node::new();
+        let ask = |agent| {
+            node.call(Call::SessionAccount {
+                request: SessionAccountRequest {
+                    agent,
+                    reference_kind: "id".to_owned(),
+                    reference_value: "019a-session".to_owned(),
+                },
+            })
+        };
+        let default = serde_json::to_value(AccountKey::Default).unwrap();
+        assert_eq!(ask(Agent::Claude).unwrap(), default, "no profile file");
+        let wrapper = node.apply(add("claude-code", "wrapper", None));
+        assert_eq!(wrapper.refused, None, "{wrapper:?}");
+        assert_eq!(ask(Agent::Claude).unwrap(), default);
+
+        let work = node.apply(add("claude-code", "work", folder("~/accounts/work/")));
+        let id = work.added.clone().unwrap();
+        assert_eq!(ask(Agent::Claude).unwrap_err().message, UNPROVEN);
+        let file = hide_kit::layout::agent_profiles(node.env.state.as_deref().unwrap());
+        let mut kept: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        for profile in kept["profiles"].as_array_mut().unwrap() {
+            if profile["id"].as_str() == Some(id.0.as_str()) {
+                profile["removing"] = true.into();
+            }
+        }
+        std::fs::write(&file, serde_json::to_vec(&kept).unwrap()).unwrap();
+        assert!(
+            node.list(false)
+                .profiles
+                .iter()
+                .any(|profile| profile.id == id && profile.removing),
+            "the profile is being removed"
+        );
+        assert_eq!(
+            ask(Agent::Claude).unwrap_err().message,
+            UNPROVEN,
+            "an account being removed is still kept"
+        );
+        assert_eq!(ask(Agent::Codex).unwrap(), default);
+
+        std::fs::write(&file, "{ not json").unwrap();
+        for agent in [Agent::Claude, Agent::Codex] {
+            assert_eq!(
+                ask(agent).unwrap_err().message,
+                hide_session::account::ACCOUNTS_UNSETTLED,
+                "{agent:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_profiles_session_is_read_in_its_account_and_an_unregistered_account_is_refused() {
         use hide_agent_adapter::AccountKey;

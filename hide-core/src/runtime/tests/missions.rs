@@ -397,12 +397,31 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     runtime.snapshot.navigator.agents = vec![conductor_row()];
+    // The Conductor's session started with a profile, as its pane's record
+    // keeps it (PRD agent-profiles D-27).
+    let work = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-work".into()),
+        name: "work".into(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+    };
+    runtime.record_pane_launch(
+        "sender",
+        "codex",
+        "sender",
+        &Default::default(),
+        Some(&work),
+        None,
+    );
     command(
         &mut runtime,
         "sender",
         json!({"op": "create", "title": "Fix the bug"}),
     )
     .unwrap();
+    assert_eq!(
+        runtime.missions.book.missions[0].conductor.profile,
+        Some(work.clone())
+    );
 
     // The Conductor's pane closed.
     runtime.delivery_observations.remove("sender");
@@ -431,6 +450,16 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     let conductor = &runtime.snapshot.missions.items[0].conductor;
     assert!(conductor.present);
     assert_eq!(conductor.pane_id, "resumed");
+    // The pane it came back in keeps no record of its own yet: the record
+    // keeps the profile the conversation started with, through a save and
+    // a read back as a restart makes.
+    assert_eq!(
+        runtime.missions.book.missions[0].conductor.profile,
+        Some(work.clone())
+    );
+    let saved = serde_json::to_value(&runtime.missions.book).unwrap();
+    let read: crate::missions::MissionBook = serde_json::from_value(saved).unwrap();
+    assert_eq!(read.missions[0].conductor.profile, Some(work.clone()));
     // A resumed conversation gets no prompt of its own: one letter waits
     // to tell it to go on, and seeing the pane again adds none.
     let events = |runtime: &Runtime| -> Vec<crate::missions::WakeEvent> {

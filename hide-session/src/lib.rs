@@ -77,7 +77,7 @@ pub use source::window::{
 
 pub use label_owner::{
     ConfirmedLabelSession, SessionReadScope, confirm_label_session, confirm_session_file,
-    label_reference_token, read_session_file, valid_native_id,
+    label_reference_token, read_session_file, valid_native_id, valid_plain_id,
 };
 
 pub use conversation_cursor::{

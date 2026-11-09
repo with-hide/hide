@@ -25,6 +25,11 @@ use crate::refusal::ReadRefusal;
 /// Why a read named an account the node did not register.
 pub const ACCOUNT_UNREGISTERED: &str = "session_account_unregistered";
 
+/// Why the accounts the node registered for an agent are not known to be all
+/// it keeps: its profile file could not be read, or a profile's account
+/// could not be registered.
+pub const ACCOUNTS_UNSETTLED: &str = "session_accounts_unsettled";
+
 /// The adapter of a supported agent; retired Cursor keeps no account.
 fn adapter(agent: Agent) -> Option<&'static hide_agent_adapter::AgentAdapter> {
     let id = match agent {
@@ -77,6 +82,9 @@ pub struct Accounts {
     home: PathBuf,
     /// Each agent's accounts, its default account first.
     registered: Vec<Registered>,
+    /// The agents whose registered accounts may not be all the node keeps
+    /// ([`Self::default_alone`]).
+    unsettled: Vec<Agent>,
 }
 
 impl Accounts {
@@ -103,13 +111,23 @@ impl Accounts {
         Self {
             home: home.to_path_buf(),
             registered,
+            unsettled: Vec::new(),
         }
+    }
+
+    /// These accounts, read for a node whose profile file could not be
+    /// read: what it registered for every agent may not be all it keeps.
+    #[must_use]
+    pub fn unread(mut self) -> Self {
+        self.unsettled = Agent::supported().collect();
+        self
     }
 
     /// These accounts and the account of each of `profiles` that is not its
     /// agent's default: the node's profile file. A profile that no longer
     /// resolves, or one whose sessions lie outside the folder it names, adds
-    /// nothing; two profiles of one account add it once.
+    /// nothing and leaves its agent's accounts unsettled
+    /// ([`Self::default_alone`]); two profiles of one account add it once.
     pub fn with_profiles<'a>(mut self, profiles: impl IntoIterator<Item = &'a Profile>) -> Self {
         let node = NodeEnv::new(Some(self.home.clone()));
         for profile in profiles {
@@ -122,8 +140,14 @@ impl Accounts {
             let Some(adapter) = adapter(agent) else {
                 continue;
             };
-            let Ok(account) = adapter.resolve(profile, &node) else {
-                continue;
+            let account = match adapter.resolve(profile, &node) {
+                Ok(account) => account,
+                // A folder the agent's default account reads is that account.
+                Err(hide_agent_adapter::Refusal::AccountIsDefault) => continue,
+                Err(_) => {
+                    self.unsettle(agent);
+                    continue;
+                }
             };
             if account.key.is_default()
                 || self
@@ -134,6 +158,7 @@ impl Accounts {
                 continue;
             }
             let Some(place) = account.path(AccountPath::Sessions) else {
+                self.unsettle(agent);
                 continue;
             };
             let anchor = match &profile.account {
@@ -141,6 +166,7 @@ impl Accounts {
                 Some(AccountRef::Name(_)) | None => self.home.clone(),
             };
             if !place.starts_with(&anchor) || place == anchor {
+                self.unsettle(agent);
                 continue;
             }
             self.registered.push(Registered {
@@ -154,6 +180,27 @@ impl Accounts {
             });
         }
         self
+    }
+
+    fn unsettle(&mut self, agent: Agent) {
+        if !self.unsettled.contains(&agent) {
+            self.unsettled.push(agent);
+        }
+    }
+
+    /// Whether `agent`'s default account is the only one the node keeps for
+    /// it: no profile of it names an account of its own, a profile being
+    /// removed included, and a profile that runs in the default account
+    /// adds none. Refused when the registration cannot tell, because the
+    /// profile file was not read or a profile's account was not registered.
+    pub fn default_alone(&self, agent: Agent) -> Result<bool, ReadRefusal> {
+        if self.unsettled.contains(&agent) {
+            return Err(ReadRefusal::from(ACCOUNTS_UNSETTLED));
+        }
+        Ok(self
+            .registered
+            .iter()
+            .all(|known| known.agent != agent || known.key.is_default()))
     }
 
     /// The home of the node's account, which an agent that names a
@@ -189,6 +236,7 @@ impl Accounts {
                 .filter(|known| known.agent != agent || known.key == *key)
                 .cloned()
                 .collect(),
+            unsettled: self.unsettled.clone(),
         }
     }
 

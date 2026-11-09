@@ -457,4 +457,18 @@ fn a_session_line_resumes_in_the_account_its_machine_says_holds_it() {
             .code,
         SESSION_ACCOUNT_AMBIGUOUS
     );
+    // A Claude Code id with no file on a machine that keeps another account
+    // for it is refused there, and the refusal is never the default account.
+    let unproven = Node {
+        reason: hide_session::session_account::UNPROVEN,
+        ..Node::answering(Err(ErrorCode::Io))
+    };
+    let id = crate::sidebar::SessionAgentSessionPayload {
+        kind: "id".into(),
+        value: "019a-session".into(),
+    };
+    assert_eq!(
+        session_account(&unproven, "claude", &id).unwrap_err().code,
+        SESSION_ACCOUNT_UNPROVEN
+    );
 }
