@@ -7,8 +7,10 @@
 //! A View is linked, in this order, when:
 //! 1. the Conductor names it with `hide mission decide --show` (the CLI opens
 //!    a path as a View first and sends its id);
-//! 2. the Conductor opened it in the turn that asked the question, before or
-//!    after `decide`, a turn ending when the Conductor's hook says it ended;
+//! 2. the Conductor opened it since the mission's question before was asked,
+//!    or since the mission was created, and it is still open when `decide`
+//!    runs: kept on the mission record, so a restart loses none and no agent
+//!    runtime has to report its turns;
 //! 3. the stopped node's worker, or an agent under it, opened it in the
 //!    node's current attempt.
 //!
@@ -26,16 +28,6 @@ use crate::missions::{Mission, ViewLink, WakeEvent, push_view_link};
 
 /// How deep an opener's parents are walked to find the node's worker.
 const LINEAGE_LIMIT: usize = 32;
-
-/// The Views a Conductor opened in its current turn, by mission, and the
-/// question that turn asked, whose links take the turn's later opens too.
-/// Memory only: a restart forgets an unfinished turn's opens, never a link
-/// already on a question.
-#[derive(Debug, Default)]
-pub(crate) struct TurnViews {
-    views: Vec<ViewLink>,
-    asked: Option<u64>,
-}
 
 /// Who linked a View to the decision, as its row names it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -64,8 +56,9 @@ pub struct DecisionView {
 
 impl Runtime {
     /// An agent's `hide file|diff|browser open` from `pane` landed in View
-    /// `view_id` of `key`: a mission's Conductor links it to its turn, and a
-    /// node's worker, or an agent under it, to the node's attempt.
+    /// `view_id` of `key`: a mission's Conductor keeps it for its next
+    /// question, and a node's worker, or an agent under it, links it to the
+    /// node's attempt.
     pub(super) fn link_mission_view(&mut self, key: &WorkspaceKey, view_id: &str, pane: &str) {
         if self.missions.book.missions.is_empty() {
             return;
@@ -92,21 +85,8 @@ impl Runtime {
                 continue;
             }
             if mission.conductor.actor.same_identity(&actor) {
-                let id = mission.id.clone();
-                let asking = mission.question.as_ref().map(|question| question.key);
-                let turn = self.missions.turn_views.entry(id).or_default();
-                match (turn.asked, asking) {
-                    // The turn that asked the question goes on showing it.
-                    (Some(asked), Some(key)) if asked == key => {
-                        let mission = &mut self.missions.book.missions[index];
-                        if let Some(question) = mission.question.as_mut() {
-                            changed |= push_view_link(&mut question.views, link.clone());
-                        }
-                    }
-                    _ => {
-                        push_view_link(&mut turn.views, link.clone());
-                    }
-                }
+                let mission = &mut self.missions.book.missions[index];
+                changed |= push_view_link(&mut mission.conductor_views, link.clone());
                 continue;
             }
             let Some(node) = mission.nodes.iter().position(|node| {
@@ -154,44 +134,29 @@ impl Runtime {
         lineage
     }
 
-    /// The hook in `pane` on `device` said its turn ended: the Views its
-    /// Conductor opened since belong to no question.
-    pub(super) fn end_conductor_turn(&mut self, device: &str, pane: &str) {
-        if self.missions.turn_views.is_empty() {
-            return;
-        }
-        let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
-        let Some(actor) = self.delivery_observations.get(&pane).map(|observation| &observation.actor)
-        else {
-            return;
-        };
-        let ended: Vec<String> = self
-            .missions
-            .book
-            .missions
-            .iter()
-            .filter(|mission| mission.conductor.actor.same_identity(actor))
-            .map(|mission| mission.id.clone())
-            .collect();
-        for id in ended {
-            self.missions.turn_views.remove(&id);
-        }
-    }
-
-    /// The Views a new question `key` of mission `id` shows: the ones
-    /// `--show` named in the Conductor's checkout, then the ones the
-    /// Conductor opened in this turn, whose later opens the question takes
-    /// too. An id no View of that checkout has is refused.
+    /// The Views a question of mission `id` shows: the ones `--show` names
+    /// in the Conductor's checkout, then, for a new question (`fresh`), the
+    /// ones the Conductor opened since the question before that are still
+    /// open, which it takes off the mission. An id no View of that checkout
+    /// has is refused, and then nothing is taken.
     pub(super) fn question_view_links(
         &mut self,
         id: &str,
         actor: &Actor,
         show: &[String],
-        key: u64,
+        fresh: bool,
     ) -> Result<Vec<ViewLink>, String> {
         let mut links = Vec::new();
         if !show.is_empty() {
-            let place = self.conductor_checkout(actor).ok_or("mission_show_unknown")?;
+            // The checkout the Conductor's pane works in, else the one the
+            // mission was created in.
+            let place = self
+                .conductor_checkout(actor)
+                .or_else(|| {
+                    let mission = self.missions.book.get(id)?;
+                    Some((mission.device_id.clone(), mission.checkout_path.clone()))
+                })
+                .ok_or("mission_show_unknown")?;
             let layout = self.view_layout_of(&place).ok_or("mission_show_unknown")?;
             for view in show {
                 layout.display(view).ok_or("mission_show_unknown")?;
@@ -206,16 +171,28 @@ impl Runtime {
                 );
             }
         }
-        let turn = self.missions.turn_views.entry(id.to_owned()).or_default();
-        for link in std::mem::take(&mut turn.views) {
-            push_view_link(&mut links, link);
+        if fresh {
+            let opened = self
+                .missions
+                .book
+                .get_mut(id)
+                .map(|mission| std::mem::take(&mut mission.conductor_views))
+                .unwrap_or_default();
+            for link in opened {
+                let key = (link.device_id.clone(), link.checkout_path.clone());
+                let open = self
+                    .view_layout_of(&key)
+                    .is_some_and(|layout| layout.display(&link.display_id).is_some());
+                if open {
+                    push_view_link(&mut links, link);
+                }
+            }
         }
-        turn.asked = Some(key);
         Ok(links)
     }
 
     /// The checkout the Conductor's pane works in, whose Views `--show`
-    /// names.
+    /// names, while the catalog holds that pane.
     fn conductor_checkout(&self, actor: &Actor) -> Option<WorkspaceKey> {
         let pane = crate::address::named_pane_id(self.node.as_str(), &actor.device_id, &actor.pane_id);
         self.catalog_workspaces()

@@ -8602,3 +8602,207 @@ fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
         "each question has its own entry: {raised:?}"
     );
 }
+
+/// A File View opened in the project's checkout, by its id.
+fn project_view(runtime: &mut Runtime, path: &str) -> String {
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    runtime
+        .change_view_layout(&key, |layout, stamp| {
+            let display =
+                layout.new_display(path, crate::view_layout::DisplayKind::File, None, false);
+            let id = display.id.clone();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, stamp)?;
+            Ok((id, true))
+        })
+        .unwrap()
+}
+
+/// What the mission's decision card lists: each View's id and who linked it.
+fn decision_views(runtime: &mut Runtime) -> Vec<(String, &'static str)> {
+    runtime.refresh_missions();
+    runtime.snapshot.missions.items[0]
+        .decision_views
+        .iter()
+        .map(|view| {
+            let by = match view.by {
+                super::mission_views::DecisionViewBy::Conductor => "conductor",
+                super::mission_views::DecisionViewBy::Worker => "worker",
+            };
+            (view.display_id.clone(), by)
+        })
+        .collect()
+}
+
+/// A View is linked to a decision only by what was recorded when it was
+/// named or opened (operator decision 2026-11-09, after mission-42's card
+/// asked the operator to look at captures it did not link): the Views
+/// `--show` names, the ones the Conductor opened since its question before
+/// that are still open when it asks, and the ones the stopped node's worker
+/// or an agent under it opened in the node's current attempt. What the
+/// Conductor opens after asking waits for its next question; a seen View
+/// stays listed, a closed one leaves.
+#[test]
+fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    runtime.workspace_views = Some(
+        WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0,
+    );
+    command(&mut runtime, "sender", json!({"op": "create", "title": "Screens"})).unwrap();
+    without_gate(&mut runtime);
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    // The node's worker started a helper in the `recipient` pane.
+    let helper = crate::runtime::delivery::tests::observed(&runtime, "recipient").actor;
+    let record = |id: &str, actor: Actor, parent: Option<&str>| crate::coordination::AgentRecord {
+        id: id.into(),
+        name: Some(id.into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: crate::node::TEST_NODE.into(),
+        native_machine: crate::node::TEST_NODE.into(),
+        session: format!("{id}-session"),
+        instance: actor.pane_id.clone(),
+        pane: actor.pane_id.clone(),
+        parent: parent.map(str::to_owned),
+        origin: None,
+        project: None,
+        actor,
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    };
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: None,
+    };
+    register(&mut runtime, record("agent-2", worker, Some("agent-1")));
+    register(&mut runtime, record("agent-9", helper, Some("agent-2")));
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let close = |runtime: &mut Runtime, view: &str| {
+        runtime
+            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .unwrap();
+    };
+
+    // Before it asks, the Conductor opens the page it will ask about, and
+    // one it closes again.
+    let page = project_view(&mut runtime, "/checkouts/fixture/screens.html");
+    runtime.link_mission_view(&key, &page, "sender");
+    let gone = project_view(&mut runtime, "/checkouts/fixture/gone.md");
+    runtime.link_mission_view(&key, &gone, "sender");
+    close(&mut runtime, &gone);
+    // The worker's helper opens its notes in this attempt.
+    let notes = project_view(&mut runtime, "/checkouts/fixture/notes.md");
+    runtime.link_mission_view(&key, &notes, "recipient");
+    let named = project_view(&mut runtime, "/checkouts/fixture/report.md");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?", "node": "fix", "show": [named]}),
+    )
+    .unwrap();
+    assert_eq!(
+        decision_views(&mut runtime),
+        [
+            (named.clone(), "conductor"),
+            (page.clone(), "conductor"),
+            (notes.clone(), "worker")
+        ]
+    );
+
+    // Opened after asking, it waits for the next question.
+    let after = project_view(&mut runtime, "/checkouts/fixture/after.md");
+    runtime.link_mission_view(&key, &after, "sender");
+    assert!(!decision_views(&mut runtime).iter().any(|(id, _)| *id == after));
+
+    // A seen View stays; a closed one leaves.
+    runtime.mark_view_unseen(&key, &page);
+    assert!(runtime.mark_view_seen(&key, &page));
+    assert!(decision_views(&mut runtime).contains(&(page.clone(), "conductor")));
+    close(&mut runtime, &page);
+    assert!(!decision_views(&mut runtime).iter().any(|(id, _)| *id == page));
+
+    // The node's next attempt lists only what it opens itself.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"attempts": 2}}),
+    )
+    .unwrap();
+    assert!(!decision_views(&mut runtime).iter().any(|(id, _)| *id == notes));
+
+    // The next question takes what the Conductor opened since this one.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge them now?"}),
+    )
+    .unwrap();
+    assert_eq!(decision_views(&mut runtime), [(after.clone(), "conductor")]);
+
+    // A View id no View of the checkout has is refused.
+    assert_eq!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "decide", "line": "Merge them later?", "show": ["d999"]}),
+        )
+        .unwrap_err(),
+        "mission_show_unknown"
+    );
+}
+
+/// A decision with nothing linked asks the Conductor for something to look
+/// at once per question (`자료 요청`): a second press, or a press on a
+/// question the Conductor has since changed, sends nothing.
+#[test]
+fn asking_for_material_wakes_the_conductor_once_per_question() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(&mut runtime, "sender", json!({"op": "create", "title": "Screens"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?"}),
+    )
+    .unwrap();
+    let key = runtime.missions.book.missions[0]
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    let asked = |runtime: &Runtime| {
+        runtime.missions.book.missions[0]
+            .wakes
+            .iter()
+            .filter(|wake| wake.event == crate::missions::WakeEvent::MaterialAsked)
+            .count()
+    };
+    runtime.refresh_missions();
+    assert!(runtime.snapshot.missions.items[0].decision_views.is_empty());
+
+    assert!(runtime.mission_material_event("mission-1", key));
+    assert_eq!(asked(&runtime), 1);
+    runtime.refresh_missions();
+    assert!(
+        runtime.snapshot.missions.items[0]
+            .question
+            .as_ref()
+            .unwrap()
+            .material_asked
+    );
+    assert!(!runtime.mission_material_event("mission-1", key));
+    assert!(!runtime.mission_material_event("mission-1", key + 1));
+    assert_eq!(asked(&runtime), 1);
+}

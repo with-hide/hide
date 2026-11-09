@@ -686,8 +686,8 @@ pub struct Question {
     pub node: Option<String>,
     pub asked_at_unix_ms: u64,
     /// The Views the Conductor linked to this question: the ones `--show`
-    /// named and the ones it opened in the turn that asked it, oldest
-    /// first, at most [`VIEW_LINK_LIMIT`]. The map lists them with the node's
+    /// named and the ones it opened since the question before was asked
+    /// that were still open, oldest first, at most [`VIEW_LINK_LIMIT`]. The map lists them with the node's
     /// own (`MissionNode::views`) under the question.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<ViewLink>,
@@ -1226,6 +1226,11 @@ pub struct Mission {
     /// How many questions this mission has asked; the next one's key.
     #[serde(default)]
     pub question_seq: u64,
+    /// The Views its Conductor opened since its last question was asked,
+    /// or since it was created, oldest first, at most [`VIEW_LINK_LIMIT`]:
+    /// the next question takes the ones still open (`mission_views`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conductor_views: Vec<ViewLink>,
     /// The operator's answer from the banner to the current question.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<Answer>,
@@ -3151,6 +3156,7 @@ pub(crate) mod tests {
             decision: None,
             question: None,
             question_seq: 0,
+            conductor_views: Vec::new(),
             answer: None,
             answer_failed: None,
             delay: None,

@@ -60,13 +60,6 @@ impl Runtime {
         // and the profile lists follow it (D-03, D-35).
         let account_moved =
             recorded.changed && report.account.is_some() && self.refresh_reported_accounts();
-        // A Conductor's ended turn ends which question its Views go with.
-        if matches!(
-            report.turn,
-            Some(hide_node_link::panes::HookTurn::Done | hide_node_link::panes::HookTurn::Idle)
-        ) {
-            self.end_conductor_turn(device, caller);
-        }
         if !recorded.changed && !account_moved {
             return Ok(());
         }

@@ -493,9 +493,6 @@ pub(crate) struct MissionRuntime {
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
     pub(crate) answers_held: std::collections::HashSet<String>,
-    /// The Views each mission's Conductor opened in its current turn
-    /// (`mission_views`). Memory only.
-    pub(crate) turn_views: HashMap<String, super::mission_views::TurnViews>,
     /// The answers whose `agent.prompt` the doorbell has asked and not yet
     /// heard back from, by mission: shown as sending. Memory only; the book
     /// already holds them as unconfirmed, so a stop in between never types
@@ -1503,6 +1500,7 @@ impl Runtime {
                     decision: None,
                     question: None,
                     question_seq: 0,
+                    conductor_views: Vec::new(),
                     answer: None,
                     answer_failed: None,
                     delay: None,

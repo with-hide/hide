@@ -314,10 +314,10 @@ impl Runtime {
             let Some((actor, show)) = shown.filter(|(_, show)| !show.is_empty()) else {
                 return Ok(false);
             };
-            let Some(key) = current.map(|question| question.key) else {
+            if current.is_none() {
                 return Ok(false);
-            };
-            let links = self.question_view_links(id, actor, show, key)?;
+            }
+            let links = self.question_view_links(id, actor, show, false)?;
             let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
             let question = target.question.as_mut().ok_or("mission_unknown")?;
             let mut changed = false;
@@ -329,13 +329,11 @@ impl Runtime {
             }
             return Ok(changed);
         }
-        // A new question takes the Views `--show` names and the ones its
-        // turn opened; a cleared one leaves the turn's for the next.
+        // A new question takes the Views `--show` names and the ones the
+        // Conductor opened since the question before; a cleared one leaves
+        // those for the next.
         let views = match (&line, shown) {
-            (Some(_), Some((actor, show))) => {
-                let key = mission.question_seq + 1;
-                self.question_view_links(id, actor, show, key)?
-            }
+            (Some(_), Some((actor, show))) => self.question_view_links(id, actor, show, true)?,
             _ => Vec::new(),
         };
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
