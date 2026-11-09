@@ -9,7 +9,7 @@ import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, showProjectRow } from "./wire";
+import { enterWorkspace, openOtherCheckouts, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -54,7 +54,6 @@ test("a checkout row being deleted opens no empty menu", async ({ page }) => {
     git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
     const worktree = path.join(engine.root, "repo-slow");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
-    // Unmerged, so the row stays among the active checkouts rather than folding into Inactive.
     git(worktree, ["commit", "--allow-empty", "-m", "not merged anywhere"]);
 
     const held = heldGit(engine.root, engine.fixturePath);
@@ -64,11 +63,8 @@ test("a checkout row being deleted opens no empty menu", async ({ page }) => {
     // A pane in main keeps the project listed once the worktree goes; the core lists the worktree, with no tab of its own, once a client shows its repository.
     await withControl(daemon, (control) => openProject(control, repo, "repo"));
 
-    const emptyFold = page.locator("[data-empty-worktrees]");
-    // The project runs no agent, so it waits under No agents (PRD sidebar-titlebar-refresh B1).
-    await showProjectRow(page, emptyFold);
-    await expect(emptyFold).toHaveAttribute("aria-expanded", "false");
-    await emptyFold.click();
+    // The worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }));
     const feature = page.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     await expect(feature).toBeVisible({ timeout: 30_000 });
     await feature.locator("[data-checkout-menu]").click({ button: "right" });

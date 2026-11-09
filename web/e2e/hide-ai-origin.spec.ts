@@ -12,6 +12,7 @@ import { startEngine, type EngineServer } from "./engine-fixture";
 import { sessionIn, startAgentInProject } from "./fixture-agents";
 import { git, ledgerOf } from "./hide-ai-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
+import { openOtherCheckouts } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 
@@ -69,12 +70,15 @@ test("an agent Hide AI started for a home leaves the project tree with no head, 
     await open(page, stack.daemon);
     const project = page.locator("[data-project]", { hasText: "scratch" });
     await expect(project.locator("[data-checkout-row]").first()).toBeVisible({ timeout: 20_000 });
+    // Every checkout but the main one waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     // Before Hide AI's record exists, every checkout is the operator's and its agent is drawn (B5).
     await expect(project.locator("[data-checkout-row]", { hasText: "hide-memory-m43" })).toHaveCount(1);
     await expect(page.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);
 
     await seed(stack, { kind: "memory_promote", target: "m43" });
     await open(page, stack.daemon);
+    await openOtherCheckouts(project);
     // The head is gone, and so is the agent's row: its home, the Memory tab, shows its work (B1).
     await expect(page.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(0, { timeout: 30_000 });
     await expect(page.locator("[data-hide-ai-group]")).toHaveCount(0);

@@ -8,7 +8,7 @@ import { initGithubRepository } from "../../web/e2e/github-remote";
 import { openProject, withControl } from "../../web/e2e/daemon-actions";
 import { startEngine } from "../../web/e2e/engine-fixture";
 import { fixtureProgram } from "../../web/e2e/platform-fixture";
-import { showProjectRow } from "../../web/e2e/wire";
+import { projectOpener, showProjectRow } from "../../web/e2e/wire";
 import { projectRow } from "../../web/e2e/overview-entry";
 import { animationsFinished, compositorPresents } from "../../web/e2e/wait";
 import { captureNativeWindow } from "./native-window";
@@ -34,6 +34,8 @@ test("Project settings keep confirmed values through a failed save and restart",
     app = launched.app;
     let page = launched.page;
     const gear = () => page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-settings]');
+    // The row's buttons wait for the pointer, so the row is hovered before one is used.
+    await projectOpener(page.locator('[data-project]', { hasText: "sample" })).hover();
     await (await showProjectRow(page, gear())).click();
     let sheet = page.locator('[data-project-settings]');
     await expect(sheet).toBeVisible();
@@ -124,6 +126,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     await expect(sheet.getByRole("combobox", { name: "Start new work in" })).toContainText("New worktree");
     // B18: project + opens the same confirmation, never starts blindly.
     await page.keyboard.press("Escape");
+    await projectOpener(page.locator('[data-project]', { hasText: "sample" })).hover();
     await page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-start]').click();
     const confirmation = page.locator('[data-start-worktree]');
     await expect(confirmation).toBeVisible();
@@ -152,6 +155,8 @@ test("Project settings fit a narrow native window in every language and theme", 
     app = launched.app;
     const page = launched.page;
     const gear = () => page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-settings]');
+    // The row's buttons wait for the pointer, so the row is hovered before one is used.
+    await projectOpener(page.locator('[data-project]', { hasText: "sample" })).hover();
     await (await showProjectRow(page, gear())).click();
     const sheet = page.locator('[data-project-settings]');
     // Actual narrow window and largest supported interface text in all scripts.
@@ -223,6 +228,7 @@ test("Project and Overview menus return Settings focus to their own trigger", as
     app = launched.app;
     const page = launched.page;
     const more = page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-more]');
+    await projectOpener(page.locator('[data-project]', { hasText: "sample" })).hover();
     await (await showProjectRow(page, more)).focus();
     await page.keyboard.press("Enter");
     await page.locator('[data-menu-item="project_settings"]').focus();

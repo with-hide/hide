@@ -14,7 +14,7 @@ import { closePane, focusTab, openProject, openWorktree, showTabOf, tabOfPane, v
 import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject, takeOverSession } from "./fixture-agents";
 import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot } from "./wire";
+import { countSent, enterWorkspace, openOtherCheckouts, screenshot } from "./wire";
 import { chord } from "./chords";
 import { completedCloseOrder, type CloseRecord, type CloseTiming } from "./close-order";
 
@@ -401,15 +401,15 @@ test("Delete worktree closes the agents its checkout spawned outside it before t
       // The worktree's agent spawned one in another folder.
       return { spawner: agent.pane, outside: await delegate(fixture, live, agent.pane, "outside", undefined, outsideRepo) };
     });
+    // The worktree is not the project's main checkout, so its row and its agent's row wait in the
+    // project's Checkouts fold.
+    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator('[data-project-row][aria-label="fixture"]') }));
     await expect(page.locator(`nav[data-sidebar] [data-pane="${spawner}"] [data-tree-chevron="${spawner}"]`).first()).toBeVisible({ timeout: 30_000 });
 
     const feature = page.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${branch}"]`) });
-    // The fixture branch has nothing ahead of main, yet no work of its own
-    // has landed, so its row stays among the active checkouts rather than
-    // folding under Inactive. Its commit age is drawn once the core has read
-    // the worktree's Git facts, which the deletion dialog is built from.
+    // Its commit age is drawn once the core has read the worktree's Git facts,
+    // which the deletion dialog is built from.
     await expect(feature.locator("[data-checkout-age]")).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator("[data-inactive-checkouts]")).toHaveCount(0);
     await feature.locator("[data-checkout-menu]").click({ button: "right" });
     await page.getByRole("menu", { name: `${branch} actions` }).locator('[data-menu-item="delete_worktree"]').click();
 

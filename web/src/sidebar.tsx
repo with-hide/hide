@@ -797,7 +797,8 @@ function ProjectName({ workspace, hidden = false, grow = true, label = false }: 
  * B6-B8): `+` opens the start panel aimed at the project's main checkout, `⋯`
  * the row's own menu under the button. They wait for the pointer or the
  * keyboard, as the row's other revealed controls do, and stay while their
- * menu is open; the cell keeps its width so showing them never moves the name.
+ * menu is open; they take no width at rest, and the badge of a folded project
+ * stands aside while they show, so the row's end never holds both.
  */
 function RowActions({ workspace, items, onSelect }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void }) {
   const { t } = useInterfaceTranslation();

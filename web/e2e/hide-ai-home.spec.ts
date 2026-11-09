@@ -178,7 +178,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     await open(page, stack.daemon);
 
     // B8: the pull request is open, ready and passing, so the operator's turn is the review.
-    const needsYou = page.locator('[data-raised-list] [data-raised-group="needs_you"]');
+    const needsYou = page.locator('[data-project-list] [data-raised-group="needs_you"]');
     const row = needsYou.locator(`[data-pane="${stack.hideAiPane}"]`);
     await expect(row).toHaveCount(1, { timeout: 60_000 });
     await expect(row).toContainText("Promote Memory · m43");
@@ -186,7 +186,8 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     // B1: it is in no tree and no Sessions group of its own, so the one row is the raised one.
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);
     await expect(project.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(0);
-    await needsYou.screenshot({ path: path.join(evidence(stack), "home-needs-you-pr-review.png") });
+    // The section is a `display: contents` item with no box of its own, so the list that holds it is captured.
+    await page.locator("[data-project-list]").screenshot({ path: path.join(evidence(stack), "home-needs-you-pr-review.png") });
 
     // B11 (hide-ai-suggestions): choosing it opens the Hide AI tool on its 제안 tab with the promotion's row m43 open, and does not go to its pane.
     await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
@@ -204,7 +205,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     move(stack, { state: "OPEN", checks: "FAILURE" });
     await untilRead(page, stack, workspace, async () => (await row.locator("[data-agent-home-turn]").textContent({ timeout: 1_000 }).catch(() => null)) === "CI failed");
     await expect(needsYou.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);
-    await needsYou.screenshot({ path: path.join(evidence(stack), "home-needs-you-ci-failed.png") });
+    await page.locator("[data-project-list]").screenshot({ path: path.join(evidence(stack), "home-needs-you-ci-failed.png") });
 
     // B15, B17: the pull request merges, so the row leaves, the agent's pane closes, the clean worktree is removed and the branch stays.
     move(stack, { state: "MERGED", checks: "SUCCESS" });

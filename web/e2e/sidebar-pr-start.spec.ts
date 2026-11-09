@@ -2,7 +2,7 @@
 // isolated engine and hided with a fake `gh` that knows one pull request
 // in each of three repositories. The first daemon only chooses a Workspace, so
 // the next start opens on it with the right panel on Explorer and the merged
-// pull request's Inactive fold already open: no Overview, no
+// pull request's Checkouts fold already open: no Overview, no
 // project Overview and no palette ever opens, and each page's wire carries no
 // `github_request` and no `overview_refresh` (the wire it does carry is the
 // terminal and the usage hint). Both rows still draw their lifecycle from the
@@ -24,7 +24,7 @@ import { startEngine, type EngineServer } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { countSent, enterWorkspace, showProjectRow } from "./wire";
+import { countSent, enterWorkspace } from "./wire";
 import { initGithubRepository } from "./github-remote";
 
 test.describe.configure({ timeout: 180_000 });
@@ -134,6 +134,7 @@ test("the sidebar draws every project's pull request with no screen asking, and 
     const statePath = path.join(daemon.stateDir, "core-state.json");
     await expect.poll(() => (JSON.parse(fs.readFileSync(statePath, "utf8")) as { focused_checkout_id?: string | null }).focused_checkout_id ?? null).not.toBeNull();
 
+    const projectOf = (name: string) => page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: new RegExp(`^${name}$`) }) });
     const row = (branch: string) => page.locator(`[data-checkout][aria-label^="${branch}"]`);
     const glyph = (number: number) => page.locator(`[data-checkout-pr-glyph="${number}"]`);
     /** The pull request's mark inside a checkout's glyph: its state, and `data-stale` once GitHub could not be read again. */
@@ -147,14 +148,15 @@ test("the sidebar draws every project's pull request with no screen asking, and 
       return sent;
     };
     /**
-     * A merged pull request's checkout is settled, so its row sits in the project's Inactive fold. The fold is
-     * seeded open in the state the first start reads, not clicked open: a click is a toggle sent from a page that
-     * has read `aria-expanded` and waits for the core to answer, which says nothing about the pull request glyph
-     * this flow proves. That the click sends the toggle is owned by `web/src/inactiveFold.test.tsx`, and what the
-     * core does with it by the core test in `hide-core/src/runtime/tests/projects.rs`.
+     * Every checkout but a project's main one sits in its project's Checkouts fold. Each fold is seeded open in
+     * the state the first start reads, not clicked open: a click is a toggle sent from a page that has read
+     * `aria-expanded` and waits for the core to answer, which says nothing about the pull request glyph this flow
+     * proves. That the click sends the toggle is owned by `web/src/inactiveFold.test.tsx`, and what the core does
+     * with it by the core test in `hide-core/src/runtime/tests/projects.rs`.
      */
+    const foldOpen = (name: string) => expect(projectOf(name).locator("[data-other-checkouts]")).toHaveAttribute("aria-expanded", "true", { timeout: 30_000 });
     const mergedGlyph = async () => {
-      await expect(page.locator('[data-inactive-checkouts$="/charlie"]')).toHaveAttribute("aria-expanded", "true", { timeout: 30_000 });
+      await foldOpen("charlie");
       return glyph(43);
     };
     const nothingAsked = (sent: Map<string, number>) => {
@@ -166,20 +168,11 @@ test("the sidebar draws every project's pull request with no screen asking, and 
     daemon = await daemon.restart((stateDir) => {
       const file = path.join(stateDir, "core-state.json");
       const state = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
-      fs.writeFileSync(file, JSON.stringify({ ...state, right_panel_visible: true, right_panel_section: "explorer", expanded_inactive_checkout_project_paths: [toPage(path.join(engine.root, "charlie"))] }));
+      fs.writeFileSync(file, JSON.stringify({ ...state, right_panel_visible: true, right_panel_section: "explorer", expanded_inactive_checkout_project_paths: REPOSITORIES.map(({ name }) => toPage(path.join(engine.root, name))) }));
     });
     let sent = await attach(daemon);
-    // B7 defaults each agentless fold closed. Wait for both catalog answers
-    // before opening them; an immediate .all() can miss a later project.
-    for (const name of ["alpha", "bravo"]) {
-      const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: new RegExp(`^${name}$`) }) });
-      // A project with no agent waits under No agents (PRD sidebar-titlebar-refresh B1).
-      await showProjectRow(page, project);
-      const fold = project.locator("[data-empty-worktrees]");
-      await expect(fold).toHaveAttribute("aria-expanded", "false");
-      await fold.click();
-      await expect(fold).toHaveAttribute("aria-expanded", "true");
-    }
+    // Each project draws its fold once the catalog has listed its worktree; wait for all of them before reading a row.
+    for (const { name } of REPOSITORIES) await foldOpen(name);
     await expect(row("feature/alpha")).toHaveAttribute("data-checkout-kind", "pull_request", { timeout: 30_000 });
     await expect(mark(41)).toHaveAttribute("data-pr-mark", "mergeable");
     await expect(mark(42)).toHaveAttribute("data-pr-mark", "draft");
