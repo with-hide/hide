@@ -282,7 +282,7 @@ export type LetterLine = { direction: LetterDirection; peer: RequestSender; mark
 /**
  * One agent the pane worked with since the request (`PeerLineSnapshot`): what
  * it last said that matters, or what the pane last sent it, with how many
- * blocks it sent and whether the pane started it.
+ * blocks went between them and whether the pane started it.
  */
 export type PeerLine = { peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number; blocks?: number; started?: boolean };
 

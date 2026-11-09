@@ -77,6 +77,9 @@ pub struct LetterLineSnapshot {
     /// line per agent can be folded from the lines.
     #[serde(skip)]
     pub(crate) peer_key: u64,
+    /// The letter is a block, whichever mark the line wears.
+    #[serde(skip)]
+    pub(crate) block: bool,
 }
 
 /// One agent the pane worked with since the request, in one line: what it
@@ -96,7 +99,8 @@ pub struct PeerLineSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
     pub at_unix_ms: u64,
-    /// How many blocks it sent the pane since the request.
+    /// How many blocks went between it and the pane since the request, either
+    /// way.
     #[serde(skip_serializing_if = "is_zero")]
     pub blocks: u32,
     /// The pane started it since the request.
@@ -194,6 +198,7 @@ impl Correspondence {
                     line: line.clone(),
                     at_unix_ms: letter.created_at_unix_ms,
                     peer_key,
+                    block: letter.kind == "block",
                 };
                 if progress {
                     entry.progress.push(written);
@@ -233,6 +238,7 @@ impl Correspondence {
                     line: None,
                     at_unix_ms: spawn.reserved_at_unix_ms,
                     peer_key,
+                    block: false,
                 });
         }
         let mut hasher = std::hash::DefaultHasher::new();
@@ -304,13 +310,11 @@ fn peer_lines(
     for line in lines.iter().chain(progress) {
         let peer = peers.entry(line.peer_key).or_default();
         peer.latest = peer.latest.max(line.at_unix_ms);
+        peer.blocks += u32::from(line.block);
         let slot = match (line.direction, line.mark) {
             (LetterDirection::Started, _) => &mut peer.started,
             (_, Some(LetterMark::Progress)) => &mut peer.progress,
-            (LetterDirection::Received, mark) => {
-                peer.blocks += u32::from(mark == Some(LetterMark::Block));
-                &mut peer.received
-            }
+            (LetterDirection::Received, _) => &mut peer.received,
             (LetterDirection::Sent, _) => &mut peer.sent,
         };
         if slot.is_none_or(|kept| kept.at_unix_ms <= line.at_unix_ms) {
@@ -716,6 +720,10 @@ mod tests {
             ]
         );
         assert_eq!((since.letters, since.more_peers), (10, 0));
+        // From the builder's side the block it sent counts too.
+        let builder_side = Correspondence::of(&ledger).since("w1:p2", 0).unwrap();
+        assert_eq!(builder_side.peers[0].blocks, 1);
+        assert_eq!(builder_side.peers[0].mark, Some(LetterMark::Reply));
     }
 
     #[test]
