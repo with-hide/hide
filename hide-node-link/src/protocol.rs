@@ -398,7 +398,12 @@ use crate::error::HostError;
 /// profile's sign-in and account variables (`profiles::ListedProfile`) and
 /// lets a usage read name a profile (`Call::UsageLimitFetch`), both optional
 /// fields an older side leaves out.
-pub const PROTOCOL_VERSION: u32 = 91;
+/// 92: each listed profile carries the account its node's `resolve` keyed
+/// it by (`profiles::ListedProfile::account_key`, PRD agent-profiles D-12),
+/// which the core compares accounts by instead of keying one itself; a
+/// helper on 91 lists none, so it is not admitted and upgrades with its
+/// core.
+pub const PROTOCOL_VERSION: u32 = 92;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

@@ -1132,6 +1132,7 @@ name = "hide-holder"
 version = "0.1.0"
 dependencies = [
  "hide-holder-protocol",
+ "hide-host",
  "hide-kit",
  "hide-node",
  "hide-node-link",

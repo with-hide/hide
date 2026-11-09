@@ -2173,6 +2173,8 @@ export type AgentProfileWire = {
   login?: AgentProfileLogin | null;
   /** Its last start ran in another of the machine's accounts: its program sets a folder of its own (B25). */
   wrapper_folder?: boolean;
+  /** A new start may take it now (`ProfileSnapshot::startable`): the core's one judgment, which an automatic preselection follows (D-30). */
+  startable: boolean;
 };
 
 /** What a node found of a profile account's sign-in (`contracts/snapshot-wire-enums.json`: `profile_login`). */
@@ -3393,6 +3395,8 @@ export type SnapshotRest = {
     herdr_profiles?: MachineProfiles;
     /** What Settings › Agents' last profile request came to; absent until one was made. */
     agent_profile_answer?: AgentProfileAnswer;
+    /** The core's final automatic start choice for each project and agent. */
+    start_profiles?: Record<string, { device_id: string; root: string; profiles: Record<string, string> }>;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     /** Bounded read-only hover text; never an attachment or a focus request. */

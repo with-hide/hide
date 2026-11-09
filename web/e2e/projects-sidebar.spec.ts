@@ -248,7 +248,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(primaryToggle).toHaveCSS("opacity", "1");
     await expect(projectToggle).toHaveCSS("opacity", "0");
     await expect(page.locator("[data-project-list]").getByRole("button", { name: /actions$/ })).toHaveCount(0);
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(projectToggle).toHaveCSS("opacity", "1");
     await primaryRow.hover();
     expect(await rowGeometry(primaryRow, checkouts, primaryParts)).toEqual(atRest);
@@ -563,8 +563,8 @@ test("Needs You and Unread are raised above the projects and stay in their tree,
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^raised/ }) });
     await project.locator("[data-project-row]").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-    // A pinned project wears the pin in place of its folder mark, and no header of its own.
-    await expect(project.locator("[data-project-pin]")).toBeVisible();
+    // A pinned project stands first and sets no header of its own; its pin waits for the pointer.
+    await expect(project).toHaveAttribute("data-project-pinned", "true");
     // Nothing needs the operator yet: no raised section is drawn.
     await expect(page.locator("[data-raised-group]")).toHaveCount(0);
 
@@ -796,24 +796,26 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     const pair = project.locator("[data-row-actions]");
     await expect(row).toBeVisible({ timeout: 20_000 });
     await rest(page);
-    // The pair is not drawn at all until the pointer or the keyboard comes.
-    await expect(pair).toBeHidden();
+    // The pair waits unseen until the pointer or the keyboard comes.
+    await expect(pair).toHaveCSS("opacity", "0");
 
     // B6: the pointer shows the pair.
     await row.hover();
-    await expect(pair).toBeVisible();
+    await expect(pair).toHaveCSS("opacity", "1");
     await screenshot(page, "projects-row-actions-hover");
     await rest(page);
-    await expect(pair).toBeHidden();
+    await expect(pair).toHaveCSS("opacity", "0");
 
-    // Focus on the row's button draws the pair, which the keyboard then reaches.
+    // Focus on the row's button draws the pair.
     await keyboardFocus(page, row);
-    await expect(pair).toBeVisible();
-    // B8: each has its own name, and the keyboard reaches and presses them.
+    await expect(pair).toHaveCSS("opacity", "1");
+    await rest(page);
+    // B8: each has its own name, and the keyboard reaches and presses them,
+    // from outside the row too, as a closing dialog hands focus back to one.
     await expect(start).toHaveAccessibleName("Start agent in tools-repo");
     await expect(more).toHaveAccessibleName("More actions for tools-repo");
     await keyboardFocus(page, start);
-    await expect(pair).toBeVisible();
+    await expect(pair).toHaveCSS("opacity", "1");
     // B7: + aims the start panel at the project's main checkout.
     await page.keyboard.press("Enter");
     const panel = page.locator("[data-start-panel]");
@@ -833,7 +835,7 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     expect(await menu.locator("[data-menu-item]").evaluateAll((items) => items.map((item) => item.getAttribute("data-menu-item")))).toEqual(contextItems);
     const button = (await more.boundingBox())!;
     expect((await menu.boundingBox())!.y).toBeGreaterThanOrEqual(button.y + button.height - 1);
-    await expect(pair).toBeVisible();
+    await expect(pair).toHaveCSS("opacity", "1");
     await screenshot(page, "projects-row-actions-menu");
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
@@ -861,9 +863,9 @@ test("a section head stays at the top of the scrolled list, and a row the keyboa
     await expect(projectItem(page, "echo-repo")).toBeVisible({ timeout: 20_000 });
     await projectItem(page, "alpha-repo").locator("[data-project-row]").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
-    // B9: a pinned row wears the pin in place of its folder mark, and no head of its own.
-    await expect(projectItem(page, "alpha-repo").locator("[data-project-pin]")).toBeVisible();
-    await expect(projectItem(page, "bravo-repo").locator("[data-project-pin]")).toHaveCount(0);
+    // B9: a pinned row stands first with no head of its own; its pin waits for the pointer.
+    await expect(projectItem(page, "alpha-repo")).toHaveAttribute("data-project-pinned", "true");
+    await expect(projectItem(page, "bravo-repo")).not.toHaveAttribute("data-project-pinned", "true");
     // Two finished turns the operator has not seen make the Done section, the one head in the list.
     const elsewhere = await elsewhereTab(fixture, live);
     await finishUnseenTurn(fixture, live, panes[3]!, elsewhere);

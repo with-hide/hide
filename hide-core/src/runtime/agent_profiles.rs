@@ -23,6 +23,56 @@ pub(super) struct ProfileChangePayload {
 }
 
 impl Runtime {
+    /// Refresh only when a project's identity, device or root changed. A
+    /// catalog's pane updates do not run the profile picker again.
+    pub(super) fn refresh_start_profile_catalog(&mut self) {
+        let kept = &self.snapshot.status.start_profiles;
+        if self.catalog_workspaces().count() != kept.len()
+            || self.catalog_workspaces().any(|project| {
+                kept.get(&project.id).is_none_or(|row| {
+                    row.device_id != project.device_id || row.root != project.path
+                })
+            })
+        {
+            self.refresh_start_profiles();
+        }
+    }
+
+    /// The final automatic choice, never a second interpretation of its
+    /// priority. Called on profile lists, project settings and catalog changes.
+    pub(super) fn refresh_start_profiles(&mut self) {
+        self.snapshot.status.start_profiles = self
+            .catalog_workspaces()
+            .map(|project| {
+                let profiles = hide_agent_adapter::ADAPTERS
+                    .iter()
+                    .map(|adapter| {
+                        let selected = self.new_start_profile(
+                            &project.device_id,
+                            Some(adapter.id),
+                            Some(&project.path),
+                            None,
+                        );
+                        let selected = selected
+                            .expect("an automatic choice has no explicit profile to refuse");
+                        (
+                            adapter.id.to_owned(),
+                            selected.map_or_else(|| "default".to_owned(), |(id, _)| id.0),
+                        )
+                    })
+                    .collect();
+                (
+                    project.id.clone(),
+                    crate::model::StartProfilesSnapshot {
+                        device_id: project.device_id.clone(),
+                        root: project.path.clone(),
+                        profiles,
+                    },
+                )
+            })
+            .collect();
+    }
+
     /// `hide agent profile` for a caller on `device`: the plan, or why
     /// there is none. A listing whose machine was read answers without a
     /// call too, but asks the node all the same, so it shows what the
@@ -32,6 +82,7 @@ impl Runtime {
         device: &str,
         command: ProfileCommand,
     ) -> Result<Prepared, String> {
+        self.finish_profile_starts();
         let machine = match command.machine() {
             Some(name) => self.machine_named(name)?,
             None => device.to_owned(),
@@ -56,6 +107,7 @@ impl Runtime {
     /// the node, else run on a thread of its own while the answer reads
     /// pending.
     pub(super) fn change_agent_profile(&mut self, payload: ProfileChangePayload) -> bool {
+        self.finish_profile_starts();
         let ProfileChangePayload {
             device_id,
             request_id,
@@ -332,11 +384,12 @@ impl Runtime {
     /// agent runs, sleeps or starts with the profile, otherwise marked being
     /// removed at that version (`launch::holds`).
     pub(crate) fn recheck_removal(
-        &self,
+        &mut self,
         machine: &str,
         id: &ProfileId,
         version: u64,
     ) -> Result<(), Refusal> {
+        self.finish_profile_starts();
         let in_use = self.profile_in_use(machine, id);
         if !in_use.is_empty() {
             return Err(Refusal::in_use(in_use));
@@ -351,10 +404,11 @@ impl Runtime {
     /// when its launch record would have no room. The built-in default
     /// holds nothing.
     pub(crate) fn hold_profile_start(
-        &self,
+        &mut self,
         machine: &str,
         request: crate::launch::Request,
     ) -> Result<crate::launch::Request, crate::launch::Refusal> {
+        self.finish_profile_starts();
         use crate::launch::holds::Refused;
         let Some((id, name)) = request.profile() else {
             return Ok(request);
@@ -367,6 +421,7 @@ impl Runtime {
             &kind,
             records,
             agent_choice::PANE_LAUNCH_LIMIT,
+            request.choice(),
         ) {
             Ok(hold) => Ok(request.held(Some(hold))),
             Err(Refused::Removing) => Err(crate::launch::Refusal {
@@ -391,28 +446,36 @@ impl Runtime {
         }
     }
 
-    /// Ends the holds of starts typed into a pane this pass settles: the
-    /// pane is gone from the topology the pass owns, or the agent row the
-    /// start made shows, described by a launch record naming the profile,
-    /// which carries the use from then on (`launch::holds`).
-    pub(super) fn settle_profile_holds(
-        &self,
-        agents: &[SidebarAgentSnapshot],
-        scope: crate::agent_state::ReadRecordScope<'_>,
-        live_pane_ids: Option<&HashSet<String>>,
-    ) {
-        let node = self.node.as_str();
-        self.profile_holds.settle(|start, pane| {
-            let pane = crate::address::pane_id_on(node, &start.machine, pane);
-            let gone = live_pane_ids.is_some_and(|live| scope.owns(&pane) && !live.contains(&pane));
-            let shown = agents.iter().any(|row| {
-                row.pane_id == pane
-                    && self
-                        .launch_profile_of(row)
-                        .is_some_and(|profile| profile.id == start.profile)
-            });
-            gone || shown
-        });
+    /// Transfers completed attempts while admission remains locked: the
+    /// record takes the reserved slot before the hold is released.
+    pub(crate) fn finish_profile_starts(&mut self) {
+        let mut moved = false;
+        for (id, start) in self.profile_holds.completed() {
+            if let (Some(pane), Some(record)) = (&start.pane, &start.record) {
+                let pane = crate::address::pane_id_on(self.node.as_str(), &start.machine, pane);
+                if self
+                    .snapshot
+                    .ui_state
+                    .pane_launches
+                    .get(&pane)
+                    .is_none_or(|kept| kept.start < id)
+                {
+                    let mut record = record.clone();
+                    // A publish may already have observed this session while
+                    // its worker was still returning. Preserve that knowledge.
+                    if let Some(agent) = self.agent_rows().find(|agent| agent.pane_id == pane) {
+                        agent_choice::observe_launch(&mut record, agent);
+                    }
+                    self.snapshot.ui_state.pane_launches.insert(pane, record);
+                    moved = true;
+                }
+            }
+            self.profile_holds.release(id);
+        }
+        if moved {
+            self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
+            self.persist_ui_state();
+        }
     }
 
     /// The profile of `kind` named `name` on `machine`, one of the
@@ -481,6 +544,26 @@ impl Runtime {
                 })
             })
             .collect();
+        // An unknown result has a real launch record even before any row.
+        // Once a row is observed the normal agent/account rule owns its use.
+        for (pane, launch) in &self.snapshot.ui_state.pane_launches {
+            if on(pane)
+                && launch.pending
+                && self
+                    .run_in(pane, &launch.kind, Some(launch))
+                    .profile
+                    .is_some_and(|profile| profile.id == *id)
+                && !found.iter().any(|agent| agent.pane_id == *pane)
+            {
+                found.push(InUse {
+                    pane_id: pane.clone(),
+                    title: launch.name.clone(),
+                    place: String::new(),
+                    asleep: false,
+                    starting: false,
+                });
+            }
+        }
         for record in sleep.dormant.values() {
             if record.node_id == machine
                 && record

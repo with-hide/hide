@@ -123,6 +123,18 @@ const PANIC_ON_INPUT: &str = "HIDE_HOLDER_TEST_PANIC_ON_INPUT";
 /// program never gets it.
 const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
 
+/// Debug builds only: a holder started with this variable naming a file
+/// starts its program and writes nothing more of its start until that file
+/// exists, so its record still says `preparing` while the program runs, and
+/// a test decides when the record says `running`
+/// (with-hide/hide-private#719). A release holder never reads it, and the
+/// pane's program never gets it.
+const HOLD_RUNNING: &str = "HIDE_HOLDER_TEST_HOLD_RUNNING";
+
+/// How long a holder started with [`HOLD_RUNNING`] holds at most: a test
+/// that fails before it releases the holder leaves no holder waiting.
+const HOLD_RUNNING_LIMIT: Duration = Duration::from_secs(30);
+
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -669,6 +681,10 @@ impl Holder {
             .filter(|_| cfg!(debug_assertions))
             .map(PathBuf::from);
         command.env_remove(HOLD_WRITES);
+        let hold_running = std::env::var_os(HOLD_RUNNING)
+            .filter(|_| cfg!(debug_assertions))
+            .map(PathBuf::from);
+        command.env_remove(HOLD_RUNNING);
         #[cfg(unix)]
         let spawned = pair.slave.spawn_command(command);
         #[cfg(windows)]
@@ -690,6 +706,12 @@ impl Holder {
         // write, as it was when the program had a write of its own, and a
         // start writes its record once less (each write is flushed, and the
         // start of every new pane waited for them).
+        if let Some(release) = &hold_running {
+            let given_up = Instant::now() + HOLD_RUNNING_LIMIT;
+            while !release.exists() && Instant::now() < given_up {
+                thread::park_timeout(Duration::from_millis(10));
+            }
+        }
         if let Some(record) = &record {
             record
                 .running(program)

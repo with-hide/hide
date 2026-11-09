@@ -1271,6 +1271,17 @@ impl Holders {
         self.ask_by(pane, Ask::Processes, Instant::now() + within.min(ASK_LIMIT))
     }
 
+    /// Waits until a start of `pane`'s holder under way here has settled,
+    /// either way, or `deadline` passed; it returns at once for a pane with
+    /// no start under way. The holder writes its program and `running` into
+    /// the record before the start settles, so a record read after this
+    /// names the program of a start that succeeded.
+    pub fn wait_settled(&self, pane: &str, deadline: Instant) {
+        // A pane past the deadline is the caller's to answer from its
+        // record; why the wait ended says nothing more.
+        let _ = self.known.socket_once_started(pane, deadline);
+    }
+
     /// The pane's record, read under no lock: a reader sees one whole
     /// record, as each change replaces it atomically.
     pub fn record(&self, pane: &str) -> Result<Option<PaneRecord>, String> {

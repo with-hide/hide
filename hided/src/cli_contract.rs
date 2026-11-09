@@ -351,15 +351,18 @@ pub const COMMANDS: &[Spec] = &[
         ],
         &["agent", "agent_register_check"],
     ),
+    // Every registration, or with `--live` only those not ended (running
+    // or asleep).
     spec(
         &["agent", "list"],
         &[],
-        &[switch("--json")],
+        &[switch("--live"), switch("--json")],
         &["agent_list"],
     ),
     // A registration by its id with its agent's state, or a spawn by its id
     // or the caller's intent: its child's registration once it has one, the
-    // spawn and its pane's state until then. It reads only.
+    // spawn and its pane's state until then; else a registration by its name
+    // or pane, the live one, else the last that ended there. It reads only.
     Spec {
         words: &["agent", "show"],
         arguments: AGENT_ID,
@@ -368,7 +371,7 @@ pub const COMMANDS: &[Spec] = &[
         options: &[switch("--json")],
         rest: None,
         answers: &["agent_show", "spawn_show"],
-        refusals: &["agent_unavailable"],
+        refusals: &["agent_unavailable", "target_ambiguous"],
     },
     // The caller's own registration, by its attested pane, device and
     // session; only a pane-bound credential can ask.

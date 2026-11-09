@@ -1211,6 +1211,18 @@ impl OwnEngine<'static> {
                     self.changed();
                 }
             }
+            super::attempt::Outcome::NotStarted { why } => {
+                let left = NotResumed {
+                    pane_id: resume.pane.clone(),
+                    agent: resume.kind.clone(),
+                    session: resume.session.clone(),
+                    why: format!("its executor was not admitted ({why}); retry the resume"),
+                };
+                if self.topology().not_resumed(&resume.pane, left.clone()) {
+                    self.say_not_resumed(&left);
+                    self.changed();
+                }
+            }
             super::attempt::Outcome::Unconfirmed { why } => crate::diagnostic!(serde_json::json!({
                 "component": "own_engine",
                 "kind": "agent.resume_unconfirmed",

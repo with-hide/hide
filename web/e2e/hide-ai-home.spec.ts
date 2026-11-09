@@ -163,7 +163,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     const project = page.locator("[data-project]", { hasText: "scratch" });
     await expect(project.locator("[data-checkout-row]").first()).toBeVisible({ timeout: 20_000 });
     // Opening the Memory tab makes the Project's store; the card and its promotion are seeded into it while the core is down.
-    await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, project.locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await expect(page.locator('[data-lane="memory"] [data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });

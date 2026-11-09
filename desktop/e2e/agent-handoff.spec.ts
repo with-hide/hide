@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { agentPane } from "../../web/e2e/agent-pane";
 import { openProject, openWorktree, showTabOf, withControl } from "../../web/e2e/daemon-actions";
-import { enterWorkspace, openTaskFolds, showTasks } from "../../web/e2e/wire";
+import { enterWorkspace, openOtherCheckouts, openTaskFolds, showTasks } from "../../web/e2e/wire";
 import { launchShell, screenshot, startStack, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 import { finishNative, inStep } from "./native-teardown";
@@ -58,6 +58,8 @@ test("handoff roots have provenance without delegation or a focus change in eith
     const parentRow = page.locator(`nav[data-sidebar] [data-pane="${parent}"]`);
     await expect(parentRow).toHaveAttribute("data-waiting", "false");
     await expect(parentRow.locator("[data-tree-chevron], [data-descendant-mark]")).toHaveCount(0);
+    // Each root runs in a checkout other than main, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator('[data-project-row][aria-label="repo"]') }));
     for (const root of roots) {
       const row = page.locator(`nav[data-sidebar] [data-pane="${root.pane}"]`);
       await expect(row).toHaveAttribute("data-delegated", "false");

@@ -464,7 +464,7 @@ test("Remove project closes the agents its panes spawned outside it before the p
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-tree-chevron="${parent}"]`).first()).toBeVisible({ timeout: 30_000 });
 
     // The project row's own menu removes the whole project.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-row-more]"))).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-row-more]"))).click({ position: { x: 12, y: 8 } });
     await page.getByRole("menu", { name: "More actions for fixture" }).locator('[data-menu-item="remove_project"]').click();
 
     const dialog = page.locator("[data-remove-project]");

@@ -182,7 +182,10 @@ hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
 ## Where to go next
 
 - A web page, a local app in a browser, or what a page shows: run `hide browser help` and follow it.
-- Complex work with several steps, work to split across agents, or an operator who asks you to plan first or have the work reviewed: run `hide mission help` and follow it as the Conductor directing agents.
-  If it is unclear, ask the operator before starting whether to do it directly or delegate it as a mission.
-- A mission the operator asks for or agrees to, or one to take over as its Conductor: run `hide mission help` and follow it. This guide is the way in for a mission; there is no separate Conductor skill.
+- A mission the operator explicitly asks for, invokes with `/hide-mission`, agrees to, or asks you to take over as its Conductor: run `hide mission help` and follow it without asking which way to work again.
+  This guide is the way in for a mission; there is no separate Conductor skill.
+- Otherwise, look for four signals: planning or review first; two or more PRs or parallel work; another agent reviewing or checking; work likely to fill the conversation, or work carried out while the operator keeps talking here.
+  If any applies, first ask in one line: Shall I run this as a mission, or do it directly?
+  Wait for the operator's answer and follow it: a mission means `hide mission help`, direct work means doing it yourself.
+  With none of these signals, work directly without asking.
 - A worker or reviewer of a mission node: record your lines with `hide mission record`, as `hide mission help` says under For workers and checkers. A worker can open, with `hide request show <id>`, a letter its node's reviewer or verifier wrote; it opens no other agent's letters.

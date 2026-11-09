@@ -42,7 +42,8 @@ fn listed_profile(id: &str, kind: &str, name: &str) -> ProfileSnapshot {
         skill: None,
         login: None,
         wrapper_folder: false,
-        account_key: hide_agent_adapter::AccountKey::Default,
+        startable: true,
+        account_key: Some(hide_agent_adapter::AccountKey::Folder(format!("~/.{name}"))),
         account_variables: Vec::new(),
     }
 }

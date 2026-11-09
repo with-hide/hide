@@ -23,8 +23,9 @@ use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
     HolderError, HolderForeground, HolderIntent, HolderProcess, HolderProcesses, HolderProof,
     HolderRecovery, HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart,
-    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, RENEWAL_BUSY, RENEWAL_LOST,
-    RENEWAL_PANE_CLOSED, RENEWAL_UNSETTLED, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    PANE_NOT_RUNNING, PANE_STARTING, PaneEnded, PaneFactsSink, PaneHolders, PaneInput,
+    RENEWAL_BUSY, RENEWAL_LOST, RENEWAL_PANE_CLOSED, RENEWAL_UNSETTLED, ScreenRules, StyledRead,
+    UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -560,10 +561,38 @@ impl PaneHolders for LocalPanes {
                 program: program.pid,
                 started: program.started,
             }),
+            (Phase::Reserved | Phase::Preparing, _, None) => Err(HolderError::Refused {
+                code: PANE_STARTING.to_owned(),
+                message: format!("pane {pane}'s program is starting"),
+            }),
             (phase, _, _) => Err(HolderError::Refused {
-                code: "pane_not_running".to_owned(),
+                code: PANE_NOT_RUNNING.to_owned(),
                 message: format!("pane {pane}'s record is {phase:?}, not running"),
             }),
+        }
+    }
+
+    fn proof_once_started(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProof, HolderError> {
+        match self.proof(pane) {
+            Err(HolderError::Refused { code, .. }) if code == PANE_STARTING => {
+                // Taken first, so logging adds nothing to the wait.
+                let deadline = std::time::Instant::now() + within;
+                crate::diagnostic!(serde_json::json!({
+                    "component": "pane_holder",
+                    "kind": "pane.proof.start_wait",
+                    "pane_id": pane,
+                    "within_ms": u64::try_from(within.as_millis()).unwrap_or(u64::MAX),
+                }));
+                // The node's start settles only after the holder wrote the
+                // program and `running`; the record answers either way.
+                self.holders.wait_settled(pane, deadline);
+                self.proof(pane)
+            }
+            answer => answer,
         }
     }
 

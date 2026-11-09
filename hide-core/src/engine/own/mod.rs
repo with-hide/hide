@@ -475,7 +475,7 @@ impl OwnEngine<'_> {
                 attempt::Outcome::Started => "started",
                 attempt::Outcome::Failed { checked: true, .. } => "refused",
                 attempt::Outcome::Failed { checked: false, .. } => "failed",
-                attempt::Outcome::Unconfirmed { why } => why,
+                attempt::Outcome::Unconfirmed { why } | attempt::Outcome::NotStarted { why } => why,
             },
         }));
         if withdrawn {
@@ -2527,6 +2527,15 @@ impl<'g> Engine for OwnEngine<'g> {
         if let Some(finish) = finish {
             match self.await_attempt(finish, deadline(wait)) {
                 attempt::Outcome::Started => {}
+                attempt::Outcome::NotStarted { why } => {
+                    return Err(refused(
+                        crate::launch::PROFILE_REFUSED,
+                        format!(
+                            "the {} start did not admit its executor ({why}); try again",
+                            definition.id
+                        ),
+                    ));
+                }
                 attempt::Outcome::Failed { failure, .. } => {
                     return Err(refused(crate::launch::PROFILE_REFUSED, failure));
                 }
@@ -5213,6 +5222,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_profile_start_expiring_before_ready_frees_its_name_and_refuses_a_late_executor() {
+        use hide_node_link::panes::AgentExecEvent;
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let failure = start_played(&engine, &holders, &start, within(600), |_| {}).unwrap_err();
+        assert_eq!(failure.code(), Some(crate::launch::PROFILE_REFUSED));
+        let ended = typed_attempt(&holders, &pane, 0);
+        assert_eq!(
+            exec_report(&engine, &pane, &ended, AgentExecEvent::Ready, EXECUTOR)
+                .unwrap_err()
+                .code(),
+            Some(crate::engine::ATTEMPT_UNKNOWN)
+        );
+        assert!(engine.topology().pane(&pane).unwrap().agent.is_none());
+    }
+
     /// While a start is undecided its executor alone in the foreground is no
     /// agent: it does not show and the start keeps its claim; the agent's
     /// own hook leaves the start undecided too. Nothing deciding it by the
@@ -6731,6 +6757,8 @@ mod tests {
             effort: Some("high".to_owned()),
         };
         let record = |name: &str| crate::model::PaneLaunch {
+            pending: false,
+            start: 0,
             profile: None,
             kind: "claude".to_owned(),
             name: name.to_owned(),
