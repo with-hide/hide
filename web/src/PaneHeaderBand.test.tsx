@@ -729,7 +729,7 @@ it("draws the answer, the letters and the unanswered question since the request"
     // Show all opens the letters in time order in the same place, and Collapse closes them.
     const letters = () => card().querySelector<HTMLButtonElement>("[data-turn-card-letters-whole]")!;
     await act(async () => letters().click());
-    expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("Older letters not shown: 1");
+    expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("Older items not shown: 1");
     expect(card().querySelector("[data-turn-card-progress]")?.textContent).toBe("10 progress reports folded");
     expect(lines()).toEqual([
       "Sent to windows-x · Awaiting reply · Reviewer FAIL forwarded",

@@ -53,7 +53,7 @@ const words = {
   "paneTurn.fold": ["Collapse", "접기", "閉じる", "收起"],
   "paneTurn.wholeReading": ["Reading…", "읽는 중…", "読み込み中…", "正在读取…"],
   "paneTurn.wholeFailed": ["Couldn't read the whole answer", "원문을 읽지 못했어요", "全文を読み込めませんでした", "无法读取完整回答"],
-  "paneTurn.lettersEarlier": ["Older letters not shown: {{count}}", "이전 {{count}}통 생략", "以前の {{count}}通は省略", "省略之前的 {{count}} 封"],
+  "paneTurn.lettersEarlier": ["Older items not shown: {{count}}", "이전 {{count}}개 생략", "以前の {{count}}件は省略", "省略之前的 {{count}} 条"],
   "paneTurn.peers": ["{{peers}} agents · {{count}} letters", "함께 일한 에이전트 {{peers}} · 편지 {{count}}통", "やり取りしたエージェント {{peers}} · レター {{count}}通", "协作的智能体 {{peers}} · 信件 {{count}} 封"],
   "paneTurn.morePeers": ["{{count}} more", "외 {{count}}명", "ほか {{count}}件", "另外 {{count}} 个"],
   "paneTurn.blocks": ["Blocked {{count}}×", "막힘 {{count}}회", "ブロック {{count}}回", "受阻 {{count}} 次"],
