@@ -123,6 +123,9 @@ export function runWords(launch: Pick<LaunchSession, "launch_model" | "launch_ef
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */
 export const STAGE_STEPS = 4;
 
+/** The fewest Views linked to a decision its card lists before `+N` folds the rest, on the desktop and the phone alike. */
+export const DECISION_VIEWS_SHOWN = 3;
+
 /**
  * The popover row's status mark (B15): its worker's own mark while its row is
  * listed, so a node reads as its agent does everywhere; else the node's

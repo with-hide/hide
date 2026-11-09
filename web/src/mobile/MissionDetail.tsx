@@ -8,7 +8,7 @@
 // them.
 
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon, Loader2Icon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
 import { Elapsed } from "../components/elapsed";
 import { ProgressCells } from "../components/mission-tone";
@@ -21,12 +21,12 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
-import { answerMission, openDetail, settleMissionAnswer } from "./connection";
+import { DECISION_VIEWS_SHOWN, attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { answerMission, askMissionMaterial, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
 import type { PrState } from "../snapshot";
-import { noticeText, type PhoneMission, type PhoneMissionNode } from "./protocol";
+import { noticeText, type PhoneDecisionView, type PhoneMission, type PhoneMissionNode } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
 export function MissionDetail() {
@@ -152,6 +152,7 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
       </p>
       <p className="break-keep text-title leading-normal text-foreground wrap-anywhere" data-phone-question="true">{mission.decision}</p>
       {question?.why ? <p className="break-keep text-body text-muted-foreground wrap-anywhere">{question.why}</p> : null}
+      {mission.decision_views?.length ? <DecisionViews views={mission.decision_views} /> : null}
       {view.sent?.line === "unconfirmed" ? (
         <div className="flex min-w-0 flex-col gap-xs" data-phone-answer-sent="unconfirmed">
           <p className="flex min-w-0 items-start gap-xs text-body">
@@ -195,6 +196,26 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
           })}
         </div>
       )}
+      {/* With nothing linked to look at, the operator may ask for it, as on the desktop's card; it never holds the answer back. */}
+      {!mission.decision_views?.length && question && !view.sent ? (
+        question.material_asked ? (
+          <p className="flex min-w-0 items-center gap-xs text-body text-muted-foreground" data-phone-material="asked">
+            <CheckIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-done" />
+            {t("mission.banner.asked")}
+          </p>
+        ) : (
+          <Button
+            variant="text"
+            size="inline"
+            className="min-h-(--size-touch-target) self-start text-body"
+            disabled={view.closed || view.unreachable || !connected}
+            data-phone-material="ask"
+            onClick={() => askMissionMaterial(mission)}
+          >
+            {t("mission.banner.ask")}
+          </Button>
+        )
+      ) : null}
       {view.reason ? (
         <p
           className={cn("break-keep text-body wrap-anywhere", view.refused ? "text-mission-failed" : "text-muted-foreground")}
@@ -319,4 +340,57 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
   }
   if (kind === "done") return node.pr_state ? t(`agentSessions.pr.${node.pr_state}`) : t(kindWord(node.kind));
   return node.base_pr != null ? t("mobile.mission.after", { pr: String(node.base_pr) }) : t(stageWord(node));
+}
+
+/**
+ * The Views linked to the decision, seen or not: a row opens the 볼 것 of
+ * the agent that opened it, where the View opens full screen; one whose
+ * agent is closed is listed without a press.
+ */
+function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
+  const { t } = useInterfaceTranslation();
+  const [all, setAll] = useState(false);
+  const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
+  const more = views.length - shown.length;
+  return (
+    <div className="flex min-w-0 flex-col" data-phone-decision-views={views.length}>
+      <span className="text-body text-muted-foreground">{t("mission.banner.looks", { count: views.length })}</span>
+      <ul className="flex min-w-0 flex-col divide-y divide-border">
+        {shown.map((view) => {
+          const pane = view.pane_id;
+          const words = (
+            <>
+              <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">{view.label}</span>
+              {/* The phone has no hover, so the mark's words are read out, not hinted. */}
+              {view.unseen ? (
+                <>
+                  <StatusMark mark="look" />
+                  <span className="sr-only">{t("agents.mark.look")}</span>
+                </>
+              ) : null}
+              <span className="shrink-0 text-body text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
+            </>
+          );
+          return (
+            <li key={`${view.device_id}:${view.display_id}`} className="min-w-0">
+              {pane ? (
+                <RowButton className="min-h-(--size-touch-target) gap-sm px-0" data-phone-decision-view={view.display_id} onClick={() => openDetail({ device_id: view.device_id, pane_id: pane }, "looks")}>
+                  {words}
+                </RowButton>
+              ) : (
+                <span className="flex min-h-(--size-touch-target) min-w-0 items-center gap-sm opacity-(--opacity-dimmed)" data-phone-decision-view={view.display_id}>{words}</span>
+              )}
+            </li>
+          );
+        })}
+        {more > 0 ? (
+          <li>
+            <Button variant="text" size="inline" className="min-h-(--size-touch-target) text-body" data-phone-decision-views-more={more} onClick={() => setAll(true)}>
+              {t("mission.banner.more", { count: more })}
+            </Button>
+          </li>
+        ) : null}
+      </ul>
+    </div>
+  );
 }

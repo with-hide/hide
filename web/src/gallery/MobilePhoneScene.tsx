@@ -21,7 +21,7 @@ import { RELEASE_MISSION, phoneMissions } from "./mobilePhoneMissionsData";
 import { AGENT_PR, FAILED_PR, READY_PR, phoneFeedback, phonePrs } from "./mobilePhonePrsData";
 import { PHONE_LOOK_SCENES, PHONE_MAC, PHONE_ROOM, phoneDevices, phoneGroups, phoneLookDetail, phoneLookGroups, seedPairedMac, type PhoneLookScene } from "./mobilePhoneSceneData";
 
-export type PhoneSceneState = "phone-connecting" | "phone-list" | "phone-list-cut" | "phone-devices" | "phone-settings" | "phone-missions" | "phone-missions-cut" | "phone-mission" | PhonePrScene | PhoneLookScene;
+export type PhoneSceneState = "phone-connecting" | "phone-list" | "phone-list-cut" | "phone-devices" | "phone-settings" | "phone-missions" | "phone-missions-cut" | "phone-mission" | "phone-mission-views" | PhonePrScene | PhoneLookScene;
 
 /** The pull request tab's own scenes: the list, a page, the merge confirmation and the hand-over sheet. */
 const PHONE_PR_SCENES = ["phone-prs", "phone-pr", "phone-pr-agent", "phone-pr-merge", "phone-pr-delegate"] as const;
@@ -38,8 +38,8 @@ const CATALOG = {
   remembered: { kind: "claude", models: { claude: "opus" } },
 };
 
-/** The scene names this component draws: the list, the device sheet, the missions tab and a mission, the PR tab and the 볼 것 tab with its viewers. */
-export const PHONE_SCENES: readonly string[] = ["phone-connecting", "phone-list", "phone-list-cut", "phone-devices", "phone-settings", "phone-missions", "phone-missions-cut", "phone-mission", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
+/** The scene names this component draws: the list, the device sheet, the missions tab and a mission (its decision with nothing to look at, or with Views linked to it), the PR tab and the 볼 것 tab with its viewers. */
+export const PHONE_SCENES: readonly string[] = ["phone-connecting", "phone-list", "phone-list-cut", "phone-devices", "phone-settings", "phone-missions", "phone-missions-cut", "phone-mission", "phone-mission-views", ...PHONE_PR_SCENES, ...PHONE_LOOK_SCENES];
 
 /** The `-cut` states: a list hided cut to fit one relay message, with the line that counts what it left out. */
 const CUT = { agents: 37, missions: 3 };
@@ -52,6 +52,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
   const devicesOpen = state === "phone-devices";
   const cut = state.endsWith("-cut");
   const look = (PHONE_LOOK_SCENES as readonly string[]).includes(state) ? (state as PhoneLookScene) : null;
+  const missionPage = state === "phone-mission" || state === "phone-mission-views";
   useFollowInterfaceLanguage(language);
   const { t } = useInterfaceTranslation();
   useLayoutEffect(() => {
@@ -65,8 +66,8 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
       detail: look ? phoneLookDetail(look) : null,
       agentsOmitted: cut ? CUT.agents : 0,
       tab: state.startsWith("phone-mission") ? "missions" : state.startsWith("phone-pr") ? "prs" : "agents",
-      missions: phoneMissions(), missionsFailed: false, missionsOmitted: cut ? CUT.missions : 0, missionOpen: state === "phone-mission" ? RELEASE_MISSION : null,
-      missionFolds: state === "phone-mission" ? { [`done:${RELEASE_MISSION}`]: true } : {}, missionDrafts: {}, missionAnswer: null, missionAnswerError: null,
+      missions: phoneMissions({ views: state === "phone-mission-views" }), missionsFailed: false, missionsOmitted: cut ? CUT.missions : 0, missionOpen: missionPage ? RELEASE_MISSION : null,
+      missionFolds: missionPage ? { [`done:${RELEASE_MISSION}`]: true } : {}, missionDrafts: {}, missionAnswer: null, missionAnswerError: null,
       prs, prOpen: prKey, prPending: null, prNotice: null, prDelegated: null,
       prConfirm: state === "phone-pr-merge" && page ? confirmOf(page) : null,
       startCatalog: state === "phone-pr-delegate" ? CATALOG : null,
@@ -86,12 +87,12 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
   }, [state, theme, scale, look, offline, cut]);
   return (
     <TooltipProvider>
-      <div className={state === "phone-mission" || state === "phone-prs" || state in PR_PAGE ? "h-screen w-full bg-background text-foreground" : "min-h-screen w-full bg-background text-foreground"} data-gallery-scene="mobile" data-scene-ready={ready ? "true" : undefined}>
+      <div className={missionPage || state === "phone-prs" || state in PR_PAGE ? "h-screen w-full bg-background text-foreground" : "min-h-screen w-full bg-background text-foreground"} data-gallery-scene="mobile" data-scene-ready={ready ? "true" : undefined}>
         {state === "phone-connecting" ? <DeviceConnecting t={t} name={PHONE_MAC} error={null} onChoose={noop} /> : look ? (
           <div className="h-screen">
             <Detail onBack={noop} />
           </div>
-        ) : state === "phone-missions" || state === "phone-missions-cut" ? <MissionsScreen /> : state === "phone-mission" ? <MissionDetail /> : state === "phone-prs" ? <PrsScreen /> : state in PR_PAGE ? <PrDetail /> : <ListScreen hosted picker={{ room: PHONE_ROOM, open: devicesOpen }} settingsOpen={state === "phone-settings"} />}
+        ) : state === "phone-missions" || state === "phone-missions-cut" ? <MissionsScreen /> : missionPage ? <MissionDetail /> : state === "phone-prs" ? <PrsScreen /> : state in PR_PAGE ? <PrDetail /> : <ListScreen hosted picker={{ room: PHONE_ROOM, open: devicesOpen }} settingsOpen={state === "phone-settings"} />}
       </div>
     </TooltipProvider>
   );

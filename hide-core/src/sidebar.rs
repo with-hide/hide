@@ -3321,6 +3321,7 @@ mod tests {
                 });
                 row.ask_subject = Some(crate::model::AskSubject::MissionDecision {
                     line: "Ship it?".to_owned(),
+                    views: 0,
                 });
                 row.laid_since_unix_ms = Some(1);
                 row.laid_asks = asks.iter().map(|ask| (*ask).to_owned()).collect();

@@ -2048,6 +2048,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
     },
 
+    /** `자료 요청` on the question with `key`: its Conductor is asked once for one page to look at. */
+    askMissionMaterial(missionId: string, key: number) {
+      dispatch({ schema_version: 2, kind: "mission_material", payload: { mission: missionId, key } });
+    },
+
     /** The fields of Settings › Mission one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
     setConductorSettings(patch: Partial<import("./snapshot").ConductorSettings>) {
       dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });

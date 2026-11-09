@@ -6113,7 +6113,8 @@
                 },
                 {
                     "conflicts": [
-                        "--line"
+                        "--line",
+                        "--show"
                     ],
                     "name": "--clear",
                     "required": false,
@@ -6150,6 +6151,14 @@
                     "requires": [],
                     "value": {
                         "type": "key"
+                    }
+                },
+                {
+                    "name": "--show",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
                     }
                 }
             ],
@@ -6542,7 +6551,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:539c7a09c91977489d360d349eaa06d6f38f246dcc9052ee2a8254f83770f697",
+    "digest": "sha256:38dad52e8bcf39a31459db6b86045b8408899a69ae0dc3e76748d230f795fb08",
     "envelopes": {
         "agent": {
             "answer": "value",

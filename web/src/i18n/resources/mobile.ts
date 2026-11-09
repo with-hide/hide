@@ -187,6 +187,9 @@ export const mobileEnglish = {
   "mobile.mission.answer.offline": "Your Mac isn't reachable right now. What you wrote is kept.",
   "mobile.mission.answer.inFlight": "This answer is still being sent. Check again shortly.",
   "mobile.mission.answer.gone": "This question is no longer open. What you wrote is kept.",
+  "mobile.mission.material.failed": "The request for material couldn't be sent.",
+  "mobile.mission.material.offline": "Your Mac isn't reachable right now, so the request wasn't sent.",
+  "mobile.mission.material.gone": "This question is no longer open.",
 } as const;
 
 const ko = {
@@ -375,6 +378,9 @@ const ko = {
   "mobile.mission.answer.offline": "지금은 Mac에 닿지 않아요. 쓴 내용은 그대로 남아 있어요.",
   "mobile.mission.answer.inFlight": "이 답을 아직 보내는 중이에요. 잠시 뒤에 다시 확인해 주세요.",
   "mobile.mission.answer.gone": "이 질문은 더 이상 열려 있지 않아요. 쓴 내용은 그대로 남아 있어요.",
+  "mobile.mission.material.failed": "자료 요청을 보내지 못했어요.",
+  "mobile.mission.material.offline": "지금은 Mac에 닿지 않아 자료를 요청하지 못했어요.",
+  "mobile.mission.material.gone": "이 질문은 더 이상 열려 있지 않아요.",
 } satisfies Catalog<typeof mobileEnglish>;
 
 const zhCN = {
@@ -563,6 +569,9 @@ const zhCN = {
   "mobile.mission.answer.offline": "现在连不上 Mac，已写的内容仍然保留。",
   "mobile.mission.answer.inFlight": "这条回答还在发送中，请稍后再看。",
   "mobile.mission.answer.gone": "这个问题已不再开放，已写的内容仍然保留。",
+  "mobile.mission.material.failed": "资料请求没有发送成功。",
+  "mobile.mission.material.offline": "现在连不上 Mac，资料请求没有发出。",
+  "mobile.mission.material.gone": "这个问题已不再开放。",
 } satisfies Catalog<typeof mobileEnglish>;
 
 const ja = {
@@ -751,6 +760,9 @@ const ja = {
   "mobile.mission.answer.offline": "いまは Mac に届きません。書いた内容はそのまま残っています。",
   "mobile.mission.answer.inFlight": "この回答はまだ送信中です。しばらくしてからもう一度確認してください。",
   "mobile.mission.answer.gone": "この質問はもう開いていません。書いた内容はそのまま残っています。",
+  "mobile.mission.material.failed": "資料のリクエストを送れませんでした。",
+  "mobile.mission.material.offline": "今は Mac に届かないため、資料をリクエストできませんでした。",
+  "mobile.mission.material.gone": "この質問はもう開いていません。",
 } satisfies Catalog<typeof mobileEnglish>;
 
 export const mobileCatalogs = { en: mobileEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof mobileEnglish>;

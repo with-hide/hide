@@ -29,14 +29,20 @@ function mission(id: string, title: string, over: Partial<PhoneMission> = {}): P
   };
 }
 
-/** The F11 mission: seven steps, four done, two at work and one stopped on the decision the Conductor asks. */
-function release(): PhoneMission {
+/** The F11 mission: seven steps, four done, two at work and one stopped on the decision the Conductor asks, with `views` the Views linked to it to look at. */
+function release(views: boolean): PhoneMission {
   const started = Date.now() - (2 * 60 + 14) * MINUTE;
   return mission(RELEASE_MISSION, "1.2.0 릴리스 준비", {
     created_at_unix_ms: started,
     started_at_unix_ms: started,
     decision: "CI 인증서가 만료됐어요. 이번 릴리스는 서명 없이 내보낼까요?",
     question: { key: 3, why: null, options: ["서명 없이 진행", "릴리스 미루기"], recommend: null, node: "sign", asked_at_unix_ms: Date.now() - 6 * MINUTE },
+    decision_views: views
+      ? [
+          { device_id: "local", display_id: "gallery-sign-report", kind: "browser", label: "서명 없이 내보낼 때 바뀌는 것", unseen: true, by: "conductor", pane_id: "gallery-conductor" },
+          { device_id: "local", display_id: "gallery-sign-log", kind: "file", label: "ci-sign.log", by: "worker" },
+        ]
+      : undefined,
     nodes: [
       merged("notes", "릴리스 노트 초안", 2085, "claude"),
       merged("pin", "agy 고정 버전 올리기", 2082, "codex"),
@@ -50,9 +56,9 @@ function release(): PhoneMission {
 }
 
 /** The five places the missions tab draws: one asking, one at work, one on another Mac, one waiting to merge, and finished ones past the three shown. */
-export function phoneMissions(): PhoneMission[] {
+export function phoneMissions({ views = false }: { views?: boolean } = {}): PhoneMission[] {
   return [
-    release(),
+    release(views),
     mission("mission-ui", "모바일 UI 개선", {
       created_at_unix_ms: Date.now() - 50 * MINUTE,
       started_at_unix_ms: Date.now() - 50 * MINUTE,

@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, EyeIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -35,6 +35,19 @@ export function moreTail(t: TFunction<"translation">, more: number): string | nu
   return more > 0 ? t("agentSessions.moreAsks", { count: more }) : null;
 }
 
+/** A decision with Views linked to it says on its row how many wait to be looked at, an eye and the count; its card lists them. */
+export function DecisionViewsCount({ subject, hidden }: { subject: AskSubject | null | undefined; hidden?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const views = subject?.cause === "mission_decision" ? (subject.views ?? 0) : 0;
+  if (!views) return null;
+  return (
+    <span aria-hidden={hidden} className="flex shrink-0 items-center gap-xxs self-center text-muted-foreground" title={t("mission.banner.looks", { count: views })} data-ask-views={views}>
+      <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      {views}
+    </span>
+  );
+}
+
 /**
  * A Needs You row's second line: what to do, and the count of the other asks
  * waiting under the same root (B2, needs-you-cleanup B9). A person's turn
@@ -58,6 +71,7 @@ export function AskLine({ ask, copy, textHidden = false, className }: { ask: Non
       </span>
       {human && copy ? <HumanTurnCopy turn={human} copy={copy} /> : null}
       {human?.device ? <span aria-hidden={hidden} className="contents"><DeviceChip label={human.device} variant="inline" className="shrink-0 self-center" /></span> : null}
+      <DecisionViewsCount subject={ask.subject} hidden={hidden} />
       {more ? <span aria-hidden={hidden} className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
     </span>
   );

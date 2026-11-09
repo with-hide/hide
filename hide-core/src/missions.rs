@@ -625,6 +625,9 @@ pub enum WakeEvent {
     /// A node shows signs its worker is stuck; `warning` says which
     /// (with-hide/hide-private#552).
     Warning,
+    /// The operator asked for something to look at before answering the
+    /// open question (`자료 요청`).
+    MaterialAsked,
 }
 
 impl WakeEvent {
@@ -644,6 +647,7 @@ impl WakeEvent {
             Self::Fix => "fix",
             Self::Reopened => "reopened",
             Self::Warning => "warning",
+            Self::MaterialAsked => "material_asked",
         }
     }
 }
@@ -681,6 +685,70 @@ pub struct Question {
     #[serde(default)]
     pub node: Option<String>,
     pub asked_at_unix_ms: u64,
+    /// The Views the Conductor linked to this question: the ones `--show`
+    /// named and the ones it opened since the question before was asked
+    /// that were still open, oldest first, at most [`VIEW_LINK_LIMIT`]. The map lists them with the node's
+    /// own (`MissionNode::views`) under the question.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
+    /// The operator asked the Conductor for something to look at before
+    /// answering (`볼 자료 요청`): asked once per question.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub material_asked: bool,
+}
+
+/// The most Views one question or one node links; past it the oldest goes.
+pub const VIEW_LINK_LIMIT: usize = 16;
+/// The longest `decide --show` value: a View id, or a path the CLI opens as
+/// a View before the core sees it.
+const SHOW_LIMIT: usize = 4096;
+
+/// A View a decision shows the operator to look at, by the checkout that
+/// holds it: a link is a fact recorded when the View was opened or named,
+/// never a guess from its name or its time.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ViewLink {
+    pub device_id: String,
+    pub checkout_path: String,
+    pub display_id: String,
+    /// The node's attempt the View was opened in (`MissionNode::attempts`);
+    /// a question's own link keeps 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attempt: u8,
+    /// When it was opened or named, which orders a question's opened Views
+    /// newest first.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub at_unix_ms: u64,
+    /// On a question: the stopped node's worker, or an agent under it,
+    /// opened it, where every other link is the Conductor's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worker: bool,
+}
+
+impl ViewLink {
+    pub fn same_view(&self, other: &Self) -> bool {
+        self.device_id == other.device_id
+            && self.checkout_path == other.checkout_path
+            && self.display_id == other.display_id
+    }
+}
+
+/// Adds `link` to `links` as the newest, once: the same View again moves
+/// to the end, and the oldest goes past [`VIEW_LINK_LIMIT`]. Whether the
+/// list changed.
+pub fn push_view_link(links: &mut Vec<ViewLink>, link: ViewLink) -> bool {
+    if links
+        .last()
+        .is_some_and(|last| last.same_view(&link) && last.attempt == link.attempt)
+    {
+        return false;
+    }
+    links.retain(|known| !known.same_view(&link));
+    links.push(link);
+    if links.len() > VIEW_LINK_LIMIT {
+        links.remove(0);
+    }
+    true
 }
 
 /// The operator's answer to the question with `key`, from the banner (B26):
@@ -755,6 +823,11 @@ pub struct MissionNode {
     pub branch: Option<String>,
     #[serde(default)]
     pub attempts: u8,
+    /// The Views the node's worker and the agents under it opened, each with
+    /// the attempt it was opened in; a decision that stops the node lists
+    /// the current attempt's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
     /// What the node does now, its conclusion or its verification result.
     #[serde(default)]
     pub line: Option<String>,
@@ -1167,6 +1240,11 @@ pub struct Mission {
     /// How many questions this mission has asked; the next one's key.
     #[serde(default)]
     pub question_seq: u64,
+    /// The Views its Conductor opened since its last question was asked,
+    /// or since it was created, oldest first, at most [`VIEW_LINK_LIMIT`]:
+    /// the next question takes the ones still open (`mission_views`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conductor_views: Vec<ViewLink>,
     /// The operator's answer from the banner to the current question.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<Answer>,
@@ -1622,6 +1700,10 @@ pub enum MissionCommand {
         recommend: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node: Option<String>,
+        /// Views of the Conductor's checkout to show with the question, by
+        /// id; the CLI opens a path as a View first and sends its id.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        show: Vec<String>,
     },
     /// Sets or clears why new nodes wait on usage (B13).
     Delay {
@@ -1765,6 +1847,7 @@ impl MissionCommand {
                 why,
                 options,
                 node,
+                show,
                 ..
             } => {
                 // The choices' count and length are refused with their own
@@ -1777,6 +1860,10 @@ impl MissionCommand {
                     && valid_line(why, LINE_LIMIT)
                     && options.len() <= NODE_LIMIT
                     && node.as_deref().is_none_or(valid_key)
+                    && show.len() <= VIEW_LINK_LIMIT
+                    && show
+                        .iter()
+                        .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
             }
             Self::Delay { mission, line } => {
                 id_ok(mission)
@@ -2173,6 +2260,7 @@ pub(crate) fn apply_plan(
                 base_pr: None,
                 branch: None,
                 attempts: 0,
+                views: Vec::new(),
                 line: None,
                 change: None,
                 review: None,
@@ -2589,6 +2677,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_no_nodes" => "Set a plan with hide mission plan before starting",
         "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
+        "mission_show_unknown" => {
+            "Name a View of your own checkout from hide view list, or give --show a path to open"
+        }
         "mission_too_many_nodes" => "Plan at most 64 nodes; merge or split the work differently",
         "mission_node_unknown" => "Run hide mission show to see the plan's node keys",
         "mission_ambiguous" => {
@@ -2611,7 +2702,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
         }
         "mission_question_without_line" => {
-            "Give --why, --option, --recommend and --node with --line; --clear takes none of them"
+            "Give --why, --option, --recommend, --node and --show with --line; --clear takes none of them"
         }
         "mission_options_too_many" => "Offer at most 5 options; leave the rest to the conversation",
         "mission_option_invalid" => "Write each option as one line of at most 120 characters",
@@ -3122,6 +3213,7 @@ pub(crate) mod tests {
             decision: None,
             question: None,
             question_seq: 0,
+            conductor_views: Vec::new(),
             answer: None,
             answer_failed: None,
             delay: None,

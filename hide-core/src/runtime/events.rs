@@ -1044,6 +1044,15 @@ pub(super) struct MissionAnswerPayload {
     pub(super) resend: bool,
 }
 
+/// `mission_material`: the operator's `자료 요청` on the question with `key`:
+/// its Conductor is asked once for one page to look at.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionMaterialPayload {
+    pub(super) mission: String,
+    pub(super) key: u64,
+}
+
 /// `mission_end`: the operator's `미션 종료` from a mission's map: the
 /// Conductor is asked to end it, or a mission no Conductor holds is
 /// cancelled at once.
@@ -1807,6 +1816,7 @@ pub(super) enum Event {
     ConductorSettingsSet(ConductorSettingsSetPayload),
     MissionAnswer(MissionAnswerPayload),
     MissionEnd(MissionEndPayload),
+    MissionMaterial(MissionMaterialPayload),
     MissionAttention(super::mission_health::MissionAttentionPayload),
     /// `mission_brief_read`: the operator opened the folded brief of a node.
     MissionBriefRead(super::mission_brief::BriefReadPayload),
@@ -2174,6 +2184,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
         "mission_end" => decode!(MissionEndPayload, MissionEnd),
+        "mission_material" => decode!(MissionMaterialPayload, MissionMaterial),
         "mission_attention" => decode!(
             super::mission_health::MissionAttentionPayload,
             MissionAttention
@@ -4138,6 +4149,9 @@ impl Runtime {
                 payload.resend,
             ),
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
+            Event::MissionMaterial(payload) => {
+                self.mission_material_event(&payload.mission, payload.key)
+            }
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
             Event::TurnAnswerRead(payload) => self.turn_answer_read(payload),
