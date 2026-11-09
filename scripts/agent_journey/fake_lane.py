@@ -176,6 +176,10 @@ def opencode_files(folder, url):
 # the run's HOME: a folder its account variable names, or omp's profile name
 # with the agent folder omp keeps for it (hide-agent-adapter/agents/*.toml,
 # `[account]`), and the files that point the agent at the fake model there.
+# An agent whose update check is a setting in a file (`auto_update` of kind
+# `config` in contracts/agent-journey.json) gets it in that account's own
+# file too: Codex's update notice in a profile account otherwise stood in
+# front of its resume (run 42586901056).
 PROFILE_NAME = "journey"
 PROFILE_ACCOUNTS = {
     "claude": (".journey-profile/claude", lambda folder, url, root, key: claude_files(folder, root, key)),
@@ -183,6 +187,21 @@ PROFILE_ACCOUNTS = {
     "grok": (".journey-profile/grok", lambda folder, url, root, key: grok_files(folder, url)),
     "pi": (".journey-profile/pi", lambda folder, url, root, key: pi_files(folder, url)),
 }
+# The file of a profile's account that holds what `auto_update`'s `path`
+# names in the default account, relative to the folder the account names.
+PROFILE_UPDATE_FILES = {
+    "codex": "config.toml",
+    "opencode": "config/opencode/opencode.json",
+    "omp": "config.yml",
+}
+
+
+def profile_update(kind, home, folder):
+    """Turns off `kind`'s update check in its profile account `folder`, when
+    its declaration keeps that switch in a file."""
+    declaration = fake_home(kind)
+    if declaration.get("auto_update", {}).get("kind") == "config":
+        configure_update(declaration, home, folder / PROFILE_UPDATE_FILES[kind])
 
 
 def profile_account(kind, home, url, root, key=KEY):
@@ -198,26 +217,34 @@ def profile_account(kind, home, url, root, key=KEY):
         config = folder / "config/opencode"
         opencode_files(config, url)
         opencode_service.configure(config)
+        profile_update(kind, home, folder)
         return {"account": {"folder": str(folder)}, "reader": "folder:" + str(folder), "folder": str(folder)}
     if kind == "omp":
         folder = home / ".omp/profiles" / PROFILE_NAME / "agent"
         omp_files(folder, url)
+        profile_update(kind, home, folder)
         return {"account": {"name": PROFILE_NAME}, "reader": "name:" + PROFILE_NAME, "folder": str(folder)}
     relative, write = PROFILE_ACCOUNTS[kind]
     folder = home / relative
     write(folder, url, root, key)
+    profile_update(kind, home, folder)
     return {"account": {"folder": str(folder)}, "reader": "folder:" + str(folder), "folder": str(folder)}
 
 
 PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": omp, "agy": agy, "opencode": opencode}
 
 
+def fake_home(kind):
+    """`kind`'s fake-home declaration in contracts/agent-journey.json."""
+    rows = json.loads((Path(__file__).resolve().parents[2] / "contracts/agent-journey.json").read_text())
+    return next(row.get("fake_home", {}) for row in rows if row["herdr_kind"] == kind)
+
+
 def configure(kind, home, url, root, local, key=KEY):
     """Writes the files that point `kind` at the fake model at `url` and
     returns the environment it runs with."""
     env = {**QUIET, **PROVIDERS[kind](home, url, root, local, key)}
-    rows = json.loads((Path(__file__).resolve().parents[2] / "contracts/agent-journey.json").read_text())
-    declaration = next(row.get("fake_home", {}) for row in rows if row["herdr_kind"] == kind)
+    declaration = fake_home(kind)
     if declaration.get("auto_update"):
         env.update(configure_update(declaration, home))
     return env

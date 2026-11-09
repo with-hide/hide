@@ -244,6 +244,23 @@ class PrivateHome(unittest.TestCase):
                          [{'action': 'provider.use', 'resource': '*', 'effect': 'deny'},
                           {'action': 'provider.use', 'resource': 'journey', 'effect': 'allow'}])
 
+    def test_a_profile_account_gets_the_update_policy_its_agent_keeps_in_a_file(self):
+        # Codex's update notice in a profile account stood in front of its
+        # resume (run 42586901056): the switch was only in the default one.
+        contract = json.loads((Path(__file__).resolve().parents[2] / 'contracts/agent-journey.json').read_text())
+        kept_in_file = [row for row in contract
+                        if row['fake_home']['status'] == 'proven' and row['fake_home']['auto_update']['kind'] == 'config']
+        self.assertEqual(sorted(row['herdr_kind'] for row in kept_in_file), ['codex', 'omp', 'opencode'])
+        for row in kept_in_file:
+            kind = row['herdr_kind']
+            with self.subTest(kind=kind):
+                home = self.root / ('profile-' + kind)
+                account = fake_lane.profile_account(kind, home, 'http://127.0.0.1:12345', home / 'project')
+                update = row['fake_home']['auto_update']
+                content = (Path(account['folder']) / fake_lane.PROFILE_UPDATE_FILES[kind]).read_text()
+                self.assertIn(update['key'], content)
+                self.assertFalse((home / update['path']).exists(), 'the default account is not the profile\'s')
+
 
 class ApiKey(unittest.TestCase):
     def test_only_the_key_from_the_launch_environment_proves_the_route(self):
