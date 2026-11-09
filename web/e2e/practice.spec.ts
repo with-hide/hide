@@ -104,7 +104,7 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       // The project view folds 내 차례 · 읽을 것 away, so its ring takes the projects alone, and each mark of a row has a tag that covers no tag or card.
       if (id === "projects") await expect(practice.locator("[data-raised-list]")).toBeHidden();
       // A missing tag names its part: the card's callouts are ordered, so the ones present say which target has no box.
-      await expect.poll(async () => (await practice.locator("[data-practice-callout]").allInnerTexts()).join(" | "), { message: `${id}'s callouts`, timeout: 5_000 }).toSatisfy((text: string) => (text ? text.split(" | ").length : 0) === (CALLOUTS[id] ?? 0));
+      await expect.poll(async () => { const said = await practice.locator("[data-practice-callout]").allInnerTexts(); return said.length === (CALLOUTS[id] ?? 0) ? "all" : said.join(" | "); }, { message: `${id}'s callouts`, timeout: 5_000 }).toBe("all");
       // Once the card has settled (it glides to its place), no tag is off screen, under the card or touching another.
       const clear = async () => {
         const tags = await practice.locator("[data-practice-callout]").evaluateAll((all) => all.map((tag) => tag.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
