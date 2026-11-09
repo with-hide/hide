@@ -7662,6 +7662,8 @@ pub struct BackgroundAiSnapshot {
     /// The connected device `provider` runs on; `None` is the core's own
     /// machine (PRD wsl-device B11).
     pub device: Option<String>,
+    /// The model Runs on is asked for; empty is the CLI's own default.
+    pub model: String,
     /// Whether `provider` is a stored choice.
     pub chosen: bool,
     /// The `에이전트 요약` switch: agent labels are asked for and shown.
@@ -7796,8 +7798,6 @@ pub struct BackgroundAiProfileModels {
     pub message: Option<String>,
     /// Whether Runs on and Add agent offer the item (D-15).
     pub selectable: bool,
-    /// The model the item is asked for; empty is the CLI's own default.
-    pub model: String,
     /// The weekly usage of the profile's own account; absent for a profile
     /// with no figure of its own, which the usage limit never holds back.
     pub weekly: Option<BackgroundAiWeekly>,

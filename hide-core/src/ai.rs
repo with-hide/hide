@@ -334,7 +334,6 @@ impl ItemReads {
                     state: state.to_owned(),
                     message,
                     selectable: availability.is_ready(),
-                    model: ask.model.clone(),
                     weekly: None,
                     past_limit: false,
                 });

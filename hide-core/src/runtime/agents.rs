@@ -2927,13 +2927,6 @@ impl Runtime {
                 row.model = settings
                     .effective_model(&hide_ai::Item::agent(provider))
                     .to_owned();
-                for entry in &mut row.profile_models {
-                    let item = hide_ai::Item::of(
-                        provider,
-                        Some(hide_agent_adapter::ProfileId(entry.profile.clone())),
-                    );
-                    entry.model = settings.effective_model(&item).to_owned();
-                }
             }
         }
         let connected = self.ai_connected_devices();
@@ -2995,6 +2988,7 @@ impl Runtime {
             .then(|| runs_on.profile_id().map(str::to_owned))
             .flatten();
         snapshot.profile_missing = runs_on_missing;
+        snapshot.model = settings.effective_model(runs_on).to_owned();
         snapshot.device = settings
             .chosen
             .then(|| settings.machine(runs_on).map(str::to_owned))
