@@ -3890,7 +3890,7 @@ mod tests {
                     AiRouter::new(
                         vec![backend],
                         RouterConfig {
-                            priority: vec![ProviderId::CLAUDE],
+                            priority: vec![ProviderId::CLAUDE.into()],
                             max_transient_attempts: 1,
                             backoff_base: std::time::Duration::ZERO,
                             ..RouterConfig::default()
@@ -3956,7 +3956,7 @@ mod tests {
                 router: Some(AiRouter::new(
                     vec![backend],
                     RouterConfig {
-                        priority: vec![ProviderId::CLAUDE],
+                        priority: vec![ProviderId::CLAUDE.into()],
                         max_transient_attempts: 1,
                         max_invalid_output_attempts: 1,
                         ..RouterConfig::default()
@@ -6098,7 +6098,7 @@ mod tests {
             router: Some(AiRouter::new(
                 vec![fixture.backend.clone()],
                 RouterConfig {
-                    priority: vec![ProviderId::CLAUDE],
+                    priority: vec![ProviderId::CLAUDE.into()],
                     max_transient_attempts: 1,
                     ..RouterConfig::default()
                 },
@@ -6417,7 +6417,7 @@ mod tests {
             router: Some(AiRouter::new(
                 vec![full.backend.clone()],
                 RouterConfig {
-                    priority: vec![ProviderId::CLAUDE],
+                    priority: vec![ProviderId::CLAUDE.into()],
                     max_transient_attempts: 1,
                     max_invalid_output_attempts: 1,
                     ..RouterConfig::default()
@@ -6518,7 +6518,7 @@ mod tests {
             limits.set(
                 hide_ai::UsageLimit::Percent(90),
                 &std::collections::BTreeMap::from([(
-                    ProviderId::CLAUDE,
+                    hide_ai::Item::agent(ProviderId::CLAUDE),
                     hide_ai::UsageReading {
                         used_percent: 93.0,
                         resets_at_unix_ms: Some(now_ms() + 3_600_000),
@@ -6539,7 +6539,7 @@ mod tests {
                         vec![full.backend.clone()]
                     },
                     RouterConfig {
-                        priority: vec![ProviderId::CLAUDE],
+                        priority: vec![ProviderId::CLAUDE.into()],
                         max_transient_attempts: 1,
                         max_invalid_output_attempts: 1,
                         max_per_minute: if pause == 0 { 0 } else { 30 },
@@ -6687,7 +6687,7 @@ mod tests {
             router: Some(AiRouter::new(
                 vec![full.backend.clone()],
                 RouterConfig {
-                    priority: vec![ProviderId::CLAUDE],
+                    priority: vec![ProviderId::CLAUDE.into()],
                     max_transient_attempts: 1,
                     ..RouterConfig::default()
                 },

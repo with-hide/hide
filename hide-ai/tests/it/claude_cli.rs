@@ -339,7 +339,7 @@ fn a_completion_unknown_outcome_is_never_retried_or_moved() {
         let router = AiRouter::new(
             vec![std::sync::Arc::new(backend())],
             RouterConfig {
-                priority: vec![ProviderId::CLAUDE],
+                priority: vec![ProviderId::CLAUDE.into()],
                 ..RouterConfig::default()
             },
             std::sync::Arc::new(NoopLogSink),
@@ -352,7 +352,7 @@ fn a_completion_unknown_outcome_is_never_retried_or_moved() {
         assert!(matches!(error, AiError::CompletionUnknown(_)), "{error:?}");
         // The provider was not parked by it: the next intent is new.
         let state = router.provider_state().unwrap();
-        assert_eq!(state.active, Some(ProviderId::CLAUDE));
+        assert_eq!(state.active, Some(ProviderId::CLAUDE.into()));
         assert_eq!(state.degraded, None);
     });
 }
@@ -831,7 +831,7 @@ fn real_claude_lists_its_models_and_answers_one_request() {
     let router = AiRouter::new(
         vec![backend.clone()],
         RouterConfig {
-            priority: vec![ProviderId::CLAUDE],
+            priority: vec![ProviderId::CLAUDE.into()],
             ..RouterConfig::default()
         },
         std::sync::Arc::new(NoopLogSink),
@@ -848,7 +848,7 @@ fn real_claude_lists_its_models_and_answers_one_request() {
         .iter()
         .map(|status| {
             json!({
-                "provider": status.provider.as_str(),
+                "provider": status.item.provider.as_str(),
                 "selectable": status.selectable,
             })
         })
@@ -858,7 +858,7 @@ fn real_claude_lists_its_models_and_answers_one_request() {
         serde_json::to_string_pretty(&json!({
             "models": models,
             "request_outcome": class,
-            "answered_by": router.last_answered().map(|provider| provider.as_str()),
+            "answered_by": router.last_answered().map(|item| item.provider.as_str()),
             "statuses": statuses,
         }))
         .unwrap(),

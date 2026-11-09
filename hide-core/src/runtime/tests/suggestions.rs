@@ -141,7 +141,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
     assert!(read.rows.iter().all(|row| row.hold.is_none()));
 
     runtime.ai_settings = Some(hide_ai::AiSettings {
-        provider: hide_ai::ProviderId::OPENCODE,
+        runs_on: hide_ai::ProviderId::OPENCODE.into(),
         chosen: true,
         enabled: true,
         ..hide_ai::AiSettings::default()
@@ -794,8 +794,8 @@ fn a_run_investigates_only_while_hide_ai_can() {
         .name()
     };
     assert_eq!(chosen(true), "tag_grouping", "no agent chosen");
-    let settings = |provider| hide_ai::AiSettings {
-        provider,
+    let settings = |provider: hide_ai::ProviderId| hide_ai::AiSettings {
+        runs_on: provider.into(),
         chosen: true,
         enabled: true,
         ..hide_ai::AiSettings::default()

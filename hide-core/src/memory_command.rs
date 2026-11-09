@@ -1162,7 +1162,7 @@ mod tests {
                 AiRouter::new(
                     vec![backend],
                     RouterConfig {
-                        priority: vec![ProviderId::CLAUDE],
+                        priority: vec![ProviderId::CLAUDE.into()],
                         max_transient_attempts: 1,
                         ..RouterConfig::default()
                     },

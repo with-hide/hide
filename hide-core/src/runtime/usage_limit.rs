@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::model::{BackgroundAiRefusalSnapshot, BackgroundAiWeekly};
-use hide_ai::{ProviderId, UsageLimit, UsageLimits, UsageReading};
+use hide_ai::{Item, ProviderId, UsageLimit, UsageLimits, UsageReading};
 
 /// How long after an agent last worked a set limit keeps the usage reader on.
 const LIMIT_USAGE_WANTED_MS: u64 = 30 * 60_000;
@@ -22,9 +22,9 @@ impl Runtime {
         Arc::clone(&self.usage_limits)
     }
 
-    /// The agents a background request is asked of, in order: Runs on, then
+    /// The items a background request is asked of, in order: Runs on, then
     /// the fallback list. Empty until an agent is chosen and Hide AI is on.
-    fn usage_order(&self) -> Vec<ProviderId> {
+    fn usage_order(&self) -> Vec<Item> {
         self.ai_settings
             .as_ref()
             .filter(|settings| settings.enabled && settings.chosen)
@@ -40,25 +40,33 @@ impl Runtime {
             .all_past(&self.usage_order(), unix_milliseconds())
     }
 
-    /// Each agent's weekly figure, from the rows the toolbar's usage read
-    /// answered: only a figure the agent gave for the seven-day window. An
-    /// agent with no figure, or one whose window has reset, has no reading
-    /// and is never held back (D-07). Those rows are this machine's
-    /// accounts, so an agent placed on a device has no reading here: its
-    /// usage counts on the device's account (PRD wsl-device B12).
-    fn weekly_readings(&self) -> BTreeMap<ProviderId, UsageReading> {
+    /// Each item's weekly figure, from the rows the toolbar's usage read
+    /// answered: only a figure given for the seven-day window. An agent's
+    /// built-in default reads its agent's row, and a profile reads its own
+    /// account's (`profile_weekly`, PRD agent-profiles-phase2 D-07): one of
+    /// the agent's default account, which a wrapper or variables alone can
+    /// run elsewhere, has none. An item with no figure, or one whose window
+    /// has reset, has no reading and is never held back (D-07). Those rows
+    /// are this machine's accounts, so an item placed on a device has no
+    /// reading here: its usage counts on the device's account (PRD
+    /// wsl-device B12).
+    fn weekly_readings(&self) -> BTreeMap<Item, UsageReading> {
         let placed = self
             .ai_settings
             .as_ref()
-            .map(hide_ai::AiSettings::machines_by_provider)
+            .map(hide_ai::AiSettings::machines_by_item)
             .unwrap_or_default();
+        let reading = |(used_percent, resets_at_ms): (f64, Option<u64>)| UsageReading {
+            used_percent,
+            resets_at_unix_ms: resets_at_ms,
+        };
         // The usage rows are keyed by the agent's engine name, the provider
         // by the kit's adapter id; `agy` and `antigravity` are one agent.
-        hide_agent_adapter::ADAPTERS
+        let mut readings: BTreeMap<Item, UsageReading> = hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|row| {
-                let provider = ProviderId::for_agent(row.id)?;
-                if placed.contains_key(&provider) {
+                let item = Item::agent(ProviderId::for_agent(row.id)?);
+                if placed.contains_key(&item) {
                     return None;
                 }
                 let (used_percent, resets_at_s) = self
@@ -66,14 +74,33 @@ impl Runtime {
                     .usage
                     .weekly_reading(row.engine_kind, unix_milliseconds() / 1000)?;
                 Some((
-                    provider,
-                    UsageReading {
-                        used_percent,
-                        resets_at_unix_ms: Some(resets_at_s.saturating_mul(1000)),
-                    },
+                    item,
+                    reading((used_percent, Some(resets_at_s.saturating_mul(1000)))),
                 ))
             })
-            .collect()
+            .collect();
+        let Some(profiles) = self.machine_profiles(self.node.as_str()) else {
+            return readings;
+        };
+        for profile in &profiles.profiles {
+            let Some(provider) = ProviderId::for_agent(&profile.kind) else {
+                continue;
+            };
+            let item = Item::of(
+                provider,
+                Some(hide_agent_adapter::ProfileId(profile.id.clone())),
+            );
+            if item.is_default() || placed.contains_key(&item) {
+                continue;
+            }
+            let Some(adapter) = hide_agent_adapter::adapter(&profile.kind) else {
+                continue;
+            };
+            if let Some(weekly) = self.profile_weekly(adapter, profile) {
+                readings.insert(item, reading(weekly));
+            }
+        }
+        readings
     }
 
     /// Whether the weekly figure is worth reading with no window attached: a
@@ -115,23 +142,41 @@ impl Runtime {
         let snapshot = &mut self.snapshot.status.background_ai;
         let mut moved = snapshot.usage_limit != limit;
         snapshot.usage_limit = limit;
+        let gate = &self.usage_limits;
+        // A device's row is that device's account, which these readings are
+        // not.
+        let figures = |item: Option<Item>| {
+            let weekly = item
+                .as_ref()
+                .and_then(|item| readings.get(item))
+                .map(|reading| BackgroundAiWeekly {
+                    used_percent: reading.used_percent,
+                    resets_at_ms: reading.resets_at_unix_ms,
+                });
+            let past = item.is_some_and(|item| gate.past_limit(&item, now).is_some());
+            (weekly, past)
+        };
         for row in &mut snapshot.providers {
-            // A device's row is that device's account, which these
-            // readings are not.
-            let reading = ProviderId::from_id(&row.id)
-                .filter(|_| row.device_id.is_none())
-                .and_then(|id| readings.get(&id).copied());
-            let weekly = reading.map(|reading| BackgroundAiWeekly {
-                used_percent: reading.used_percent,
-                resets_at_ms: reading.resets_at_unix_ms,
-            });
-            let past = row.device_id.is_none()
-                && ProviderId::from_id(&row.id)
-                    .is_some_and(|id| self.usage_limits.past_limit(id, now).is_some());
+            let provider = ProviderId::from_id(&row.id).filter(|_| row.device_id.is_none());
+            let (weekly, past) = figures(provider.map(Item::agent));
             if row.weekly != weekly || row.past_limit != past {
                 row.weekly = weekly;
                 row.past_limit = past;
                 moved = true;
+            }
+            for profile in &mut row.profile_models {
+                let item = provider.map(|provider| {
+                    Item::of(
+                        provider,
+                        Some(hide_agent_adapter::ProfileId(profile.profile.clone())),
+                    )
+                });
+                let (weekly, past) = figures(item);
+                if profile.weekly != weekly || profile.past_limit != past {
+                    profile.weekly = weekly;
+                    profile.past_limit = past;
+                    moved = true;
+                }
             }
         }
         self.announce_usage_pause();
@@ -151,9 +196,10 @@ impl Runtime {
             "kind": if paused { "usage_limit.paused" } else { "usage_limit.resumed" },
             "reason": "usage_limit",
             "limit": self.usage_limit().threshold(),
-            "agents": self.usage_order().iter().map(|id| serde_json::json!({
-                "agent": id.as_str(),
-                "used": self.usage_limits.reading(*id).map(|reading| reading.used_percent),
+            "agents": self.usage_order().iter().map(|item| serde_json::json!({
+                "agent": item.provider.as_str(),
+                "profile": item.profile_id(),
+                "used": self.usage_limits.reading(item).map(|reading| reading.used_percent),
             })).collect::<Vec<_>>(),
         }));
         self.sync_project_memory();
@@ -168,36 +214,35 @@ impl Runtime {
         settings: &hide_ai::AiSettings,
     ) -> Option<BackgroundAiRefusalSnapshot> {
         let now = unix_milliseconds();
-        let past = self.usage_limits.past_limit(settings.provider, now)?;
+        let past = self.usage_limits.past_limit(&settings.runs_on, now)?;
         let using = self.usage_answering(settings, now);
         Some(BackgroundAiRefusalSnapshot {
-            provider: past.provider.as_str().to_owned(),
+            provider: past.item.provider.as_str().to_owned(),
+            profile: past.item.profile_id().map(str::to_owned),
             reason: "past_limit".to_owned(),
             retry_at_ms: past.resets_at_unix_ms,
-            using: using.map(|using| using.as_str().to_owned()),
+            using: using
+                .as_ref()
+                .map(|using| using.provider.as_str().to_owned()),
+            using_profile: using.as_ref().and_then(Item::profile_id).map(str::to_owned),
             used_percent: Some(past.used_percent),
             limit: Some(past.limit_percent),
         })
     }
 
-    /// The first listed agent that is signed in and under the limit.
+    /// The first listed item that is signed in and under the limit.
     pub(super) fn usage_answering(
         &self,
         settings: &hide_ai::AiSettings,
         now_unix_ms: u64,
-    ) -> Option<ProviderId> {
+    ) -> Option<Item> {
         settings
             .fallback
             .iter()
-            .map(|entry| entry.provider)
-            .find(|provider| {
-                self.usage_limits
-                    .past_limit(*provider, now_unix_ms)
-                    .is_none()
-                    && self
-                        .background_ai_providers
-                        .iter()
-                        .any(|row| row.id == provider.as_str() && row.state == "ready")
+            .map(|entry| entry.item.clone())
+            .find(|item| {
+                self.usage_limits.past_limit(item, now_unix_ms).is_none()
+                    && self.ai_item_ready(settings, item)
             })
     }
 }

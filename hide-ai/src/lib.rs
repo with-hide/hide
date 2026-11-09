@@ -10,6 +10,7 @@ mod claude;
 mod codex;
 mod codex_home;
 mod grok;
+mod item;
 mod log;
 mod omp;
 mod pi;
@@ -32,6 +33,7 @@ pub use antigravity::{
 pub use claude::{ClaudeCliBackend, ClaudeConfig, USAGE_ENVIRONMENT, UsageError};
 pub use codex::{CodexAppServerBackend, CodexConfig};
 pub use grok::GrokCliBackend;
+pub use item::Item;
 pub use log::{AiLogEvent, AiLogSink, NoopLogSink};
 pub use omp::{OmpConfig, OmpSdkBackend};
 pub use pi::PiCliBackend;
@@ -551,6 +553,12 @@ impl CancelToken {
 
 pub trait AiBackend: Send + Sync {
     fn id(&self) -> ProviderId;
+    /// The agent item this backend runs as (PRD agent-profiles-phase2 D-07):
+    /// what the router keys its order, its caches and its parks by. A
+    /// backend of the built-in default profile is its agent's default item.
+    fn item(&self) -> Item {
+        Item::agent(self.id())
+    }
     /// Whether this backend owns a resident process whose descendants and
     /// size the router measures after each turn and holds to its caps. The
     /// backend declares it; the router never names a provider for it.

@@ -1190,7 +1190,7 @@ impl Runtime {
                             .router_config()
                             .priority
                             .iter()
-                            .filter_map(|provider| hide_agent_adapter::adapter(provider.agent()))
+                            .filter_map(|item| hide_agent_adapter::adapter(item.provider.agent()))
                             .map(|row| row.engine_kind.to_owned())
                             .collect()
                     })
@@ -2376,36 +2376,41 @@ impl Runtime {
             Ok(device) => device,
             Err(()) => return true,
         };
+        let profile = payload
+            .profile
+            .filter(|profile| !profile.is_empty())
+            .map(hide_agent_adapter::ProfileId);
         if let Some(id) = payload.provider.as_deref() {
             let Some(provider) = self.ai_provider_named(id) else {
                 return true;
             };
+            let item = hide_ai::Item::of(provider, profile.clone());
             match payload.model {
-                // A model names the agent it is for: Runs on, or an agent in
+                // A model names the item it is for: Runs on, or an item in
                 // the fallback list, which keeps its own model. Choosing a
-                // model for the agent that is already selected is also
+                // model for the item that is already selected is also
                 // choosing it, which is what a first choice by model means.
                 Some(model) => {
-                    if next.fallback.iter().any(|entry| entry.provider == provider) {
-                        next.set_fallback_model(provider, Some(model));
+                    if next.fallback.iter().any(|entry| entry.item == item) {
+                        next.set_fallback_model(&item, Some(model));
                     } else {
-                        if provider == next.provider && !next.chosen {
-                            next.set_provider(provider);
+                        if item == next.runs_on && !next.chosen {
+                            next.set_runs_on(item.clone());
                         }
-                        next.set_model(provider, model);
+                        next.set_model(&item, model);
                     }
                 }
                 None => {
-                    if provider != next.provider
+                    if item != next.runs_on
                         || !next.chosen
-                        || next.machine(provider) != device.as_deref()
+                        || next.machine(&item) != device.as_deref()
                     {
-                        if !self.ai_selectable(provider, device.as_deref()) {
+                        if !self.ai_selectable(&item, device.as_deref()) {
                             self.refuse_unselectable(provider);
                             return true;
                         }
-                        next.set_provider(provider);
-                        next.place(provider, device.clone());
+                        next.place(&item, device.clone());
+                        next.set_runs_on(item);
                     }
                 }
             }
@@ -2414,11 +2419,12 @@ impl Runtime {
             let Some(provider) = self.ai_provider_named(id) else {
                 return true;
             };
-            if !self.ai_selectable(provider, device.as_deref()) {
+            let item = hide_ai::Item::of(provider, profile.clone());
+            if !self.ai_selectable(&item, device.as_deref()) {
                 self.refuse_unselectable(provider);
                 return true;
             }
-            if let Err(refusal) = next.add_fallback(provider, None) {
+            if let Err(refusal) = next.add_fallback(item.clone(), None) {
                 let (kind, message) = match refusal {
                     hide_ai::FallbackRefusal::IsRunsOn => (
                         "ai_settings.fallback_is_runs_on",
@@ -2432,13 +2438,13 @@ impl Runtime {
                 self.set_error(kind, message, false);
                 return true;
             }
-            next.place(provider, device);
+            next.place(&item, device);
         }
         if let Some(id) = payload.fallback_remove.as_deref() {
             let Some(provider) = self.ai_provider_named(id) else {
                 return true;
             };
-            next.remove_fallback(provider);
+            next.remove_fallback(&hide_ai::Item::of(provider, profile));
         }
         if self.ai_settings.as_ref() != Some(&next) {
             self.ai_settings = Some(next.clone());
@@ -2522,14 +2528,64 @@ impl Runtime {
         Ok(Some(device.to_owned()))
     }
 
-    /// Whether the last read says `provider` on `device` (`None`: the core's
+    /// Whether the last read says `item` on `device` (`None`: the core's
     /// own machine) can be chosen (D-15): its CLI is installed there, it is
-    /// signed in, it has a backend and its call cannot change files. A
-    /// provider not read yet, or on a device that is not connected, cannot.
-    fn ai_selectable(&self, provider: hide_ai::ProviderId, device: Option<&str>) -> bool {
-        self.background_ai_providers.iter().any(|row| {
-            row.id == provider.as_str() && row.device_id.as_deref() == device && row.selectable
-        }) && device.is_none_or(|device| self.linked_node(device).is_ok())
+    /// signed in as the item's account, it has a backend and its call cannot
+    /// change files. An item not read yet, a profile its machine does not
+    /// list (B21), or one on a device that is not connected, cannot.
+    fn ai_selectable(&self, item: &hide_ai::Item, device: Option<&str>) -> bool {
+        self.ai_item_answer(item, device)
+            .is_some_and(|(_, selectable)| selectable)
+            && device.is_none_or(|device| self.linked_node(device).is_ok())
+    }
+
+    /// What the last read said of `item` on `device`: its state code and
+    /// whether it can be chosen. A built-in default reads its agent's row,
+    /// a profile the row's entry of it; `None` before either was read.
+    fn ai_item_answer(&self, item: &hide_ai::Item, device: Option<&str>) -> Option<(&str, bool)> {
+        let row = self
+            .background_ai_providers
+            .iter()
+            .find(|row| row.id == item.provider.as_str() && row.device_id.as_deref() == device)?;
+        match item.profile_id() {
+            None => Some((row.state.as_str(), row.selectable)),
+            Some(profile) => row
+                .profile_models
+                .iter()
+                .find(|entry| entry.profile == profile)
+                .map(|entry| (entry.state.as_str(), entry.selectable)),
+        }
+    }
+
+    /// Whether `item` on the machine the settings place it answered the
+    /// last read signed in.
+    pub(super) fn ai_item_ready(
+        &self,
+        settings: &hide_ai::AiSettings,
+        item: &hide_ai::Item,
+    ) -> bool {
+        self.ai_item_answer(item, settings.machine(item))
+            .is_some_and(|(state, _)| state == "ready")
+    }
+
+    /// Whether the profile `item` names is one its machine no longer lists,
+    /// or the machine keeps no profiles at all (PRD agent-profiles-phase2
+    /// B6, B21): the item stays in the order, dimmed, and the router passes
+    /// over it. A built-in default, or a machine whose list was not read
+    /// yet, is never called missing.
+    fn ai_profile_missing(&self, settings: &hide_ai::AiSettings, item: &hide_ai::Item) -> bool {
+        let Some(profile) = item.profile_id() else {
+            return false;
+        };
+        let machine = settings.machine(item).unwrap_or(self.node.as_str());
+        let Some(profiles) = self.machine_profiles(machine) else {
+            return false;
+        };
+        profiles.state == crate::model::ProfilesState::Unsupported
+            || !profiles.profiles.iter().any(|listed| {
+                listed.id == profile
+                    && hide_ai::ProviderId::for_agent(&listed.kind) == Some(item.provider)
+            })
     }
 
     /// The agents to ask whether they are signed in on `machine` while
@@ -2602,7 +2658,7 @@ impl Runtime {
             observing: self.ai_observing
                 || self.ai_start_observing
                 || self.ai_catalog_read_pending(),
-            models: settings.models_by_provider(),
+            models: settings.default_models(),
             selecting: self.ai_selecting(self.node.as_str()),
             cli_found: self.ai_cli_found(self.node.as_str()),
             devices: self
@@ -2619,10 +2675,12 @@ impl Runtime {
         }
     }
 
-    /// The profiles of `machine` whose model lists are read beside their
-    /// agents' (PRD agent-profiles-phase2 D-09): each a start may take, of
-    /// an agent Hide AI has a provider for, in the machine's list order.
+    /// The profiles of `machine` whose model lists and sign-in are read
+    /// beside their agents' (PRD agent-profiles-phase2 D-07, D-09): each a
+    /// start may take, of an agent Hide AI has a provider for, in the
+    /// machine's list order, asked for the model Hide AI would ask it for.
     fn ai_items(&self, machine: &str) -> Vec<crate::ai::ItemAsk> {
+        let settings = self.ai_settings.clone().unwrap_or_default();
         self.machine_profiles(machine)
             .map(|profiles| {
                 profiles
@@ -2630,15 +2688,78 @@ impl Runtime {
                     .iter()
                     .filter(|profile| profile.startable)
                     .filter_map(|profile| {
+                        let provider = hide_ai::ProviderId::for_agent(&profile.kind)?;
+                        let id = hide_agent_adapter::ProfileId(profile.id.clone());
+                        let item = hide_ai::Item::of(provider, Some(id.clone()));
                         Some(crate::ai::ItemAsk {
-                            provider: hide_ai::ProviderId::for_agent(&profile.kind)?,
-                            profile: hide_agent_adapter::ProfileId(profile.id.clone()),
+                            provider,
+                            profile: id,
                             version: profile.version,
+                            model: settings.effective_model(&item).to_owned(),
                         })
                     })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Follows a machine's profile list: the accounts the routers park by
+    /// and which items of the order name a profile that is gone.
+    pub(super) fn refresh_ai_items(&mut self) {
+        self.refresh_ai_accounts();
+        let settings = self.ai_settings.clone().unwrap_or_default();
+        let (runs_on, fallback) = self.ai_missing(&settings);
+        let snapshot = &mut self.snapshot.status.background_ai;
+        snapshot.profile_missing = runs_on;
+        for (entry, missing) in snapshot.fallback.iter_mut().zip(fallback) {
+            entry.profile_missing = missing;
+        }
+    }
+
+    /// Whether Runs on, and each fallback entry in order, names a profile
+    /// its machine no longer lists.
+    fn ai_missing(&self, settings: &hide_ai::AiSettings) -> (bool, Vec<bool>) {
+        (
+            settings.chosen && self.ai_profile_missing(settings, &settings.runs_on),
+            settings
+                .fallback
+                .iter()
+                .map(|entry| self.ai_profile_missing(settings, &entry.item))
+                .collect(),
+        )
+    }
+
+    /// Brings the account each machine's profiles run in up to date for the
+    /// routers (`crate::ai::ItemAccounts`, D-07): a profile of an account of
+    /// its own shares a usage limit's park with every item of that account;
+    /// one of the agent's default account has no entry and is parked alone.
+    fn refresh_ai_accounts(&self) {
+        let accounts = self
+            .kit_states
+            .iter()
+            .filter_map(|(machine, kit)| Some((machine, kit.profiles.as_ref()?)))
+            .flat_map(|(machine, profiles)| {
+                let machine = (machine != self.node.as_str()).then(|| machine.clone());
+                profiles.profiles.iter().filter_map(move |profile| {
+                    let key = profile
+                        .account_key
+                        .clone()
+                        .filter(|key| !key.is_default())?;
+                    let provider = hide_ai::ProviderId::for_agent(&profile.kind)?;
+                    let item = hide_ai::Item::of(
+                        provider,
+                        Some(hide_agent_adapter::ProfileId(profile.id.clone())),
+                    );
+                    (!item.is_default()).then(|| ((machine.clone(), item), key))
+                })
+            })
+            .collect();
+        self.ai_accounts.set(accounts);
+    }
+
+    /// The accounts cell every Hide AI router reads.
+    pub(crate) fn ai_accounts(&self) -> Arc<crate::ai::ItemAccounts> {
+        Arc::clone(&self.ai_accounts)
     }
 
     /// Whether `hide agent catalog` is waiting for one read of the model
@@ -2765,8 +2886,9 @@ impl Runtime {
             return false;
         };
         let mut next = settings.clone();
-        next.set_provider(provider);
-        next.place(provider, device);
+        let item = hide_ai::Item::agent(provider);
+        next.place(&item, device);
+        next.set_runs_on(item);
         self.ai_settings = Some(next.clone());
         self.pending_ai_settings_save = Some(next);
         true
@@ -2800,13 +2922,18 @@ impl Runtime {
         } else {
             self.background_ai_providers.clone()
         };
-        let models = settings.models_by_provider();
         for row in &mut providers {
             if let Some(provider) = hide_ai::ProviderId::from_id(&row.id) {
-                row.model = models
-                    .get(&provider)
-                    .cloned()
-                    .unwrap_or_else(|| settings.model(provider).to_owned());
+                row.model = settings
+                    .effective_model(&hide_ai::Item::agent(provider))
+                    .to_owned();
+                for entry in &mut row.profile_models {
+                    let item = hide_ai::Item::of(
+                        provider,
+                        Some(hide_agent_adapter::ProfileId(entry.profile.clone())),
+                    );
+                    entry.model = settings.effective_model(&item).to_owned();
+                }
             }
         }
         let connected = self.ai_connected_devices();
@@ -2818,10 +2945,11 @@ impl Runtime {
         // An agent placed on a device has a row whatever its link: one the
         // read has not reached yet, or one that cannot answer while its
         // device is not connected, which is not woken for it (B13).
-        for provider in settings.router_config().priority {
-            let Some(device) = settings.machine(provider) else {
+        for item in settings.order() {
+            let Some(device) = settings.machine(&item) else {
                 continue;
             };
+            let provider = item.provider;
             if providers
                 .iter()
                 .any(|row| row.id == provider.as_str() && row.device_id.as_deref() == Some(device))
@@ -2830,7 +2958,9 @@ impl Runtime {
             }
             let mut row = crate::model::BackgroundAiProviderSnapshot::unread(provider);
             row.device_id = Some(device.to_owned());
-            row.model = settings.model(provider).to_owned();
+            row.model = settings
+                .effective_model(&hide_ai::Item::agent(provider))
+                .to_owned();
             if !connected.iter().any(|connected| connected == device) {
                 row.state = "unavailable".to_owned();
                 row.headline = "Cannot answer".to_owned();
@@ -2838,26 +2968,39 @@ impl Runtime {
             }
             providers.push(row);
         }
+        let runs_on = &settings.runs_on;
+        let (runs_on_missing, fallback_missing) = self.ai_missing(&settings);
+        let fallback = settings
+            .fallback
+            .iter()
+            .zip(fallback_missing)
+            .map(
+                |(entry, profile_missing)| crate::model::BackgroundAiFallbackSnapshot {
+                    provider: entry.item.provider.as_str().to_owned(),
+                    profile: entry.item.profile_id().map(str::to_owned),
+                    profile_missing,
+                    device: settings.machine(&entry.item).map(str::to_owned),
+                    model: settings.effective_model(&entry.item).to_owned(),
+                },
+            )
+            .collect();
         let snapshot = &mut self.snapshot.status.background_ai;
         snapshot.enabled = settings.enabled;
         snapshot.chosen = settings.chosen;
         snapshot.provider = settings
             .chosen
-            .then(|| settings.provider.as_str().to_owned());
+            .then(|| runs_on.provider.as_str().to_owned());
+        snapshot.profile = settings
+            .chosen
+            .then(|| runs_on.profile_id().map(str::to_owned))
+            .flatten();
+        snapshot.profile_missing = runs_on_missing;
         snapshot.device = settings
             .chosen
-            .then(|| settings.machine(settings.provider).map(str::to_owned))
+            .then(|| settings.machine(runs_on).map(str::to_owned))
             .flatten();
         snapshot.agent_summary = settings.agent_summary;
-        snapshot.fallback = settings
-            .fallback
-            .iter()
-            .map(|entry| crate::model::BackgroundAiFallbackSnapshot {
-                provider: entry.provider.as_str().to_owned(),
-                device: settings.machine(entry.provider).map(str::to_owned),
-                model: models.get(&entry.provider).cloned().unwrap_or_default(),
-            })
-            .collect();
+        snapshot.fallback = fallback;
         snapshot.providers = providers;
         // The figures and the refusal read the rows just stored.
         self.refresh_usage_limit();
@@ -2889,7 +3032,7 @@ impl Runtime {
             .label_services
             .as_ref()
             .and_then(|services| services.standing.current())
-            .filter(|standing| standing.selected == settings.provider);
+            .filter(|standing| standing.selected == settings.runs_on);
         let Some(standing) = standing else {
             // Nothing is wrong with Runs on except, maybe, the usage limit.
             return self.usage_refusal(settings);
@@ -2898,14 +3041,21 @@ impl Runtime {
         // as answering that is past the limit now does not answer.
         let using = standing.using.filter(|using| {
             self.usage_gate()
-                .past_limit(*using, unix_milliseconds())
+                .past_limit(using, unix_milliseconds())
                 .is_none()
         });
         Some(crate::model::BackgroundAiRefusalSnapshot {
-            provider: standing.selected.as_str().to_owned(),
+            provider: standing.selected.provider.as_str().to_owned(),
+            profile: standing.selected.profile_id().map(str::to_owned),
             reason: standing.reason.to_owned(),
             retry_at_ms: standing.retry_at_ms,
-            using: using.map(|using| using.as_str().to_owned()),
+            using: using
+                .as_ref()
+                .map(|using| using.provider.as_str().to_owned()),
+            using_profile: using
+                .as_ref()
+                .and_then(hide_ai::Item::profile_id)
+                .map(str::to_owned),
             used_percent: None,
             limit: None,
         })

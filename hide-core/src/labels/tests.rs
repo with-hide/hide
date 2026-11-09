@@ -255,7 +255,7 @@ impl Harness {
                 Arc::new(AiRouter::new(
                     vec![Arc::clone(&router_backend)],
                     RouterConfig {
-                        priority: vec![ProviderId::CLAUDE],
+                        priority: vec![ProviderId::CLAUDE.into()],
                         max_transient_attempts: 1,
                         usage_gate: usage_gate.clone(),
                         ..RouterConfig::default()
@@ -3126,14 +3126,14 @@ fn a_helper_that_cannot_read_conversations_leaves_the_provider_name() {
 fn an_analysis_before_the_runtime_read_the_settings_uses_the_saved_choice() {
     let home = tempfile::tempdir().unwrap();
     let chosen = AiSettings {
-        provider: ProviderId::CLAUDE,
+        runs_on: ProviderId::CLAUDE.into(),
         ..AiSettings::default()
     };
     hide_ai::settings::save(home.path(), &chosen).unwrap();
     let no_runtime = std::sync::Weak::new();
     assert_eq!(
-        super::analysis_settings(&no_runtime, Some(home.path())).provider,
-        ProviderId::CLAUDE
+        super::analysis_settings(&no_runtime, Some(home.path())).runs_on,
+        ProviderId::CLAUDE.into()
     );
 }
 
@@ -3649,7 +3649,7 @@ fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends
     let wait = Duration::from_secs(600);
     let reading = |used_percent| {
         std::collections::BTreeMap::from([(
-            ProviderId::CLAUDE,
+            hide_ai::Item::agent(ProviderId::CLAUDE),
             hide_ai::UsageReading {
                 used_percent,
                 resets_at_unix_ms: None,

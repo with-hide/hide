@@ -735,12 +735,12 @@ fn a_chosen_agent_and_model_move_the_snapshot_and_queue_one_write() {
     let saved = runtime
         .take_ai_settings_save()
         .expect("the choice is queued for the coordinator to write");
-    assert_eq!(saved.provider, hide_ai::ProviderId::CLAUDE);
+    assert_eq!(saved.runs_on, hide_ai::ProviderId::CLAUDE.into());
     assert!(saved.chosen);
-    assert_eq!(saved.model(hide_ai::ProviderId::CLAUDE), "sonnet");
+    assert_eq!(saved.model(&hide_ai::ProviderId::CLAUDE.into()), "sonnet");
     assert_eq!(
         saved.router_config().priority,
-        vec![hide_ai::ProviderId::CLAUDE],
+        vec![hide_ai::ProviderId::CLAUDE.into()],
         "only the chosen provider is asked until the operator adds a fallback"
     );
     assert!(
@@ -834,9 +834,9 @@ fn the_fallback_list_keeps_the_operators_order_and_runs_on_leaves_it() {
     assert_eq!(
         saved.router_config().priority,
         vec![
-            hide_ai::ProviderId::CLAUDE,
-            hide_ai::ProviderId::GROK,
-            hide_ai::ProviderId::CODEX
+            hide_ai::ProviderId::CLAUDE.into(),
+            hide_ai::ProviderId::GROK.into(),
+            hide_ai::ProviderId::CODEX.into()
         ],
         "the order of adding is the order of trying"
     );
@@ -858,6 +858,107 @@ fn the_fallback_list_keeps_the_operators_order_and_runs_on_leaves_it() {
     assert_eq!(
         runtime.snapshot.status.last_error.as_ref().unwrap().kind,
         "ai_settings.fallback_is_runs_on"
+    );
+}
+
+/// This Mac's profile list with the named Claude Code profiles.
+fn claude_profiles(runtime: &mut Runtime, version: u64, ids: &[&str]) {
+    let profiles: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({"id": id, "kind": "claude-code", "name": id.trim_start_matches("p-"),
+                "version": 1, "removing": false})
+        })
+        .collect();
+    let node = runtime.node.to_string();
+    runtime.ingest_profiles(
+        &node,
+        crate::runtime::kit::ProfilesRead::Listed(
+            serde_json::from_value(serde_json::json!({"version": version, "profiles": profiles}))
+                .unwrap(),
+        ),
+    );
+}
+
+/// PRD agent-profiles-phase2 B16, B17, B21, D-07, D-12: a profile of an
+/// agent is an item of Runs on and of the fallback list like an agent is;
+/// another item of the Runs on agent may be its fallback, only the same item
+/// is refused, and an item whose profile its machine stops listing stays in
+/// the order, marked, never dropped from the file.
+#[test]
+fn profile_items_are_chosen_listed_and_marked_when_their_profile_is_gone() {
+    let mut runtime = runtime();
+    claude_profiles(&mut runtime, 1, &["p-work", "p-gw"]);
+    runtime.ingest_ai_settings(hide_ai::AiSettings::default(), None);
+    let mut read = ready_read(&["claude"]);
+    read.providers[0].profile_models = ["p-work", "p-gw"]
+        .into_iter()
+        .map(|profile| crate::model::BackgroundAiProfileModels {
+            profile: profile.to_owned(),
+            state: "ready".to_owned(),
+            selectable: true,
+            ..crate::model::BackgroundAiProfileModels::default()
+        })
+        .collect();
+    runtime.ingest_background_ai(read);
+
+    assert!(runtime.dispatch_json(&ai_event(
+        serde_json::json!({"provider": "claude", "profile": "p-work"})
+    )));
+    let ai = &runtime.snapshot.status.background_ai;
+    assert_eq!(
+        (ai.provider.as_deref(), ai.profile.as_deref()),
+        (Some("claude"), Some("p-work"))
+    );
+    for profile in [Some("p-gw"), None] {
+        assert!(runtime.dispatch_json(&ai_event(
+            serde_json::json!({"fallback_add": "claude", "profile": profile})
+        )));
+    }
+    assert!(runtime.dispatch_json(&ai_event(
+        serde_json::json!({"fallback_add": "claude", "profile": "p-work"})
+    )));
+    assert_eq!(
+        runtime.snapshot.status.last_error.as_ref().unwrap().kind,
+        "ai_settings.fallback_is_runs_on",
+        "only the same item is refused"
+    );
+    assert!(runtime.dispatch_json(&ai_event(
+        serde_json::json!({"provider": "claude", "profile": "p-unread"})
+    )));
+    assert_eq!(
+        runtime.snapshot.status.last_error.as_ref().unwrap().kind,
+        "ai_settings.provider_not_selectable",
+        "an item no read found signed in cannot be chosen"
+    );
+    let item = |profile: &str| {
+        hide_ai::Item::of(
+            hide_ai::ProviderId::CLAUDE,
+            Some(hide_agent_adapter::ProfileId(profile.to_owned())),
+        )
+    };
+    let saved = runtime.take_ai_settings_save().expect("one queued write");
+    assert_eq!(
+        saved.order(),
+        [
+            item("p-work"),
+            item("p-gw"),
+            hide_ai::ProviderId::CLAUDE.into()
+        ]
+    );
+
+    claude_profiles(&mut runtime, 2, &["p-work"]);
+    let ai = &runtime.snapshot.status.background_ai;
+    assert!(!ai.profile_missing);
+    let marked: Vec<(Option<&str>, bool)> = ai
+        .fallback
+        .iter()
+        .map(|entry| (entry.profile.as_deref(), entry.profile_missing))
+        .collect();
+    assert_eq!(marked, [(Some("p-gw"), true), (None, false)]);
+    assert!(
+        runtime.take_ai_settings_save().is_none(),
+        "a gone profile is never taken out of the file"
     );
 }
 
@@ -903,7 +1004,7 @@ fn the_agent_summary_switch_moves_the_snapshot_and_queues_one_write() {
         .take_ai_settings_save()
         .expect("the switch is queued for the coordinator to write");
     assert!(!saved.agent_summary);
-    assert_eq!(saved.provider, hide_ai::ProviderId::CLAUDE);
+    assert_eq!(saved.runs_on, hide_ai::ProviderId::CLAUDE.into());
 
     runtime.dispatch_json(&ai_event(serde_json::json!({"agent_summary": false})));
     assert!(
@@ -981,7 +1082,7 @@ fn the_first_signed_in_agent_that_is_switched_on_is_chosen_by_itself() {
         .expect("the choice is stored");
     assert!(saved.chosen && saved.fallback.is_empty());
     assert_eq!(
-        saved.model(hide_ai::ProviderId::CODEX),
+        saved.model(&hide_ai::ProviderId::CODEX.into()),
         hide_ai::settings::default_model(hide_ai::ProviderId::CODEX)
     );
     assert!(
@@ -991,8 +1092,8 @@ fn the_first_signed_in_agent_that_is_switched_on_is_chosen_by_itself() {
 
     // A stored choice is never replaced by the rule.
     let mut stored = hide_ai::AiSettings::default();
-    stored.set_provider(hide_ai::ProviderId::CLAUDE);
-    stored.set_model(hide_ai::ProviderId::CLAUDE, "haiku");
+    stored.set_runs_on(hide_ai::ProviderId::CLAUDE.into());
+    stored.set_model(&hide_ai::ProviderId::CLAUDE.into(), "haiku");
     runtime.ingest_ai_settings(stored, None);
     runtime.ingest_background_ai(ready_read(&["codex"]));
     assert_eq!(

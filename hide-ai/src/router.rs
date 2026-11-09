@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -10,8 +10,9 @@ use crate::schema;
 use crate::usage_limit::{PastLimit, UsageLimits};
 use crate::{
     AiBackend, AiError, AiRequest, AiResponse, AiResult, AiUsageSink, Availability, CancelToken,
-    ModelCatalog, ProcessMeasurement, ProviderId,
+    Item, ModelCatalog, ProcessMeasurement, ProviderId,
 };
+use hide_agent_adapter::AccountKey;
 
 /// Retry and selection policy. The defaults carry the retired label plugin's
 /// proven constants forward: exponential backoff capped at four attempts for a
@@ -19,11 +20,18 @@ use crate::{
 /// A request whose completion is unknown is never attempted again.
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
-    /// The providers a request may be asked of, in the order they are tried:
-    /// the operator's choice first, then the fallback list. A provider that is
+    /// The items a request may be asked of, in the order they are tried:
+    /// the operator's choice first, then the fallback list. An item that is
     /// registered but not listed here is never asked a request (D-16); it is
     /// only inspected, for the Settings screen.
-    pub priority: Vec<ProviderId>,
+    pub priority: Vec<Item>,
+    /// The account each item runs in where two items can share one (PRD
+    /// agent-profiles-phase2 D-07): items with one entry are one account, so
+    /// a usage limit one of them reports parks them all. An item without an
+    /// entry is an account of its own, as a profile that keeps the agent's
+    /// default account and only adds a wrapper or variables is, since those
+    /// can run the agent against another provider.
+    pub accounts: BTreeMap<Item, AccountKey>,
     /// Use Hide AI. Off, `execute` returns [`AiError::Disabled`] without
     /// asking any provider anything (B33).
     pub enabled: bool,
@@ -74,7 +82,8 @@ pub struct RouterConfig {
 impl Default for RouterConfig {
     fn default() -> Self {
         Self {
-            priority: vec![crate::PROVIDERS[0]],
+            priority: vec![Item::agent(crate::PROVIDERS[0])],
+            accounts: BTreeMap::new(),
             enabled: true,
             overall_deadline_factor: 2,
             overall_deadline_cap: Duration::from_secs(90),
@@ -101,12 +110,12 @@ impl Default for RouterConfig {
 /// right now and why is it not my choice". This is that answer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderState {
-    /// The provider the configured priority puts first: the user's choice.
-    pub selected: ProviderId,
-    /// The provider a request made now would run on, or `None` when every
-    /// provider is degraded. That state is reachable, so it is reported
-    /// rather than filled in with a provider that cannot answer.
-    pub active: Option<ProviderId>,
+    /// The item the configured priority puts first: the user's choice.
+    pub selected: Item,
+    /// The item a request made now would run on, or `None` when every
+    /// item is degraded. That state is reachable, so it is reported
+    /// rather than filled in with an item that cannot answer.
+    pub active: Option<Item>,
     /// Why `selected` stepped aside; absent when it did not.
     pub degraded: Option<Degraded>,
 }
@@ -114,7 +123,7 @@ pub struct ProviderState {
 /// Why one provider is not answering, and until when when that is known.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Degraded {
-    pub provider: ProviderId,
+    pub item: Item,
     pub reason: Availability,
     /// What remains of an account-wide cooldown. `None` when the reason has
     /// no end the provider told us about, such as a missing login.
@@ -125,7 +134,7 @@ pub struct Degraded {
 /// operator can choose it, and why not when they cannot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderStatus {
-    pub provider: ProviderId,
+    pub item: Item,
     /// What the provider answered, or the cooldown it is parked in.
     pub availability: Availability,
     /// The agent can be chosen: its CLI is installed, it is logged in, it has
@@ -275,21 +284,30 @@ struct State {
     in_flight_count: usize,
     /// Start times of recently admitted requests, for the per-minute cap.
     recent_starts: VecDeque<Instant>,
-    /// Consecutive over-budget restarts of the app-server, per provider. A
+    /// Consecutive over-budget restarts of the app-server, per item. A
     /// request that completes under the cap clears it.
-    restart_streak: HashMap<ProviderId, u32>,
-    cooldown_until: HashMap<ProviderId, Instant>,
-    availability: HashMap<ProviderId, (Availability, Instant)>,
-    /// The selected provider a degradation event has already been logged
+    restart_streak: HashMap<Item, u32>,
+    /// A usage limit's park, per account (`RouterConfig::accounts`).
+    cooldown_until: HashMap<Park, Instant>,
+    availability: HashMap<Item, (Availability, Instant)>,
+    /// The selected item a degradation event has already been logged
     /// for, so entering and leaving failover are each announced once rather
     /// than on every request.
-    announced_degraded: Option<ProviderId>,
-    /// The reason each provider's model list was last unavailable, so a read
+    announced_degraded: Option<Item>,
+    /// The reason each item's model list was last unavailable, so a read
     /// that fails the same way again is not logged again.
-    models_unavailable: HashMap<ProviderId, String>,
-    /// The provider that answered the most recent request.
-    last_answered: Option<ProviderId>,
+    models_unavailable: HashMap<Item, String>,
+    /// The item that answered the most recent request.
+    last_answered: Option<Item>,
     rollup: Rollup,
+}
+
+/// What a usage limit parks: the account an item runs in, which items of one
+/// account share, or the item alone (`RouterConfig::accounts`).
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum Park {
+    Account(ProviderId, AccountKey),
+    Item(Item),
 }
 
 /// Selects a provider, suppresses duplicate intents, applies the retry and
@@ -357,10 +375,10 @@ impl AiRouter {
     /// Current availability of every registered provider, refreshed when the
     /// cached answer is older than the configured window. A provider parked
     /// by an account-wide cooldown reports that park instead of being asked.
-    pub fn availability(&self) -> Vec<(ProviderId, Availability)> {
+    pub fn availability(&self) -> Vec<(Item, Availability)> {
         self.select_among(self.inspected_backends())
             .into_iter()
-            .map(|(backend, selection)| (backend.id(), selection.availability()))
+            .map(|(backend, selection)| (backend.item(), selection.availability()))
             .collect()
     }
 
@@ -374,8 +392,8 @@ impl AiRouter {
     pub fn provider_state(&self) -> Option<ProviderState> {
         let selection = self.select_among(self.candidates());
         let (first, chosen) = selection.first()?;
-        let selected = first.id();
-        let degraded = degraded_of(selected, chosen);
+        let selected = first.item();
+        let degraded = degraded_of(&selected, chosen);
         // Who a request would run on is judged with the usage limit, who is
         // degraded is not: an agent past the limit is signed in and able.
         let active = active_provider(&self.apply_usage_limit(selection.clone()));
@@ -390,11 +408,11 @@ impl AiRouter {
     /// order. This asks the provider rather than the router's cache, because
     /// a model list is not part of a selection decision and has no window of
     /// its own; the caller decides how often to ask.
-    pub fn models(&self) -> Vec<(ProviderId, ModelCatalog)> {
-        let catalogs: Vec<(ProviderId, ModelCatalog)> = self
+    pub fn models(&self) -> Vec<(Item, ModelCatalog)> {
+        let catalogs: Vec<(Item, ModelCatalog)> = self
             .inspected_backends()
             .into_iter()
-            .map(|backend| (backend.id(), backend.models()))
+            .map(|backend| (backend.item(), backend.models()))
             .collect();
         self.log_unreadable_catalogs(&catalogs);
         catalogs
@@ -405,32 +423,30 @@ impl AiRouter {
     /// cause is here. Written when a provider's reason first appears or
     /// changes, not on every read, which the open tab repeats every few
     /// seconds, and again if the list comes back and fails later.
-    fn log_unreadable_catalogs(&self, catalogs: &[(ProviderId, ModelCatalog)]) {
+    fn log_unreadable_catalogs(&self, catalogs: &[(Item, ModelCatalog)]) {
         let mut announced = Vec::new();
         {
             let mut state = self.lock();
-            for (provider, catalog) in catalogs {
+            for (item, catalog) in catalogs {
                 match catalog.unknown_reason() {
                     Some(reason) => {
-                        if state.models_unavailable.get(provider).map(String::as_str)
-                            != Some(reason)
-                        {
+                        if state.models_unavailable.get(item).map(String::as_str) != Some(reason) {
                             state
                                 .models_unavailable
-                                .insert(*provider, reason.to_owned());
-                            announced.push((*provider, reason.to_owned()));
+                                .insert(item.clone(), reason.to_owned());
+                            announced.push((item.clone(), reason.to_owned()));
                         }
                     }
                     None => {
-                        state.models_unavailable.remove(provider);
+                        state.models_unavailable.remove(item);
                     }
                 }
             }
         }
-        for (provider, reason) in announced {
+        for (item, reason) in announced {
             let mut event = AiLogEvent::new("ai.models.unavailable");
-            event.provider = Some(provider);
-            event.detail = Some(format!("reason={reason}"));
+            event.provider = Some(item.provider);
+            event.detail = Some(item_detail(&item, format!("reason={reason}")));
             self.sink.log(event);
         }
     }
@@ -442,7 +458,7 @@ impl AiRouter {
         self.select_among(self.inspected_backends())
             .into_iter()
             .map(|(backend, selection)| ProviderStatus {
-                provider: backend.id(),
+                item: backend.item(),
                 selectable: matches!(selection, Selection::Ready | Selection::Parked(_)),
                 parked_for: match selection {
                     Selection::Parked(remaining) => Some(remaining),
@@ -453,10 +469,10 @@ impl AiRouter {
             .collect()
     }
 
-    /// The provider that answered the most recent request, which is what
-    /// "Using Codex" is said of while the chosen provider cannot answer (B41).
-    pub fn last_answered(&self) -> Option<ProviderId> {
-        self.lock().last_answered
+    /// The item that answered the most recent request, which is what
+    /// "Using Codex" is said of while the chosen item cannot answer (B41).
+    pub fn last_answered(&self) -> Option<Item> {
+        self.lock().last_answered.clone()
     }
 
     /// Forces the next selection to ask each provider again, for a caller
@@ -469,10 +485,10 @@ impl AiRouter {
     /// so a verification command can report the app-server's descendant count.
     /// A provider that is not registered, or owns no resident process, answers
     /// `Unavailable`.
-    pub fn process_measurement(&self, provider: ProviderId) -> ProcessMeasurement {
+    pub fn process_measurement(&self, item: &Item) -> ProcessMeasurement {
         self.backends
             .iter()
-            .find(|backend| backend.id() == provider)
+            .find(|backend| backend.item() == *item)
             .map_or(ProcessMeasurement::Unavailable, |backend| {
                 backend.last_measurement()
             })
@@ -648,10 +664,11 @@ impl AiRouter {
             return Err(error);
         }
         let candidates = match &request.pick {
+            // A pick names an agent, which is its built-in default item.
             Some(pick) => self
                 .backends
                 .iter()
-                .filter(|backend| backend.id() == pick.provider)
+                .filter(|backend| backend.item() == Item::agent(pick.provider))
                 .cloned()
                 .collect(),
             None => self.candidates(),
@@ -679,7 +696,7 @@ impl AiRouter {
             // sign-in or an outage elsewhere in the order is the more useful
             // thing to say; with none, the wait is the earliest reset.
             let past = selection.iter().find_map(|(_, state)| match state {
-                Selection::PastLimit(past) => Some(*past),
+                Selection::PastLimit(past) => Some(past.clone()),
                 _ => None,
             });
             let blocked = selection
@@ -693,7 +710,7 @@ impl AiRouter {
                     },
                 ),
                 (None, Some(past)) if !blocked => (
-                    Some(past.provider),
+                    Some(past.item.provider),
                     AiError::UsageLimited {
                         retry_after: self.earliest_reset(&selection),
                     },
@@ -720,20 +737,27 @@ impl AiRouter {
         }
 
         let mut last_error = None;
-        let mut previous: Option<ProviderId> = None;
+        let mut previous: Option<Item> = None;
         for backend in connected {
             let provider = backend.id();
+            let item = backend.item();
             // A refusal that took time leaves the next provider what remains
             // of the request's overall deadline, and nothing once it is gone
             // (B43): the request then ends with the refusal that was seen.
             if previous.is_some() && limit.saturating_duration_since((self.now)()).is_zero() {
                 break;
             }
-            if let Some(from) = previous {
+            // A usage limit an earlier hop of this request reported parks
+            // every item of its account (`RouterConfig::accounts`), so one of
+            // them further down the order is not asked for the same account.
+            if previous.is_some() && self.cooldown_remaining(&item).is_some() {
+                continue;
+            }
+            if let Some(from) = &previous {
                 self.log(request, |event| {
                     event.event = "ai.fallback".into();
                     event.provider = Some(provider);
-                    event.detail = Some(format!("from={from};to={provider}"));
+                    event.detail = Some(format!("from={from};to={item}"));
                 });
             }
             let outcome = self.execute_on(backend.as_ref(), request, cancel, limit);
@@ -745,7 +769,7 @@ impl AiRouter {
             };
             match outcome {
                 Ok((value, attempt)) => {
-                    self.lock().last_answered = Some(provider);
+                    self.lock().last_answered = Some(item.clone());
                     let result = AiResult { provider, value };
                     self.finish(
                         request,
@@ -778,7 +802,7 @@ impl AiRouter {
                     if !eligible || cancel.is_cancelled() {
                         return Err(error);
                     }
-                    previous = Some(provider);
+                    previous = Some(item);
                     last_error = Some(error);
                 }
             }
@@ -796,6 +820,7 @@ impl AiRouter {
         limit: Instant,
     ) -> Result<(Value, u8), (AiError, u8)> {
         let provider = backend.id();
+        let item = backend.item();
         let mut attempt: u8 = 0;
         loop {
             attempt = attempt.saturating_add(1);
@@ -861,20 +886,19 @@ impl AiRouter {
                         AiError::Timeout | AiError::CompletionUnknown(_) => 0,
                         AiError::UsageLimited { retry_after } => {
                             let wait = retry_after.unwrap_or(self.config.default_cooldown);
-                            self.lock()
-                                .cooldown_until
-                                .insert(provider, (self.now)() + wait);
+                            let park = self.park_of(&item);
+                            self.lock().cooldown_until.insert(park, (self.now)() + wait);
                             0
                         }
                         AiError::NotAuthenticated => {
                             self.lock()
                                 .availability
-                                .insert(provider, (Availability::NeedsLogin, (self.now)()));
+                                .insert(item.clone(), (Availability::NeedsLogin, (self.now)()));
                             0
                         }
                         AiError::ProviderUnavailable(reason) => {
                             self.lock().availability.insert(
-                                provider,
+                                item.clone(),
                                 (
                                     Availability::Unavailable {
                                         reason: reason.clone(),
@@ -917,7 +941,7 @@ impl AiRouter {
         backends
             .into_iter()
             .map(|backend| {
-                let selection = match self.cooldown_remaining(backend.id()) {
+                let selection = match self.cooldown_remaining(&backend.item()) {
                     Some(remaining) => Selection::Parked(remaining),
                     None => match self.cached_availability(backend.as_ref()) {
                         state if state.is_ready() => Selection::Ready,
@@ -943,20 +967,20 @@ impl AiRouter {
         let Some((backend, chosen)) = selection.first() else {
             return;
         };
-        let selected = backend.id();
-        let announced = self.lock().announced_degraded;
+        let selected = backend.item();
+        let announced = self.lock().announced_degraded.clone();
         match (announced, chosen.is_ready()) {
             (None, false) => {
-                self.lock().announced_degraded = Some(selected);
+                self.lock().announced_degraded = Some(selected.clone());
                 let active = active_provider(selection);
                 let reason = chosen.detail();
                 self.log(request, |event| {
                     event.event = "ai.provider.degraded".into();
-                    event.provider = active;
+                    event.provider = active.as_ref().map(|item| item.provider);
                     event.outcome_class = Some(chosen.availability().class().into());
                     event.detail = Some(format!(
                         "selected={selected};reason={reason};active={}",
-                        active.map_or("none".to_owned(), |provider| provider.to_string())
+                        active.map_or("none".to_owned(), |item| item.to_string())
                     ));
                 });
             }
@@ -964,7 +988,7 @@ impl AiRouter {
                 self.lock().announced_degraded = None;
                 self.log(request, |event| {
                     event.event = "ai.provider.recovered".into();
-                    event.provider = Some(selected);
+                    event.provider = Some(selected.provider);
                     event.outcome_class = Some("ready".into());
                     event.detail = Some(format!("selected={selected}"));
                 });
@@ -1019,7 +1043,7 @@ impl AiRouter {
         selection
             .into_iter()
             .map(|(backend, state)| match state {
-                Selection::Ready => match gate.past_limit(backend.id(), now) {
+                Selection::Ready => match gate.past_limit(&backend.item(), now) {
                     Some(past) => (backend, Selection::PastLimit(past)),
                     None => (backend, Selection::Ready),
                 },
@@ -1036,12 +1060,17 @@ impl AiRouter {
             if let Selection::PastLimit(past) = state {
                 self.log(request, |event| {
                     event.event = "ai.usage_limit".into();
-                    event.provider = Some(past.provider);
-                    event.detail = Some(format!(
-                        "reason=usage_limit;used={};limit={};action={}",
-                        past.used_percent,
-                        past.limit_percent,
-                        answering.map_or("paused".to_owned(), |to| format!("fallback;to={to}"))
+                    event.provider = Some(past.item.provider);
+                    event.detail = Some(item_detail(
+                        &past.item,
+                        format!(
+                            "reason=usage_limit;used={};limit={};action={}",
+                            past.used_percent,
+                            past.limit_percent,
+                            answering
+                                .as_ref()
+                                .map_or("paused".to_owned(), |to| format!("fallback;to={to}"))
+                        ),
                     ));
                 });
             } else if state.is_ready() {
@@ -1070,11 +1099,11 @@ impl AiRouter {
     /// this list, however many are installed (D-16).
     fn candidates(&self) -> Vec<Arc<dyn AiBackend>> {
         let mut ordered: Vec<Arc<dyn AiBackend>> = Vec::new();
-        for provider in &self.config.priority {
-            if ordered.iter().any(|b| b.id() == *provider) {
+        for item in &self.config.priority {
+            if ordered.iter().any(|b| b.item() == *item) {
                 continue;
             }
-            if let Some(backend) = self.backends.iter().find(|b| b.id() == *provider) {
+            if let Some(backend) = self.backends.iter().find(|b| b.item() == *item) {
                 ordered.push(Arc::clone(backend));
             }
         }
@@ -1088,7 +1117,7 @@ impl AiRouter {
     fn inspected_backends(&self) -> Vec<Arc<dyn AiBackend>> {
         let mut ordered = self.candidates();
         for backend in &self.backends {
-            if !ordered.iter().any(|b| b.id() == backend.id()) {
+            if !ordered.iter().any(|b| b.item() == backend.item()) {
                 ordered.push(Arc::clone(backend));
             }
         }
@@ -1108,8 +1137,8 @@ impl AiRouter {
     }
 
     fn cached_availability(&self, backend: &dyn AiBackend) -> Availability {
-        let provider = backend.id();
-        if let Some((state, checked)) = self.lock().availability.get(&provider)
+        let item = backend.item();
+        if let Some((state, checked)) = self.lock().availability.get(&item)
             && (self.now)().saturating_duration_since(*checked) < self.config.availability_ttl
         {
             return state.clone();
@@ -1117,20 +1146,30 @@ impl AiRouter {
         let state = backend.availability();
         self.lock()
             .availability
-            .insert(provider, (state.clone(), (self.now)()));
+            .insert(item, (state.clone(), (self.now)()));
         state
     }
 
-    fn cooldown_remaining(&self, provider: ProviderId) -> Option<Duration> {
+    /// What a usage limit of `item` parks: its account when it shares one
+    /// with other items, else the item alone.
+    fn park_of(&self, item: &Item) -> Park {
+        match self.config.accounts.get(item) {
+            Some(account) => Park::Account(item.provider, account.clone()),
+            None => Park::Item(item.clone()),
+        }
+    }
+
+    fn cooldown_remaining(&self, item: &Item) -> Option<Duration> {
+        let park = self.park_of(item);
         let mut state = self.lock();
-        let until = *state.cooldown_until.get(&provider)?;
+        let until = *state.cooldown_until.get(&park)?;
         let now = (self.now)();
         if until <= now {
-            state.cooldown_until.remove(&provider);
+            state.cooldown_until.remove(&park);
             // The park is over. Drop the cached answer with it so the next
-            // question is asked of the provider once, rather than answered
+            // question is asked of the item once, rather than answered
             // from a cache filled while it could not answer at all.
-            state.availability.remove(&provider);
+            state.availability.remove(item);
             return None;
         }
         Some(until - now)
@@ -1205,6 +1244,7 @@ impl AiRouter {
         request: &AiRequest,
     ) -> Option<AiError> {
         let provider = backend.id();
+        let item = backend.item();
         let ProcessMeasurement::Available {
             app_server_pid,
             descendants,
@@ -1222,12 +1262,12 @@ impl AiRouter {
         };
         let Some((cap, measured)) = over else {
             // A completed request under the cap returns the restart count.
-            self.lock().restart_streak.remove(&provider);
+            self.lock().restart_streak.remove(&item);
             return None;
         };
         let streak = {
             let mut state = self.lock();
-            let entry = state.restart_streak.entry(provider).or_insert(0);
+            let entry = state.restart_streak.entry(item).or_insert(0);
             *entry += 1;
             *entry
         };
@@ -1270,24 +1310,33 @@ impl AiRouter {
     }
 }
 
-/// The highest-priority provider that can answer now, if any.
-fn active_provider(selection: &[(Arc<dyn AiBackend>, Selection)]) -> Option<ProviderId> {
+/// The highest-priority item that can answer now, if any.
+fn active_provider(selection: &[(Arc<dyn AiBackend>, Selection)]) -> Option<Item> {
     selection
         .iter()
         .find(|(_, state)| state.is_ready())
-        .map(|(backend, _)| backend.id())
+        .map(|(backend, _)| backend.item())
 }
 
-fn degraded_of(selected: ProviderId, chosen: &Selection) -> Option<Degraded> {
+/// A log line's detail with the item's profile in front, for an item of a
+/// profile; a built-in default item's line reads as every line did before.
+fn item_detail(item: &Item, detail: String) -> String {
+    match item.profile_id() {
+        None => detail,
+        Some(profile) => format!("profile={profile};{detail}"),
+    }
+}
+
+fn degraded_of(selected: &Item, chosen: &Selection) -> Option<Degraded> {
     match chosen {
         Selection::Ready => None,
         Selection::Parked(remaining) => Some(Degraded {
-            provider: selected,
+            item: selected.clone(),
             reason: chosen.availability(),
             until: Some(*remaining),
         }),
         Selection::Blocked(reason) => Some(Degraded {
-            provider: selected,
+            item: selected.clone(),
             reason: reason.clone(),
             until: None,
         }),
@@ -1576,7 +1625,7 @@ mod tests {
     /// operator's choice and the rest are its fallback list.
     fn make_router(backends: Vec<Arc<dyn AiBackend>>, sink: Arc<Recorder>) -> AiRouter {
         let config = RouterConfig {
-            priority: backends.iter().map(|backend| backend.id()).collect(),
+            priority: backends.iter().map(|backend| backend.item()).collect(),
             backoff_base: Duration::from_millis(1),
             ..RouterConfig::default()
         };
@@ -1907,7 +1956,7 @@ mod tests {
         gate: &Arc<UsageLimits>,
     ) -> AiRouter {
         let config = RouterConfig {
-            priority: backends.iter().map(|backend| backend.id()).collect(),
+            priority: backends.iter().map(|backend| backend.item()).collect(),
             backoff_base: Duration::from_millis(1),
             usage_gate: Some(Arc::clone(gate)),
             ..RouterConfig::default()
@@ -1927,7 +1976,13 @@ mod tests {
         rows: &[(ProviderId, crate::UsageReading)],
     ) -> Arc<UsageLimits> {
         let gate = Arc::new(UsageLimits::new());
-        gate.set(limit, &rows.iter().copied().collect());
+        gate.set(
+            limit,
+            &rows
+                .iter()
+                .map(|(provider, reading)| (Item::agent(*provider), *reading))
+                .collect(),
+        );
         gate
     }
 
@@ -1964,7 +2019,7 @@ mod tests {
         let status = router
             .statuses()
             .into_iter()
-            .find(|status| status.provider == ProviderId::CLAUDE)
+            .find(|status| status.item.provider == ProviderId::CLAUDE)
             .unwrap();
         assert!(status.selectable && status.availability.is_ready());
     }
@@ -2080,7 +2135,8 @@ mod tests {
         let sink = Arc::new(Recorder::default());
         let claude = Scripted::new(ProviderId::CLAUDE, vec![ok("claude"), ok("claude")]);
         let codex = Scripted::new(ProviderId::CODEX, vec![ok("codex"), ok("codex")]);
-        let rows: std::collections::BTreeMap<_, _> = [(ProviderId::CLAUDE, week(86.0))].into();
+        let rows: std::collections::BTreeMap<_, _> =
+            [(Item::agent(ProviderId::CLAUDE), week(86.0))].into();
         let limits = Arc::new(UsageLimits::new());
         limits.set(crate::UsageLimit::Percent(80), &rows);
         let router = gated_router(vec![claude.clone(), codex.clone()], sink, &limits);
@@ -2160,8 +2216,8 @@ mod tests {
             ),
         );
         let state = router.provider_state().unwrap();
-        assert_eq!(state.selected, ProviderId::CLAUDE);
-        assert_eq!(state.active, Some(ProviderId::CODEX));
+        assert_eq!(state.selected, ProviderId::CLAUDE.into());
+        assert_eq!(state.active, Some(ProviderId::CODEX.into()));
         assert!(state.degraded.is_none());
     }
 
@@ -2425,7 +2481,7 @@ mod tests {
     /// not a cache window that happens to be open.
     fn make_sticky_router(backends: Vec<Arc<dyn AiBackend>>, sink: Arc<Recorder>) -> AiRouter {
         let config = RouterConfig {
-            priority: backends.iter().map(|backend| backend.id()).collect(),
+            priority: backends.iter().map(|backend| backend.item()).collect(),
             availability_ttl: Duration::ZERO,
             backoff_base: Duration::from_millis(1),
             ..RouterConfig::default()
@@ -2444,8 +2500,8 @@ mod tests {
         assert_eq!(
             router.provider_state().unwrap(),
             ProviderState {
-                selected: ProviderId::CODEX,
-                active: Some(ProviderId::CODEX),
+                selected: ProviderId::CODEX.into(),
+                active: Some(ProviderId::CODEX.into()),
                 degraded: None,
             }
         );
@@ -2453,10 +2509,10 @@ mod tests {
         assert_eq!(
             router.provider_state().unwrap(),
             ProviderState {
-                selected: ProviderId::CODEX,
-                active: Some(ProviderId::CLAUDE),
+                selected: ProviderId::CODEX.into(),
+                active: Some(ProviderId::CLAUDE.into()),
                 degraded: Some(Degraded {
-                    provider: ProviderId::CODEX,
+                    item: ProviderId::CODEX.into(),
                     reason: Availability::NeedsLogin,
                     until: None,
                 }),
@@ -2510,10 +2566,10 @@ mod tests {
         assert_eq!(codex.probes(), probes_after_park, "the park was re-probed");
 
         let state = router.provider_state().unwrap();
-        assert_eq!(state.selected, ProviderId::CODEX);
-        assert_eq!(state.active, Some(ProviderId::CLAUDE));
+        assert_eq!(state.selected, ProviderId::CODEX.into());
+        assert_eq!(state.active, Some(ProviderId::CLAUDE.into()));
         let degraded = state.degraded.expect("the reason stays queryable");
-        assert_eq!(degraded.provider, ProviderId::CODEX);
+        assert_eq!(degraded.item, ProviderId::CODEX.into());
         assert!(degraded.until.expect("a cooldown ends") > Duration::from_secs(500));
         assert_eq!(degraded.reason.class(), "unavailable");
         assert_eq!(codex.probes(), probes_after_park);
@@ -2542,7 +2598,7 @@ mod tests {
         codex.queue(vec![ok("codex is back")]);
 
         let state = router.provider_state().unwrap();
-        assert_eq!(state.active, Some(ProviderId::CODEX));
+        assert_eq!(state.active, Some(ProviderId::CODEX.into()));
         assert_eq!(state.degraded, None);
         assert_eq!(
             codex.probes(),
@@ -2578,12 +2634,12 @@ mod tests {
         ));
 
         let state = router.provider_state().unwrap();
-        assert_eq!(state.selected, ProviderId::CODEX);
+        assert_eq!(state.selected, ProviderId::CODEX.into());
         assert_eq!(state.active, None, "no provider can answer");
         assert_eq!(
             state.degraded,
             Some(Degraded {
-                provider: ProviderId::CODEX,
+                item: ProviderId::CODEX.into(),
                 reason: Availability::NeedsLogin,
                 until: None,
             })
@@ -2768,7 +2824,7 @@ mod tests {
         let sink = Arc::new(Recorder::default());
         let codex = Scripted::new(ProviderId::CODEX, vec![ok("a"), ok("b")]);
         let config = RouterConfig {
-            priority: vec![ProviderId::CODEX],
+            priority: vec![ProviderId::CODEX.into()],
             max_per_minute: 2,
             backoff_base: Duration::from_millis(1),
             ..RouterConfig::default()
@@ -2857,7 +2913,7 @@ mod tests {
         );
         let unlisted = Scripted::new(ProviderId::CODEX, vec![ok("never asked")]);
         let config = RouterConfig {
-            priority: vec![ProviderId::CLAUDE],
+            priority: vec![ProviderId::CLAUDE.into()],
             backoff_base: Duration::from_millis(1),
             ..RouterConfig::default()
         };
@@ -2879,7 +2935,7 @@ mod tests {
         let inspected: Vec<_> = router
             .availability()
             .into_iter()
-            .map(|(id, _)| id)
+            .map(|(item, _)| item.provider)
             .collect();
         assert_eq!(
             inspected,
@@ -2889,7 +2945,7 @@ mod tests {
         assert_eq!(router.models().len(), 2);
         assert_eq!(
             router.provider_state().unwrap().selected,
-            ProviderId::CLAUDE
+            ProviderId::CLAUDE.into()
         );
     }
 
@@ -2904,12 +2960,14 @@ mod tests {
         let third = Scripted::new(ProviderId::CODEX, vec![ok("third")]);
         let config = RouterConfig {
             // The chosen agent listed again behind the others is still one hop.
-            priority: vec![
+            priority: [
                 ProviderId::CLAUDE,
                 ProviderId::PI,
                 ProviderId::CODEX,
                 ProviderId::CLAUDE,
-            ],
+            ]
+            .map(Item::agent)
+            .to_vec(),
             backoff_base: Duration::from_millis(1),
             ..RouterConfig::default()
         };
@@ -2924,7 +2982,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.provider, ProviderId::CODEX);
         assert_eq!((first.calls(), second.calls(), third.calls()), (1, 1, 1));
-        assert_eq!(router.last_answered(), Some(ProviderId::CODEX));
+        assert_eq!(router.last_answered(), Some(ProviderId::CODEX.into()));
     }
 
     /// B33: Use Hide AI off means no model is asked anything, not even for
@@ -2934,7 +2992,7 @@ mod tests {
         let sink = Arc::new(Recorder::default());
         let codex = Scripted::new(ProviderId::CODEX, vec![ok("a")]);
         let config = RouterConfig {
-            priority: vec![ProviderId::CODEX],
+            priority: vec![ProviderId::CODEX.into()],
             enabled: false,
             ..RouterConfig::default()
         };
@@ -2968,7 +3026,7 @@ mod tests {
         let router = AiRouter::with_sleep(
             vec![parked.clone(), ready, unsupported, signed_out],
             RouterConfig {
-                priority: vec![ProviderId::CODEX, ProviderId::CLAUDE],
+                priority: vec![ProviderId::CODEX.into(), ProviderId::CLAUDE.into()],
                 backoff_base: Duration::from_millis(1),
                 ..RouterConfig::default()
             },
@@ -2982,7 +3040,7 @@ mod tests {
         let by = |id| {
             statuses
                 .iter()
-                .find(|status| status.provider == id)
+                .find(|status| status.item.provider == id)
                 .unwrap()
         };
         assert!(by(ProviderId::CLAUDE).selectable);
@@ -2999,10 +3057,10 @@ mod tests {
             }
         );
         assert!(!by(ProviderId::GROK).selectable);
-        assert_eq!(router.last_answered(), Some(ProviderId::CLAUDE));
+        assert_eq!(router.last_answered(), Some(ProviderId::CLAUDE.into()));
         let state = router.provider_state().unwrap();
-        assert_eq!(state.selected, ProviderId::CODEX);
-        assert_eq!(state.active, Some(ProviderId::CLAUDE));
+        assert_eq!(state.selected, ProviderId::CODEX.into());
+        assert_eq!(state.active, Some(ProviderId::CLAUDE.into()));
         assert!(state.degraded.unwrap().until.is_some());
     }
 
@@ -3173,7 +3231,7 @@ mod tests {
 
     fn counting_router(backends: Vec<Arc<dyn AiBackend>>, told: &Arc<Told>) -> AiRouter {
         let config = RouterConfig {
-            priority: backends.iter().map(|backend| backend.id()).collect(),
+            priority: backends.iter().map(|backend| backend.item()).collect(),
             backoff_base: Duration::from_millis(1),
             usage_sink: Some(Arc::clone(told) as Arc<dyn AiUsageSink>),
             ..RouterConfig::default()
@@ -3368,7 +3426,7 @@ mod tests {
         let sink = Arc::new(Recorder::default());
         let held = Arc::new(Held::default());
         let config = RouterConfig {
-            priority: vec![held.id()],
+            priority: vec![held.item()],
             usage_sink: Some(Arc::clone(&told) as Arc<dyn AiUsageSink>),
             ..RouterConfig::default()
         };
@@ -3405,7 +3463,7 @@ mod tests {
         let sink = Arc::new(Recorder::default());
         let held = Arc::new(Held::default());
         let config = RouterConfig {
-            priority: vec![held.id()],
+            priority: vec![held.item()],
             usage_sink: Some(Arc::clone(&told) as Arc<dyn AiUsageSink>),
             ..RouterConfig::default()
         };
@@ -3439,5 +3497,194 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64
+    }
+
+    /// A scripted backend run as one item of its agent, as the core's backend
+    /// of a profile is.
+    struct OfItem {
+        item: Item,
+        inner: Arc<Scripted>,
+    }
+
+    impl OfItem {
+        fn backend(item: Item, inner: &Arc<Scripted>) -> Arc<dyn AiBackend> {
+            Arc::new(Self {
+                item,
+                inner: Arc::clone(inner),
+            })
+        }
+    }
+
+    impl AiBackend for OfItem {
+        fn id(&self) -> ProviderId {
+            self.inner.id
+        }
+        fn item(&self) -> Item {
+            self.item.clone()
+        }
+        fn availability(&self) -> Availability {
+            self.inner.availability()
+        }
+        fn models(&self) -> ModelCatalog {
+            self.inner.models()
+        }
+        fn execute(
+            &self,
+            request: &AiRequest,
+            cancel: &CancelToken,
+        ) -> Result<AiResponse, AiError> {
+            self.inner.execute(request, cancel)
+        }
+    }
+
+    fn claude_profile(id: &str) -> Item {
+        Item::of(
+            ProviderId::CLAUDE,
+            Some(hide_agent_adapter::ProfileId(id.to_owned())),
+        )
+    }
+
+    /// PRD agent-profiles-phase2 B17, D-07: a request goes to the item the
+    /// order puts first, never to another item of its agent, and when that
+    /// item reports a usage limit it moves to the next item of the order,
+    /// another profile of the same agent included; the park is sticky, so
+    /// the next request does not ask the limited item, and the standing
+    /// names the items.
+    #[test]
+    fn a_request_goes_to_the_chosen_item_and_a_limited_item_moves_to_another_item_of_its_agent() {
+        let sink = Arc::new(Recorder::default());
+        let default = Scripted::new(ProviderId::CLAUDE, vec![ok("default")]);
+        let work = Scripted::new(
+            ProviderId::CLAUDE,
+            vec![Err(AiError::UsageLimited { retry_after: None })],
+        );
+        let gateway = Scripted::new(ProviderId::CLAUDE, vec![ok("gateway"), ok("gateway")]);
+        let backends = vec![
+            OfItem::backend(Item::agent(ProviderId::CLAUDE), &default),
+            OfItem::backend(claude_profile("p-work"), &work),
+            OfItem::backend(claude_profile("p-gw"), &gateway),
+        ];
+        let config = RouterConfig {
+            priority: vec![
+                claude_profile("p-work"),
+                claude_profile("p-gw"),
+                Item::agent(ProviderId::CLAUDE),
+            ],
+            backoff_base: Duration::from_millis(1),
+            ..RouterConfig::default()
+        };
+        let router = AiRouter::with_sleep(backends, config, sink.clone(), Box::new(|_| {}));
+
+        let first = router
+            .execute(&request("p1", "x"), &CancelToken::new())
+            .unwrap();
+        assert_eq!(first.value["summary"], "gateway");
+        assert_eq!((work.calls(), gateway.calls(), default.calls()), (1, 1, 0));
+        assert!(
+            sink.events("ai.fallback")
+                .iter()
+                .any(|event| event.detail.as_deref() == Some("from=claude:p-work;to=claude:p-gw")),
+            "the move names both items"
+        );
+
+        let second = router
+            .execute(&request("p2", "y"), &CancelToken::new())
+            .unwrap();
+        assert_eq!(second.value["summary"], "gateway");
+        assert_eq!(work.calls(), 1, "a limited item is parked, not asked again");
+        let state = router.provider_state().unwrap();
+        assert_eq!(state.selected, claude_profile("p-work"));
+        assert_eq!(state.active, Some(claude_profile("p-gw")));
+        assert_eq!(state.degraded.unwrap().item, claude_profile("p-work"));
+        assert_eq!(router.last_answered(), Some(claude_profile("p-gw")));
+    }
+
+    /// D-07: two items of one account share a usage limit, so the one the
+    /// limit parked takes the other with it, in the same request too; an
+    /// item of no shared account, as a gateway in the agent's default
+    /// account, is not parked by it.
+    #[test]
+    fn items_of_one_account_share_a_usage_park_and_an_item_of_its_own_does_not() {
+        let sink = Arc::new(Recorder::default());
+        let one = Scripted::new(
+            ProviderId::CLAUDE,
+            vec![Err(AiError::UsageLimited { retry_after: None })],
+        );
+        let other = Scripted::new(ProviderId::CLAUDE, vec![ok("same account")]);
+        let gateway = Scripted::new(ProviderId::CLAUDE, vec![ok("gateway")]);
+        let account = AccountKey::Folder("/accounts/team/".to_owned());
+        let config = RouterConfig {
+            priority: vec![
+                claude_profile("p-one"),
+                claude_profile("p-two"),
+                claude_profile("p-gw"),
+            ],
+            accounts: [
+                (claude_profile("p-one"), account.clone()),
+                (claude_profile("p-two"), account),
+            ]
+            .into(),
+            backoff_base: Duration::from_millis(1),
+            ..RouterConfig::default()
+        };
+        let router = AiRouter::with_sleep(
+            vec![
+                OfItem::backend(claude_profile("p-one"), &one),
+                OfItem::backend(claude_profile("p-two"), &other),
+                OfItem::backend(claude_profile("p-gw"), &gateway),
+            ],
+            config,
+            sink,
+            Box::new(|_| {}),
+        );
+        let answer = router
+            .execute(&request("p1", "x"), &CancelToken::new())
+            .unwrap();
+        assert_eq!(answer.value["summary"], "gateway");
+        assert_eq!(other.calls(), 0, "the same account is not asked again");
+        let parked: Vec<_> = router
+            .statuses()
+            .into_iter()
+            .map(|status| (status.item, status.parked_for.is_some()))
+            .collect();
+        assert_eq!(
+            parked,
+            [
+                (claude_profile("p-one"), true),
+                (claude_profile("p-two"), true),
+                (claude_profile("p-gw"), false),
+            ]
+        );
+    }
+
+    /// D-07: the usage limit judges each item by its own account's reading;
+    /// an item of no reading, as a gateway, is never held back by it.
+    #[test]
+    fn the_usage_limit_judges_each_item_by_its_own_reading() {
+        let sink = Arc::new(Recorder::default());
+        let work = Scripted::new(ProviderId::CLAUDE, vec![ok("work")]);
+        let gateway = Scripted::new(ProviderId::CLAUDE, vec![ok("gateway")]);
+        let limits = Arc::new(UsageLimits::new());
+        limits.set(
+            crate::UsageLimit::Percent(90),
+            &[
+                (claude_profile("p-work"), week(95.0)),
+                (Item::agent(ProviderId::CLAUDE), week(10.0)),
+            ]
+            .into(),
+        );
+        let router = gated_router(
+            vec![
+                OfItem::backend(claude_profile("p-work"), &work),
+                OfItem::backend(claude_profile("p-gw"), &gateway),
+            ],
+            sink,
+            &limits,
+        );
+        let answer = router
+            .execute(&request("p1", "x"), &CancelToken::new())
+            .unwrap();
+        assert_eq!(answer.value["summary"], "gateway");
+        assert_eq!(work.calls(), 0);
     }
 }

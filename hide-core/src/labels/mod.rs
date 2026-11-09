@@ -73,19 +73,13 @@ impl LabelServices {
         home: Option<PathBuf>,
         runtime: Weak<Mutex<Runtime>>,
         node: &crate::node::NodeId,
-        own_node: Arc<dyn NodeLink>,
+        machines: crate::ai::AiMachines,
         gate: Arc<hide_ai::UsageLimits>,
         usage: Arc<dyn hide_ai::AiUsageSink>,
     ) -> Result<Self, String> {
         let store = Arc::new(LabelStore::open(state_dir, home.as_deref(), node.as_str()));
         let settings_home = home.clone();
         let standing = Arc::new(crate::ai::AiStanding::default());
-        // The labels run on the logins of the machine each agent is placed
-        // on: the core's own unless the operator chose a device's.
-        let machines = crate::ai::AiMachines {
-            own: own_node,
-            devices: crate::runtime::device_links(runtime.clone()),
-        };
         let analyzer = LabelAnalyzer::spawn(
             Box::new(move || analysis_settings(&runtime, settings_home.as_deref())),
             Arc::clone(&standing),

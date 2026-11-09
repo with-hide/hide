@@ -196,7 +196,8 @@ fn run(
                     crate::diagnostic!(json!({
                         "component": "labels",
                         "kind": "analyzer.settings_changed",
-                        "provider": current.provider.to_string(),
+                        "provider": current.runs_on.provider.to_string(),
+                        "profile": current.runs_on.profile_id(),
                     }));
                 }
                 let built = build(&current);
@@ -305,7 +306,7 @@ mod tests {
             let analyzer = LabelAnalyzer::spawn_with(
                 Box::new(move || lock(&source).clone()),
                 Box::new(move |settings| {
-                    let models = settings.models_by_provider();
+                    let models = settings.default_models();
                     let backends: Vec<Arc<dyn AiBackend>> = hide_ai::PROVIDERS
                         .iter()
                         .map(|provider| {
@@ -441,10 +442,11 @@ mod tests {
         let machines = crate::ai::AiMachines {
             own: Arc::clone(&own) as Arc<dyn crate::node_access::NodeLink>,
             devices: Arc::new(move |_| lock(&links).clone()),
+            accounts: Arc::default(),
         };
         let mut settings = AiSettings::default();
-        settings.set_provider(ProviderId::CODEX);
-        settings.place(ProviderId::CODEX, Some("wsl-ubuntu".to_owned()));
+        settings.set_runs_on(ProviderId::CODEX.into());
+        settings.place(&ProviderId::CODEX.into(), Some("wsl-ubuntu".to_owned()));
         settings.chosen = true;
         let analyzer = LabelAnalyzer::spawn(
             Box::new(move || settings.clone()),
@@ -536,9 +538,9 @@ mod tests {
 
     fn chosen_with_fallback() -> AiSettings {
         let mut settings = AiSettings::default();
-        settings.set_provider(ProviderId::CLAUDE);
+        settings.set_runs_on(ProviderId::CLAUDE.into());
         settings
-            .add_fallback(ProviderId::CODEX, Some("first".to_owned()))
+            .add_fallback(ProviderId::CODEX.into(), Some("first".to_owned()))
             .unwrap();
         settings
     }
@@ -548,7 +550,7 @@ mod tests {
         let fixture = Fixture::new(chosen_with_fallback());
         let before: Vec<ProviderId> = fixture.job().iter().map(|(id, _)| *id).collect();
         assert_eq!(before, [ProviderId::CLAUDE, ProviderId::CODEX]);
-        fixture.change(|settings| settings.remove_fallback(ProviderId::CODEX));
+        fixture.change(|settings| settings.remove_fallback(&ProviderId::CODEX.into()));
         let after: Vec<ProviderId> = fixture.job().iter().map(|(id, _)| *id).collect();
         assert_eq!(after, [ProviderId::CLAUDE]);
     }
@@ -556,12 +558,14 @@ mod tests {
     #[test]
     fn an_added_fallback_agent_is_tried_by_the_next_job() {
         let mut start = AiSettings::default();
-        start.set_provider(ProviderId::CLAUDE);
+        start.set_runs_on(ProviderId::CLAUDE.into());
         let fixture = Fixture::new(start);
         let before: Vec<ProviderId> = fixture.job().iter().map(|(id, _)| *id).collect();
         assert_eq!(before, [ProviderId::CLAUDE]);
         fixture.change(|settings| {
-            settings.add_fallback(ProviderId::GROK, None).unwrap();
+            settings
+                .add_fallback(ProviderId::GROK.into(), None)
+                .unwrap();
         });
         let after: Vec<ProviderId> = fixture.job().iter().map(|(id, _)| *id).collect();
         assert_eq!(after, [ProviderId::CLAUDE, ProviderId::GROK]);
@@ -572,7 +576,7 @@ mod tests {
         let fixture = Fixture::new(chosen_with_fallback());
         assert_eq!(fixture.job()[1], (ProviderId::CODEX, "first".to_owned()));
         fixture.change(|settings| {
-            settings.set_fallback_model(ProviderId::CODEX, Some("second".to_owned()));
+            settings.set_fallback_model(&ProviderId::CODEX.into(), Some("second".to_owned()));
         });
         assert_eq!(fixture.job()[1], (ProviderId::CODEX, "second".to_owned()));
     }
@@ -580,7 +584,7 @@ mod tests {
     #[test]
     fn a_changed_fallback_order_is_followed_by_the_next_job() {
         let mut start = chosen_with_fallback();
-        start.add_fallback(ProviderId::GROK, None).unwrap();
+        start.add_fallback(ProviderId::GROK.into(), None).unwrap();
         let fixture = Fixture::new(start);
         let before: Vec<ProviderId> = fixture.job().iter().map(|(id, _)| *id).collect();
         assert_eq!(
@@ -590,11 +594,11 @@ mod tests {
         fixture.change(|settings| {
             settings.fallback = vec![
                 FallbackEntry {
-                    provider: ProviderId::GROK,
+                    item: ProviderId::GROK.into(),
                     model: None,
                 },
                 FallbackEntry {
-                    provider: ProviderId::CODEX,
+                    item: ProviderId::CODEX.into(),
                     model: Some("first".to_owned()),
                 },
             ];

@@ -1515,6 +1515,9 @@ pub struct Runtime {
     /// judge each request by; written from the settings and the usage rows
     /// (`runtime/usage_limit.rs`).
     usage_limits: Arc<hide_ai::UsageLimits>,
+    /// The account each machine's profiles run in, which every Hide AI
+    /// router parks a usage limit by (`refresh_ai_accounts`).
+    ai_accounts: Arc<crate::ai::ItemAccounts>,
     /// Where every router tells what its attempts cost; the usage ledger
     /// worker drains it (`runtime/usage_ledger.rs`).
     ai_usage: Arc<crate::usage_ledger::ai_usage::AiUsageQueue>,
@@ -2507,6 +2510,7 @@ impl Runtime {
             usage_popover_open: false,
             usage_popover_open_generation: 0,
             usage_limits: Arc::new(hide_ai::UsageLimits::new()),
+            ai_accounts: Arc::default(),
             ai_usage: crate::usage_ledger::ai_usage::AiUsageQueue::new(),
             product_analytics: None,
             device_connect_analytics: device_analytics::Attempts::default(),

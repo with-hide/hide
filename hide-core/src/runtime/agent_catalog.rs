@@ -294,7 +294,7 @@ impl Runtime {
     /// sharing another profile's account reads that one's, and one in the
     /// agent's default account (a wrapper or variables alone, which may run
     /// it elsewhere, as a gateway does) has none.
-    fn profile_weekly(
+    pub(super) fn profile_weekly(
         &self,
         adapter: &hide_agent_adapter::AgentAdapter,
         profile: &ProfileSnapshot,

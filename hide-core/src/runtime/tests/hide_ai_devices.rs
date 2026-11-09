@@ -146,7 +146,10 @@ fn a_device_agent_is_offered_and_chosen_first_only_when_none_here_is_signed_in()
     let saved = runtime
         .take_ai_settings_save()
         .expect("the choice is stored");
-    assert_eq!(saved.machine(hide_ai::ProviderId::CODEX), Some(DEVICE));
+    assert_eq!(
+        saved.machine(&hide_ai::ProviderId::CODEX.into()),
+        Some(DEVICE)
+    );
 
     // Signing in here later leaves the stored choice where it is.
     runtime.ingest_background_ai(joined(
@@ -172,7 +175,10 @@ fn a_device_agent_is_offered_and_chosen_first_only_when_none_here_is_signed_in()
         Some(DEVICE)
     );
     let saved = runtime.take_ai_settings_save().expect("the move is stored");
-    assert_eq!(saved.machine(hide_ai::ProviderId::CODEX), Some(DEVICE));
+    assert_eq!(
+        saved.machine(&hide_ai::ProviderId::CODEX.into()),
+        Some(DEVICE)
+    );
     drop(runtime);
     drop(release);
 }
