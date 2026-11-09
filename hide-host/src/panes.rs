@@ -88,11 +88,19 @@ fn inspect_holder(
     if pane_id.is_empty() || pane_id.len() > 256 {
         return Err("invalid_request");
     }
+    use hide_node_link::holders::{HolderError, PANE_NOT_RUNNING, PANE_STARTING, PROOF_START_WAIT};
     let holders = slot.holders().ok_or("bridge_unavailable")?;
-    let proof = holders.proof(pane_id).map_err(|error| match error {
-        hide_node_link::holders::HolderError::Unreachable { .. } => "pane_unavailable",
-        _ => "pane_not_found",
-    })?;
+    // A program asks as soon as it runs, which can be before its holder's
+    // record names it: a start under way is waited for, briefly, since
+    // every hook asks here (with-hide/hide-private#719).
+    let proof = holders
+        .proof_once_started(pane_id, PROOF_START_WAIT)
+        .map_err(|error| match error {
+            HolderError::Unreachable { .. } => "pane_unavailable",
+            HolderError::Refused { code, .. } if code == PANE_STARTING => PANE_STARTING,
+            HolderError::Refused { code, .. } if code == PANE_NOT_RUNNING => PANE_NOT_RUNNING,
+            _ => "pane_not_found",
+        })?;
     Ok(PaneIdentity {
         terminal_id: pane_id.to_owned(),
         shell_pid: i32::try_from(proof.program).map_err(|_| "pane_not_found")?,

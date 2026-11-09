@@ -34,6 +34,10 @@ pub const SCRIPT: &str = "HIDE_HOLDER_TEST_SCRIPT";
 /// Debug holders only: the file the holder writes nothing to its program
 /// until it exists (`hide-holder/src/holder.rs`, `HOLD_WRITES`).
 pub const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
+/// Debug holders only: the file the holder runs its program without writing
+/// `running` into its record until it exists (`hide-holder/src/holder.rs`,
+/// `HOLD_RUNNING`).
+pub const HOLD_RUNNING: &str = "HIDE_HOLDER_TEST_HOLD_RUNNING";
 
 /// A private HOME for one test.
 pub struct Home {
