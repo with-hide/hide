@@ -1514,11 +1514,21 @@ Each later kit read carries the kit's judgment of every profile, which the snaps
 A node that knows the calls and keeps no profiles (one without a state folder) refuses them as `unsupported`, a node on an older protocol the core still admits cannot read them, and either reads as `unsupported`: that machine offers only each agent's built-in default profile.
 A list that cannot be read keeps the last one, marked `unreadable`, and why goes to the log.
 
+#### Changing a machine's profiles
+
+Settings › Agents and `hide agent profile` change a machine's profiles through one path, `hide-core/src/agent_profiles.rs` (PRD agent-profiles D-05, D-33, B11).
+The runtime plans the change under its lock from the list the machine last gave and the agents that run with each profile (`runtime/agent_profiles.rs`), then the node's calls run with the lock released, and the outcome is settled under the lock again: the new list goes into the machine's kit snapshot and a removal takes the profile out of every project that chose it.
+A command runs those calls on the CLI request's own thread and prints the answer; the screen's `agent_profile_change` runs them on a thread of its own and answers in `status.agent_profile_answer`, which carries the screen's request id and, for an edit form, the variables' values the list never carries.
+One change runs at a time on the whole core; another meanwhile is refused as `profile_busy`.
+Both make the same checks and refuse by the same codes: `profile_invalid` (a malformed name, an agent Hide keeps no profiles for, an account for one that keeps none apart, a variable that is not `KEY=VALUE`), `profile_builtin` (the built-in default is never edited or removed), `profile_gone`, `profile_in_use` (an agent runs with it, a sleeping or dormant one included, listed with where it is), `profile_refused` (the node's refusal, with the field and its sentence), `profiles_unsupported`, `profiles_unread` and `profile_unanswered`.
+An edit is made against the values the node lists then, so a field it does not name keeps its value; a list that moved since the plan was made is read again and the change made once more on it.
+Whether an agent runs with a profile is read when the change is planned, so an agent started between that and the removal is not seen; its next start is refused by name, since the profile is gone.
+
 #### Starting an agent with a profile
 
 Every start of an agent goes through `hide-core/src/launch.rs` (PRD agent-profiles D-26, D-27, D-32).
 A start names a `launch::Request`: the `LaunchTarget` (agent and profile id) and the name the start knew the profile by, which a refusal names.
-A new start picks it (`launch::pick`): the profile the start named, else its parent's when the parent is the same agent on the same machine (`launch::Parent`: the profile its launch record keeps, the built-in default included), else the project's default (none until Project settings choose one), else the agent's default on that machine (`ProfileList`'s `defaults`).
+A new start picks it (`launch::pick`): the profile the start named, else its parent's when the parent is the same agent on the same machine (`launch::Parent`: the profile its launch record keeps, the built-in default included), else the project's default (`ProjectSettings::agent_profiles`, by agent id, which Project settings › Working style › Agent accounts sets for the project's device and root, so every checkout and worktree of it shares it), else the agent's default on that machine (`ProfileList`'s `defaults`).
 A project's or machine default the machine no longer lists falls through to the next; a parent's profile is asked of the machine like a recorded one, so one that is gone refuses the child by name rather than starting it in another account.
 An agent that comes back (a wake in its pane or dormant, a fork, a pane's Reopen, a closed tab's or pane's reopen, an archive's resume, a View's `Reopen and send`, which resumes the View's opener with the profile `view_feedback::Opener` keeps) names the profile its record keeps (`Request::recorded`).
 `launch::resolve` turns the request into the `launch::Launch` that `engine::AgentLaunch` carries, and nothing else makes one, so no start function takes an agent's kind alone.
