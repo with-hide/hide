@@ -1,7 +1,8 @@
 // What the landing's lane shots open in the lane's 보기 slot, over the hero's
 // story: the card of pull request 431, the lead's session record, and the mission
 // the lead conducts. Invented English values; nothing here is read or sent.
-import type { AgentRow, DetailItem, LinkPanel, LinkedSession, Mission, MissionNode, PrCard, PrState, PullRequest, SessionRecord, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
+import type { AgentRow, DetailItem, LinkPanel, LinkedSession, Mission, PrCard, PrState, PullRequest, SessionRecord, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
+import { missionNode as node } from "../missionFixture";
 import { listedPull } from "./sceneData";
 
 const MINUTE = 60_000;
@@ -132,10 +133,6 @@ export function landingRecord(nowMs: number, agents: AgentRow[]): SessionRecord 
     ],
     omitted_requests: 0, outputs, pr_groups: children.filter((one) => one.pr_groups.length).map((one) => ({ child: one.session, name: one.title, pulls: one.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [one.title] })) })), artifacts: [], children,
   };
-}
-
-function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 /** The mission the lead conducts: one research node, four changes and a check together, each on the hero's panes. */

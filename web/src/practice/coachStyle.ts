@@ -20,10 +20,13 @@ export const COACH_CSS = `
 .pc-zdim{position:absolute;inset:0;background:color-mix(in srgb,var(--practice-scrim) 32%,transparent);animation:pc-in .4s both}
 .pc-zone{position:absolute;border-radius:var(--radius-xl);border:var(--size-tab-indicator) dashed;animation:pc-zone .5s ${EASE} both}
 ${ZONES}
-.pc-tag{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);padding:var(--spacing-md) var(--spacing-lg);border-radius:var(--radius-xl);font-weight:700;font-size:var(--text-headline);white-space:nowrap;box-shadow:${SHADOW};text-align:center;line-height:1.35;color:var(--practice-ink)}
+/* A zone's tag rests on the zone's bottom edge, where a list ends and a terminal is empty, so it covers no row and no terminal text. */
+.pc-tag{position:absolute;left:50%;bottom:var(--spacing-xs);transform:translateX(-50%);padding:var(--spacing-xs) var(--spacing-md);border-radius:var(--radius-xl);font-weight:700;font-size:var(--text-body);white-space:nowrap;box-shadow:${SHADOW};text-align:center;line-height:1.35;color:var(--practice-ink)}
 /* The project zone is the tool rail alone while the lane is closed, narrower than its tag, so the tag ends where the screen does. */
-.pc-zone.project .pc-tag{left:auto;right:0;transform:translate(0,-50%)}
-.pc-tag small{display:block;font-size:var(--text-body);font-weight:500;opacity:.8}
+.pc-zone.project .pc-tag{left:auto;right:0;transform:none}
+/* The left list fills its zone to the bottom, so its tag sits on the zone's top edge, in the title row's empty stretch. */
+.pc-zone.view .pc-tag{left:auto;right:0;bottom:auto;top:0;transform:translateY(-100%)}
+.pc-tag small{display:inline;margin-left:var(--spacing-sm);font-size:var(--text-caption);font-weight:500;opacity:.8}
 @keyframes pc-zone{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
 @keyframes pc-in{from{opacity:0}to{opacity:1}}
 .pc-kick{font-size:var(--text-caption);font-weight:600;letter-spacing:.02em;color:color-mix(in srgb,var(--practice-accent-strong) 60%,var(--practice-ink));display:flex;justify-content:space-between;gap:var(--spacing-sm)}

@@ -6,14 +6,31 @@
 import type { CommandId } from "../shortcuts";
 import type { PracticeWorld } from "./world";
 
+/**
+ * What a card sets on the window when it opens (no quest: the card does it, and
+ * a later card that says nothing keeps it): the list the left sidebar shows, what
+ * the right lane holds, and the pane that holds the keyboard.
+ */
+export type PracticeScene = {
+  lens?: "projects" | "tasks";
+  /** The lane closed, open on the Documents, or the 보기 slot holding the mission's map. */
+  lane?: "closed" | "documents" | "mission";
+  /** The pane that holds the keyboard; null for none. */
+  focus?: string | null;
+  /** The one pane the tab shows alone, for a card whose lane needs the room; null for the four. */
+  solo?: string | null;
+};
+
 export type PracticeStep = {
   id: string;
+  /** What the window shows while this card is up. */
+  scene?: PracticeScene;
   /** What the spotlight rings: a selector into the real shell; every match is ringed as one box. */
   target?: string;
   /** The three parts of the screen, drawn as labeled zones. */
   zones?: true;
-  /** The command whose chord the card names, in this host's keys and the operator's own. */
-  command?: CommandId;
+  /** The commands whose chords the card names, in this host's keys and the operator's own. */
+  commands?: CommandId[];
   /** The step whose button leaves the practice for a real mission: the Start panel with the sentence waiting (`channel.ts`). */
   mission?: true;
 };

@@ -4,6 +4,8 @@
 
 import type { NodeUsage } from "../generated/hided-ws";
 import type { AgentRow, SnapshotRest } from "../snapshot";
+import type { useShellStore } from "../store";
+import type { PracticeScene } from "./chapter";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
@@ -23,10 +25,15 @@ export const PRACTICE_COPY = "practice_copy";
  */
 export const PRACTICE_OUTSIDE = "practice_outside";
 
-export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null };
+/** Shell state a world holds beside the core's snapshot: the documents a lane shows. */
+export type WorldExtra = Partial<Pick<ReturnType<typeof useShellStore.getState>, "editor" | "documents" | "listings">>;
+
+export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; extra?: WorldExtra };
 
 export type PracticeWorld<M> = {
   initial: () => M;
+  /** The model with a card's scene set on it (`PracticeScene`), for a world that has one. */
+  scene?: (model: M, scene: PracticeScene) => M;
   /** The model after `event`, or null for an event the chapter never needs. */
   apply: (model: M, event: CoreEvent) => M | null;
   snapshot: (model: M, nowMs: number) => WorldSnapshot;

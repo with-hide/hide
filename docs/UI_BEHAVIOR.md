@@ -2311,22 +2311,25 @@ The mission card alone has a button, `미션 해 보기`, the same as the first 
 Esc closes either dialog.
 Its words are the product's own (`agentPresentation.ts`, `taskLens.ts`, `commands.ts`), and it says only what [the status model](status-model.md) and [the sidebar sections](#sidebar-hierarchy) say: the 프로젝트 보기 reads project › branch or worktree › tab › agent; the 태스크 보기 groups by state, 내 차례 / 읽을 것 / 작업 중 / 확인함; a working row's ring is whole while the agent works and dashed while it waits, and a waiting row's second line says for what (`자식 기다림 · 자식 N개 작업 중`, `백그라운드 기다림`, `CI 기다림`, `답장 기다림`); a sleeping agent shows `재움 · 열면 깨어남`.
 
-The first run is eleven cards on the practice window of the introduction site's hero (`data/tour.json`), each one screen, ⏎ once, with no task list, no wait and no step the learner has to do:
+The first run is eleven cards on the practice window of the introduction site's hero (`data/tour.json`), the big picture of a working day rather than single actions: each one screen, ⏎ once, with no task list, no wait and no step the learner has to do.
+Each card sets its own scene when it opens (`scene` on its step: the list the left sidebar shows, what the right lane holds, the pane that has the keyboard, one pane shown alone), and a card that says nothing keeps the scene before it, so ← and → always land on the scene a card was written for.
+The window is one tab of four panes: a lead running children (A), another agent conducting a mission (B, its mission chip), an agent started beside to review that waits with a question (C), and one working by itself (D).
+Every card but the first and the last points at a real part of the screen with the practice amber ring over a dimmed screen, and `practice.spec.ts` fails a card whose ring is missing, off screen or under the band.
 
-1. 세 칸: the three parts drawn as zones, the left to choose, the middle to work, the right to look.
-2. 왼쪽 목록: the sidebar, with the 프로젝트 보기 and 태스크 보기 and the switch above the list.
-3. 내 차례, 읽을 것: those two groups ringed: 내 차례 holds only what waits for the learner (a question, an approval, a 볼 것), and finished work goes quietly to 읽을 것.
-4. 작업 중은 두 가지: the 작업 중 group ringed, with a session working by itself (the ring, no second line) beside one that waits, whose second line says for what (`자식 기다림 · 자식 N개 작업 중`; `백그라운드 기다림` and `CI 기다림` are named in the words only).
-5. 에이전트 더 띄우기: the agents' terminals in the middle, where a pane splits, and ⌘D with its words: ask an agent in words to open another beside it, or split a pane yourself; one a lead starts for part of its job is its child, listed under it.
-6. 볼 것: the row whose mark is the eye, which shows what the agent opened on the right, in Documents.
-7. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
-8. 오른쪽 도구 줄: the tool rail, what its icons open (문서, 프로젝트, Hide AI, 탐색기, 변경, by their own labels) and the pin in a column's head that keeps it beside the agents.
-9. 여러 컴퓨터: the device rail; a tile is a computer, pressing it switches the screen to that computer, and agents can work there too; connecting one is not taught.
-10. 미션이란: the agents' area, with no zones; a big job handed over, the lead (Conductor) plans and hands parts to several agents, only decisions come to 내 차례, results arrive as PRs and what was decided stays in Memory.
+1. 세 칸: the three parts drawn as zones, the left to choose, the middle to work, the right to look; each zone's tag sits where it covers no row and no terminal text.
+2. 프로젝트 보기: the list turned to the 프로젝트 lens, the project's branches and worktrees, their tabs and the agents in them.
+3. 프로젝트 보기의 한 줄: a branch row, with the PR mark its agent wears (`#438`, the state's colour: failed red, pending amber, mergeable green, merged purple) and the time since its last activity.
+4. 태스크 보기: the list turned to the 태스크 lens, the same agents by state: 내 차례 holds only what waits for the learner (a question, an approval, a 볼 것), 읽을 것 what finished quietly, then 작업 중.
+5. 작업 중은 두 가지: the 작업 중 group, a session working by itself (the ring, no second line) beside one that waits, whose second line says for what (`자식 기다림 · 자식 N개 작업 중`; `백그라운드 기다림` is named in the words only).
+6. 여러 에이전트를 부리기: the pane head's second line of the lead (A), where its children show, and ⌘D and ⇧⌘D with their words: ask an agent in words to open another beside it, or split a pane yourself.
+7. 오른쪽에서 보기: the lane opened on the Documents, showing the file an agent opened (a 볼 것 row), pinned so it stays beside the agents; the tab shows the lead alone for room.
+8. 미션: the 보기 slot holding the mission map of the Conductor (B), beside its pane (shown alone for room): a plan, parts handed to several agents, only decisions in 내 차례, results as PRs, what was decided kept in Memory.
+9. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
+10. 여러 컴퓨터: the device rail with another computer's tile; pressing a tile switches the screen to that computer, and agents can work there too; connecting one is not taught.
 11. 미션 해 보기: the button.
 
-The window is static: it opens on the 태스크 list with the lane closed and nothing a learner presses changes it, though the shell's own keyboard and clicks still run on it and its world answers them with nothing.
-Its rows cover every state the cards name: a row in each group, a row working by itself beside a waiting row with its second line, a lead with children, and a row marked 볼 것.
+The window is static but for the scene: the learner's own press on the list switch still turns the list, and the shell's own keyboard and clicks still run on it with the world answering nothing else.
+Its rows cover every state the cards name: a row in each group, a row working by itself beside a waiting row with its second line, a lead with children, a row marked 볼 것, a branch whose agent wears a PR mark, and a second computer.
 The card is a band under the whole screen (`pc-dock`), so it never covers the part it explains, which is ringed above it (or all three parts, zoned, on the first card); the keyboard rests on its button, so ⏎ is always the card's, → goes on and ← goes back, and every other key reaches the shell untouched.
 The card names its command's chord as keycaps where this host has one, and says nothing about a chord where it does not.
 Nothing waits and nothing is typed or pressed in the learner's place, so a card shows the moment it is reached.
@@ -2343,7 +2346,7 @@ In the desktop app the window has no preload: it stands in for the desktop host 
 
 ### Changing the practice
 
-- The first run is `web/src/practice/chapters/overview.ts` (its cards: `id`, a `target` selector into the shell or `zones`, an optional `command` whose chord the card names, and `mission` on the card that hands over), its words `web/src/i18n/resources/practice/overview.ts` (`practice.overview.<card>.kick|title|text`, in four languages, one title and one or two short sentences, the product's own words), and its window `web/src/practice/worlds/tour.ts` on `data/tour.json`, a whole snapshot with each time written as how long before now it was (`$msAgo`, `$sAgo`, `$isoAgo`, `$daysAgo`). Bump the chapter's `version` when its cards change, so an old progress reads as `바뀜`.
+- The first run is `web/src/practice/chapters/overview.ts` (its cards: `id`, a `target` selector into the shell or `zones`, a `scene` the card sets on the window, optional `commands` whose chords the card names, and `mission` on the card that hands over; a target inside a `display: contents` group is written as the group's children, since the group itself has no box), its words `web/src/i18n/resources/practice/overview.ts` (`practice.overview.<card>.kick|title|text`, in four languages, one title and one or two short sentences, the product's own words), and its window `web/src/practice/worlds/tour.ts` on `data/tour.json`, a whole snapshot with each time written as how long before now it was, the four panes' layout, terminals, mission and document drawn by the world (`$msAgo`, `$sAgo`, `$isoAgo`, `$daysAgo`). Bump the chapter's `version` when its cards change, so an old progress reads as `바뀜`.
 - A look-up card is an entry of `web/src/practice/guides.ts` (`id`, `number`, the drawing its card plays, the drawings of its frames, the commands whose chords it lists) and a words file `web/src/i18n/resources/practice/<id>.ts` (`practice.<id>.title|summary|line|frame1..`). A move no drawing shows is a new drawing in `PracticePreview.tsx`, drawn from tokens only.
 - `web/src/practice/words.ts` joins every words file there, refusing a key outside its file's prefix; they stay out of the shared catalog, because the desktop host bundles that catalog without Vite.
 - `web/e2e/practice.spec.ts` plays the first run with ⏎ alone, checks each card's ring clears the band, that the last card opens the Start panel on the sentence with the blank selected, and that a look-up card shows its frames and chords; `web/src/practice/worlds.test.ts` sends the first run's window every command the shell's keyboard runs and every pane focus, and fails when the world, its snapshot or a pane's screen throws; `web/src/practice/channel.test.tsx` covers what the shell does on `mission`.

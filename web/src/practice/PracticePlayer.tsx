@@ -4,7 +4,7 @@
 // or a click changes the screen the way the core would and touches nothing
 // outside the page.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
@@ -19,7 +19,7 @@ import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
 import { MissionScreen } from "../MissionScreen";
 import { WorkspaceScreen } from "../WorkspaceScreen";
-import type { PracticeChapter } from "./chapter";
+import type { PracticeChapter, PracticeScene } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
 import { holdPageClipboard, practiceClipboard } from "./clipboard";
 import { holdPageOutside } from "./outside";
@@ -65,17 +65,24 @@ export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, on
     return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
+  // A card sets its scene on the world (the list, the lane, the keyboard's pane); a world with no scene keeps its window.
+  const onScene = useCallback((scene: PracticeScene) => {
+    const after = live.current.world.scene?.(live.current.model, scene);
+    if (!after) return;
+    live.current = { ...live.current, model: after };
+    setModel(after);
+  }, []);
   useEffect(() => installKeyboard(actions), [actions]);
   useEffect(() => holdPageClipboard(clipboard), [clipboard]);
   // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
   useEffect(() => holdPageOutside(send), [send]);
 
   useLayoutEffect(() => {
-    const { rest, agents, focused, usage } = chapter.world.snapshot(model, Date.now());
+    const { rest, agents, focused, usage, extra } = chapter.world.snapshot(model, Date.now());
     // The practice screen is the practice: its sidebar never invites to practice.
     const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
     // A world with no missions holds an empty book, so the sidebar's 미션 row opens the quiet empty table, as in Hide.
-    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null, ...extra });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
@@ -125,7 +132,7 @@ export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, on
         <Palette actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
-        <PracticeCoach chapter={chapter} onStep={onStep} onMission={onMission} onHub={onHub} onLeave={onLeave} />
+        <PracticeCoach chapter={chapter} onStep={onStep} onMission={onMission} onHub={onHub} onLeave={onLeave} onScene={onScene} />
       </div>
     </TooltipProvider>
   );

@@ -71,7 +71,7 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
 }
 
 /** The first-run cards, in order: one screen each, the real part they point at on screen. */
-const FIRST_RUN = ["parts", "left", "turn", "work", "spawn", "look", "find", "tools", "devices", "aboutMission", "mission"];
+const FIRST_RUN = ["parts", "projects", "rows", "tasks", "work", "agents", "files", "conduct", "find", "devices", "mission"];
 
 test("the first-run cards play with Enter alone, each pointing at a part of the screen, with the card clear of it", async ({ page }) => {
   await withPractice(page, async (practice) => {
@@ -83,15 +83,24 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
     for (const [at, id] of FIRST_RUN.entries()) {
       await expect(layer).toHaveAttribute("data-practice-step", id);
       await drawn(practice);
-      // The card sits in the bottom band, clear of the screen it explains: the ring, once it has glided to its target, ends above the band.
-      const clear = async () => {
+      // Every card but the three zones and the last points at a real part, and the ring is drawn on it, whole on screen and clear of the card's band under it.
+      const marks = id !== "parts" && id !== "mission";
+      const ringed = async () => {
         const dock = await practice.locator("[data-practice-dock]").boundingBox();
         const spot = practice.locator(".pc-spot:not(.off)");
-        if (!dock || !(await spot.count())) return true;
+        if (!marks) return (await spot.count()) === 0;
+        if (!dock || (await spot.count()) !== 1) return false;
         const ring = (await spot.boundingBox())!;
-        return ring.y + ring.height <= dock.y + 8;
+        const view = practice.viewportSize()!;
+        return ring.width > 24 && ring.height > 24 && ring.x >= 0 && ring.x + ring.width <= view.width && ring.y >= 0 && ring.y + ring.height <= dock.y + 8;
       };
-      await expect.poll(clear, { message: `${id}'s ring is under the card`, timeout: 5_000 }).toBe(true);
+      await expect.poll(ringed, { message: `${id}'s ring is not drawn on its part, clear of the card`, timeout: 5_000 }).toBe(true);
+      // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
+      if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
+      if (id === "tasks") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
+      if (id === "agents") await expect(practice.locator("[data-pane-header-band]:has([data-pane-tree=\"a1\"])")).toBeVisible();
+      if (id === "files") await expect(practice.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-pressed", "true");
+      if (id === "conduct") await expect(practice.locator("[data-pane-mission-chip]")).toBeVisible();
       if (at === FIRST_RUN.length - 1) break;
       await practice.keyboard.press("Enter");
       await expect(layer).toHaveAttribute("data-practice-step", FIRST_RUN[at + 1]!);

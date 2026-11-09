@@ -12,7 +12,7 @@ import { hostKind, keySystem } from "../host";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
-import type { PracticeChapter } from "./chapter";
+import type { PracticeChapter, PracticeScene } from "./chapter";
 import { COACH_CSS } from "./coachStyle";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -64,9 +64,11 @@ type Props = {
   onHub: () => void;
   /** Leaves the practice for the real Hide. */
   onLeave: () => void;
+  /** Sets what the window shows for the card that is up. */
+  onScene: (scene: PracticeScene) => void;
 };
 
-export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave }: Props) {
+export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave, onScene }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
@@ -78,12 +80,24 @@ export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave }: Pr
 
   useEffect(() => onStep(index, last), [index, last, onStep]);
 
+  // The card sets its own scene when it opens, and a card that says nothing keeps the one before it: the way back is the card's, not the learner's.
+  useEffect(() => {
+    onScene(chapter.steps.slice(0, index + 1).reduce<PracticeScene>((scene, row) => ({ ...scene, ...row.scene }), {}));
+  }, [chapter, index, onScene]);
+
   // The keyboard rests on the card's button, so ⏎ is the card's and nothing waits.
   useEffect(() => go.current?.focus({ preventScroll: true }), [index]);
 
   // The ring and the zones follow what they mark every frame: panes resize, rows appear.
   useLayoutEffect(() => {
+    let scrolled = false;
     let frame = requestAnimationFrame(function follow() {
+      // What the card points at may sit below the fold of its own list: bring it into view once, then ring it.
+      const first = !scrolled && step.target ? document.querySelector(step.target) : null;
+      if (first) {
+        first.scrollIntoView({ block: "nearest" });
+        scrolled = true;
+      }
       const marked = rectOf(step.target);
       setRing((before) => (same(before, marked) ? before : marked));
       setZones((before) => {
@@ -142,7 +156,7 @@ export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave }: Pr
           <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
           <h3>{words("title")}</h3>
           <p>{words("text")}</p>
-          {step.command && hasChord(step.command) ? <div className="pc-via">{say(`commands.${step.command}`)} <span className="pc-keys">{keyParts(commandLabel(step.command)).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</span></div> : null}
+          {(step.commands ?? []).filter(hasChord).map((command) => <div key={command} className="pc-via">{say(`commands.${command}`)} <span className="pc-keys">{keyParts(commandLabel(command)).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</span></div>)}
         </div>
         <div className="pc-row">
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
