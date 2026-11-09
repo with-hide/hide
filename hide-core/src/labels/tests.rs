@@ -6431,21 +6431,24 @@ fn a_profile_agents_session_is_read_in_the_account_its_launch_record_names() {
     let node: Arc<dyn crate::node_access::NodeLink> = helper.clone();
     let (mut worker, woken) = harness.device_worker(Box::new(move || Ok(Arc::clone(&node))));
     worker.follow_account_launches((
-        1,
-        std::collections::BTreeMap::from([(
-            "w1:p1".to_owned(),
-            crate::model::PaneLaunch {
-                kind: "claude".to_owned(),
-                name: "work".to_owned(),
-                choice: Default::default(),
-                session: None,
-                profile: Some(crate::launch::LaunchProfile {
-                    id: hide_agent_adapter::ProfileId("work".to_owned()),
+        (1, 0),
+        crate::runtime::agent_choice::AccountReads {
+            reported: Default::default(),
+            launches: std::collections::BTreeMap::from([(
+                "w1:p1".to_owned(),
+                crate::model::PaneLaunch {
+                    kind: "claude".to_owned(),
                     name: "work".to_owned(),
-                    account: key.clone(),
-                }),
-            },
-        )]),
+                    choice: Default::default(),
+                    session: None,
+                    profile: Some(crate::launch::LaunchProfile {
+                        id: hide_agent_adapter::ProfileId("work".to_owned()),
+                        name: "work".to_owned(),
+                        account: key.clone(),
+                    }),
+                },
+            )]),
+        },
     ));
     let idle = ObservedAgent {
         account: worker.account_of("w1:p1", "claude", Some("work"), None),
@@ -6492,5 +6495,94 @@ fn a_profile_agents_session_is_read_in_the_account_its_launch_record_names() {
         )
         .is_err(),
         "the default account does not hold the profile's session"
+    );
+}
+
+/// B24, B25: a pane's session is read in the account its hook reported,
+/// whatever started it: an alias the operator typed (no launch record), and
+/// a wrapper Hide started with a profile in another account. The reads the
+/// node receives name that account.
+#[test]
+fn an_agents_session_is_read_in_the_account_its_hook_reported() {
+    let harness = Harness::new();
+    let written = harness.session(
+        "reported",
+        "native-r",
+        &[
+            ("user", "보고된 계정에서 작업해줘"),
+            ("assistant", "했습니다"),
+        ],
+    );
+    let account = harness.home().join("accounts/where-it-runs");
+    let project = account.join("projects/-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("reported.jsonl");
+    std::fs::rename(&written, &path).unwrap();
+    let key = hide_agent_adapter::AccountKey::Folder(account.display().to_string());
+    harness.backend.answer("보고된 계정 작업", "done", "");
+    let helper = Arc::new(ProfileHelper {
+        home: harness.home().to_path_buf(),
+        profile: hide_agent_adapter::Profile {
+            account: Some(hide_agent_adapter::AccountRef::Folder(
+                account.display().to_string(),
+            )),
+            ..hide_agent_adapter::Profile::builtin_default("claude-code")
+        },
+        named: Mutex::default(),
+    });
+    let node: Arc<dyn crate::node_access::NodeLink> = helper.clone();
+    let (mut worker, woken) = harness.device_worker(Box::new(move || Ok(Arc::clone(&node))));
+    let started_elsewhere = crate::model::PaneLaunch {
+        kind: "claude".to_owned(),
+        name: "gate".to_owned(),
+        choice: Default::default(),
+        session: None,
+        profile: Some(crate::launch::LaunchProfile {
+            id: hide_agent_adapter::ProfileId("gate".to_owned()),
+            name: "gate".to_owned(),
+            account: hide_agent_adapter::AccountKey::Folder("/accounts/gate".to_owned()),
+        }),
+    };
+    let reported =
+        |launch: Option<crate::model::PaneLaunch>| crate::runtime::agent_choice::AccountReads {
+            launches: launch
+                .into_iter()
+                .map(|launch| ("w1:p1".to_owned(), launch))
+                .collect(),
+            reported: std::collections::BTreeMap::from([(
+                "w1:p1".to_owned(),
+                ("claude-code".to_owned(), key.clone()),
+            )]),
+        };
+    // An alias: no launch record, the hook's account alone.
+    worker.follow_account_launches(((0, 1), reported(None)));
+    assert_eq!(worker.account_of("w1:p1", "claude", None, None), key);
+    // Another agent in the pane is not the one that reported.
+    assert_eq!(
+        worker.account_of("w1:p1", "codex", None, None),
+        hide_agent_adapter::AccountKey::Default
+    );
+    // A wrapper: started with the gate profile, running where it reported.
+    worker.follow_account_launches(((1, 1), reported(Some(started_elsewhere))));
+    let idle = ObservedAgent {
+        account: worker.account_of("w1:p1", "claude", Some("gate"), None),
+        ..agent(&path, "idle", 1)
+    };
+    assert_eq!(
+        idle.account, key,
+        "the hook's account wins over the record's"
+    );
+
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("보고된 계정 작업")
+    );
+    let named = helper.named.lock().unwrap().clone();
+    assert!(
+        !named.is_empty() && named.iter().all(|named| *named == key),
+        "{named:?}"
     );
 }

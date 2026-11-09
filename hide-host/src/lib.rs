@@ -38,6 +38,7 @@ pub mod kit;
 pub mod label_lock;
 pub mod link_bridge;
 pub mod list;
+mod login;
 pub mod mutate;
 pub mod opencode_fork;
 pub mod pane_holders;

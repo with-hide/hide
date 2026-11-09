@@ -867,6 +867,10 @@ fn a_session_line_resumes_with_the_profile_of_the_account_that_holds_it() {
         folder: None,
         hook: None,
         skill: None,
+        login: None,
+        wrapper_folder: false,
+        account_key: hide_agent_adapter::AccountKey::Default,
+        account_variables: Vec::new(),
     };
     let going = crate::model::ProfileSnapshot {
         install: Some(crate::model::ProfileInstall::Removing),

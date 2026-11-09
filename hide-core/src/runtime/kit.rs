@@ -604,7 +604,9 @@ impl Runtime {
             }
         };
         state.profiles = Some(profiles);
-        self.set_kit_state(device_id, state)
+        let listed = self.set_kit_state(device_id, state);
+        // A pane's reported account is matched against the list it has now.
+        self.refresh_reported_accounts() || listed
     }
 
     /// An agent that is on, whose pieces waited on something the operator

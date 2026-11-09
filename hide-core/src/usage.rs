@@ -31,10 +31,28 @@ const RETRY_BACKOFF: [Duration; 3] = [
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct UsageActivity {
+    /// The agents' own figures are wanted now: a window shows them, or
+    /// Memory or the usage limit reads the weekly figure.
     pub window_visible: bool,
+    /// A window shows the usage, which alone makes a profile account's read
+    /// (B23): Memory and the limit ask for the default account only.
+    pub shown: bool,
     pub popover_open_generation: u64,
     pub hidden: Vec<String>,
     pub required: Vec<String>,
+    /// This machine's profiles of agents whose limits Hide reads, in the
+    /// list's order (PRD agent-profiles B23): each account is read once,
+    /// for the first profile in it.
+    pub profiles: Vec<UsageProfile>,
+}
+
+/// One of this machine's profiles, as a usage read sees it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UsageProfile {
+    /// The agent's engine kind, which keys the usage rows.
+    pub agent: String,
+    pub id: hide_agent_adapter::ProfileId,
+    pub account: hide_agent_adapter::AccountKey,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct UsagePaths {
@@ -99,6 +117,8 @@ impl Failure {
 }
 struct SourceRead {
     agent: &'static str,
+    /// The profile whose account is read; `None` for the agent's default.
+    profile: Option<hide_agent_adapter::ProfileId>,
     source: LimitSource,
     worker: BackgroundRead<u64, Answer>,
     attempt: u64,
@@ -116,9 +136,11 @@ impl SourceRead {
         agent: &'static str,
         source: LimitSource,
         root: Option<PathBuf>,
+        profile: Option<hide_agent_adapter::ProfileId>,
         node: Arc<dyn NodeLink>,
         cancel: CancelToken,
     ) -> Self {
+        let read_profile = profile.clone();
         let worker = BackgroundRead::on_change(Duration::ZERO, move |_: &u64| {
             let checked_at_ms = unix_ms();
             let fetch = match &root {
@@ -127,6 +149,7 @@ impl SourceRead {
                     Call::UsageLimitFetch {
                         source,
                         root: root.to_string_lossy().into_owned(),
+                        profile: read_profile.clone(),
                     },
                     READ_TIMEOUT,
                     |_| !cancel.is_cancelled(),
@@ -183,6 +206,7 @@ impl SourceRead {
         });
         Self {
             agent,
+            profile,
             source,
             worker,
             attempt: 0,
@@ -286,6 +310,14 @@ pub struct UsageDriver {
     started_at: Instant,
     last_seen_popover_generation: u64,
     reads: Vec<SourceRead>,
+    /// One read per source and profile account (B23), by the agent, the
+    /// source and the account; at most one per profile the machine keeps.
+    accounts: std::collections::BTreeMap<
+        (&'static str, LimitSource, hide_agent_adapter::AccountKey),
+        SourceRead,
+    >,
+    paths: UsagePaths,
+    node: Arc<dyn NodeLink>,
     published: Vec<AgentUsage>,
     cancel: CancelToken,
 }
@@ -298,17 +330,11 @@ impl UsageDriver {
                 row.usage
                     .limit_sources()
                     .map(|source| {
-                        let root = match source {
-                            LimitSource::ClaudeUsage => paths.claude_cwd.clone(),
-                            LimitSource::CodexUsage => paths.codex_home.clone(),
-                            // agy's `/usage` reads no workspace; it runs in
-                            // Hide's own folder as Claude's does.
-                            LimitSource::AntigravityUsage => paths.claude_cwd.clone(),
-                        };
                         SourceRead::new(
                             row.engine_kind,
                             source,
-                            root,
+                            paths.root(source),
+                            None,
                             Arc::clone(&node),
                             cancel.clone(),
                         )
@@ -320,9 +346,95 @@ impl UsageDriver {
             started_at: Instant::now(),
             last_seen_popover_generation: 0,
             reads,
+            accounts: std::collections::BTreeMap::new(),
+            paths,
+            node,
             published: AgentUsage::initial_rows(),
             cancel,
         }
+    }
+
+    /// Keeps one read per account the machine's profiles run in: a new
+    /// account's read starts with the next due poll, and one no profile
+    /// names any longer goes (its worker ends with its read). Which profile
+    /// each row shows the account's reading for is laid at publish
+    /// ([`Self::profile_rows`]).
+    fn follow_profiles(&mut self, profiles: &[UsageProfile]) {
+        let mut wanted: std::collections::BTreeMap<_, &UsageProfile> =
+            std::collections::BTreeMap::new();
+        for profile in profiles
+            .iter()
+            .filter(|profile| !profile.account.is_default())
+        {
+            let Some(row) = hide_agent_adapter::ADAPTERS
+                .iter()
+                .find(|row| row.engine_kind == profile.agent)
+            else {
+                continue;
+            };
+            for source in row.usage.limit_sources() {
+                // agy keeps no account apart.
+                if source == LimitSource::AntigravityUsage {
+                    continue;
+                }
+                wanted
+                    .entry((row.engine_kind, source, profile.account.clone()))
+                    .or_insert(profile);
+            }
+        }
+        self.accounts.retain(|key, read| {
+            wanted
+                .get(key)
+                .is_some_and(|profile| read.profile.as_ref() == Some(&profile.id))
+        });
+        for (key, profile) in wanted {
+            if self.accounts.contains_key(&key) {
+                continue;
+            }
+            let read = SourceRead::new(
+                key.0,
+                key.1,
+                self.paths.root(key.1),
+                Some(profile.id.clone()),
+                Arc::clone(&self.node),
+                self.cancel.clone(),
+            );
+            self.accounts.insert(key, read);
+        }
+    }
+
+    /// Each profile's row of its agent's usage: its account's reading, for
+    /// the first profile in that account; shared for one in an account a
+    /// profile before it, or the agent's default, already shows (B23).
+    fn profile_rows(
+        &self,
+        profiles: &[UsageProfile],
+        agent: &str,
+        now_ms: u64,
+    ) -> Vec<ProfileUsage> {
+        let mut seen = std::collections::BTreeSet::new();
+        profiles
+            .iter()
+            .filter(|profile| profile.agent == agent)
+            .map(|profile| {
+                let first = !profile.account.is_default() && seen.insert(&profile.account);
+                let mut limits: Option<Cell<LimitReading>> = None;
+                if first {
+                    for (_, read) in self
+                        .accounts
+                        .iter()
+                        .filter(|((kind, _, key), _)| *kind == agent && *key == profile.account)
+                    {
+                        limits = Some(merge(limits.unwrap_or(Cell::Loading), read.project(now_ms)));
+                    }
+                }
+                ProfileUsage {
+                    id: profile.id.0.clone(),
+                    shared: !first,
+                    limits,
+                }
+            })
+            .collect()
     }
     /// Added work per coordinator tick is bounded by declared sources (two).
     /// One worker per source, no queued reads; one publish only on a transition.
@@ -342,11 +454,26 @@ impl UsageDriver {
                 opened && visible,
             );
         }
+        self.follow_profiles(&activity.profiles);
+        // A profile's account is read only while a window shows its agent's
+        // row, its first read included: no one else reads it (Memory and the
+        // limit ask for the default account).
+        for read in self.accounts.values_mut() {
+            let shown = activity.shown && !activity.hidden.iter().any(|agent| agent == read.agent);
+            read.poll(
+                now,
+                shown && now.duration_since(self.started_at) >= INITIAL_DELAY,
+                shown,
+                opened && shown,
+            );
+        }
+        let now_ms = unix_ms();
         let mut next = AgentUsage::initial_rows();
         for row in &mut next {
             for read in self.reads.iter().filter(|read| read.agent == row.agent) {
-                row.limits = merge(row.limits.clone(), read.project(unix_ms()));
+                row.limits = merge(row.limits.clone(), read.project(now_ms));
             }
+            row.profiles = self.profile_rows(&activity.profiles, &row.agent, now_ms);
         }
         if next == self.published {
             return None;
@@ -358,8 +485,22 @@ impl UsageDriver {
 impl Drop for UsageDriver {
     fn drop(&mut self) {
         self.cancel.cancel();
-        for read in &mut self.reads {
+        for read in self.reads.iter_mut().chain(self.accounts.values_mut()) {
             read.worker.join_pending();
+        }
+    }
+}
+
+impl UsagePaths {
+    /// The folder a read of `source` runs in: Claude's working folder, or
+    /// the default Codex home.
+    fn root(&self, source: LimitSource) -> Option<PathBuf> {
+        match source {
+            LimitSource::ClaudeUsage => self.claude_cwd.clone(),
+            LimitSource::CodexUsage => self.codex_home.clone(),
+            // agy's `/usage` reads no workspace; it runs in Hide's own
+            // folder as Claude's does.
+            LimitSource::AntigravityUsage => self.claude_cwd.clone(),
         }
     }
 }
@@ -404,6 +545,7 @@ mod tests {
     fn source() -> SourceRead {
         SourceRead {
             agent: "claude",
+            profile: None,
             source: LimitSource::ClaudeUsage,
             worker: BackgroundRead::on_change(Duration::ZERO, |_: &u64| unreachable!()),
             attempt: 0,
@@ -527,6 +669,148 @@ mod tests {
         source.worker.join_pending();
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
+    /// A node that answers nothing: these reads are never due.
+    struct Silent;
+    impl NodeLink for Silent {
+        fn call(
+            &self,
+            _: Call,
+            _: Duration,
+        ) -> Result<hide_node_link::LinkAnswer, crate::node_access::LinkError> {
+            unreachable!("no read is due")
+        }
+    }
+
+    #[test]
+    fn each_profile_account_is_read_once_and_a_profile_sharing_one_shows_a_dash() {
+        use hide_agent_adapter::{AccountKey, ProfileId};
+        let mut driver = UsageDriver::new(
+            UsagePaths {
+                home: None,
+                claude_cwd: Some("/hide".into()),
+                codex_home: Some("/codex".into()),
+            },
+            Arc::new(Silent),
+        );
+        let profile = |id: &str, agent: &str, account: AccountKey| UsageProfile {
+            agent: agent.into(),
+            id: ProfileId(id.into()),
+            account,
+        };
+        let folder = |path: &str| AccountKey::Folder(path.into());
+        let profiles = [
+            profile("work", "claude", folder("/accounts/work")),
+            // A wrapper in the default account, and a second profile of the
+            // work account: their figure is another row's.
+            profile("gateway", "claude", AccountKey::Default),
+            profile("work-too", "claude", folder("/accounts/work")),
+            profile("team", "codex", folder("/accounts/team")),
+        ];
+        driver.follow_profiles(&profiles);
+        assert_eq!(
+            driver.accounts.keys().cloned().collect::<Vec<_>>(),
+            [
+                ("claude", LimitSource::ClaudeUsage, folder("/accounts/work")),
+                ("codex", LimitSource::CodexUsage, folder("/accounts/team")),
+            ]
+        );
+        let rows = driver.profile_rows(&profiles, "claude", 0);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.id.as_str(), row.shared, row.limits.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("work", false, Some(Cell::Loading)),
+                ("gateway", true, None),
+                ("work-too", true, None),
+            ]
+        );
+        // A profile that goes takes its account's read with it.
+        driver.follow_profiles(&profiles[..2]);
+        assert_eq!(driver.accounts.len(), 1);
+        // With no profile, nothing is read and the row carries none.
+        driver.follow_profiles(&[]);
+        assert!(driver.accounts.is_empty());
+        assert!(driver.profile_rows(&[], "claude", 0).is_empty());
+    }
+
+    /// A node that answers no read, keeping the profile each read named.
+    #[derive(Default)]
+    struct Reads(std::sync::Mutex<Vec<Option<hide_agent_adapter::ProfileId>>>);
+    impl NodeLink for Reads {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<hide_node_link::LinkAnswer, crate::node_access::LinkError> {
+            if let Call::UsageLimitFetch { profile, .. } = call {
+                self.0.lock().unwrap().push(profile);
+            }
+            Err(crate::node_access::LinkError::Busy)
+        }
+    }
+
+    /// Memory or the usage limit with no window reads the default account
+    /// alone; a profile account is read only while a window shows its row,
+    /// its first read included (B23).
+    #[test]
+    fn a_profile_account_is_read_only_while_a_window_shows_its_row() {
+        use hide_agent_adapter::{AccountKey, ProfileId};
+        let reads = Arc::new(Reads::default());
+        let mut driver = UsageDriver::new(
+            UsagePaths {
+                home: None,
+                claude_cwd: Some("/hide".into()),
+                codex_home: Some("/codex".into()),
+            },
+            reads.clone(),
+        );
+        driver.started_at = Instant::now() - INITIAL_DELAY;
+        let activity = |shown: bool| UsageActivity {
+            window_visible: true,
+            shown,
+            required: vec!["claude".into()],
+            profiles: vec![UsageProfile {
+                agent: "claude".into(),
+                id: ProfileId("work".into()),
+                account: AccountKey::Folder("/accounts/work".into()),
+            }],
+            ..Default::default()
+        };
+        let settle = |driver: &mut UsageDriver| {
+            for read in driver.reads.iter_mut().chain(driver.accounts.values_mut()) {
+                read.worker.join_pending();
+            }
+        };
+        driver.read_if_due(activity(false));
+        settle(&mut driver);
+        let read = |reads: &Reads| reads.0.lock().unwrap().clone();
+        assert!(!read(&reads).is_empty(), "the default account is read");
+        assert!(
+            read(&reads).iter().all(Option::is_none),
+            "{:?}",
+            read(&reads)
+        );
+        driver.read_if_due(activity(true));
+        settle(&mut driver);
+        assert!(read(&reads).contains(&Some(ProfileId("work".into()))));
+    }
+
+    /// With no profile, an agent's usage row is on the wire as it was
+    /// before profiles (B1).
+    #[test]
+    fn a_usage_row_without_profiles_is_written_as_before() {
+        for row in AgentUsage::initial_rows() {
+            let written = serde_json::to_value(&row).unwrap();
+            assert_eq!(
+                written.as_object().unwrap().keys().collect::<Vec<_>>(),
+                ["agent", "limits", "consumption"],
+                "{}",
+                row.agent
+            );
+        }
+    }
+
     #[test]
     fn registry_has_all_agents_but_only_three_distinct_limit_reads() {
         let rows = AgentUsage::initial_rows();

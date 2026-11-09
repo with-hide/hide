@@ -20,6 +20,7 @@ impl Runtime {
             .hook_facts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = facts;
+        self.refresh_reported_accounts();
     }
 
     /// The engine that keeps the session a hook in `caller`'s pane on
@@ -55,7 +56,11 @@ impl Runtime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .record(&pane, report)?;
-        if !recorded.changed {
+        // A session's start says which account its agent runs in; the rows
+        // and the profile lists follow it (D-03, D-35).
+        let account_moved =
+            recorded.changed && report.account.is_some() && self.refresh_reported_accounts();
+        if !recorded.changed && !account_moved {
             return Ok(());
         }
         if local {

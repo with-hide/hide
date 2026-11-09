@@ -1143,13 +1143,17 @@ impl Runtime {
     pub fn ingest_usage(&mut self, usage: Vec<crate::usage::model::AgentUsage>) -> bool {
         let mut changed = false;
         for reading in usage {
-            if let Some(row) = self.snapshot.usage.nodes[0]
+            let Some(row) = self.snapshot.usage.nodes[0]
                 .agents
                 .iter_mut()
                 .find(|row| row.agent == reading.agent)
-                && row.limits != reading.limits
-            {
+            else {
+                continue;
+            };
+            // Each profile account's reading rides with its agent's (B23).
+            if row.limits != reading.limits || row.profiles != reading.profiles {
                 row.limits = reading.limits;
+                row.profiles = reading.profiles;
                 changed = true;
             }
         }
@@ -1171,6 +1175,7 @@ impl Runtime {
             window_visible: self.usage_window_visible
                 || self.memory_reads_usage()
                 || self.limit_reads_usage(),
+            shown: self.usage_window_visible,
             popover_open_generation: self.usage_popover_open_generation,
             hidden: self.snapshot.ui_state.usage.hidden.clone(),
             required: if self.memory_reads_usage() || self.limit_reads_usage() {
@@ -1193,7 +1198,38 @@ impl Runtime {
             } else {
                 Vec::new()
             },
+            profiles: self.usage_profiles(),
         }
+    }
+
+    /// This machine's profiles of the agents whose limits Hide reads, in the
+    /// list's order (PRD agent-profiles B23); none being removed.
+    fn usage_profiles(&self) -> Vec<crate::usage::UsageProfile> {
+        let Some(profiles) = self.machine_profiles(self.node.as_str()) else {
+            return Vec::new();
+        };
+        profiles
+            .profiles
+            .iter()
+            .filter(|profile| {
+                !matches!(
+                    profile.install,
+                    Some(
+                        crate::model::ProfileInstall::Removing
+                            | crate::model::ProfileInstall::RemoveFailed
+                    )
+                )
+            })
+            .filter_map(|profile| {
+                let row = hide_agent_adapter::adapter(&profile.kind)?;
+                row.usage.limit_sources().next()?;
+                Some(crate::usage::UsageProfile {
+                    agent: row.engine_kind.to_owned(),
+                    id: hide_agent_adapter::ProfileId(profile.id.clone()),
+                    account: profile.account_key.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Stamps when an agent last worked or waited on the operator, the clock

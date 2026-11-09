@@ -1378,11 +1378,21 @@ pub fn handle_with_progress(
             to_value(())
         }
         Call::UsagePriceFetch => to_value(crate::usage::fetch_prices()),
-        Call::UsageLimitFetch { source, root } => {
+        Call::UsageLimitFetch {
+            source,
+            root,
+            profile,
+        } => {
             let root = absolute(&root)?;
-            to_value(crate::usage::fetch(source, &root, &mut || {
-                progress(Value::Null)
-            }))
+            let account = profile
+                .map(|profile| crate::profiles::usage_account(env, source, &profile))
+                .transpose()?;
+            to_value(crate::usage::fetch(
+                source,
+                &root,
+                account.as_ref(),
+                &mut || progress(Value::Null),
+            ))
         }
         Call::ReadAttachments { paths } => to_value(
             crate::attachments::read_sources(&paths, &mut |index| progress(Value::from(index)))
