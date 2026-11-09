@@ -84,6 +84,8 @@ const CALL_OFFSET = 28;
 const CALL_HEIGHT = 26;
 const CALL_GAP = 8;
 const CALL_DOT = 4;
+/** A callout's width before it is drawn. */
+const CALL_WIDTH = 220;
 const ROUND = 12;
 
 export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Props) {
@@ -112,16 +114,18 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
   useEffect(() => {
     if (!step.opens) return;
     const selector = step.opens;
-    let opened: HTMLElement | null = null;
-    const frame = requestAnimationFrame(function open() {
+    // The panes may still be settling into the card's scene when it opens and a redraw closes the list again, so for the first moments the button is pressed again whenever the list is shut.
+    const until = performance.now() + 1500;
+    let frame = 0;
+    const open = () => {
       const button = document.querySelector<HTMLElement>(selector);
-      if (!button) return void (opened === null && requestAnimationFrame(open));
-      if (button.getAttribute("aria-expanded") !== "true") button.click();
-      opened = button;
-    });
+      if (button && button.getAttribute("aria-expanded") !== "true") button.click();
+      if (performance.now() < until) frame = requestAnimationFrame(open);
+    };
+    frame = requestAnimationFrame(open);
     return () => {
       cancelAnimationFrame(frame);
-      const button = opened ?? document.querySelector<HTMLElement>(selector);
+      const button = document.querySelector<HTMLElement>(selector);
       if (button?.getAttribute("aria-expanded") === "true") button.click();
     };
   }, [step]);
@@ -160,7 +164,9 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
       const own = boxOf(card.current);
       if (own) {
         const kept = (step.keepClear ?? []).flatMap((selector) => [...document.querySelectorAll(selector)]);
-        const avoid = [...document.querySelectorAll(".pc-tag, .pc-call"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
+        // The callouts' places of this very frame, not the last one drawn: a card never lands where a tag is about to stand.
+        const tagBoxes = next.map((call, at) => ({ x: call.x - CALL_DOT * 2, y: call.y, w: (document.querySelectorAll(".pc-call")[at]?.getBoundingClientRect().width || CALL_WIDTH) + CALL_DOT * 4, h: call.h }));
+        const avoid = [...document.querySelectorAll(".pc-tag"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []).concat(tagBoxes);
         const at = placeCard(own, marked, avoid, { w: window.innerWidth, h: window.innerHeight });
         setPlace((before) => (before && before.x === at.x && before.y === at.y ? before : at));
       }

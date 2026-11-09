@@ -86,7 +86,7 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
     for (const [at, id] of FIRST_RUN.entries()) {
       await expect(layer).toHaveAttribute("data-practice-step", id);
       await drawn(practice);
-      // Every card but the three zones points at real parts: each is ringed on screen (a part that reaches the window's edge carries its ring's few pixels past it), and the floating card covers none of them.
+      // Every card but the three zones points at real parts: each is ringed on screen (the children chip is the smallest part, so a ring is at least 16px high; a part that reaches the window's edge carries its ring's few pixels past it), and the floating card covers none of them.
       const marks = id !== "parts";
       const ringed = async () => {
         const card = await practice.locator("[data-practice-card]").boundingBox();
@@ -94,7 +94,7 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
         if (!marks) return rings.length === 0;
         const view = practice.viewportSize()!;
         if (!card || rings.length === 0) return false;
-        return rings.every((ring) => ring.width > 24 && ring.height > 24 && ring.x >= -4 && ring.y >= -4 && ring.x + ring.width <= view.width + 4 && ring.y + ring.height <= view.height + 4
+        return rings.every((ring) => ring.width > 24 && ring.height > 16 && ring.x >= -4 && ring.y >= -4 && ring.x + ring.width <= view.width + 4 && ring.y + ring.height <= view.height + 4
           && (card.x + card.width <= ring.x || ring.x + ring.width <= card.x || card.y + card.height <= ring.y || ring.y + ring.height <= card.y));
       };
       await expect.poll(ringed, { message: `${id}'s ring is missing, off screen, or under its card`, timeout: 5_000 }).toBe(true);
@@ -104,14 +104,16 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       // The project view folds 내 차례 · 읽을 것 away, so its ring takes the projects alone, and each mark of a row has a tag that covers no tag or card.
       if (id === "projects") await expect(practice.locator("[data-raised-list]")).toBeHidden();
       await expect(practice.locator("[data-practice-callout]")).toHaveCount(CALLOUTS[id] ?? 0);
-      const tags = await practice.locator("[data-practice-callout]").evaluateAll((all) => all.map((tag) => tag.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
-      const card = await practice.locator("[data-practice-card]").boundingBox();
-      const view = practice.viewportSize()!;
-      for (const [at, tag] of tags.entries()) {
-        expect(tag.x >= 0 && tag.y >= 0 && tag.x + tag.width <= view.width && tag.y + tag.height <= view.height, `${id}'s tag ${at} is off screen`).toBe(true);
-        expect(!card || card.x + card.width <= tag.x || tag.x + tag.width <= card.x || card.y + card.height <= tag.y || tag.y + tag.height <= card.y, `${id}'s tag ${at} is under its card`).toBe(true);
-        for (const other of tags.slice(at + 1)) expect(tag.y + tag.height <= other.y || other.y + other.height <= tag.y, `${id}'s tags touch`).toBe(true);
-      }
+      // Once the card has settled (it glides to its place), no tag is off screen, under the card or touching another.
+      const clear = async () => {
+        const tags = await practice.locator("[data-practice-callout]").evaluateAll((all) => all.map((tag) => tag.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
+        const card = await practice.locator("[data-practice-card]").boundingBox();
+        const view = practice.viewportSize()!;
+        return tags.every((tag, at) => tag.x >= 0 && tag.y >= 0 && tag.x + tag.width <= view.width && tag.y + tag.height <= view.height
+          && (!card || card.x + card.width <= tag.x || tag.x + tag.width <= card.x || card.y + card.height <= tag.y || tag.y + tag.height <= card.y)
+          && tags.slice(at + 1).every((other) => tag.y + tag.height <= other.y || other.y + other.height <= tag.y));
+      };
+      await expect.poll(clear, { message: `${id}'s tags are off screen, under the card, or touching`, timeout: 5_000 }).toBe(true);
       // The agents card opens the lead's children list from the chip, and leaving the card closes it.
       if (id === "agents") await expect(practice.locator('[data-agent-tree="a1"]')).toBeVisible();
       else await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);
