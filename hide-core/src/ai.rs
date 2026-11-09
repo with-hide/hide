@@ -1506,6 +1506,7 @@ mod tests {
             provider: ProviderId::CLAUDE,
             profile: ProfileId(profile.to_owned()),
             version: 1,
+            model: "sonnet".to_owned(),
         };
         let mut request = AiRequest {
             observing: true,
