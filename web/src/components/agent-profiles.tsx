@@ -1,8 +1,10 @@
 // Agent profiles, drawn from values a caller holds: an agent's profile rows
 // with their one state, the add and edit form, the delete confirmation, the
 // start panel's profile menu and a project's Agent accounts group. Nothing
-// here reads the store or sends an event; the gallery's `scene=agent-profiles`
-// draws every state, and the screens that will own them pass the values in.
+// here reads the store or sends an event: Settings › Agents
+// (`settings/AgentProfiles.tsx`), the start panel and Project settings pass
+// the values and the handlers in, and the gallery's `scene=agent-profiles`
+// draws every state with none.
 
 import { LockIcon, PlusIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -197,13 +199,23 @@ function Field({ label, optional = false, htmlFor, children, note, refusal }: { 
  * The profile's fields, the same for adding and editing (B3, B26). The
  * account field follows the agent's way: a folder with a chooser, an omp name,
  * or a disabled field with the reason. Editing locks the account and saves each
- * field as it is left, so it has no Save button.
+ * field as it is left (`onCommit`), so it has no Save button. Without
+ * `onDraft` the fields only show the draft.
  */
-export function ProfileForm({ view, mode, draft, refusals = [], builtIn = false, readOnly = false, idPrefix }: { view: AgentProfilesView; mode: "add" | "edit"; draft: ProfileDraft; refusals?: readonly ProfileRefusal[]; builtIn?: boolean; readOnly?: boolean; idPrefix: string }) {
+export function ProfileForm({ view, mode, draft, refusals = [], builtIn = false, readOnly = false, idPrefix, onDraft, onCommit, onChooseFolder, canChoose = true, envLoading = false }: { view: AgentProfilesView; mode: "add" | "edit"; draft: ProfileDraft; refusals?: readonly ProfileRefusal[]; builtIn?: boolean; readOnly?: boolean; idPrefix: string; onDraft?: (draft: ProfileDraft) => void; onCommit?: (draft: ProfileDraft) => void; onChooseFolder?: () => void; canChoose?: boolean; envLoading?: boolean }) {
   const { t } = useInterfaceTranslation();
   const refusal = (field: ProfileRefusal["field"]) => refusals.find((row) => row.field === field && !row.envKey)?.text ?? null;
   const editing = mode === "edit";
   const off = readOnly || builtIn;
+  const fixed = !onDraft;
+  const set = (patch: Partial<ProfileDraft>) => onDraft?.({ ...draft, ...patch });
+  const commit = () => onCommit?.(draft);
+  const setEnv = (index: number, pair: Partial<EnvPair>) => set({ env: draft.env.map((row, at) => (at === index ? { ...row, ...pair } : row)) });
+  const removeEnv = (index: number) => {
+    const next = { ...draft, env: draft.env.filter((_, at) => at !== index) };
+    onDraft?.(next);
+    onCommit?.(next);
+  };
   const accountLabel = view.way === "name" ? t("agentProfiles.field.ompName") : view.way === "folder" ? t("agentProfiles.field.folder") : t("agentProfiles.field.account");
   const accountNote = view.way === "none" ? t("agentProfiles.noAccountNote") : editing ? null : view.way === "name" ? t("agentProfiles.ompNote") : t("agentProfiles.folderNote");
   return (
@@ -211,7 +223,7 @@ export function ProfileForm({ view, mode, draft, refusals = [], builtIn = false,
       {builtIn ? <Note>{t("agentProfiles.builtInNote")}</Note> : null}
       {builtIn ? null : (
         <Field label={t("agentProfiles.field.name")} htmlFor={`${idPrefix}-name`} refusal={refusal("name")}>
-          <Input id={`${idPrefix}-name`} defaultValue={draft.name} disabled={off} aria-invalid={refusal("name") ? true : undefined} />
+          <Input id={`${idPrefix}-name`} value={draft.name} readOnly={fixed} onChange={(event) => set({ name: event.target.value })} onBlur={commit} disabled={off} aria-invalid={refusal("name") ? true : undefined} data-profile-input="name" />
         </Field>
       )}
       <Field label={accountLabel} optional={view.way !== "none" && !editing} htmlFor={`${idPrefix}-account`} refusal={refusal("account")} note={editing && view.way !== "none" && !builtIn ? <span className="flex items-center gap-xs"><LockIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />{t("agentProfiles.locked")}</span> : accountNote}>
@@ -219,35 +231,36 @@ export function ProfileForm({ view, mode, draft, refusals = [], builtIn = false,
           <Input id={`${idPrefix}-account`} disabled value={t("agentProfiles.noAccount")} readOnly data-profile-account="none" />
         ) : (
           <span className="flex min-w-0 gap-sm">
-            <Input id={`${idPrefix}-account`} mono defaultValue={draft.account} disabled={editing || off} readOnly={editing} aria-invalid={refusal("account") ? true : undefined} data-profile-account={view.way} />
-            {view.way === "folder" && !editing ? <Button variant="secondary" disabled={off} data-profile-choose="true">{t("agentProfiles.chooseFolder")}</Button> : null}
+            <Input id={`${idPrefix}-account`} mono value={draft.account} readOnly={editing || fixed} onChange={(event) => set({ account: event.target.value })} disabled={editing || off} aria-invalid={refusal("account") ? true : undefined} data-profile-account={view.way} />
+            {view.way === "folder" && !editing && canChoose ? <Button variant="secondary" disabled={off} onClick={onChooseFolder} data-profile-choose="true">{t("agentProfiles.chooseFolder")}</Button> : null}
           </span>
         )}
       </Field>
       {builtIn ? null : (
         <>
           <Field label={t("agentProfiles.field.program")} optional htmlFor={`${idPrefix}-program`} refusal={refusal("program")} note={t("agentProfiles.programNote")}>
-            <Input id={`${idPrefix}-program`} mono defaultValue={draft.program} disabled={off} placeholder={t("agentProfiles.programPlaceholder", { program: view.program })} aria-invalid={refusal("program") ? true : undefined} />
+            <Input id={`${idPrefix}-program`} mono value={draft.program} readOnly={fixed} onChange={(event) => set({ program: event.target.value })} onBlur={commit} disabled={off} placeholder={t("agentProfiles.programPlaceholder", { program: view.program })} aria-invalid={refusal("program") ? true : undefined} data-profile-input="program" />
           </Field>
-          <Field label={t("agentProfiles.field.env")} optional note={t("agentProfiles.envNote")}>
-            <div className="flex flex-col gap-xs" data-profile-env="true">
+          <Field label={t("agentProfiles.field.env")} optional note={t("agentProfiles.envNote")} refusal={refusal("env")}>
+            <div className="flex flex-col gap-xs" data-profile-env={envLoading ? "loading" : "true"}>
               {draft.env.map((pair, index) => {
                 const refused = refusals.find((row) => row.field === "env" && row.envKey === pair.key)?.text ?? null;
                 return (
-                  <div key={`${pair.key}:${index}`} className="flex flex-col gap-xxs">
+                  // A row keeps its place while its name is typed, so it is keyed by place.
+                  <div key={index} className="flex flex-col gap-xxs" data-profile-env-row={index}>
                     <span className="flex min-w-0 items-center gap-xs">
-                      <Input mono aria-label={t("agentProfiles.envKey")} defaultValue={pair.key} disabled={off} className="basis-2/5" aria-invalid={refused ? true : undefined} />
+                      <Input mono aria-label={t("agentProfiles.envKey")} value={pair.key} readOnly={fixed} onChange={(event) => setEnv(index, { key: event.target.value })} onBlur={commit} disabled={off || envLoading} className="basis-2/5" aria-invalid={refused ? true : undefined} />
                       <span aria-hidden="true" className="font-mono text-muted-foreground">=</span>
-                      <Input mono aria-label={t("agentProfiles.envValue")} defaultValue={pair.value} disabled={off} className="flex-1" />
+                      <Input mono aria-label={t("agentProfiles.envValue")} value={pair.value} readOnly={fixed} onChange={(event) => setEnv(index, { value: event.target.value })} onBlur={commit} disabled={off || envLoading} className="flex-1" />
                       <Hint label={t("agentProfiles.envRemove", { key: pair.key })}>
-                        <Button variant="ghost" size="icon-sm" disabled={off} aria-label={t("agentProfiles.envRemove", { key: pair.key })}><XIcon /></Button>
+                        <Button variant="ghost" size="icon-sm" disabled={off || envLoading} onClick={() => removeEnv(index)} aria-label={t("agentProfiles.envRemove", { key: pair.key })}><XIcon /></Button>
                       </Hint>
                     </span>
                     {refused ? <Note tone="error">{refused}</Note> : null}
                   </div>
                 );
               })}
-              <Button variant="text" size="sm" className="self-start" disabled={off} data-profile-env-add="true"><PlusIcon aria-hidden="true" />{t("agentProfiles.envAdd")}</Button>
+              <Button variant="text" size="sm" className="self-start" disabled={off || envLoading} onClick={() => set({ env: [...draft.env, { key: "", value: "" }] })} data-profile-env-add="true"><PlusIcon aria-hidden="true" />{t("agentProfiles.envAdd")}</Button>
             </div>
           </Field>
         </>
@@ -258,18 +271,35 @@ export function ProfileForm({ view, mode, draft, refusals = [], builtIn = false,
 }
 
 /** The edit form's own actions: make it the agent's default, delete it. The built-in row offers only the first (B28). */
-function ProfileEditActions({ profile, onMakeDefault, onDelete }: { profile: ProfileView; onMakeDefault?: () => void; onDelete?: () => void }) {
+function ProfileEditActions({ profile, busy = false, onMakeDefault, onDelete }: { profile: ProfileView; busy?: boolean; onMakeDefault?: () => void; onDelete?: () => void }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
-      {profile.isDefault ? null : <Button variant="secondary" onClick={onMakeDefault} data-profile-make-default="true">{t("agentProfiles.makeDefault")}</Button>}
-      {profile.builtIn ? null : <Button variant="text" className="text-destructive" onClick={onDelete} data-profile-delete="true">{t("agentProfiles.delete")}</Button>}
+      {profile.isDefault ? null : <Button variant="secondary" disabled={busy} onClick={onMakeDefault} data-profile-make-default="true">{t("agentProfiles.makeDefault")}</Button>}
+      {profile.builtIn ? null : <Button variant="text" className="text-destructive" disabled={busy} onClick={onDelete} data-profile-delete="true">{t("agentProfiles.delete")}</Button>}
     </>
   );
 }
 
+/** What the dialog does with the operator's presses; the gallery passes none. */
+export type ProfileDialogHandlers = {
+  onDraft?: (draft: ProfileDraft) => void;
+  onCommit?: (draft: ProfileDraft) => void;
+  onSubmit?: () => void;
+  onMakeDefault?: () => void;
+  onDelete?: () => void;
+  onChooseFolder?: () => void;
+  canChoose?: boolean;
+  /** A change is on its way: the form's buttons wait. */
+  busy?: boolean;
+  /** The variables' values are still being read: their fields wait. */
+  envLoading?: boolean;
+  /** A refusal that names no field. */
+  error?: string | null;
+};
+
 /** Adding or editing a profile in a dialog over the Agents list. */
-export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, draft, refusals }: { open: boolean; onOpenChange?: (open: boolean) => void; view: AgentProfilesView; mode: "add" | "edit"; profile?: ProfileView; draft: ProfileDraft; refusals?: readonly ProfileRefusal[] }) {
+export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, draft, refusals, ...on }: { open: boolean; onOpenChange?: (open: boolean) => void; view: AgentProfilesView; mode: "add" | "edit"; profile?: ProfileView; draft: ProfileDraft; refusals?: readonly ProfileRefusal[] } & ProfileDialogHandlers) {
   const { t } = useInterfaceTranslation();
   const title = mode === "add" || !profile ? t("agentProfiles.addTitle", { agent: view.label }) : t("agentProfiles.editTitle", { agent: view.label, profile: profileName(profile, t) });
   return (
@@ -279,15 +309,16 @@ export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, dra
           <DialogTitle className="flex items-center gap-sm"><AgentLogo agent={view.agent} label={view.label} />{title}</DialogTitle>
         </DialogHeader>
         <DialogBody>
-          <ProfileForm view={view} mode={mode} draft={draft} refusals={refusals} builtIn={profile?.builtIn} idPrefix={`profile-${mode}`} />
+          <ProfileForm view={view} mode={mode} draft={draft} refusals={refusals} builtIn={profile?.builtIn} idPrefix={`profile-${mode}`} onDraft={on.onDraft} onCommit={on.onCommit} onChooseFolder={on.onChooseFolder} canChoose={on.canChoose} envLoading={on.envLoading} />
+          {on.error ? <div className="pt-md"><Note tone="error" data-profile-error="true">{on.error}</Note></div> : null}
         </DialogBody>
         <DialogFooter className={mode === "edit" ? "justify-between" : undefined}>
           {mode === "add" ? (
             <>
               <Button variant="secondary" onClick={() => onOpenChange?.(false)}>{t("common.cancel")}</Button>
-              <Button data-profile-submit="true">{t("common.add")}</Button>
+              <Button disabled={on.busy || (Boolean(on.onSubmit) && !draft.name.trim())} onClick={on.onSubmit} data-profile-submit="true">{t("common.add")}</Button>
             </>
-          ) : profile ? <ProfileEditActions profile={profile} /> : null}
+          ) : profile ? <ProfileEditActions profile={profile} busy={on.busy} onMakeDefault={on.onMakeDefault} onDelete={on.onDelete} /> : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -301,7 +332,7 @@ export type InUseAgent = { id: string; title: string; place: string; asleep: boo
  * included, each with the way to it; otherwise what the delete takes away and
  * which projects go back to the agent default, before it does.
  */
-export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inUse, projects }: { open: boolean; onOpenChange?: (open: boolean) => void; profile: string; location: string; inUse: readonly InUseAgent[]; projects: readonly string[] }) {
+export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inUse, projects, onConfirm, onShow }: { open: boolean; onOpenChange?: (open: boolean) => void; profile: string; location: string; inUse: readonly InUseAgent[]; projects: readonly string[]; onConfirm?: () => void; onShow?: (id: string) => void }) {
   const { t } = useInterfaceTranslation();
   const refused = inUse.length > 0;
   return (
@@ -317,7 +348,7 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inU
               <li key={agent.id} className="flex min-w-0 items-center gap-sm px-md py-sm">
                 <span className="min-w-0 flex-1 truncate text-body text-foreground">{agent.title}<span className="text-muted-foreground"> · {agent.place}</span></span>
                 {agent.asleep ? <Badge>{t("agentProfiles.asleep")}</Badge> : null}
-                <Button variant="text" size="inline" data-profile-in-use-open={agent.id}>{t("agentProfiles.show")}</Button>
+                <Button variant="text" size="inline" onClick={() => onShow?.(agent.id)} data-profile-in-use-open={agent.id}>{t("agentProfiles.show")}</Button>
               </li>
             ))}
           </ul>
@@ -333,7 +364,7 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inU
           {refused ? <AlertDialogCancel>{t("common.close")}</AlertDialogCancel> : (
             <>
               <AlertDialogCancel>{t("agentProfiles.deleteKeep")}</AlertDialogCancel>
-              <AlertDialogAction data-profile-delete-confirm="true">{t("agentProfiles.deleteConfirm", { profile })}</AlertDialogAction>
+              <AlertDialogAction onClick={onConfirm} data-profile-delete-confirm="true">{t("agentProfiles.deleteConfirm", { profile })}</AlertDialogAction>
             </>
           )}
         </AlertDialogFooter>

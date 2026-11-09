@@ -2,8 +2,8 @@ import type { Catalogs } from "../schema";
 
 // Agent profiles: an agent's accounts and run settings (Settings › Agents, the
 // add and edit form, deleting, the start panel's profile menu and a project's
-// Agent accounts). The display components in components/agent-profiles.tsx
-// read these; nothing on a live screen draws them yet.
+// Agent accounts), read by components/agent-profiles.tsx and the screens
+// that draw it.
 export const agentProfilesEnglish = {
   "agentProfiles.add": "Add profile",
   "agentProfiles.addTitle": "Add a {{agent}} profile",
@@ -71,7 +71,11 @@ export const agentProfilesEnglish = {
   "agentProfiles.project.title": "Agent accounts",
   "agentProfiles.project.caption": "The profile each agent starts with in this project",
   "agentProfiles.project.follow": "Agent default · {{profile}}",
-  "agentProfiles.project.note": "Only agents with profiles appear. It applies to every checkout and worktree of this project."
+  "agentProfiles.project.note": "Only agents with profiles appear. It applies to every checkout and worktree of this project.",
+  "agentProfiles.error.gone": "This profile is no longer on the machine.",
+  "agentProfiles.error.busy": "Another profile change is still running. Try again in a moment.",
+  "agentProfiles.error.unanswered": "The machine did not answer. Try again once it is connected.",
+  "agentProfiles.error.other": "The change could not be made. The cause is in the log."
 } as const;
 
 const ko = {
@@ -141,7 +145,11 @@ const ko = {
   "agentProfiles.project.title": "에이전트 계정",
   "agentProfiles.project.caption": "이 프로젝트에서 에이전트를 띄울 때 쓸 프로필",
   "agentProfiles.project.follow": "에이전트 기본 따름 · {{profile}}",
-  "agentProfiles.project.note": "프로필이 있는 에이전트만 나와요. 이 프로젝트의 모든 체크아웃과 워크트리에 적용돼요."
+  "agentProfiles.project.note": "프로필이 있는 에이전트만 나와요. 이 프로젝트의 모든 체크아웃과 워크트리에 적용돼요.",
+  "agentProfiles.error.gone": "이 프로필은 이제 기기에 없어요.",
+  "agentProfiles.error.busy": "다른 프로필 변경이 아직 진행 중이에요. 잠시 뒤 다시 해 주세요.",
+  "agentProfiles.error.unanswered": "기기가 응답하지 않았어요. 연결된 뒤 다시 해 주세요.",
+  "agentProfiles.error.other": "바꾸지 못했어요. 원인은 로그에 남았어요."
 } as const;
 
 const ja = {
@@ -211,7 +219,11 @@ const ja = {
   "agentProfiles.project.title": "エージェントのアカウント",
   "agentProfiles.project.caption": "このプロジェクトでエージェントを起動するときのプロファイル",
   "agentProfiles.project.follow": "エージェントの既定 · {{profile}}",
-  "agentProfiles.project.note": "プロファイルのあるエージェントだけが表示されます。このプロジェクトのすべてのチェックアウトとワークツリーに適用されます。"
+  "agentProfiles.project.note": "プロファイルのあるエージェントだけが表示されます。このプロジェクトのすべてのチェックアウトとワークツリーに適用されます。",
+  "agentProfiles.error.gone": "このプロファイルはもうマシンにありません。",
+  "agentProfiles.error.busy": "別のプロファイル変更がまだ実行中です。少し待ってからもう一度お試しください。",
+  "agentProfiles.error.unanswered": "マシンが応答しませんでした。接続されてからもう一度お試しください。",
+  "agentProfiles.error.other": "変更できませんでした。原因はログに記録されています。"
 } as const;
 
 const zhCN = {
@@ -281,7 +293,11 @@ const zhCN = {
   "agentProfiles.project.title": "智能体账号",
   "agentProfiles.project.caption": "在此项目中启动各智能体时使用的配置",
   "agentProfiles.project.follow": "智能体默认 · {{profile}}",
-  "agentProfiles.project.note": "只显示有配置的智能体。适用于此项目的所有检出目录和工作树。"
+  "agentProfiles.project.note": "只显示有配置的智能体。适用于此项目的所有检出目录和工作树。",
+  "agentProfiles.error.gone": "此配置已不在该机器上。",
+  "agentProfiles.error.busy": "另一项配置更改仍在进行。请稍后再试。",
+  "agentProfiles.error.unanswered": "机器没有响应。连接后请再试一次。",
+  "agentProfiles.error.other": "无法完成更改。原因已记录在日志中。"
 } as const;
 
 export const agentProfilesCatalogs = { en: agentProfilesEnglish, ko, ja, "zh-CN": zhCN } satisfies Catalogs<typeof agentProfilesEnglish>;

@@ -1510,6 +1510,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "agent_permission_set", payload: { device_id: deviceId, agent, ...permission } });
     },
 
+    /**
+     * One change to a machine's agent profiles (PRD agent-profiles B1-B13,
+     * B26-B28). The core checks it as `hide agent profile` is checked and
+     * answers in `status.agent_profile_answer` under `requestId`.
+     */
+    changeAgentProfile(deviceId: string, requestId: string, change: import("./agentProfiles").ProfileChange) {
+      dispatch({ schema_version: 2, kind: "agent_profile_change", payload: { device_id: deviceId, request_id: requestId, change } });
+    },
+
     /** A tab showing the kit opened: this Mac's parts are read once. */
     checkKit() {
       dispatch({ schema_version: 2, kind: "kit_check", payload: {} });
