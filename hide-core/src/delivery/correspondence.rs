@@ -1,12 +1,14 @@
 //! Each pane's letters and the agents it started, in time order, for the turn
-//! card's "그 사이 오간 편지" (`docs/UI_BEHAVIOR.md`, the turn card).
+//! card's letters (`docs/UI_BEHAVIOR.md`, the turn card): one line per agent
+//! it worked with, and the whole list in time order when opened.
 //!
 //! The index is built from a whole ledger by the delivery worker, outside
 //! `Mutex<Runtime>`, before it publishes that ledger; the runtime compares
 //! only its digest under the lock and lays the rows again only when it moved
 //! (`Runtime::publish_delivery`). A row then reads its own pane's slice from
-//! the request's time on: two binary searches and at most
-//! [`CARD_LETTERS`] lines, whatever the ledger holds.
+//! the request's time on: two binary searches, one pass over that slice to
+//! fold it into a line per agent, at most [`CARD_PEERS`] of those and
+//! [`CARD_LETTERS`] lines in time order, whatever the ledger holds.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -18,6 +20,9 @@ use crate::request_view::RequestSender;
 
 /// The newest letters a turn card lists; older ones are only counted.
 pub(crate) const CARD_LETTERS: usize = 8;
+/// The agents a turn card lists a line for, the latest first; the rest are
+/// only counted.
+pub(crate) const CARD_PEERS: usize = 6;
 /// The longest first line of a letter a card line carries; the card cuts it
 /// to its width.
 const LINE_CHARS: usize = 80;
@@ -44,6 +49,8 @@ pub enum LetterMark {
     Block,
     Report,
     Question,
+    /// An agent's line when all it wrote were interim reports.
+    Progress,
 }
 
 /// One line of the card's letter list.
@@ -66,26 +73,67 @@ pub struct LetterLineSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
     pub at_unix_ms: u64,
+    /// Which agent the other side is (its device, pane and session), so a
+    /// line per agent can be folded from the lines.
+    #[serde(skip)]
+    pub(crate) peer_key: u64,
 }
 
-/// The pane's letters since the shown request: how many, how many interim
-/// reports were folded, and the newest lines, oldest first.
+/// One agent the pane worked with since the request, in one line: what it
+/// last said that matters, a block before a report and a report before an
+/// interim one, else what the pane last sent it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PeerLineSnapshot {
+    pub peer: RequestSender,
+    #[serde(skip)]
+    pub(crate) titled_by: Option<String>,
+    /// The mark of the letter the line shows: a block, a question, a report
+    /// or a reply it sent, `progress` when it sent only interim reports, and
+    /// `waiting_answer` when the pane only wrote to it and waits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mark: Option<LetterMark>,
+    /// That letter's first line; absent for an agent the pane only started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    pub at_unix_ms: u64,
+    /// How many blocks it sent the pane since the request.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub blocks: u32,
+    /// The pane started it since the request.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub started: bool,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
+}
+
+/// The pane's letters since the shown request: how many, a line per agent,
+/// and the newest lines in time order for the whole list.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LettersSinceSnapshot {
     /// Letters and started agents, interim reports left out.
     pub total: u32,
     /// Interim reports (`progress`), counted and not listed.
     pub progress: u32,
+    /// Letters, interim reports included and started agents left out.
+    pub letters: u32,
     /// The newest [`CARD_LETTERS`] of `total`, oldest first.
     pub recent: Vec<LetterLineSnapshot>,
+    /// A line for each of the [`CARD_PEERS`] agents the pane last worked
+    /// with, the latest first.
+    pub peers: Vec<PeerLineSnapshot>,
+    /// The agents past [`CARD_PEERS`], counted and not listed.
+    pub more_peers: u32,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PaneLetters {
     /// Every letter and started agent but interim reports, by time.
     lines: Vec<LetterLineSnapshot>,
-    /// When each interim report was written, in order.
-    progress_at: Vec<u64>,
+    /// Every interim report, by time; folded on the whole list, and an
+    /// agent's line when it wrote nothing else.
+    progress: Vec<LetterLineSnapshot>,
 }
 
 /// The index: each pane's lines, and a digest of all of them that tells two
@@ -132,19 +180,26 @@ impl Correspondence {
                     continue;
                 }
                 let entry = panes.entry(pane.pane_id.clone()).or_default();
-                if progress {
-                    entry.progress_at.push(letter.created_at_unix_ms);
-                    continue;
-                }
+                let peer_key = key_of(who(peer));
                 let (peer, titled_by) = peer_of(ledger, peer);
-                entry.lines.push(LetterLineSnapshot {
+                let written = LetterLineSnapshot {
                     direction,
                     peer,
                     titled_by,
-                    mark: mark(letter, direction, &answered),
+                    mark: if progress {
+                        Some(LetterMark::Progress)
+                    } else {
+                        mark(letter, direction, &answered)
+                    },
                     line: line.clone(),
                     at_unix_ms: letter.created_at_unix_ms,
-                });
+                    peer_key,
+                };
+                if progress {
+                    entry.progress.push(written);
+                } else {
+                    entry.lines.push(written);
+                }
             }
         }
         for spawn in &ledger.spawns {
@@ -156,6 +211,16 @@ impl Correspondence {
             if parent.actor.code_owned() {
                 continue;
             }
+            // The child it became is the agent its letters name; one not
+            // registered yet is known by its spawn alone.
+            let child = spawn
+                .child
+                .as_ref()
+                .and_then(|child| ledger.agents.iter().find(|agent| &agent.id == child));
+            let peer_key = child.map_or_else(
+                || key_of(("spawn", &spawn.id, None)),
+                |child| key_of(who(&child.actor)),
+            );
             panes
                 .entry(parent.actor.pane_id.clone())
                 .or_default()
@@ -167,15 +232,16 @@ impl Correspondence {
                     mark: None,
                     line: None,
                     at_unix_ms: spawn.reserved_at_unix_ms,
+                    peer_key,
                 });
         }
         let mut hasher = std::hash::DefaultHasher::new();
         for (pane, letters) in &mut panes {
             letters.lines.sort_by_key(|line| line.at_unix_ms);
-            letters.progress_at.sort_unstable();
+            letters.progress.sort_by_key(|line| line.at_unix_ms);
             pane.hash(&mut hasher);
             letters.lines.hash(&mut hasher);
-            letters.progress_at.hash(&mut hasher);
+            letters.progress.hash(&mut hasher);
         }
         Self {
             panes,
@@ -192,20 +258,103 @@ impl Correspondence {
     /// none.
     pub(crate) fn since(&self, pane: &str, from: u64) -> Option<LettersSinceSnapshot> {
         let letters = self.panes.get(pane)?;
-        let start = letters.lines.partition_point(|line| line.at_unix_ms < from);
-        let progress =
-            letters.progress_at.len() - letters.progress_at.partition_point(|at| *at < from);
-        let total = letters.lines.len() - start;
-        if total == 0 && progress == 0 {
+        let lines = &letters.lines[letters.lines.partition_point(|line| line.at_unix_ms < from)..];
+        let progress = &letters.progress[letters
+            .progress
+            .partition_point(|line| line.at_unix_ms < from)..];
+        if lines.is_empty() && progress.is_empty() {
             return None;
         }
-        let shown = total.min(CARD_LETTERS);
+        let started = lines
+            .iter()
+            .filter(|line| line.direction == LetterDirection::Started)
+            .count();
+        let (peers, more_peers) = peer_lines(lines, progress);
+        let count = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
         Some(LettersSinceSnapshot {
-            total: u32::try_from(total).unwrap_or(u32::MAX),
-            progress: u32::try_from(progress).unwrap_or(u32::MAX),
-            recent: letters.lines[letters.lines.len() - shown..].to_vec(),
+            total: count(lines.len()),
+            progress: count(progress.len()),
+            letters: count(lines.len() - started + progress.len()),
+            recent: lines[lines.len() - lines.len().min(CARD_LETTERS)..].to_vec(),
+            peers,
+            more_peers: count(more_peers),
         })
     }
+}
+
+/// What one agent's lines fold into.
+#[derive(Default)]
+struct Peer<'a> {
+    received: Option<&'a LetterLineSnapshot>,
+    progress: Option<&'a LetterLineSnapshot>,
+    sent: Option<&'a LetterLineSnapshot>,
+    started: Option<&'a LetterLineSnapshot>,
+    blocks: u32,
+    latest: u64,
+}
+
+/// The pane's lines since the request folded into a line per agent, the
+/// agent last heard from or written to first, cut at [`CARD_PEERS`]; and how
+/// many agents were cut. `lines` and `progress` are each in time order.
+fn peer_lines(
+    lines: &[LetterLineSnapshot],
+    progress: &[LetterLineSnapshot],
+) -> (Vec<PeerLineSnapshot>, usize) {
+    let mut peers: HashMap<u64, Peer<'_>> = HashMap::new();
+    for line in lines.iter().chain(progress) {
+        let peer = peers.entry(line.peer_key).or_default();
+        peer.latest = peer.latest.max(line.at_unix_ms);
+        let slot = match (line.direction, line.mark) {
+            (LetterDirection::Started, _) => &mut peer.started,
+            (_, Some(LetterMark::Progress)) => &mut peer.progress,
+            (LetterDirection::Received, mark) => {
+                peer.blocks += u32::from(mark == Some(LetterMark::Block));
+                &mut peer.received
+            }
+            (LetterDirection::Sent, _) => &mut peer.sent,
+        };
+        if slot.is_none_or(|kept| kept.at_unix_ms <= line.at_unix_ms) {
+            *slot = Some(line);
+        }
+    }
+    let mut folded: Vec<(u64, u64, PeerLineSnapshot)> = peers
+        .into_iter()
+        .filter_map(|(key, peer)| {
+            // What it said comes first, an interim report only when it said
+            // nothing else, then what the pane last wrote it, then its start.
+            let shown = peer.received.or(peer.progress).or(peer.sent);
+            let named = shown.or(peer.started)?;
+            let mark = shown.and_then(|line| match line.direction {
+                LetterDirection::Sent => (line.mark == Some(LetterMark::WaitingAnswer))
+                    .then_some(LetterMark::WaitingAnswer),
+                _ => line.mark,
+            });
+            Some((
+                peer.latest,
+                key,
+                PeerLineSnapshot {
+                    peer: named.peer.clone(),
+                    titled_by: named.titled_by.clone(),
+                    mark,
+                    line: shown.and_then(|line| line.line.clone()),
+                    at_unix_ms: named.at_unix_ms,
+                    blocks: peer.blocks,
+                    started: peer.started.is_some(),
+                },
+            ))
+        })
+        .collect();
+    // The latest first; two agents at the same moment keep one order.
+    folded.sort_by(|(a, a_key, _), (b, b_key, _)| b.cmp(a).then(a_key.cmp(b_key)));
+    let more = folded.len().saturating_sub(CARD_PEERS);
+    folded.truncate(CARD_PEERS);
+    (folded.into_iter().map(|(_, _, line)| line).collect(), more)
+}
+
+fn key_of(who: Who<'_>) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    who.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// `actor`'s screen name as the bell gives it (`doorbell::bell_sender`): the
@@ -473,6 +622,123 @@ mod tests {
             );
             assert!(ledger.letters[0].waiting_answer);
         }
+    }
+
+    #[test]
+    fn each_agent_folds_into_one_line_of_what_it_last_said_that_matters() {
+        let lead = actor("w1:p1", "lead");
+        let builder = actor("w1:p2", "builder");
+        let reviewer = actor("w1:p3", "reviewer");
+        let writer = actor("w1:p4", "writer");
+        let quiet = actor("w1:p5", "quiet");
+        let busy = actor("w1:p6", "busy");
+        let mut ledger = Ledger {
+            letters: vec![
+                letter(1, &lead, &builder, "request", "고쳐 주세요", 100),
+                letter(2, &builder, &lead, "block", "경로가 없어요", 200),
+                letter(3, &lead, &builder, "report", "fixtures 아래에", 300),
+                letter(4, &builder, &lead, "progress", "하는 중", 400),
+                letter(5, &builder, &lead, "report", "고쳤습니다", 500),
+                letter(6, &builder, &lead, "progress", "정리 중", 600),
+                letter(7, &lead, &reviewer, "request", "봐 주세요", 150),
+                letter(8, &writer, &lead, "request", "어디에 둘까요?", 700),
+                letter(9, &lead, &quiet, "request", "답 주세요", 350),
+                letter(10, &busy, &lead, "progress", "절반", 450),
+            ],
+            ..Ledger::default()
+        };
+        ledger.letters[2].reply_to = Some("letter-2".into());
+        for (n, agent) in [&lead, &builder, &reviewer, &writer, &quiet, &busy]
+            .into_iter()
+            .enumerate()
+        {
+            ledger.agents.push(registered(&format!("agent-{n}"), agent));
+        }
+        // The lead started the writer; its start and its letters are one line.
+        ledger.spawns.push(serde_json::from_value(serde_json::json!({
+            "id": "spawn-1", "parent": "agent-0", "intent": "w", "name": "writer",
+            "kind": "claude", "repo": "/repo", "branch": "b", "requested_path": null, "args": [],
+            "path": null, "pane": "w1:p4", "child": "agent-3", "reserved_at_unix_ms": 120
+        })).unwrap());
+        let since = Correspondence::of(&ledger).since("w1:p1", 0).unwrap();
+        let lines: Vec<_> = since
+            .peers
+            .iter()
+            .map(|line| {
+                (
+                    line.peer.clone(),
+                    line.mark,
+                    line.line.as_deref(),
+                    line.blocks,
+                    line.started,
+                )
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                (
+                    named("writer"),
+                    Some(LetterMark::Question),
+                    Some("어디에 둘까요?"),
+                    0,
+                    true
+                ),
+                // A later interim report does not hide the report before it.
+                (
+                    named("builder"),
+                    Some(LetterMark::Report),
+                    Some("고쳤습니다"),
+                    1,
+                    false
+                ),
+                (
+                    named("busy"),
+                    Some(LetterMark::Progress),
+                    Some("절반"),
+                    0,
+                    false
+                ),
+                (
+                    named("quiet"),
+                    Some(LetterMark::WaitingAnswer),
+                    Some("답 주세요"),
+                    0,
+                    false
+                ),
+                (
+                    named("reviewer"),
+                    Some(LetterMark::WaitingAnswer),
+                    Some("봐 주세요"),
+                    0,
+                    false
+                ),
+            ]
+        );
+        assert_eq!((since.letters, since.more_peers), (10, 0));
+    }
+
+    #[test]
+    fn agents_past_the_cap_are_counted() {
+        let lead = actor("w1:p1", "lead");
+        let others: Vec<_> = (0..9)
+            .map(|n| actor(&format!("w2:p{n}"), &format!("a{n}")))
+            .collect();
+        let ledger = Ledger {
+            letters: others
+                .iter()
+                .enumerate()
+                .map(|(n, other)| {
+                    letter(n as u64 + 1, other, &lead, "report", "끝", 100 + n as u64)
+                })
+                .collect(),
+            ..Ledger::default()
+        };
+        let since = Correspondence::of(&ledger).since("w1:p1", 0).unwrap();
+        assert_eq!(since.peers.len(), CARD_PEERS);
+        assert_eq!(since.more_peers, 3);
+        // The agent last heard from comes first.
+        assert_eq!(since.peers[0].at_unix_ms, 108);
     }
 
     #[test]

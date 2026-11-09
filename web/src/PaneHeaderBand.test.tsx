@@ -683,9 +683,10 @@ it("opens the turn card from the request on a press, not on hover, until Esc", a
 });
 
 // The card's later half (docs/UI_BEHAVIOR.md, the turn card): the answer to
-// the request in bold over its first lines, the letters since with their
-// marks and the folded reports, a question a letter's turn put to the
-// operator in its place, and the whole answer read only when opened.
+// the request in bold over its first lines, a line per agent it worked with
+// that opens into the letters in time order with the folded reports, a
+// question a letter's turn put to the operator under them, and the whole
+// answer read only when opened.
 it("draws the answer, the letters and the unanswered question since the request", async () => {
   const value: PaneHeader = { working: true, notice: null, band: null, progress: "Waiting on Windows CI", request: { text: "Can a profile exist without the default folder?", images: 0 } };
   const agent = turnAgent();
@@ -700,6 +701,12 @@ it("draws the answer, the letters and the unanswered question since the request"
         { direction: "sent", peer: { kind: "named", name: "windows-x" }, mark: "waiting_answer", line: "Reviewer FAIL forwarded", at_unix_ms: 2_000 },
         { direction: "received", peer: { kind: "named", name: "impl" }, mark: "block", line: "Plugin contract needed", at_unix_ms: 3_000 },
       ],
+      letters: 13,
+      peers: [
+        { peer: { kind: "named", name: "impl" }, mark: "report", line: "Fixed and pushed", at_unix_ms: 3_500, blocks: 1 },
+        { peer: { kind: "named", name: "windows-x" }, mark: "waiting_answer", line: "Reviewer FAIL forwarded", at_unix_ms: 2_000, started: true },
+      ],
+      more_peers: 2,
     },
     asked: [{ line: "Decide the closed tab defect", at_unix_ms: 2_500, current: false }],
   };
@@ -710,15 +717,28 @@ it("draws the answer, the letters and the unanswered question since the request"
     await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!.click());
     expect(card().querySelector("[data-turn-card-answer-line]")?.textContent).toBe("Yes, rarely: a profile-only machine");
     expect(card().querySelector("[data-turn-card-answer-head]")?.textContent).toBe("Yes, it can happen.\nNot common though.");
-    expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("13 letters since");
+    expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("4 agents · 13 letters");
+    // A line per agent, the latest first, then the question to the operator; each named for assistive technology.
+    const lines = () => [...card().querySelectorAll("[data-turn-card-peer], [data-turn-card-letter], [data-turn-card-asked]")].map((line) => line.getAttribute("aria-label"));
+    expect(lines()).toEqual([
+      "impl · Report · Fixed and pushed · Blocked 1×",
+      "windows-x · Awaiting reply · Reviewer FAIL forwarded",
+      "To me · Decide the closed tab defect · not answered",
+    ]);
+    expect(card().querySelector("[data-turn-card-more-peers]")?.textContent).toBe("2 more");
+    // Show all opens the letters in time order in the same place, and Collapse closes them.
+    const letters = () => card().querySelector<HTMLButtonElement>("[data-turn-card-letters-whole]")!;
+    await act(async () => letters().click());
     expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("Older letters not shown: 1");
     expect(card().querySelector("[data-turn-card-progress]")?.textContent).toBe("10 progress reports folded");
-    // Letters and the question read in time order, each named for assistive technology.
-    expect([...card().querySelectorAll("[data-turn-card-letter], [data-turn-card-asked]")].map((line) => line.getAttribute("aria-label"))).toEqual([
+    expect(lines()).toEqual([
       "Sent to windows-x · Awaiting reply · Reviewer FAIL forwarded",
-      "To me · Decide the closed tab defect · not answered",
       "From impl · Blocked · Plugin contract needed",
+      "To me · Decide the closed tab defect · not answered",
     ]);
+    await act(async () => letters().click());
+    expect(letters().getAttribute("data-turn-card-letters-whole")).toBe("closed");
+    expect(card().querySelectorAll("[data-turn-card-peer]")).toHaveLength(2);
     // The agent still works on a later turn, so how it stands now stays its own line.
     expect(card().querySelector("[data-turn-card-response]")?.textContent).toBe("WorkingWaiting on Windows CI");
     const whole = () => card().querySelector<HTMLButtonElement>("[data-turn-card-whole]")!;

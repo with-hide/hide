@@ -392,10 +392,20 @@ pub(crate) fn apply<'a>(
             .map(|mut letters| {
                 // An unnamed peer on these rows goes by its title; one with
                 // no title keeps its runtime's name.
+                let title = |titled_by: &Option<String>| {
+                    titled_by
+                        .as_ref()
+                        .and_then(|pane| names.get(pane))
+                        .map(|title| named(title))
+                        .filter(|title| matches!(title, RequestSender::Named(_)))
+                };
                 for line in &mut letters.recent {
-                    let titled = line.titled_by.as_ref().and_then(|pane| names.get(pane));
-                    if let Some(title @ RequestSender::Named(_)) = titled.map(|title| named(title))
-                    {
+                    if let Some(title) = title(&line.titled_by) {
+                        line.peer = title;
+                    }
+                }
+                for line in &mut letters.peers {
+                    if let Some(title) = title(&line.titled_by) {
                         line.peer = title;
                     }
                 }

@@ -274,13 +274,24 @@ export type TurnAnswer = {
 export type LetterDirection = "sent" | "received" | "started";
 
 /** What a card line is marked with (`LetterMark`). */
-export type LetterMark = "waiting_answer" | "reply" | "block" | "report" | "question";
+export type LetterMark = "waiting_answer" | "reply" | "block" | "report" | "question" | "progress";
 
 /** One line of the turn card's letter list (`LetterLineSnapshot`). */
 export type LetterLine = { direction: LetterDirection; peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number };
 
-/** The letters since the shown request: interim reports only counted, the newest eight listed oldest first. */
-export type LettersSince = { total: number; progress: number; recent: LetterLine[] };
+/**
+ * One agent the pane worked with since the request (`PeerLineSnapshot`): what
+ * it last said that matters, or what the pane last sent it, with how many
+ * blocks it sent and whether the pane started it.
+ */
+export type PeerLine = { peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number; blocks?: number; started?: boolean };
+
+/**
+ * The letters since the shown request: a line per agent (at most six, the
+ * rest counted), and for the whole list the newest eight lines oldest first,
+ * interim reports only counted.
+ */
+export type LettersSince = { total: number; progress: number; letters: number; recent: LetterLine[]; peers: PeerLine[]; more_peers: number };
 
 /** A question a later turn put to the operator (`AskedSnapshot`); `current` when it ended the newest turn. */
 export type AskedTurn = { line: string; at_unix_ms: number; current: boolean };

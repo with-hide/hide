@@ -12,9 +12,9 @@ import { cn } from "./lib/utils";
 import { renderMarkdown } from "./mobile/markdown";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { sessionOfAgent } from "./sessionWork";
-import { type AgentRow, type AskedTurn, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead } from "./snapshot";
+import { type AgentRow, type AskedTurn, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PeerLine, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead } from "./snapshot";
 import { useShellStore } from "./store";
-import { cardLines, letterCount, lettersBefore } from "./turnCard";
+import { askedLines, lettersBefore, peerCount } from "./turnCard";
 
 /** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
@@ -239,18 +239,48 @@ const MARK: Record<LetterMark, string> = {
   waiting_answer: "bg-secondary text-subtle-foreground",
   reply: "bg-secondary text-subtle-foreground",
   question: "bg-secondary text-subtle-foreground",
+  progress: "bg-agent-working/15 text-agent-working",
 };
 
-/** One line of the card's later half: glyph, who, mark, words and time, cut to the card's width. */
-function CardRow({ glyph, who, mark, words, at, className, label, ...rest }: { glyph: ReactNode; who: string; mark?: ReactNode; words: ReactNode; at: number; className?: string; label: string } & { [data: `data-${string}`]: string | number | undefined }) {
+/** One line of the card's later half: glyph, who, mark, words, a small note and time, cut to the card's width. */
+function CardRow({ glyph, who, mark, words, note, at, className, label, ...rest }: { glyph?: ReactNode; who: string; mark?: ReactNode; words: ReactNode; note?: string | null; at: number; className?: string; label: string } & { [data: `data-${string}`]: string | number | undefined }) {
   return (
     <li className={cn("flex min-w-0 items-baseline gap-xs", className)} aria-label={label} {...rest}>
-      <span aria-hidden="true" className="w-(--size-icon-sm) shrink-0 text-center">{glyph}</span>
+      {glyph === undefined ? null : <span aria-hidden="true" className="w-(--size-icon-sm) shrink-0 text-center">{glyph}</span>}
       <span aria-hidden="true" className="max-w-1/4 shrink-0 truncate text-muted-foreground">{who}</span>
       {mark}
       <span aria-hidden="true" className="min-w-0 flex-1 truncate">{words}</span>
+      {note ? <span aria-hidden="true" className="shrink-0 text-micro text-subtle-foreground">{note}</span> : null}
       <Clock at={at} />
     </li>
+  );
+}
+
+function MarkBadge({ mark, word }: { mark: LetterMark; word: string }) {
+  return <span className={cn("shrink-0 rounded-xs px-xxs text-micro font-semibold", MARK[mark])}>{word}</span>;
+}
+
+/**
+ * One agent the pane worked with since the request: its name, the mark and
+ * first line of what it last said that matters (or what the pane last sent
+ * it), how many blocks it sent, and when.
+ */
+function PeerRow({ line }: { line: PeerLine }) {
+  const { t } = useInterfaceTranslation();
+  const who = senderName(t, line.peer);
+  const words = line.line ?? (line.started ? t("paneTurn.started") : "");
+  const markWord = line.mark ? t(`paneTurn.mark.${line.mark}`) : null;
+  const note = line.blocks ? t("paneTurn.blocks", { count: line.blocks }) : null;
+  return (
+    <CardRow
+      who={who}
+      mark={line.mark && markWord ? <MarkBadge mark={line.mark} word={markWord} /> : null}
+      words={<span className="text-foreground">{words}</span>}
+      note={note}
+      at={line.at_unix_ms}
+      label={[who, markWord, words, note].filter(Boolean).join(" · ")}
+      data-turn-card-peer={line.mark ?? "none"}
+    />
   );
 }
 
@@ -264,7 +294,7 @@ function LetterRow({ letter }: { letter: LetterLine }) {
     <CardRow
       glyph={<span className={direction.tone}>{direction.glyph}</span>}
       who={who}
-      mark={letter.mark ? <span className={cn("shrink-0 rounded-xs px-xxs text-micro font-semibold", MARK[letter.mark])}>{markWord}</span> : null}
+      mark={letter.mark && markWord ? <MarkBadge mark={letter.mark} word={markWord} /> : null}
       words={<span className="text-foreground">{words}</span>}
       at={letter.at_unix_ms}
       label={[t(`paneTurn.direction.${letter.direction}`, { name: who }), markWord, words].filter(Boolean).join(" · ")}
@@ -346,12 +376,12 @@ function AnswerItem({ answer, pill, read, onReadWhole, opened = false }: { answe
  * rail: the turns before (oldest first, dimmed, each ringed in how it ended),
  * the shown request in a bubble under who sent it and when (its summary and
  * its own first two lines, who asked after), the agent's answer to it once
- * that turn is over, the letters the agent sent and received and the agents
- * it started since, with the questions its later turns put to the operator in
- * their places, and the agent's half now: what it does as a coloured verb
+ * that turn is over, the agents it worked with since, one line each, which
+ * opens into the letters in time order, the questions its later turns put to
+ * the operator under them, and the agent's half now: what it does as a coloured verb
  * with the label's words. A part with nothing to say is not drawn (B7).
  */
-export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null; onReadWhole: (offset: number) => void; /** The gallery's opened answer. */ answerOpened?: boolean }) {
+export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened, lettersOpened }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null; onReadWhole: (offset: number) => void; /** The gallery's opened answer. */ answerOpened?: boolean; /** The gallery's opened letters. */ lettersOpened?: boolean }) {
   const { t } = useInterfaceTranslation();
   const read = useShellStore((state) => (state.rest?.turn_answer?.pane_id === agent.pane_id ? state.rest.turn_answer : undefined));
   const view = agent.request;
@@ -366,11 +396,12 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened }:
   // With no later turn and nothing asked, the answer is how the agent stands
   // now: it wears the verb, and no second line repeats it.
   const answerIsNow = answer !== null && !view?.later_by && response !== null && !response.asks && !header?.working;
-  const lines = cardLines(view?.letters, view?.asked, response?.asks === true);
-  const count = letterCount(view?.letters);
-  const before = lettersBefore(view?.letters);
-  const progress = view?.letters?.progress ?? 0;
-  const later = lines.length > 0 || count > 0;
+  const [lettersOpen, setLettersOpen] = useState(lettersOpened ?? false);
+  const letters = view?.letters;
+  const asked = askedLines(view?.asked, response?.asks === true);
+  const before = lettersBefore(letters);
+  const progress = letters?.progress ?? 0;
+  const later = letters !== undefined || asked.length > 0;
   const rail = raw !== null || response !== null || earlier.length > 0 || answer !== null || later;
   return (
     <div className="flex min-w-0 flex-col [word-break:keep-all]" data-turn-card="true">
@@ -414,13 +445,42 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened }:
               />
             ) : null}
             {later ? (
-              <RailItem dot="letters" data-turn-card-letters={count}>
-                <h3 className="text-micro text-muted-foreground" data-turn-card-letters-head="true">{t("paneTurn.letters", { count })}</h3>
-                <ol className="mt-xxs flex min-w-0 flex-col gap-xxs">
-                  {before > 0 ? <li className="text-muted-foreground" data-turn-card-letters-before={before}>{t("paneTurn.lettersEarlier", { count: before })}</li> : null}
-                  {lines.map((line, index) => (line.kind === "letter" ? <LetterRow key={index} letter={line.letter} /> : <AskedRow key={index} asked={line.asked} />))}
-                  {progress > 0 ? <li className="text-muted-foreground" data-turn-card-progress={progress}>{t("paneTurn.progressFolded", { count: progress })}</li> : null}
-                </ol>
+              <RailItem dot="letters" data-turn-card-letters={letters?.letters ?? 0}>
+                {letters ? (
+                  <>
+                    <div className="flex min-w-0 items-center justify-between gap-xs">
+                      <h3 className="truncate text-micro text-muted-foreground" data-turn-card-letters-head="true">{t("paneTurn.peers", { peers: peerCount(letters), count: letters.letters })}</h3>
+                      <Button
+                        variant="text"
+                        size="inline"
+                        className="shrink-0 text-micro"
+                        aria-expanded={lettersOpen}
+                        data-turn-card-letters-whole={lettersOpen ? "open" : "closed"}
+                        onClick={() => setLettersOpen(!lettersOpen)}
+                      >
+                        {lettersOpen ? `${t("paneTurn.fold")} ▴` : `${t("paneTurn.whole")} ▾`}
+                      </Button>
+                    </div>
+                    {lettersOpen ? (
+                      // The whole list in time order, as it went.
+                      <ol className="mt-xxs flex min-w-0 flex-col gap-xxs" data-turn-card-letters-list="time">
+                        {before > 0 ? <li className="text-muted-foreground" data-turn-card-letters-before={before}>{t("paneTurn.lettersEarlier", { count: before })}</li> : null}
+                        {letters.recent.map((letter, index) => <LetterRow key={index} letter={letter} />)}
+                        {progress > 0 ? <li className="text-muted-foreground" data-turn-card-progress={progress}>{t("paneTurn.progressFolded", { count: progress })}</li> : null}
+                      </ol>
+                    ) : (
+                      <ol className="mt-xxs flex min-w-0 flex-col gap-xxs" data-turn-card-letters-list="peers">
+                        {letters.peers.map((line, index) => <PeerRow key={index} line={line} />)}
+                        {letters.more_peers > 0 ? <li className="text-muted-foreground" data-turn-card-more-peers={letters.more_peers}>{t("paneTurn.morePeers", { count: letters.more_peers })}</li> : null}
+                      </ol>
+                    )}
+                  </>
+                ) : null}
+                {asked.length > 0 ? (
+                  <ol className={cn("flex min-w-0 flex-col gap-xxs", letters && "mt-xs")}>
+                    {asked.map((one, index) => <AskedRow key={index} asked={one} />)}
+                  </ol>
+                ) : null}
               </RailItem>
             ) : null}
             {response && !answerIsNow ? (

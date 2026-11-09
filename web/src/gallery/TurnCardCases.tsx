@@ -25,7 +25,7 @@ const WHOLE = `네, 실제로 생길 수 있습니다. 다만 흔한 경우는 �
 - 기본 계정이 준비 안 됨: 프로필은 준비됐는데도 시작이 거절됩니다.
 - 기본 계정만 준비됨: 프로필 쪽 훅이 빠져 있어도 그냥 시작됩니다.`;
 
-type Case = { id: string; label: string; header: PaneHeader; request: NonNullable<AgentRow["request"]>; opened?: boolean };
+type Case = { id: string; label: string; header: PaneHeader; request: NonNullable<AgentRow["request"]>; opened?: boolean; lettersOpened?: boolean };
 
 const CONDUCTOR: Case = {
   id: "conductor",
@@ -46,6 +46,13 @@ const CONDUCTOR: Case = {
         { direction: "received", peer: named("m41-review-windows"), mark: "report", line: "로컬 551e5c8c4 추가 delta 승인", at_unix_ms: min(6) + 30_000 },
         { direction: "received", peer: named("m41-review-windows"), mark: "reply", line: "방향 승인합니다", at_unix_ms: min(7) },
       ],
+      letters: 15,
+      peers: [
+        { peer: named("m41-review-windows"), mark: "reply", line: "방향 승인합니다", at_unix_ms: min(7), blocks: 0 },
+        { peer: named("m41-windows-x"), mark: "waiting_answer", line: "리뷰어 732160b86 증분 FAIL 1건 전달", at_unix_ms: min(5) + 20_000 },
+        { peer: named("m41-together-x"), mark: "progress", line: "디스크 정리 중", at_unix_ms: min(4) + 10_000 },
+      ],
+      more_peers: 0,
     },
     asked: [{ line: "닫은 탭 결함 어떻게 할지 정해 주세요", at_unix_ms: min(6), current: false }],
   },
@@ -71,6 +78,9 @@ const CASES: Case[] = [
           { direction: "sent", peer: named("auto-mission-impl"), line: "플러그인 계약 변경은 하지 않습니다(범위 확장 거절)", at_unix_ms: min(12) },
           { direction: "received", peer: named("auto-mission-impl"), mark: "question", line: "재시작 한계를 두 문서에 반영해 de514ae0a로 커밋했습니다", at_unix_ms: min(13) },
         ],
+        letters: 8,
+        peers: [{ peer: named("auto-mission-impl"), mark: "question", line: "재시작 한계를 두 문서에 반영해 de514ae0a로 커밋했습니다", at_unix_ms: min(13), blocks: 1, started: true }],
+        more_peers: 0,
       },
     },
   },
@@ -89,10 +99,14 @@ const CASES: Case[] = [
           { direction: "received", peer: named("skill-merge-impl"), mark: "question", line: "수정 범위에서 설정 UI 문구 결정 하나가 남았습니다", at_unix_ms: min(-84) },
           { direction: "sent", peer: named("skill-merge-impl"), mark: "reply", line: "네, 세 web 파일도 갱신하세요. mission 행은 'hide mission help'만", at_unix_ms: min(-84) + 30_000 },
         ],
+        letters: 6,
+        peers: [{ peer: named("skill-merge-impl"), mark: "question", line: "수정 범위에서 설정 UI 문구 결정 하나가 남았습니다", at_unix_ms: min(-84) }],
+        more_peers: 0,
       },
     },
   },
   { ...CONDUCTOR, id: "answer-opened", label: "답 전체 보기 펼침", opened: true },
+  { ...CONDUCTOR, id: "letters-opened", label: "편지 전체 보기 펼침 (시간순)", lettersOpened: true },
 ];
 
 export function TurnCardCases({ seed }: { seed: AgentRow }) {
@@ -108,7 +122,7 @@ export function TurnCardCases({ seed }: { seed: AgentRow }) {
           <div key={example.id} className="flex flex-col gap-xs" data-turn-card-case={example.id}>
             <div className="text-micro text-muted-foreground">{example.label}</div>
             <div className="w-(--size-turn-card) max-w-full rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-lg">
-              <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} answerOpened={example.opened} />
+              <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} answerOpened={example.opened} lettersOpened={example.lettersOpened} />
             </div>
           </div>
         ))}
