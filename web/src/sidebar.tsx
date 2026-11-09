@@ -1103,7 +1103,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
       data-checkout-row={checkout.id}
       data-checkout-open={open ? "true" : undefined}
       data-checkout-removing={removing ? "true" : undefined}
-      className={cn(removing && "opacity-(--opacity-dimmed)")}
+      className={cn("rounded-sm", focused && !removing && "bg-holds-selected", removing && "opacity-(--opacity-dimmed)")}
     >
       <EntryContextMenu
         label={t("common.entryActions", { name })}
@@ -1204,7 +1204,7 @@ const FolderRowView = memo(function FolderRowView({
   const secondLine = asleep ? !open && checkoutHasSecondLine(view, purpose, raisedFrom) : disclosure.secondLine;
   const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   return (
-    <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-checkout-open={open ? "true" : undefined} className={cn(!first && "mt-xs")}>
+    <li data-project={workspace.id} data-project-pinned={workspace.pinned ? "true" : undefined} data-checkout-open={open ? "true" : undefined} className={cn("rounded-sm", !first && "mt-xs", focused && "bg-holds-selected")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
