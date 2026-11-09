@@ -7,6 +7,62 @@ use hide_agent_adapter::definition::{
 use hide_agent_adapter::{ADAPTERS, AgentId};
 
 #[test]
+fn credential_paths_are_declared_for_every_agent_whose_login_is_read() {
+    use hide_agent_adapter::AccountPath::{Login, Usage};
+    let expected: &[(&str, _, &[&str])] = &[
+        ("codex", Login, &["/OPENAI_API_KEY", "/tokens/access_token"]),
+        (
+            "claude-code",
+            Usage,
+            &["/claudeAiOauth/accessToken", "/claudeAiOauth/refreshToken"],
+        ),
+        (
+            "pi",
+            Login,
+            &["/*/key", "/*/env", "/*/access", "/*/refresh"],
+        ),
+        (
+            "grok",
+            Login,
+            &["/*/key", "/*/access_token", "/*/refresh_token"],
+        ),
+    ];
+    for adapter in ADAPTERS {
+        let actual = adapter.account_rule().and_then(|rule| rule.login.as_ref());
+        match expected.iter().find(|(id, _, _)| *id == adapter.id) {
+            Some((_, at, any)) => {
+                let actual = actual.expect(adapter.id);
+                assert_eq!(actual.at, *at);
+                assert_eq!(actual.any, *any);
+            }
+            None => assert!(actual.is_none(), "{}", adapter.id),
+        }
+    }
+}
+
+#[test]
+fn login_rules_reject_unbounded_paths_and_invalid_pointers() {
+    let base = include_str!("../../agents/codex.toml");
+    let original = "at = \"login\"\nany = [\"/OPENAI_API_KEY\", \"/tokens/access_token\"]";
+    for bad in [
+        "at = \"sessions\"\nany = [\"/token\"]".to_owned(),
+        "at = \"login\"\nany = []".to_owned(),
+        "at = \"login\"\nany = [\"token\"]".to_owned(),
+        "at = \"login\"\nany = [\"/token/*/value\"]".to_owned(),
+        "at = \"login\"\nany = [\"/bad~2escape\"]".to_owned(),
+        format!("at = \"login\"\nany = [\"/{}\"]", "a".repeat(256)),
+        format!("at = \"login\"\nany = [{}]", ["\"/token\""; 17].join(",")),
+    ] {
+        let written = base.replace(original, &bad);
+        assert_ne!(written, base);
+        assert!(
+            hide_agent_adapter::definition::read_account("custom", &written).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn built_in_package_identities_match_their_install_routes() {
     use hide_agent_adapter::InstallMethod;
     for adapter in ADAPTERS {

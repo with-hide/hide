@@ -27,7 +27,7 @@ pub use hide_screen_rules::Rules;
 mod file;
 pub use file::{
     ACCOUNT_PART, AccountPath, AccountRule, AccountVar, Base, By, Hooks, LINE_BYTES, LINE_WORDS,
-    PathRule, SCHEMA, Template, is_plain_command, is_typable_word, reserved_variable,
+    LoginRule, PathRule, SCHEMA, Template, is_plain_command, is_typable_word, reserved_variable,
     valid_variable,
 };
 use file::{Fields, Origin, required};

@@ -21,9 +21,8 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::{Account, AccountPath, AgentId};
+use hide_agent_adapter::Account;
 use hide_node_link::profiles::ProfileLogin;
-use serde_json::Value;
 
 use crate::credentials;
 
@@ -65,61 +64,35 @@ fn answers() -> std::sync::MutexGuard<
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-type Check = fn(&Account) -> ProfileLogin;
+mod claude;
 
-/// The check of the `kind` agent's sign-in, if it has one.
-fn check_of(kind: &str) -> Option<Check> {
-    let id = hide_agent_adapter::adapter(kind)?.id;
-    let is = |agent: AgentId| agent.adapter().id == id;
-    if is(AgentId::ClaudeCode) {
-        Some(claude)
-    } else if is(AgentId::Codex) {
-        Some(|account| login_file(account, credentials::codex::signed_in))
-    } else if is(AgentId::Pi) {
-        Some(|account| login_file(account, credentials::pi::signed_in))
-    } else if is(AgentId::Grok) {
-        Some(|account| login_file(account, credentials::grok::signed_in))
-    } else {
-        None
-    }
-}
-
-/// Claude Code's sign-in: its keychain item on macOS, else (and on macOS
-/// with no item) the credentials file in the account's folder.
-fn claude(account: &Account) -> ProfileLogin {
-    #[cfg(target_os = "macos")]
-    match crate::usage::claude_keychain_item(
-        &crate::usage::claude_keychain_service(&account.key),
-        false,
-    ) {
-        Ok(Some(_)) => return ProfileLogin::SignedIn,
-        Ok(None) => {}
-        Err(_) => {
-            log(account, "keychain_unreadable");
-            return ProfileLogin::Unknown;
+/// A definition's sign-in rule; only Claude's keychain needs code of its own.
+fn check_of(kind: &str) -> Option<impl Fn(&Account) -> ProfileLogin> {
+    let adapter = hide_agent_adapter::adapter(kind)?;
+    let rule = adapter.account_rule()?.login.as_ref()?;
+    let keychain = adapter.id == hide_agent_adapter::AgentId::ClaudeCode.adapter().id;
+    Some(move |account: &Account| {
+        if keychain && let Some(answer) = claude::keychain(account) {
+            return answer;
         }
-    }
-    match account.path(AccountPath::Usage) {
-        Some(file) => signed_in(account, file, credentials::claude::signed_in),
-        None => ProfileLogin::Unknown,
-    }
-}
-
-/// A sign-in file the agent writes in the account (`AccountPath::Login`).
-fn login_file(account: &Account, holds: fn(&Value) -> bool) -> ProfileLogin {
-    match account.path(AccountPath::Login) {
-        Some(file) => signed_in(account, file, holds),
-        None => ProfileLogin::Unknown,
-    }
+        match account.path(rule.at) {
+            Some(file) => signed_in(account, file, rule),
+            None => ProfileLogin::Unknown,
+        }
+    })
 }
 
 /// Signed in while `file` holds what its agent needs (`holds`); missing, or
 /// without those values, signed out.
-fn signed_in(account: &Account, file: &Path, holds: fn(&Value) -> bool) -> ProfileLogin {
+fn signed_in(
+    account: &Account,
+    file: &Path,
+    rule: &hide_agent_adapter::definition::LoginRule,
+) -> ProfileLogin {
     match credentials::read(file)
         .and_then(|bytes| bytes.map(|bytes| credentials::object(&bytes)).transpose())
     {
-        Ok(Some(login)) if holds(&login) => ProfileLogin::SignedIn,
+        Ok(Some(login)) if credentials::signed_in(&login, rule) => ProfileLogin::SignedIn,
         Ok(_) => ProfileLogin::SignedOut,
         Err(kind) => {
             log(account, kind);
@@ -145,7 +118,7 @@ fn log(account: &Account, kind: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hide_agent_adapter::{AccountRef, NodeEnv, Profile, ProfileId};
+    use hide_agent_adapter::{AccountPath, AccountRef, NodeEnv, Profile, ProfileId};
 
     fn account(kind: &str, folder: &Path) -> Account {
         let profile = Profile {
@@ -196,6 +169,11 @@ mod tests {
                 "codex",
                 r#"{"tokens":{"id_token":"","access_token":"","refresh_token":""}}"#,
                 ProfileLogin::SignedOut,
+            ),
+            (
+                "codex",
+                r#"{"tokens":{"access_token":"a"}}"#,
+                ProfileLogin::SignedIn,
             ),
             (
                 "codex",

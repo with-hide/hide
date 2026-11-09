@@ -63,12 +63,6 @@ fn text<'v>(value: &'v Value, pointer: &str) -> Option<&'v str> {
 pub(crate) mod codex {
     use super::{Value, text};
 
-    pub(crate) fn signed_in(auth: &Value) -> bool {
-        text(auth, "/OPENAI_API_KEY").is_some()
-            || (text(auth, "/tokens/access_token").is_some()
-                && text(auth, "/tokens/refresh_token").is_some())
-    }
-
     /// The ChatGPT sign-in's access token and account, which the usage
     /// endpoint takes.
     pub(crate) fn usage_login(auth: &Value) -> Option<(&str, &str)> {
@@ -85,11 +79,6 @@ pub(crate) mod codex {
 pub(crate) mod claude {
     use super::{Value, text};
 
-    pub(crate) fn signed_in(login: &Value) -> bool {
-        text(login, "/claudeAiOauth/accessToken").is_some()
-            || text(login, "/claudeAiOauth/refreshToken").is_some()
-    }
-
     /// The access token and when it expires (Unix milliseconds), if the
     /// login says.
     pub(crate) fn access_token(login: &Value) -> Option<(&str, Option<u64>)> {
@@ -102,37 +91,17 @@ pub(crate) mod claude {
     }
 }
 
-/// pi's `auth.json`: one entry per provider, an API key (`type` `api_key`,
-/// the key itself or the variable that holds it) or a sign-in (`oauth`).
-pub(crate) mod pi {
-    use super::{Value, text};
-
-    pub(crate) fn signed_in(auth: &Value) -> bool {
-        auth.as_object().is_some_and(|providers| {
-            providers
-                .values()
-                .any(|entry| match entry.get("type").and_then(Value::as_str) {
-                    Some("api_key") => text(entry, "/key").or(text(entry, "/env")).is_some(),
-                    Some("oauth") => text(entry, "/access").or(text(entry, "/refresh")).is_some(),
-                    _ => false,
-                })
-        })
-    }
-}
-
-/// Grok's `auth.json`: one entry per sign-in scope, each holding its token
-/// as `key` (an OIDC sign-in its access and refresh tokens). Grok deletes
-/// an entry when it signs out of it.
-pub(crate) mod grok {
-    use super::{Value, text};
-
-    pub(crate) fn signed_in(auth: &Value) -> bool {
-        auth.as_object().is_some_and(|scopes| {
-            scopes.values().any(|entry| {
-                ["/key", "/access_token", "/refresh_token"]
-                    .iter()
-                    .any(|pointer| text(entry, pointer).is_some())
-            })
-        })
-    }
+/// Whether a definition's credential paths hold any nonblank value.
+/// Files are already bounded by `LIMIT`; pointers and their depth are
+/// bounded while reading the definition.
+pub(crate) fn signed_in(value: &Value, rule: &hide_agent_adapter::definition::LoginRule) -> bool {
+    rule.any.iter().any(|pointer| {
+        if let Some(pointer) = pointer.strip_prefix("/*") {
+            value
+                .as_object()
+                .is_some_and(|entries| entries.values().any(|entry| text(entry, pointer).is_some()))
+        } else {
+            text(value, pointer).is_some()
+        }
+    })
 }
