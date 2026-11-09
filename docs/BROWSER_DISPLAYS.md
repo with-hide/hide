@@ -416,6 +416,10 @@ The shell tells the host, in one sync, every browser display of the Workspace in
 A display the inventory no longer names is closed, which ends its renderer process even when its Workspace is in the background.
 A retained display absent from the current front placements, including a page behind the front, is hidden and keeps its page, so moving a page between areas or Workspaces never reloads it.
 At most 12 pages live at once (`MAX_LIVE_VIEWS`); past that, the page shown least recently among the hidden ones is unloaded, whatever holds it ([Unloading hidden pages](#unloading-hidden-pages)).
+A page that closes itself (`window.close()`, which Chromium allows a page that opened with one history entry) ends its own contents and leaves its view with none, so the host closes it as it closes any page and puts a fresh, unloaded page on the same slot (`BrowserViews.closedItself`).
+The display stays, reported failed with `The page closed itself` and the toolbar's reload, which loads its address again; the host never loads it again on its own, since a page that closes itself as it loads would loop.
+Each such close is logged as `browser.page_closed_itself {id, contents}`.
+A page left in the host's list with no contents would fail every later sync before the pages after it were placed, leaving them blank.
 The host checks every field of a sync before it places anything and drops a message that fails whole; only the shell the daemon serves may send one.
 Native page reports carry the display's current load stamp, so a late report from a previous reload cannot mark the new request loaded.
 

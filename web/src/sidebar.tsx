@@ -796,7 +796,10 @@ function ProjectName({ workspace, hidden = false, grow = true, label = false }: 
  * the row's own menu under the button. They wait for the pointer or the
  * keyboard, as the row's other revealed controls do, and stay while their
  * menu is open; they take no width at rest, and the badge of a folded project
- * stands aside while they show, so the row's end never holds both.
+ * stands aside while they show, so the row's end never holds both. They wait
+ * at opacity 0, never `display: none`: a hidden button cannot take focus, so
+ * the keyboard could not reach them from outside the row and a closing
+ * Project settings could not hand focus back to the gear that opened it.
  */
 function RowActions({ workspace, items, onSelect, fill, children }: { workspace: Workspace; items: () => MenuItem[]; onSelect: (id: MenuItem["id"]) => void; /** The `from-*` classes of the row's own fill, which the fade starts from; the row's own fill is what the buttons cover the name's end with. */ fill: string; children?: ReactNode }) {
   const { t } = useInterfaceTranslation();
@@ -804,7 +807,7 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
   const more = useRef<HTMLButtonElement>(null);
   return (
     <span className="pointer-events-none absolute inset-y-0 right-full flex items-center justify-end">
-      <span className={cn("pointer-events-none relative h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md hoverless:flex [&_button]:pointer-events-auto", fill, menuOpen ? "flex" : "hidden group-hover:flex group-has-focus-visible:flex")} data-row-actions={workspace.id}>
+      <span className={cn("pointer-events-none relative flex h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md [&_button]:pointer-events-auto", fill, menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
         <Hint label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")}>
           <Button variant="row-action" size="icon-sm" aria-label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")} aria-pressed={workspace.pinned} data-row-pin={workspace.id} onClick={() => onSelect(workspace.pinned ? "unpin" : "pin")}>
             <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "fill-current text-foreground")} />

@@ -89,10 +89,11 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
 
     // The mark stays while the pointer is on the row, where the row's + and ⋯ show.
     await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
-    await expect(project.locator("[data-row-actions]")).toBeVisible();
+    await expect(project.locator("[data-row-actions]")).toHaveCSS("opacity", "1");
     await expect(mark).toHaveCSS("opacity", "1");
     await rest(page);
-    await expect(mark).toBeHidden();
+    // Away from the row, the mark waits unseen with the + and ⋯ it stands beside.
+    await expect(project.locator("[data-row-actions]")).toHaveCSS("opacity", "0");
 
     // ⌘ asks for the default browser: the repository opens there and the project is neither opened nor selected.
     const before = new Map(sent);
