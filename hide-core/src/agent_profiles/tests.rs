@@ -83,6 +83,8 @@ fn a_field_the_node_refuses_reaches_the_caller_with_its_field_and_words() {
         field: ProfileField::Env,
         text: "HOME cannot be set by a profile".into(),
         env_key: Some("HOME".into()),
+        reason: Some(hide_node_link::profiles::ProfileReason::EnvReserved),
+        limit: None,
     };
     let link = Scripted::new(vec![Ok(applied(Some(refusal), 3))]);
     let prepared = job(
@@ -109,8 +111,33 @@ fn a_field_the_node_refuses_reaches_the_caller_with_its_field_and_words() {
         crate::coordination::split_refusal(&line),
         (REFUSED, Some("env: HOME cannot be set by a profile"))
     );
+    // The screen gets the reason to word itself, and the variable's name.
+    let answer =
+        serde_json::to_value(ProfileAnswer::pending("r1", "local").refused(refused)).unwrap();
+    assert_eq!(answer["reason"], "env_reserved");
+    assert_eq!(answer["env_key"], "HOME");
     // The list after the refusal still reaches the snapshot.
     assert!(outcome.list.is_some());
+}
+
+#[test]
+fn a_node_before_reason_codes_and_one_after_this_build_still_answer() {
+    // An older node sends no reason; a newer one may name one this build
+    // does not know. Both refusals still read, the screen then words them
+    // generically.
+    let old: ProfileRefusal = serde_json::from_value(
+        serde_json::json!({"field": "name", "text": "A profile needs a name"}),
+    )
+    .unwrap();
+    assert_eq!(old.reason, None);
+    let newer: ProfileRefusal = serde_json::from_value(
+        serde_json::json!({"field": "name", "text": "x", "reason": "name_from_the_future"}),
+    )
+    .unwrap();
+    assert_eq!(
+        newer.reason,
+        Some(hide_node_link::profiles::ProfileReason::Other)
+    );
 }
 
 #[test]

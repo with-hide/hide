@@ -2182,8 +2182,11 @@ export type AgentProfileAnswer = {
   code?: string;
   field?: "kind" | "name" | "account" | "program" | "env" | "profile";
   env_key?: string;
-  /** The machine's words for a field it refused. */
+  /** The machine's English words, for the log and the CLI; the screen words `reason`. */
   text?: string;
+  reason?: "kind_unknown" | "profiles_full" | "name_empty" | "name_long" | "name_control" | "name_builtin" | "name_taken" | "program_long" | "profile_builtin" | "profile_missing" | "profile_removing" | "profile_other_kind" | "node_variable" | "account_home_missing" | "account_unsupported" | "account_needs_folder" | "account_needs_name" | "account_empty" | "account_relative" | "account_is_default" | "account_name" | "account_unprepared" | "env_too_many" | "env_name" | "env_reserved" | "env_repeated" | "env_value" | "other";
+  /** The bound a `*_long`, `profiles_full` or `env_too_many` reason crossed. */
+  limit?: number;
   in_use?: { pane_id: string; title: string; place: string; asleep: boolean }[];
   projects?: string[];
   values?: [string, string][];

@@ -131,16 +131,60 @@ export function profileRefusalKey(code: string | undefined): string {
 
 const FORM_FIELDS = ["name", "account", "program", "env"] as const;
 
+/** What the screen says for a node's refusal, in its own words (`profile_reason`). */
+const REASON_KEYS: Record<NonNullable<AgentProfileAnswer["reason"]>, string> = {
+  kind_unknown: "agentProfiles.refuse.kindUnknown",
+  profiles_full: "agentProfiles.refuse.profilesFull",
+  name_empty: "agentProfiles.refuse.nameEmpty",
+  name_long: "agentProfiles.refuse.nameLong",
+  name_control: "agentProfiles.refuse.nameControl",
+  name_builtin: "agentProfiles.refuse.nameBuiltin",
+  name_taken: "agentProfiles.refuse.nameTaken",
+  program_long: "agentProfiles.refuse.programLong",
+  profile_builtin: "agentProfiles.builtInNote",
+  profile_missing: "agentProfiles.error.gone",
+  profile_removing: "agentProfiles.refuse.removing",
+  profile_other_kind: "agentProfiles.refuse.otherKind",
+  node_variable: "agentProfiles.refuse.nodeVariable",
+  account_home_missing: "agentProfiles.refuse.noHome",
+  account_unsupported: "agentProfiles.noAccount",
+  account_needs_folder: "agentProfiles.refuse.needsFolder",
+  account_needs_name: "agentProfiles.refuse.needsName",
+  account_empty: "agentProfiles.refuse.empty",
+  account_relative: "agentProfiles.refuse.relative",
+  account_is_default: "agentProfiles.refuse.defaultLocation",
+  account_name: "agentProfiles.refuse.accountName",
+  account_unprepared: "agentProfiles.refuse.unprepared",
+  env_too_many: "agentProfiles.refuse.envTooMany",
+  env_name: "agentProfiles.refuse.envName",
+  env_reserved: "agentProfiles.refuse.accountVar",
+  env_repeated: "agentProfiles.refuse.envRepeated",
+  env_value: "agentProfiles.refuse.envValue",
+  other: "agentProfiles.refuse.unknown",
+};
+
+/** A message to word: its catalog key and what it names. */
+export type Worded = { key: string; params?: Record<string, string | number> };
+
+/** The words for a node's refusal; one from a node that sends no reason reads generically. */
+function reasonWords(answer: AgentProfileAnswer): Worded {
+  const key = answer.env_key;
+  // The home and Hide's own variables are named apart from the account's.
+  if (answer.reason === "env_reserved" && key && /^(HOME|USERPROFILE|HIDE_.*)$/i.test(key)) return { key: "agentProfiles.refuse.reserved", params: { key } };
+  return { key: REASON_KEYS[answer.reason ?? "other"] ?? REASON_KEYS.other, params: { ...(answer.limit !== undefined ? { limit: answer.limit } : {}), ...(key ? { key } : {}) } };
+}
+
 /**
- * What a refused answer shows: a field the machine refused under that field,
- * in the machine's words (B4, B5, B13), else one line under the form.
+ * What a refused answer shows: a field the machine refused under that field
+ * (B4, B5, B13), else one line under the form, each in the screen's language.
  */
-export function answerRefusal(answer: AgentProfileAnswer | null): { refusals: ProfileRefusal[]; text: string | null; key: string | null } {
-  if (answer?.state !== "refused") return { refusals: [], text: null, key: null };
+export function answerRefusal(answer: AgentProfileAnswer | null): { refusals: (Worded & { field: ProfileRefusal["field"]; envKey?: string })[]; line: Worded | null } {
+  if (answer?.state !== "refused") return { refusals: [], line: null };
+  if (answer.code !== "profile_refused") return { refusals: [], line: { key: profileRefusalKey(answer.code) } };
   const field = FORM_FIELDS.find((name) => name === answer.field);
-  if (answer.code === "profile_refused" && field && answer.text) return { refusals: [{ field, text: answer.text, ...(answer.env_key ? { envKey: answer.env_key } : {}) }], text: null, key: null };
-  if (answer.code === "profile_refused" && answer.text) return { refusals: [], text: answer.text, key: null };
-  return { refusals: [], text: null, key: profileRefusalKey(answer.code) };
+  const words = reasonWords(answer);
+  if (field) return { refusals: [{ field, ...words, ...(answer.env_key ? { envKey: answer.env_key } : {}) }], line: null };
+  return { refusals: [], line: words };
 }
 
 /** A profile's fields as the form starts them; the variables' values come from a `values` answer, never the snapshot. */

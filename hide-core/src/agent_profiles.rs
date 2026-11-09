@@ -336,10 +336,15 @@ pub struct ProfileAnswer {
     pub field: Option<ProfileField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
-    /// The node's words for a field it refused; the screen words every
-    /// other code itself.
+    /// The node's words for a field it refused, for a node that sends no
+    /// `reason`; the screen words every other code itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Why the node refused, which the screen words in its language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<hide_node_link::profiles::ProfileReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub in_use: Vec<InUse>,
     /// The names of the projects that start with the profile.
@@ -373,6 +378,8 @@ impl ProfileAnswer {
             field: None,
             env_key: None,
             text: None,
+            reason: None,
+            limit: None,
             in_use: Vec::new(),
             projects: Vec::new(),
             values: None,
@@ -387,6 +394,8 @@ impl ProfileAnswer {
             self.field = Some(field.field);
             self.env_key.clone_from(&field.env_key);
             self.text = Some(field.text.clone());
+            self.reason = field.reason;
+            self.limit = field.limit;
         }
         self.in_use.clone_from(&refusal.in_use);
         self
@@ -397,7 +406,8 @@ impl ProfileAnswer {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Refusal {
     pub(crate) code: &'static str,
-    pub(crate) field: Option<hide_node_link::profiles::ProfileRefusal>,
+    /// Boxed: a refusal travels in every `Err`, and most carry none.
+    pub(crate) field: Option<Box<hide_node_link::profiles::ProfileRefusal>>,
     pub(crate) in_use: Vec<InUse>,
     /// What the CLI's line names after the code.
     pub(crate) detail: Option<String>,
@@ -428,7 +438,7 @@ impl Refusal {
         Self {
             code: REFUSED,
             detail: Some(format!("{field}: {}", refusal.text)),
-            field: Some(refusal),
+            field: Some(Box::new(refusal)),
             in_use: Vec::new(),
         }
     }

@@ -86,9 +86,18 @@ it("adds a profile through the core, shows the machine's refusal under its field
   await tab.click(tab.q("[data-profile-submit]"));
   expect(tab.changes().at(-1)).toMatchObject({ device_id: "local", change: { op: "add", kind: "claude-code", name: "work", account: "~/.claude", program: null, env: [] } });
 
-  await tab.answer({ state: "refused", code: "profile_refused", field: "account", text: "This is the agent's own folder" });
-  expect(tab.q("[data-profile-dialog='add']")?.textContent).toContain("This is the agent's own folder");
+  // The node's reason is worded by the screen, not in the node's English.
+  await tab.answer({ state: "refused", code: "profile_refused", field: "account", reason: "account_is_default", text: "the folder is where the default profile reads" });
+  expect(tab.q("[data-profile-dialog='add']")?.textContent).toContain("This is the agent's own folder. Use the Default profile for it.");
+  expect(tab.q("[data-profile-dialog='add']")?.textContent).not.toContain("where the default profile reads");
   expect(tab.q("#profile-add-account")?.getAttribute("aria-invalid")).toBe("true");
+  // A bound names its number; a node that sends no reason reads generically.
+  await tab.click(tab.q("[data-profile-submit]"));
+  await tab.answer({ state: "refused", code: "profile_refused", field: "name", reason: "name_long", limit: 64, text: "x" });
+  expect(tab.q("[data-profile-dialog='add']")?.textContent).toContain("A name is at most 64 bytes.");
+  await tab.click(tab.q("[data-profile-submit]"));
+  await tab.answer({ state: "refused", code: "profile_refused", field: "name", text: "A profile needs a name" });
+  expect(tab.q("[data-profile-dialog='add']")?.textContent).toContain("The machine refused this value.");
 
   await tab.type(tab.q("#profile-add-account"), "~/accounts/work");
   await tab.click(tab.q("[data-profile-submit]"));
@@ -149,8 +158,8 @@ it("keeps the dialog open with its values and the reason when the last edit is r
   await tab.type(tab.q("#profile-edit-program"), "nope");
   await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect(tab.changes().at(-1)?.change).toMatchObject({ op: "edit", program: "nope" });
-  await tab.answer({ state: "refused", code: "profile_refused", field: "program", text: "No such program" });
-  expect(tab.q("[data-profile-dialog='edit']")?.textContent).toContain("No such program");
+  await tab.answer({ state: "refused", code: "profile_refused", field: "program", reason: "program_long", limit: 4096, text: "too long" });
+  expect(tab.q("[data-profile-dialog='edit']")?.textContent).toContain("A program is at most 4,096 bytes.");
   expect((tab.q("#profile-edit-program") as HTMLInputElement).value).toBe("nope");
   await tab.unmount();
 });

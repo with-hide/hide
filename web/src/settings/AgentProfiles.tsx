@@ -19,6 +19,7 @@ import {
   profilesMachine,
   sameDraft,
   type ProfileChange,
+  type Worded,
 } from "../agentProfiles";
 import { InlineProfiles, ProfileDeleteDialog, ProfileFormDialog, ProfilesMachineNote, type ProfileDraft, type ProfileView } from "../components/agent-profiles";
 import { Note } from "../components/settings-rows";
@@ -99,7 +100,9 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
   }
 
   const refusal = answerRefusal(answer);
-  const errorText = refusal.text ?? (refusal.key ? t(refusal.key as "agentProfiles.error.other") : null);
+  const word = ({ key, params }: Worded) => t(key as "agentProfiles.error.other", params);
+  const errorText = refusal.line ? word(refusal.line) : null;
+  const fieldRefusals = refusal.refusals.map((row) => ({ field: row.field, text: word(row), ...(row.envKey ? { envKey: row.envKey } : {}) }));
   const close = () => setOpen(null);
   /**
    * Closing an edit saves its last draft first (B26): the dialog stays,
@@ -202,7 +205,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
           mode={open.kind}
           profile={profile ?? undefined}
           draft={open.draft}
-          refusals={refusal.refusals}
+          refusals={fieldRefusals}
           error={errorText}
           busy={waiting || editing?.closing === true}
           envLoading={editing?.saved === null}

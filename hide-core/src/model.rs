@@ -9161,6 +9161,72 @@ mod wire_enum_tests {
         assert_wire(&contract, "profile_field", &fields);
         checked.insert("profile_field");
 
+        use hide_node_link::profiles::ProfileReason;
+        let reasons = [
+            ProfileReason::KindUnknown,
+            ProfileReason::ProfilesFull,
+            ProfileReason::NameEmpty,
+            ProfileReason::NameLong,
+            ProfileReason::NameControl,
+            ProfileReason::NameBuiltin,
+            ProfileReason::NameTaken,
+            ProfileReason::ProgramLong,
+            ProfileReason::ProfileBuiltin,
+            ProfileReason::ProfileMissing,
+            ProfileReason::ProfileRemoving,
+            ProfileReason::ProfileOtherKind,
+            ProfileReason::NodeVariable,
+            ProfileReason::AccountHomeMissing,
+            ProfileReason::AccountUnsupported,
+            ProfileReason::AccountNeedsFolder,
+            ProfileReason::AccountNeedsName,
+            ProfileReason::AccountEmpty,
+            ProfileReason::AccountRelative,
+            ProfileReason::AccountIsDefault,
+            ProfileReason::AccountName,
+            ProfileReason::AccountUnprepared,
+            ProfileReason::EnvTooMany,
+            ProfileReason::EnvName,
+            ProfileReason::EnvReserved,
+            ProfileReason::EnvRepeated,
+            ProfileReason::EnvValue,
+            ProfileReason::Other,
+        ];
+        for variant in reasons {
+            match variant {
+                ProfileReason::KindUnknown
+                | ProfileReason::ProfilesFull
+                | ProfileReason::NameEmpty
+                | ProfileReason::NameLong
+                | ProfileReason::NameControl
+                | ProfileReason::NameBuiltin
+                | ProfileReason::NameTaken
+                | ProfileReason::ProgramLong
+                | ProfileReason::ProfileBuiltin
+                | ProfileReason::ProfileMissing
+                | ProfileReason::ProfileRemoving
+                | ProfileReason::ProfileOtherKind
+                | ProfileReason::NodeVariable
+                | ProfileReason::AccountHomeMissing
+                | ProfileReason::AccountUnsupported
+                | ProfileReason::AccountNeedsFolder
+                | ProfileReason::AccountNeedsName
+                | ProfileReason::AccountEmpty
+                | ProfileReason::AccountRelative
+                | ProfileReason::AccountIsDefault
+                | ProfileReason::AccountName
+                | ProfileReason::AccountUnprepared
+                | ProfileReason::EnvTooMany
+                | ProfileReason::EnvName
+                | ProfileReason::EnvReserved
+                | ProfileReason::EnvRepeated
+                | ProfileReason::EnvValue
+                | ProfileReason::Other => {}
+            }
+        }
+        assert_wire(&contract, "profile_reason", &reasons);
+        checked.insert("profile_reason");
+
         let onboarding = [AgentOnboarding::Pending, AgentOnboarding::Done];
         for variant in onboarding {
             match variant {
