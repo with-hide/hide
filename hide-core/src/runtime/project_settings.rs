@@ -415,11 +415,14 @@ impl Runtime {
         self.snapshot.navigator.agents = agents;
     }
 
-    fn project_settings_changed(
+    pub(super) fn project_settings_changed(
         &mut self,
         before: Option<&ProjectSettings>,
         after: &ProjectSettings,
     ) {
+        if before.map(|record| &record.agent_profiles) != Some(&after.agent_profiles) {
+            self.refresh_start_profiles();
+        }
         let repository_changed =
             before.and_then(|record| record.repository.as_ref()) != after.repository.as_ref();
         let base_changed =

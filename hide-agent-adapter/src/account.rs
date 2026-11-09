@@ -127,6 +127,19 @@ impl AccountKey {
     pub fn is_default(&self) -> bool {
         *self == Self::Default
     }
+
+    /// The account a profile keyed so names: [`resolve`] keys an account by
+    /// its value as stored (D-15), so this is that key's one inverse, for a
+    /// caller that kept only the key (folder trust's record of the account
+    /// it wrote in) and asks [`resolve`] for the account's places again.
+    /// `None` for the default account.
+    pub fn account(&self) -> Option<AccountRef> {
+        match self {
+            Self::Default => None,
+            Self::Folder(folder) => Some(AccountRef::Folder(folder.clone())),
+            Self::Name(name) => Some(AccountRef::Name(name.clone())),
+        }
+    }
 }
 
 /// One feature's place in an account.

@@ -16,7 +16,10 @@
 //!   the node's, never a cache ([`PaneHolders::process`]).
 //! - **Failed** when the executor reports that its check refused the
 //!   program or its start failed.
-//! - **Unconfirmed** when nothing says: the caller's deadline passed, the
+//! - **NotStarted** when the attempt ends before admitting an executor.
+//!   Admission and completion hold the same topology lock, so a late executor
+//!   is refused before it can run.
+//! - **Unconfirmed** after admitting an executor, when nothing says: the caller's deadline passed, the
 //!   process ended before a read showed the program, the pane ended, or
 //!   the engine stopped. It claims neither that the program ran nor that it
 //!   did not, and nothing starts again on it.
@@ -44,6 +47,8 @@ pub(super) enum Outcome {
     /// Its executor reported that the program did not start: `checked`
     /// when its check refused the program before any start.
     Failed { failure: String, checked: bool },
+    /// No executor was admitted before the attempt ended. Late Ready is refused.
+    NotStarted { why: &'static str },
     /// Nothing says what came of it; `why` names what ended the wait.
     Unconfirmed { why: &'static str },
 }
@@ -174,6 +179,12 @@ impl Attempt {
     /// Ends it with `outcome` unless something ended it first; what it
     /// ended with.
     pub(super) fn settle(&mut self, outcome: Outcome) -> Outcome {
+        // This transition and Ready admission share the topology lock.
+        // Once ended, a late executor can neither fetch its profile nor run.
+        let outcome = match outcome {
+            Outcome::Unconfirmed { why } if self.executor.is_none() => Outcome::NotStarted { why },
+            outcome => outcome,
+        };
         self.outcome.get_or_insert(outcome).clone()
     }
 }
@@ -357,7 +368,7 @@ mod tests {
         assert_eq!(attempt.report(&other), Err(ATTEMPT_UNKNOWN));
         assert_eq!(
             attempt.settle(Outcome::Unconfirmed { why: DEADLINE }),
-            Outcome::Unconfirmed { why: DEADLINE }
+            Outcome::NotStarted { why: DEADLINE }
         );
         assert_eq!(
             attempt.report(&report(
@@ -370,8 +381,23 @@ mod tests {
         );
         assert_eq!(
             attempt.settle(Outcome::Started),
-            Outcome::Unconfirmed { why: DEADLINE }
+            Outcome::NotStarted { why: DEADLINE }
         );
+    }
+
+    #[test]
+    fn a_deadline_before_ready_is_definite_and_refuses_a_late_executor() {
+        let mut attempt = attempt();
+        let outcome = attempt.settle(Outcome::Unconfirmed { why: DEADLINE });
+        assert!(
+            !matches!(outcome, Outcome::Unconfirmed { .. }),
+            "no executor was admitted"
+        );
+        assert_eq!(
+            attempt.report(&report(AgentExecEvent::Ready, EXECUTOR)),
+            Err(ATTEMPT_UNKNOWN)
+        );
+        assert_eq!(attempt.asked(ID), Err(ATTEMPT_UNKNOWN));
     }
 
     #[test]

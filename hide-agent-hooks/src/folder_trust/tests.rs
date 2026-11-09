@@ -1,4 +1,5 @@
 use super::*;
+use hide_agent_adapter::AccountRef;
 
 /// An absolute folder on this system: `/work/<name>`, or `C:\work\<name>`.
 fn folder(name: &str) -> PathBuf {

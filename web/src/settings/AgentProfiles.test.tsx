@@ -22,7 +22,7 @@ const agent = (id: string, label: string, over: Partial<KitAgent> = {}): KitAgen
 const AGENTS = [agent("claude-code", "Claude Code"), agent("codex", "Codex"), agent("antigravity", "Antigravity"), agent("omp", "omp", { availability: "not_installed", enabled: false, chosen: false })];
 
 const listed = (profiles: MachineAgentProfiles["profiles"] = [], defaults: Record<string, string> = {}): MachineAgentProfiles => ({ state: "listed", version: 3, profiles, defaults });
-const work = { id: "p-work", kind: "claude-code", name: "work", account: "/home/me/accounts/work", program: null, env_keys: ["A"], version: 1, install: "own" as const, folder: "/home/me/accounts/work", hook: ok, skill: ok };
+const work = { id: "p-work", kind: "claude-code", name: "work", account: "/home/me/accounts/work", program: null, env_keys: ["A"], version: 1, install: "own" as const, folder: "/home/me/accounts/work", hook: ok, skill: ok, startable: true };
 
 function device(profiles: MachineAgentProfiles | undefined): Device {
   return { agent_scope: emptyScope(), id: "local", label: "mini", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: { unavailable: null, busy: false, components: [], agents: AGENTS, offers_reinstall: false, shares_account_with: null, profiles } } as Device;
@@ -240,4 +240,34 @@ it("starts the profile's agent in a new tab to sign in, with the start the start
   expect(useStartPanel.getState().isOpen).toBe(true);
   useStartPanel.getState().close();
   await none.unmount();
+});
+
+it("keeps the last device profiles dimmed without add or edit when its connection goes away (B30)", async () => {
+  const tab = await mount(listed([work], { "claude-code": "p-work" }));
+  const before = tab.all('[data-inline-profiles="claude-code"] [data-profile-row]').map((row) => row.dataset.profileRow);
+  expect(before).toEqual(["default", "p-work"]);
+  await act(async () => {
+    const rest = useShellStore.getState().rest!;
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: rest.navigator!.devices!.map((row) => ({ ...row, kind: "remote", state: "unavailable" })) } } } as never);
+  });
+  expect(tab.all('[data-inline-profiles="claude-code"] [data-profile-row]').map((row) => row.dataset.profileRow)).toEqual(before);
+  expect(tab.q('[data-inline-profiles="claude-code"]')?.className).toContain("opacity-(--opacity-dimmed)");
+  expect(tab.all("[data-profile-add], [data-profile-row] button, [data-agent-switch], [data-agent-permission-select]")).toHaveLength(0);
+  expect(tab.q("[data-agents-retry]")).not.toBeNull();
+  expect(tab.changes()).toEqual([]);
+  await tab.unmount();
+});
+
+it("keeps only profile names and the default mark when the device disconnects", async () => {
+  const tab = await mount(listed([{ ...work, login: "signed_out" }], { "claude-code": "p-work" }));
+  expect(tab.q('[data-profile-row="p-work"] [data-profile-state="signedOut"]')).not.toBeNull();
+  await act(async () => {
+    const rest = useShellStore.getState().rest!;
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: rest.navigator!.devices!.map((row) => ({ ...row, kind: "remote", state: "unavailable" })) } } } as never);
+  });
+  expect(tab.q('[data-profile-row="p-work"]')?.textContent).toContain("work");
+  expect(tab.q('[data-profile-row="p-work"] [data-profile-default]')).not.toBeNull();
+  expect(tab.all("[data-profile-state], [data-profile-usage]")).toHaveLength(0);
+  expect(tab.changes()).toEqual([]);
+  await tab.unmount();
 });

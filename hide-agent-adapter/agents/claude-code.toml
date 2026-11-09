@@ -22,6 +22,10 @@ session = ["--resume", "{session}"]
 [account]
 by = "folder"
 
+[account.login]
+at = "usage"
+any = ["/claudeAiOauth/accessToken", "/claudeAiOauth/refreshToken"]
+
 [account.vars]
 CLAUDE_CONFIG_DIR = { default = "~/.claude", profile = "{account}" }
 
