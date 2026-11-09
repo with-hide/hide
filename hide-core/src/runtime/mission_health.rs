@@ -699,11 +699,14 @@ impl Runtime {
                     .as_deref()
                     .and_then(|id| ledger?.agents.iter().find(|record| record.id == id));
                 let worker =
-                    record.map(|record| match crate::coordination::life(record, sleeping) {
-                        crate::delivery::answer::Runtime::Running => WorkerLife::Running,
-                        crate::delivery::answer::Runtime::Asleep => WorkerLife::Asleep,
-                        crate::delivery::answer::Runtime::Ended => WorkerLife::Ended,
-                    });
+                    record.map(
+                        |record| match super::missions::worker_life(record, sleeping) {
+                            crate::delivery::answer::Runtime::Running => WorkerLife::Running,
+                            crate::delivery::answer::Runtime::Asleep => WorkerLife::Asleep,
+                            crate::delivery::answer::Runtime::Ended
+                            | crate::delivery::answer::Runtime::Closed => WorkerLife::Ended,
+                        },
+                    );
                 // The worker's own pull requests, of this project only: a
                 // number names a pull request only beside its repository.
                 let own_prs = record

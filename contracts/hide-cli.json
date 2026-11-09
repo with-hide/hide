@@ -88,6 +88,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -434,6 +435,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -785,6 +787,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -1200,6 +1203,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -2992,7 +2996,7 @@
                     "type": "object"
                 },
                 "PsState": {
-                    "description": "The row's mark as every surface draws it (docs/status-model.md, The mark), `disconnected` for a row on a device that does not answer, and `ended` for an ended registration.",
+                    "description": "The row's mark as every surface draws it (docs/status-model.md, The mark), `disconnected` for a row on a device that does not answer, `closed` for a registration whose pane was closed for Reopen closed, and `ended` for an ended registration.",
                     "enum": [
                         "turn",
                         "look",
@@ -3003,6 +3007,7 @@
                         "quiet",
                         "unknown",
                         "asleep",
+                        "closed",
                         "disconnected",
                         "ended"
                     ],
@@ -3243,6 +3248,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -6532,7 +6538,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:7dd4745f98b5a3586ba2da330826946f31f8e4879418580b15a32081e8bee570",
+    "digest": "sha256:5fe11be5216931a3d2458f3e16eff87375db179708e46f35bd164017d71678f5",
     "envelopes": {
         "agent": {
             "answer": "value",

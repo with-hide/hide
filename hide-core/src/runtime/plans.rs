@@ -1426,7 +1426,7 @@ impl Runtime {
             Some(delegation) => delegation.attempt,
             None => linked.max(1),
         };
-        let asleep = self.plan_children_asleep(&ledger, &session);
+        let asleep = self.plan_children_away(&ledger, &session);
         Ok(Some(PlanAdmission {
             link: PlanLink {
                 plan: id,
@@ -1438,16 +1438,18 @@ impl Runtime {
         }))
     }
 
-    /// The children `session`'s plans handed steps to that are asleep now,
-    /// which hold no place under the cap (B5, B6): only a child whose sleep
-    /// has landed. One whose end still runs, that is waking, or whose wake
-    /// failed still holds its place, for the spawn and the waking letter
-    /// alike.
-    fn plan_children_asleep(
+    /// The children `session`'s plans handed steps to that are asleep or
+    /// closed now, which hold no place under the cap (B5, B6): only a child
+    /// whose sleep has landed, or whose pane was closed for Reopen closed
+    /// (`closed_registrations.rs`). One whose end still runs, that is
+    /// waking, or whose wake failed still holds its place, for the spawn and
+    /// the waking letter alike.
+    fn plan_children_away(
         &self,
         ledger: &crate::delivery::ledger::Ledger,
         session: &SessionIdentity,
     ) -> Vec<String> {
+        let closed = self.closed_registration_ids();
         ledger
             .spawns
             .iter()
@@ -1462,9 +1464,10 @@ impl Runtime {
                 ledger.agents.iter().any(|record| {
                     &record.id == child
                         && !record.ended
-                        && self.asleep_route(&record.actor).is_some_and(|(_, stage)| {
-                            stage == super::agent_sleep::letters::Stage::Sleeping
-                        })
+                        && (closed.contains(&record.id)
+                            || self.asleep_route(&record.actor).is_some_and(|(_, stage)| {
+                                stage == super::agent_sleep::letters::Stage::Sleeping
+                            }))
                 })
             })
             .map(str::to_owned)
@@ -1504,7 +1507,7 @@ impl Runtime {
         {
             return Ok(());
         }
-        let asleep = self.plan_children_asleep(&ledger, &link.parent_session);
+        let asleep = self.plan_children_away(&ledger, &link.parent_session);
         if crate::coordination::plan_children(
             &ledger,
             &link.parent_session,

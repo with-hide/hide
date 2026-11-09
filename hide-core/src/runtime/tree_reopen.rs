@@ -6,17 +6,15 @@
 //! or tab item. A tree close keeps those items here instead of pushing each
 //! onto `recent_closed`, where a large tree would push out its own first
 //! nodes, and pushes one `ClosedItem::Tree` once every node's close has
-//! settled. From the moment a node starts closing, its agents'
-//! registrations are held, as a sleeping session's are, so they do not end
-//! with their panes. The reopen restores the members parents first through
-//! the ordinary single-item reopen, and each registration then moves to the
-//! pane its conversation resumed in through the delivery store's rebind, the
-//! wake's own continuation; the lineage tokens follow the registration.
+//! settled. Each node's item holds its agents' registrations as any closed
+//! item does (`closed_registrations.rs`), here while the entry is recorded
+//! too. The reopen restores the members parents first through the ordinary
+//! single-item reopen, which continues each registration in the pane its
+//! conversation resumed in; the lineage tokens follow the registration.
 //!
 //! A member that fails to reopen stays in the entry with every member under
 //! it, which is not started, so no child comes back without its parent; the
-//! next reopen retries that branch. The hold ends, and the registrations end
-//! with their closed panes, when the entry leaves the list unreopened.
+//! next reopen retries that branch.
 
 use super::*;
 use crate::agent_sleep::DormantRegistration;
@@ -28,7 +26,6 @@ struct CapturedNode {
     close_key: String,
     /// The panes its close takes.
     pane_ids: Vec<String>,
-    registrations: Vec<DormantRegistration>,
     /// The pane of the agent the node's agent was delegated by, as the rows
     /// showed it when the node started closing.
     parent_pane: Option<String>,
@@ -60,17 +57,6 @@ pub(super) struct TreeReopen {
     total: usize,
 }
 
-/// A reopened member's registration waiting for its new pane.
-#[derive(Clone, Debug)]
-pub(super) struct Continuation {
-    registration: DormantRegistration,
-    pane: String,
-    since_unix_ms: u64,
-    /// The session has listed the pane; a pane that leaves after this is
-    /// gone, one not listed yet may still be on its way.
-    seen: bool,
-}
-
 impl Runtime {
     /// Records a tree node whose ordinary close just started as `close_key`.
     pub(super) fn capture_tree_node(&mut self, tree_id: &str, close_key: &str) {
@@ -78,10 +64,6 @@ impl Runtime {
             return;
         };
         let pane_ids = operation.pane_ids.clone();
-        let registrations = pane_ids
-            .iter()
-            .filter_map(|pane| self.delivery_registration_of(pane))
-            .collect();
         let parent_pane = pane_ids.iter().find_map(|pane| {
             self.snapshot
                 .navigator
@@ -94,7 +76,6 @@ impl Runtime {
         let node = CapturedNode {
             close_key: close_key.to_owned(),
             pane_ids,
-            registrations,
             parent_pane,
             item: None,
             settled: false,
@@ -150,7 +131,8 @@ impl Runtime {
     /// Pushes the entry of each finished tree whose closes have all settled,
     /// a close the operator dismissed included, and says whether the list
     /// changed. A node whose close settled without an item (refused, failed,
-    /// dismissed, or closed outside Hide) lets its registrations go.
+    /// dismissed, or closed outside Hide) let its registrations go as its
+    /// close left the queue.
     pub(super) fn push_ready_tree_entries(&mut self) -> bool {
         if !self
             .tree_reopen_captures
@@ -170,20 +152,18 @@ impl Runtime {
         self.tree_reopen_captures = waiting;
         let mut pushed = false;
         for capture in ready {
-            let (kept, dropped): (Vec<_>, Vec<_>) = capture
+            let kept = capture
                 .nodes
                 .into_iter()
-                .partition(|node| node.item.is_some());
-            for registration in dropped.iter().flat_map(|node| &node.registrations) {
-                self.release_dormant_hold(&registration.id);
-            }
+                .filter(|node| node.item.is_some())
+                .collect();
             let members = tree_members(kept);
             crate::diagnostic!(serde_json::json!({
                 "component": "recent_closed",
                 "kind": "recent_closed.tree_recorded",
                 "tree_id": capture.tree_id,
                 "members": members.len(),
-                "registrations": members.iter().map(|member| member.registrations.len()).sum::<usize>(),
+                "registrations": members.iter().map(|member| member.item.held_registrations().len()).sum::<usize>(),
             }));
             if members.is_empty() {
                 continue;
@@ -199,15 +179,7 @@ impl Runtime {
     /// registrations it held go.
     pub(super) fn push_closed_item(&mut self, item: ClosedItem) {
         if let Some(evicted) = push_bounded(&mut self.recent_closed, item) {
-            for registration in evicted.held_registrations() {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "recent_closed",
-                    "kind": "recent_closed.tree_hold_released",
-                    "key": evicted.key(),
-                    "agent_id": registration.id,
-                }));
-                self.release_dormant_hold(&registration.id);
-            }
+            self.release_item_registrations(&evicted);
         }
     }
 
@@ -226,31 +198,15 @@ impl Runtime {
         self.tree_reopen.as_ref().map(|run| run.key.as_str())
     }
 
-    /// Registrations a tree close holds: its nodes' while they close and
-    /// while its entry is listed, and a reopened member's until its new pane
-    /// takes it over.
-    pub(super) fn tree_held_registrations(&self) -> impl Iterator<Item = &DormantRegistration> {
+    /// The registrations the settled nodes of the tree closes still
+    /// recording their entry hold; a node still closing holds its own
+    /// through its close.
+    pub(super) fn tree_capture_registrations(&self) -> impl Iterator<Item = &DormantRegistration> {
         self.tree_reopen_captures
             .iter()
             .flat_map(|capture| &capture.nodes)
-            .flat_map(|node| &node.registrations)
-            .chain(
-                self.recent_closed
-                    .iter()
-                    .flat_map(ClosedItem::held_registrations),
-            )
-            .chain(
-                self.tree_reopen_continuations
-                    .iter()
-                    .map(|continuation| &continuation.registration),
-            )
-    }
-
-    /// Whether a tree close holds `actor`'s registration, so a watch on it
-    /// is not ended while it is away.
-    pub(super) fn tree_holds_actor(&self, actor: &crate::delivery::Actor) -> bool {
-        self.tree_held_registrations()
-            .any(|registration| registration.actor.same_identity(actor))
+            .filter_map(|node| node.item.as_ref())
+            .flat_map(ClosedItem::held_registrations)
     }
 
     /// Starts reopening a tree entry, the target first.
@@ -338,15 +294,10 @@ impl Runtime {
         })
     }
 
-    /// One member's reopen ended; `agents` are the agents it started, or
-    /// `None` when it did not come back. A member that came back leaves the
-    /// entry, and each registration it held waits for the pane its
-    /// conversation resumed in.
-    pub(super) fn tree_member_settled(
-        &mut self,
-        member_key: &str,
-        agents: Option<&[crate::recent_closed::reopen::ReopenedAgent]>,
-    ) {
+    /// One member's reopen ended, `back` when it came back: it leaves the
+    /// entry, its registrations already continued by the reopen
+    /// (`continue_reopened_registrations`).
+    pub(super) fn tree_member_settled(&mut self, member_key: &str, back: bool) {
         let Some(run) = self.tree_reopen.as_mut() else {
             return;
         };
@@ -355,45 +306,16 @@ impl Runtime {
         }
         run.current = None;
         let tree_key = run.key.clone();
-        let Some(agents) = agents else {
+        if !back {
             run.left.push(member_key.to_owned());
             self.start_next_tree_member();
             return;
-        };
-        let member = self.recent_closed.iter_mut().find_map(|item| match item {
-            ClosedItem::Tree { key, members } if *key == tree_key => members
-                .iter()
-                .position(|member| member.item.key() == member_key)
-                .map(|index| members.remove(index)),
-            _ => None,
-        });
-        let now = unix_milliseconds();
-        for registration in member.into_iter().flat_map(|member| member.registrations) {
-            let pane = agents.iter().find(|agent| {
-                agent
-                    .session_id
-                    .as_deref()
-                    .and_then(crate::engine::tokens::session_digest)
-                    .is_some_and(|digest| registration.actor.session.as_deref() == Some(&digest))
-            });
-            match pane {
-                Some(agent) => self.tree_reopen_continuations.push(Continuation {
-                    registration,
-                    pane: agent.pane_id.clone(),
-                    since_unix_ms: now,
-                    seen: false,
-                }),
-                // The conversation did not resume, so no pane continues it.
-                None => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "recent_closed",
-                        "kind": "recent_closed.tree_registration_released",
-                        "key": tree_key,
-                        "agent_id": registration.id,
-                        "reason": "not_resumed",
-                    }));
-                    self.release_dormant_hold(&registration.id);
-                }
+        }
+        for item in &mut self.recent_closed {
+            if let ClosedItem::Tree { key, members } = item
+                && *key == tree_key
+            {
+                members.retain(|member| member.item.key() != member_key);
             }
         }
         self.start_next_tree_member();
@@ -423,51 +345,6 @@ impl Runtime {
             }]);
         }
         self.sync_recent_closed_snapshot();
-    }
-
-    /// Pushes a finished tree's entry held back by a close that left the
-    /// queue without settling through it, and moves each reopened member's
-    /// registration to its new pane once the delivery store sees it there.
-    /// Runs on the operation tick and after each session ingest; free while
-    /// nothing waits.
-    pub(super) fn advance_tree_reopens(&mut self) -> bool {
-        let mut changed = false;
-        if self.push_ready_tree_entries() {
-            self.sync_recent_closed_snapshot();
-            changed = true;
-        }
-        if self.tree_reopen_continuations.is_empty() {
-            return changed;
-        }
-        let now = unix_milliseconds();
-        for mut continuation in std::mem::take(&mut self.tree_reopen_continuations) {
-            let listed = self.pane_listed(&continuation.pane);
-            continuation.seen |= listed;
-            let step = self.take_over_registration(
-                &continuation.registration,
-                &continuation.pane,
-                continuation.seen && !listed,
-                continuation.since_unix_ms,
-                now,
-            );
-            match step {
-                super::agent_sleep::Takeover::Waiting => {
-                    self.tree_reopen_continuations.push(continuation);
-                }
-                super::agent_sleep::Takeover::Continued => changed = true,
-                super::agent_sleep::Takeover::Released(reason) => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "recent_closed",
-                        "kind": "recent_closed.tree_registration_released",
-                        "agent_id": continuation.registration.id,
-                        "pane_id": continuation.pane,
-                        "reason": reason,
-                    }));
-                    changed = true;
-                }
-            }
-        }
-        changed
     }
 }
 
@@ -499,7 +376,6 @@ fn tree_members(nodes: Vec<CapturedNode>) -> Vec<TreeMember> {
             if placed {
                 members.push(TreeMember {
                     item: node.item.clone().expect("kept nodes have items"),
-                    registrations: node.registrations.clone(),
                     parent: parent.clone(),
                 });
             }
@@ -510,7 +386,6 @@ fn tree_members(nodes: Vec<CapturedNode>) -> Vec<TreeMember> {
             // they are, each under no member.
             members.extend(pending.drain(..).map(|(node, _)| TreeMember {
                 item: node.item.clone().expect("kept nodes have items"),
-                registrations: node.registrations.clone(),
                 parent: None,
             }));
         }

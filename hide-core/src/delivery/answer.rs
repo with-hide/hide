@@ -216,12 +216,14 @@ pub struct SpawnRef {
 
 // Where the registration's agent is in its life, which every answer reads
 // from one decision (`coordination::life`): running, put to sleep by Hide
-// (waking, or not reopened, included), or ended.
+// (waking, or not reopened, included), closed while Reopen closed can bring
+// it back, or ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Runtime {
     Running,
     Asleep,
+    Closed,
     Ended,
 }
 
@@ -302,7 +304,8 @@ pub struct PsAgent {
 }
 
 /// The row's mark as every surface draws it (docs/status-model.md, The
-/// mark), `disconnected` for a row on a device that does not answer, and
+/// mark), `disconnected` for a row on a device that does not answer,
+/// `closed` for a registration whose pane was closed for Reopen closed, and
 /// `ended` for an ended registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -316,6 +319,7 @@ pub enum PsState {
     Quiet,
     Unknown,
     Asleep,
+    Closed,
     Disconnected,
     Ended,
 }
@@ -491,7 +495,7 @@ mod tests {
         assert!(letter.as_array().unwrap().contains(&json!("reply_to")));
         assert_eq!(
             schemas["agent"]["definitions"]["Runtime"]["enum"],
-            json!(["running", "asleep", "ended"])
+            json!(["running", "asleep", "closed", "ended"])
         );
     }
 
