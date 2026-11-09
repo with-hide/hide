@@ -835,17 +835,21 @@ fn completion_is_news(record_completed: bool, current_completed: bool) -> bool {
 /// Whether a record still covers what the row shows now, on the server the
 /// record was read on.
 ///
-/// The row's own fields have to match exactly, except that a completion
-/// going away is not news (`completion_is_news`). A descendant signal is news
-/// only when it is missing from the record: a signal the record holds and
-/// the row no longer shows is a question answered or a finished child back
-/// at work, neither of which calls the operator (PRD B5, B6). How the checks
-/// it waited on ended is news when the record has not seen that end
-/// (status-marks D-08).
+/// What the row shows has to be what the record holds; only something the
+/// row shows that the record does not is news. So a completion going away is
+/// not news (`completion_is_news`), nor a demand going away, nor a session
+/// the row cannot name yet: another session is news only when both name
+/// one. A descendant signal is news only when it is missing from the record:
+/// a signal the record holds and the row no longer shows is a question
+/// answered or a finished child back at work, neither of which calls the
+/// operator (PRD B5, B6). How the checks it waited on ended is news when the
+/// record has not seen that end (status-marks D-08).
 fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
     record.state_change_seq == current.state_change_seq
-        && record.session_id == current.session_id
-        && record.demand == current.demand
+        && (record.session_id.is_none()
+            || current.session_id.is_none()
+            || record.session_id == current.session_id)
+        && (current.demand == AgentDemand::None.name() || record.demand == current.demand)
         && record.activity == current.activity
         && !completion_is_news(record.completed, current.completed)
         && current
@@ -853,18 +857,6 @@ fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
             .is_subset(&record.descendant_signals)
         && (current.checks_ended.is_none() || current.checks_ended == record.checks_ended)
         && (current.human_turn.is_none() || current.human_turn == record.human_turn)
-}
-
-/// Whether a pane first settled on a new server shows something the
-/// operator had not read: another agent session, a demand it did not have,
-/// or a change between working and stopped. A completion it reports again is
-/// the one it had, and a demand gone is nothing to look at.
-fn restored_is_news(record: &PaneReadRecord, agent: &SidebarAgentSnapshot) -> bool {
-    let another_session = record.session_id.is_some()
-        && agent.session_id.is_some()
-        && record.session_id != agent.session_id;
-    let new_demand = agent.demand != AgentDemand::None.name() && agent.demand != record.demand;
-    another_session || new_demand || agent.activity != record.activity
 }
 
 /// Shows each finished pane's completion through an engine that no
@@ -984,9 +976,13 @@ pub fn prune_completions(
 ///
 /// A record saved on another engine, or while its pane was still being
 /// restored, is carried over rather than compared: until the pane settles on
-/// this server it keeps the verdict it was saved with, and when it settles a
-/// read record is moved onto this server unless the pane shows something new
-/// (`restored_is_news`).
+/// this server it keeps the verdict it was saved with. When the pane first
+/// settles here, a read record is moved onto this server's sequence and from
+/// then on judged like a record read here (`record_covers`), against what the
+/// operator read; nothing is decided from that one first state, which can
+/// still be on its way (the label worker laid a label summary before it knew
+/// Hide AI was paused, 2026-11-09), so a difference that goes away at the same
+/// sequence leaves the row read. An unread record stays unread until read.
 /// The verdict a record holds is saved whenever it changes, so a restart
 /// that loses the engine's numbers cannot turn an unread pane read or the reverse.
 pub fn apply_read_state(
@@ -1014,19 +1010,23 @@ pub fn apply_read_state(
             continue;
         };
         let mut moved = false;
-        let carried = (first_settled && !connection.compares(record.server.as_deref(), agent))
-            || !record_settled(record);
-        if settled_here && carried && !record.unread {
-            if restored_is_news(record, agent) {
-                record.unread = true;
-            } else {
-                record.state_change_seq = agent.state_change_seq;
-                record.server = Some(connection.server_of(agent).to_owned());
-                record.session_id = agent.session_id.clone().or(record.session_id.take());
-                record.demand = agent.demand.clone();
-                record.activity = agent.activity.clone();
-                record.completed = agent.completed;
-            }
+        let from_another_server =
+            first_settled && !connection.compares(record.server.as_deref(), agent);
+        if settled_here && !record.unread && !record_settled(record) {
+            // Read while the pane was still being restored, so it holds no
+            // state to compare: what the pane settles on is what was read.
+            record.state_change_seq = agent.state_change_seq;
+            record.server = Some(connection.server_of(agent).to_owned());
+            record.session_id = agent.session_id.clone().or(record.session_id.take());
+            record.demand = agent.demand.clone();
+            record.activity = agent.activity.clone();
+            record.completed = agent.completed;
+            moved = true;
+        } else if settled_here && !record.unread && from_another_server {
+            // Only this server's numbering is taken; what the operator read
+            // stays, so the pane is judged against it from now on.
+            record.state_change_seq = agent.state_change_seq;
+            record.server = Some(connection.server_of(agent).to_owned());
             moved = true;
         } else if settled_here && record.server.is_none() {
             // Judged by sequence as before, once, then named for this server.
