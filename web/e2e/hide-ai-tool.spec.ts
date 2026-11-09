@@ -9,7 +9,7 @@ import path from "node:path";
 import { openProject, withControl } from "./daemon-actions";
 import { startEngine } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
-import { countSent, showProjectMemory, showProjectRow } from "./wire";
+import { countSent, projectOpener, showProjectMemory, showProjectRow } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
 
@@ -27,7 +27,7 @@ test("Hide AI opens the front checkout's Project with its two tabs, and its head
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "hide-ai-repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "hide-ai-repo" })))).click();
     await showProjectMemory(page);
 
     // One `memory_open` names the Project for both tabs; the head names it too.

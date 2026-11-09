@@ -33,22 +33,19 @@ export function sidebarFocusPane(focused: string | null, agents: readonly AgentR
 
 /**
  * Scrolls the project list by as little as brings the focus's row into view,
- * and not at all while one of its rows is already in view, in the project
- * list or in the raised list held above it. The row is the deepest one marked
- * current: an agent row, else the focused checkout's row, else the project or
- * fold row that hides it; an agent drawn both raised and in its tree is
- * brought in at its tree row, and one drawn only raised within the raised list.
+ * and not at all while one of its rows is already in view. Needs You and Done
+ * are the list's first sections, so a raised row and a tree row are in the
+ * same scroll. The row is the deepest one marked current: an agent row, else
+ * the focused checkout's row, else the project or fold row that hides it; an
+ * agent drawn both raised and in its tree is brought in at its tree row, and
+ * one drawn only raised at its raised row.
  */
 export function revealSidebarFocus(lists: HTMLElement): void {
   const marked = [...lists.querySelectorAll<HTMLElement>('[aria-current="true"]')];
   if (marked.length === 0) return;
   const deepest = ["[data-agent-open]", "[data-checkout]"].map((kind) => marked.filter((row) => row.matches(kind))).find((rows) => rows.length > 0) ?? marked;
-  const raised = deepest.filter((row) => row.closest("[data-raised-list]") !== null);
-  const tree = deepest.filter((row) => !raised.includes(row));
-  const held = lists.querySelector<HTMLElement>("[data-raised-list]")?.getBoundingClientRect();
-  if (held && raised.some((row) => inside(row.getBoundingClientRect(), held.top, held.bottom))) return;
-  if (tree.length > 0) revealRow(lists.querySelector<HTMLElement>("[data-project-list]")!, tree, tree[0]!);
-  else raised[0]!.scrollIntoView({ block: "nearest" });
+  const tree = deepest.filter((row) => row.closest("[data-raised-group]") === null);
+  revealRow(lists.querySelector<HTMLElement>("[data-project-list]")!, deepest, tree[0] ?? deepest[0]!);
 }
 
 /**

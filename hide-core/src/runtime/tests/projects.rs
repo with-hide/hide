@@ -4800,20 +4800,6 @@ fn a_sleeping_project_stays_open_until_it_wakes() {
     runtime.snapshot.navigator.sleeping_sessions = vec![sleeper];
     runtime.refresh_inactive_groups();
     assert_eq!(asleep(&runtime).map(|asleep| asleep.expanded), Some(false));
-
-    let no_agents = serde_json::to_vec(&serde_json::json!({
-        "schema_version": SCHEMA_VERSION,
-        "kind": "session_fold_toggle",
-        "payload": { "key": format!("no_agents/{}", crate::node::TEST_NODE) }
-    }))
-    .unwrap();
-    assert_eq!(
-        runtime.snapshot.navigator.no_agent_projects[0].project_ids,
-        ["workspace-empty"]
-    );
-    assert!(!runtime.snapshot.navigator.no_agent_projects[0].expanded);
-    assert!(runtime.dispatch_json(&no_agents));
-    assert!(runtime.snapshot.navigator.no_agent_projects[0].expanded);
 }
 
 /// A worktree whose pull request is older than the list the sidebar reads is

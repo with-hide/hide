@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { checkoutAt, tabOfPane, withControl, openProject, openWorktree } from "./daemon-actions";
+import { checkoutAt, focusTab, tabOfPane, withControl, openProject, openWorktree, type OpenedProject } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -13,7 +13,7 @@ import { enterWorkspace } from "./wire";
 // Each contract has its own private engine and linked worktree; only the UI contracts start hided.
 test.describe.configure({ timeout: 120_000 });
 
-type Stack = { server: EngineServer; daemon: Daemon; primary: { folder: string; workspace: string; tab: string; pane: string }; linkedFolder: string };
+type Stack = { server: EngineServer; daemon: Daemon; primary: OpenedProject; linkedFolder: string };
 
 /** A primary checkout with one linked worktree, each with its first tab, in a project the daemon opened. */
 async function startStack(page: Page, label: string): Promise<Stack> {
@@ -46,16 +46,18 @@ async function startStack(page: Page, label: string): Promise<Stack> {
 /** The tabs of the primary checkout, as the daemon lists them. */
 const primaryTabs = (stack: Stack) => withControl(stack.daemon, (control) => control.until((rest) => checkoutAt(rest, stack.primary.folder)?.tabs, "the primary checkout's tabs", 20_000));
 
-async function openPrimary(page: Page) {
+async function openPrimary(page: Page, stack: Stack) {
   await enterWorkspace(page, "primary");
-  await page.locator('[data-project]', { hasText: "primary" }).locator('[data-checkout][aria-label^="main"]').click();
+  // The main checkout's row is drawn only while it is in front or holds an agent, so bring it in front through the daemon.
+  await withControl(stack.daemon, (control) => focusTab(control, stack.primary, stack.primary.tab));
+  await expect(page.locator('[data-project]', { hasText: "primary" }).locator('[data-checkout][aria-label^="main"]')).toHaveAttribute("aria-current", "true");
 }
 
 
 test("closing a primary checkout's last tab in the UI closes it for good and keeps the linked workspace", async ({ page }) => {
   const stack = await startStack(page, "primary-close-tab");
   try {
-    await openPrimary(page);
+    await openPrimary(page, stack);
     const originalTab = page.locator(`[data-agent-tab-bar] [data-tab="${stack.primary.tab}"]`);
     await expect(originalTab).toBeVisible();
     await originalTab.getByRole("button", { name: /^Close tab/ }).click();
@@ -70,7 +72,7 @@ test("closing a primary checkout's last pane in the UI closes its tab and keeps 
   const stack = await startStack(page, "primary-close-pane");
   try {
     const pane = stack.primary.pane;
-    await openPrimary(page);
+    await openPrimary(page, stack);
     await page.locator(`[data-pane-view="${pane}"]`).getByRole("button", { name: /Close/ }).click();
     await withControl(stack.daemon, (control) => control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `the close of ${pane}`, 20_000));
     await expect.poll(async () => (await primaryTabs(stack)).length).toBe(0);

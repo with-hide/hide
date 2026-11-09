@@ -256,6 +256,8 @@ type UiStore = {
   sidebarFocus: number;
   /** The raised Projects sections the operator unfolded past their cap; this page's alone, so a fresh list starts short. */
   raisedOpen: readonly string[];
+  /** The raised Projects sections the operator folded to their head; page-local, so a fresh list starts open. */
+  raisedFolded: readonly string[];
   /** The 태스크 list's open folds (`rest:<group>`, `cleanup:<group>`, `archived:<group>`); page-local, opened by the operator or by entering a resting task (sidebar-task-lens B5). */
   taskFoldsOpen: readonly string[];
   /** The Explorer row the operator last touched; the core owns the opened
@@ -382,6 +384,7 @@ type UiStore = {
   setMainView: (view: MainView) => void;
   setRelation: (relation: Relation | null) => void;
   toggleRaised: (group: string) => void;
+  toggleRaisedFolded: (group: string) => void;
   toggleTaskFold: (key: string) => void;
   setExplorerSelection: (path: string | null) => void;
   requestEditorFind: (displayId: string | null) => void;
@@ -466,6 +469,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   relation: null,
   sidebarFocus: 0,
   raisedOpen: [],
+  raisedFolded: [],
   taskFoldsOpen: [],
   explorerSelection: null,
   editorFindRequest: 0,
@@ -518,6 +522,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   toggleRaised: (group) => {
     const open = get().raisedOpen;
     set({ raisedOpen: open.includes(group) ? open.filter((row) => row !== group) : [...open, group] });
+  },
+  toggleRaisedFolded: (group) => {
+    const folded = get().raisedFolded;
+    set({ raisedFolded: folded.includes(group) ? folded.filter((row) => row !== group) : [...folded, group] });
   },
   toggleTaskFold: (key) => {
     const open = get().taskFoldsOpen;

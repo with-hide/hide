@@ -124,7 +124,7 @@ test("Project settings keep confirmed values through a failed save and restart",
     await expect(sheet.getByRole("combobox", { name: "Start new work in" })).toContainText("New worktree");
     // B18: project + opens the same confirmation, never starts blindly.
     await page.keyboard.press("Escape");
-    await page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-start]').click();
+    await (await showProjectRow(page, page.locator('[data-project]', { hasText: "sample" }).locator('[data-row-start]'))).click();
     const confirmation = page.locator('[data-start-worktree]');
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByRole("combobox")).toContainText("main");

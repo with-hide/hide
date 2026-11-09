@@ -9,7 +9,7 @@ import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSe
 import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, openTaskFolds, screenshot, showTasks } from "./wire";
+import { chooseTheme, countSent, openOtherCheckouts, openTaskFolds, screenshot, showTasks } from "./wire";
 import { quietFor, unchangedForFrames } from "./wait";
 
 test.describe.configure({ timeout: 240_000 });
@@ -144,8 +144,8 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await expect(page.locator('[data-sidebar-lens="tasks"]')).toBeVisible();
     await showProjects(page);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"]`).first()).toBeVisible();
-    // Its worktree has no unresolved agent, so it stands in the `Worktrees with no agents` fold, where the resolved row is dimmed under its tab.
-    await page.locator("nav[data-sidebar] [data-empty-worktrees]").click();
+    // Its worktree is not the project's main checkout, so it stands in the project's Checkouts fold, where the resolved row is dimmed under its tab.
+    await openOtherCheckouts(page.locator("nav[data-sidebar] [data-project]").filter({ has: page.locator("[data-other-checkouts]") }));
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).toHaveClass(/opacity-\(--opacity-dimmed\)/);
     await showTasks(page);
     await openTaskFolds(page);

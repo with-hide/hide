@@ -8,7 +8,7 @@ import { startFixture } from "./engine-fixture";
 import { waitForTerminal } from "./group-start-helper";
 import type { Rest } from "./hided-control.mjs";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot } from "./wire";
+import { enterWorkspace, openOtherCheckouts, screenshot } from "./wire";
 import { chord } from "./chords";
 
 // PRD checkout-workspace-binding B1, B2, B13: a tab Hide creates goes to the
@@ -80,8 +80,8 @@ test("A new tab in a linked worktree opens in that worktree's checkout and the n
     await enterWorkspace(page, "fixture");
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^fixture/ }) });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature"]') });
-    // Session UI B9: a clean worktree with no agent starts in this fold.
-    await project.getByRole("button", { name: /^Worktrees with no agents/ }).click();
+    // Session UI B9: a clean worktree with no agent starts in the project's Checkouts fold, with every other checkout.
+    await openOtherCheckouts(project);
     await expect(feature).toBeVisible({ timeout: 30_000 });
     const newTabHere = async () => {
       await feature.locator("[data-checkout-menu]").click({ button: "right" });
@@ -93,9 +93,8 @@ test("A new tab in a linked worktree opens in that worktree's checkout and the n
     await newTabHere();
     const first = await withControl(daemon, (control) => control.until((rest) => tabsHere(rest)?.[0], "the worktree's first tab", 30_000));
     await waitForTerminal(page, first);
-    // Opening the terminal moves the checkout out of the empty fold.
+    // Opening the terminal puts the checkout in front, still in its fold.
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
-    await expect(project.getByRole("button", { name: /^Worktrees with no agents/ })).toHaveCount(0);
 
     await newTabHere();
     const second = await withControl(daemon, (control) => control.until((rest) => (tabsHere(rest)?.length === 2 ? tabsHere(rest)![1] : undefined), "the worktree's second tab", 30_000));

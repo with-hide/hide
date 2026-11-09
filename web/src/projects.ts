@@ -3,17 +3,17 @@ import { scopeOccurrences, type AgentRef } from "./agentScope";
 import type { AgentScope } from "./agentScope";
 import type { MissionAsk } from "./missions";
 // The Projects list as the sidebar draws it: the raised Needs You and Done
-// agents, then pinned rows under their own header, then the activity rows
-// with a per-device fold of projects with no agents and one of inactive
-// projects, and per project a fold of inactive checkouts. The split only
-// reads flags and groups the core set; no age, merge or attention rule is
-// repeated.
+// agents, then pinned rows with no header of their own (the pin is the row's
+// mark and sort), a hairline, and the activity rows. A project with no agent,
+// or untouched for a week, is an ordinary row, the second one dimmed. The split
+// only reads flags and groups the core set; no age, merge or attention rule
+// is repeated.
 
 import type { TFunction } from "i18next";
 import { githubFailureText } from "./githubFailure";
 import { agentGroupTitle, type AgentGroup, type ListedAgent } from "./navigation";
 import { badgeWord, checksWord, PR_LOOK, reviewWord, settled, staleness } from "./prMark";
-import type { Checkout, InactiveProjectGroup, MarkCounts, PrState, PullRequest, RecentCheckout, SnapshotRest, Workspace } from "./snapshot";
+import type { Checkout, MarkCounts, PrState, PullRequest, RecentCheckout, SnapshotRest, Workspace } from "./snapshot";
 
 /** Return to this device's last usable checkout, then its primary, then row order. */
 export function projectCheckout(workspace: Workspace, recent: readonly RecentCheckout[] = []): Checkout | null {
@@ -27,14 +27,12 @@ export function projectCheckout(workspace: Workspace, recent: readonly RecentChe
 }
 
 export type ProjectRow =
-  | { kind: "header"; section: "pinned" | "recent"; count: number }
   | { kind: "raised"; group: AgentGroup; agents: ListedAgent[]; more: ListedAgent[]; expanded: boolean; missions: MissionAsk[] }
-  | { kind: "workspace"; workspace: Workspace; level: "root" | "child" }
-  | { kind: "no_agents"; group: InactiveProjectGroup; count: number }
-  | { kind: "inactive_projects"; group: InactiveProjectGroup; count: number };
+  | { kind: "workspace"; workspace: Workspace; /** Nothing touched it for a week: drawn dimmed in its place, never folded away. */ quiet?: boolean }
+  | { kind: "divider" };
 
 /** The device folds of the Projects list, as the core grouped them (`navigator`). */
-export type ProjectFolds = Pick<NonNullable<SnapshotRest["navigator"]>, "inactive_projects" | "no_agent_projects">;
+export type ProjectFolds = Pick<NonNullable<SnapshotRest["navigator"]>, "inactive_projects">;
 
 /** Whether a project's checkouts are drawn: a sleeping project follows its own fold (D-19), any other the operator's. */
 export function projectExpanded(workspace: Workspace): boolean {
@@ -79,31 +77,10 @@ export function projectRows(
   }
   const pinned = workspaces.filter((row) => row.pinned);
   const recent = workspaces.filter((row) => !row.pinned);
-  if (pinned.length > 0) {
-    rows.push({ kind: "header", section: "pinned", count: pinned.length });
-    for (const workspace of pinned) rows.push({ kind: "workspace", workspace, level: "root" });
-  }
-  rows.push({ kind: "header", section: "recent", count: recent.length });
-  const byId = new Map(recent.map((row) => [row.id, row]));
-  const deviceIds = [...new Set(recent.map((row) => row.device_id))];
-  for (const deviceId of deviceIds) {
-    const quiet = (folds.no_agent_projects ?? []).find((row) => row.device_id === deviceId);
-    const inactive = (folds.inactive_projects ?? []).find((row) => row.device_id === deviceId);
-    const folded = new Set([...(quiet?.project_ids ?? []), ...(inactive?.project_ids ?? [])]);
-    for (const workspace of recent) {
-      if (workspace.device_id === deviceId && !folded.has(workspace.id)) {
-        rows.push({ kind: "workspace", workspace, level: "root" });
-      }
-    }
-    // No agents, then Inactive projects (D-01): each a fold row with its projects under it while open.
-    for (const [kind, group] of [["no_agents", quiet], ["inactive_projects", inactive]] as const) {
-      if (!group) continue;
-      const members = group.project_ids.map((id) => byId.get(id)).filter((row): row is Workspace => !!row);
-      if (members.length === 0) continue;
-      rows.push({ kind, group, count: members.length });
-      if (group.expanded) for (const workspace of members) rows.push({ kind: "workspace", workspace, level: "child" });
-    }
-  }
+  for (const workspace of pinned) rows.push({ kind: "workspace", workspace });
+  if (pinned.length > 0 && recent.length > 0) rows.push({ kind: "divider" });
+  const quiet = new Set((folds.inactive_projects ?? []).flatMap((group) => group.project_ids));
+  for (const workspace of recent) rows.push({ kind: "workspace", workspace, quiet: quiet.has(workspace.id) });
   return rows;
 }
 

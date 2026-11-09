@@ -40,50 +40,18 @@ describe("activeCheckouts", () => {
 });
 
 describe("projectRows", () => {
-  it("draws pinned rows under their header, then the activity list with the device fold", () => {
-    const rows = projectRows(
-      [workspace("a", { pinned: true }), workspace("b"), workspace("c"), workspace("d")],
-      { inactive_projects: [{ device_id: "local", expanded: false, project_ids: ["c", "d"] }] },
-      [],
-    );
-    expect(rows.map((row) => (row.kind === "workspace" ? `${row.kind}:${row.workspace.id}:${row.level}` : row.kind))).toEqual([
-      "header",
-      "workspace:a:root",
-      "header",
-      "workspace:b:root",
-      "inactive_projects",
-    ]);
-    const expanded = projectRows(
-      [workspace("b"), workspace("c")],
-      { inactive_projects: [{ device_id: "local", expanded: true, project_ids: ["c"] }] },
-      [],
-    );
-    expect(expanded.at(-1)).toMatchObject({ kind: "workspace", level: "child" });
+  it("draws a project with no agents as an ordinary row, pinned rows first with a hairline, and dims an inactive project in place", () => {
+    const folds = { inactive_projects: [{ device_id: "local", expanded: false, project_ids: ["b"] }] };
+    const rows = projectRows([workspace("a", { pinned: true }), workspace("b"), workspace("c")], folds, []);
+    expect(rows.map((row) => (row.kind === "workspace" ? `${row.workspace.id}:${row.quiet === true ? "quiet" : "live"}` : row.kind))).toEqual(["a:live", "divider", "b:quiet", "c:live"]);
   });
 
-  it("folds projects with no agents after the active ones and before Inactive projects (PRD sidebar-titlebar-refresh B1)", () => {
-    const folds = {
-      no_agent_projects: [{ device_id: "local", expanded: true, project_ids: ["c"] }],
-      inactive_projects: [{ device_id: "local", expanded: false, project_ids: ["d"] }],
-    };
-    const rows = projectRows([workspace("a", { pinned: true }), workspace("b"), workspace("c"), workspace("d")], folds, []);
-    expect(rows.map((row) => (row.kind === "workspace" ? `${row.workspace.id}:${row.level}` : row.kind === "header" ? row.section : row.kind === "raised" ? row.kind : `${row.kind}:${row.count}`))).toEqual([
-      "pinned",
-      "a:root",
-      "recent",
-      "b:root",
-      "no_agents:1",
-      "c:child",
-      "inactive_projects:1",
-    ]);
+  it("draws no divider when nothing is pinned or everything is", () => {
+    expect(projectRows([workspace("b")], {}, []).map((row) => row.kind)).toEqual(["workspace"]);
+    expect(projectRows([workspace("a", { pinned: true })], {}, []).map((row) => row.kind)).toEqual(["workspace"]);
   });
 
-  it("omits the pinned header when nothing is pinned", () => {
-    const rows = projectRows([workspace("b")], {}, []);
-    expect(rows[0]).toEqual({ kind: "header", section: "recent", count: 1 });
-  });
-
-  it("raises Needs You then Done above Pinned, in the core's order, and keeps them in the tree", () => {
+  it("raises Needs You then Done above the pinned rows, in the core's order, and keeps them in the tree", () => {
     const withPanes = (id: string, panes: string[], extra: Partial<Workspace> = {}) =>
       workspace(id, { checkouts: [{ id: `${id}-main`, tabs: [{ id: `${id}-t`, panes: panes.map((pane) => ({ id: pane })) }] } as unknown as Checkout], ...extra });
     const agent = (pane: string, group: string, extra: Partial<AgentRow> = {}) => ({ agent: legacyAgentRow({ pane_id: pane, id: pane, group, ...extra }) as AgentRow, device: null });
@@ -97,16 +65,16 @@ describe("projectRows", () => {
     ];
     const rows = projectRows([withPanes("a", ["done-1", "ask-1"], { pinned: true }), withPanes("b", ["ask-2", "run"])], {}, listed);
     const shape = rows.map((row) =>
-      row.kind === "raised" ? `${row.group}:${row.agents.map(({ agent }) => agent.pane_id).join(",")}` : row.kind === "header" ? row.section : `${row.kind}:${row.kind === "workspace" ? row.workspace.id : ""}`,
+      row.kind === "raised" ? `${row.group}:${row.agents.map(({ agent }) => agent.pane_id).join(",")}` : `${row.kind}:${row.kind === "workspace" ? row.workspace.id : ""}`,
     );
     // Working is the Agents tab's: the Projects list raises Needs You and Done only.
-    expect(shape).toEqual(["needs_you:ask-2,ask-1", "done:done-1", "pinned", "workspace:a", "recent", "workspace:b"]);
+    expect(shape).toEqual(["needs_you:ask-2,ask-1", "done:done-1", "workspace:a", "divider:", "workspace:b"]);
     // A raised row never unfolds, whatever the tree below has open.
     const needsYou = rows[0] as Extract<(typeof rows)[number], { kind: "raised" }>;
     expect(needsYou.agents.map(({ agent }) => agent.lineage_collapsed !== false)).toEqual([true, true]);
     expect(listed[1]!.agent.lineage_collapsed).toBe(false);
     // An empty group draws no section.
-    expect(projectRows([withPanes("b", ["run"])], {}, listed).map((row) => row.kind)).toEqual(["header", "workspace"]);
+    expect(projectRows([withPanes("b", ["run"])], {}, listed).map((row) => row.kind)).toEqual(["workspace"]);
   });
 
   it("draws the five latest Needs You and three latest Done, folding the rest until their group is opened", () => {

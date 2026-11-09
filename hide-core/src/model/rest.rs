@@ -128,7 +128,6 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     devices: Vec<DeviceSnapshot> => s.devices,
     workspaces: Vec<WorkspaceSnapshot> => s.workspaces,
     inactive_projects: Vec<InactiveProjectGroupSnapshot> => s.inactive_projects,
-    no_agent_projects: Vec<InactiveProjectGroupSnapshot> => s.no_agent_projects,
     agents: Vec<SidebarAgentSnapshot> => s.agents,
     hide_ai_checkouts: Vec<HideAiCheckoutSnapshot> => s.hide_ai_checkouts,
     sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot> => s.sleeping_sessions,

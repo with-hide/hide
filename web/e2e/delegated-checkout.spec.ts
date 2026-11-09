@@ -12,7 +12,7 @@ import { startFixture } from "./engine-fixture";
 import { spawnChild } from "./fixture-agents";
 import { git } from "./hide-ai-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot, showProjectRow } from "./wire";
+import { countSent, enterWorkspace, projectOpener, screenshot, showProjectRow } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 test.use({ actionTimeout: 15_000 });
@@ -39,7 +39,7 @@ test("a checkout whose only tab is delegated opens on the child's pane", async (
 
     // The checkout row opens the Workspace on the child's pane: the strip
     // has no tab for it (B1), and the empty state is not shown.
-    const checkout = await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first());
+    const checkout = await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "beta" })));
     await checkout.click();
     await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-canvas", childTab, { timeout: 20_000 });
     await expect(page.locator(`[data-pane-view="${child}"]`)).toBeVisible();

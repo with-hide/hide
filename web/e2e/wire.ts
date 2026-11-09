@@ -245,16 +245,36 @@ export async function rowGeometry(row: Locator, next: Locator, parts: Locator[])
 }
 
 /**
- * A sidebar row of a project, shown: a project with no agent rows is folded
- * under No agents (PRD sidebar-titlebar-refresh B1), so the fold is opened
- * when the row is not drawn. The fold is the core's, so it stays open.
+ * A sidebar row of a project, shown. A project with no agent is an ordinary
+ * row of the one Projects list; its buttons (+, settings, more) wait for the
+ * pointer, so the project is hovered before the row is waited for.
  */
-export async function showProjectRow(page: Page, row: Locator): Promise<Locator> {
-  const fold = page.locator('[data-no-agent-projects][aria-expanded="false"]');
-  await expect(row.or(fold).first()).toBeVisible({ timeout: 20_000 });
-  if (!(await row.isVisible())) await fold.click();
-  await expect(row).toBeVisible();
+export async function showProjectRow(_page: Page, row: Locator): Promise<Locator> {
+  const project = row.locator("xpath=ancestor::*[@data-project][1]");
+  if ((await project.count()) > 0) await projectOpener(project).hover();
+  await expect(row).toBeVisible({ timeout: 20_000 });
   return row;
+}
+
+/**
+ * What opens a project in the sidebar: a repository's own row, or a plain
+ * folder's one checkout button. A repository's main checkout has a row of its
+ * own only while it holds an agent, a purpose or the focus.
+ */
+export function projectOpener(project: Locator): Locator {
+  return project.locator("[data-project-row], button[data-checkout]").first();
+}
+
+/**
+ * Opens a project's "Checkouts N" fold, which holds every checkout but its
+ * main one, so those rows are drawn. The fold is the core's
+ * (`inactive_checkouts.expanded`), so it stays open.
+ */
+export async function openOtherCheckouts(project: Locator): Promise<void> {
+  const fold = project.locator("[data-other-checkouts]");
+  await expect(fold).toBeVisible({ timeout: 30_000 });
+  if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+  await expect(fold).toHaveAttribute("aria-expanded", "true");
 }
 
 /** Opens the one sidebar project whose agents all sleep, which folds until opened (PRD sidebar-titlebar-refresh B4). */
@@ -345,4 +365,10 @@ export async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<
   await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
   // Controls fade their colors into the new theme; a capture waits them out.
   await animationsFinished(page);
+}
+
+/** A checkout row of a project's "Checkouts" fold, with the fold opened. */
+export async function otherCheckoutRow(page: Page, project: Locator, branch: string): Promise<Locator> {
+  await openOtherCheckouts(project);
+  return page.locator(`[data-checkout][aria-label^="${branch}"]`).first();
 }

@@ -53,7 +53,8 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+    // The repository's own row opens its main checkout, whose row is drawn only while it holds an agent or the focus.
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click();
     await chooseTheme(page, "light");
     if (options.agentOn) {
       // A working agent in the worktree of that branch. The core lists a repository's worktrees once the
@@ -356,7 +357,7 @@ test("the lane chord brings the card back with its tool and alone, and another c
 
     // Back in the first checkout's tab its card is there, and its button
     // is the way to it.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click();
     await expect(slot).toHaveCount(1);
     await expect(card).toBeVisible();
   });

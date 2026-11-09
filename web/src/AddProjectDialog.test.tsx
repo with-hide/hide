@@ -188,11 +188,27 @@ it("lists a device's folders through its node and adds the one chosen there (PRD
 
   await act(async () => find('[data-folder-row="notes.txt"]')!.click());
   expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  // A folder that already is a project is not refused: its button goes to the project instead of adding it.
   await act(async () => find('[data-folder-row="old"]')!.click());
-  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(true);
+  expect((find("[data-folder-browser-submit]") as HTMLButtonElement).disabled).toBe(false);
+  expect(find("[data-folder-browser-submit]")?.textContent).toBe("Go to project");
+  expect(find("[data-folder-browser-existing]")?.textContent).toBe("This is already a project");
   await act(async () => find('[data-folder-row="app"]')!.click());
+  expect(find("[data-folder-browser-submit]")?.textContent).toBe("Add");
   await act(async () => find("[data-folder-browser-submit]")!.click());
   expect(creates(events)).toEqual([{ device_id: "ubuntu", path: "/home/me/app", label: "app", initialize_git: false }]);
+  await unmount();
+});
+
+it("goes to a project the chosen folder already is, adds nothing and leaves the dialog", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder: async () => null } as never;
+  const { events, unmount } = await mount(state("/mnt", "ubuntu"));
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await answerList("ubuntu", "~", { listing: home });
+  await act(async () => find('[data-folder-row="old"]')!.click());
+  await act(async () => find("[data-folder-browser-submit]")!.click());
+  expect(creates(events)).toEqual([]);
+  expect(find("[data-folder-browser-submit]")).toBeNull();
   await unmount();
 });
 

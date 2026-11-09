@@ -15,11 +15,11 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { focusTab, openProject, openWorktree, withControl } from "./daemon-actions";
 import { startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { chooseTheme, countSent, enterWorkspace, rest, rowGeometry, screenshot } from "./wire";
+import { chooseTheme, countSent, enterWorkspace, openOtherCheckouts, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { quietFor } from "./wait";
 import { initGithubRepository } from "./github-remote";
@@ -107,6 +107,8 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
+    // The worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     const primary = project.locator("[data-checkout-row]", { hasText: /^main/ });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     const glyph = feature.locator('[data-checkout-pr-glyph="180"]');
@@ -144,7 +146,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await expect(feature.locator("[data-purpose]")).toHaveText("PR 카드 구현");
     await expect(feature.locator("[data-checkout-age]")).toHaveText("now");
     await rest(page);
-    const atRest = await rowGeometry(featureRow, project.locator("[data-inactive-checkouts]").or(project.locator("[data-checkout-row]").last()), parts);
+    const atRest = await rowGeometry(featureRow, project.locator("[data-checkout-row]").last(), parts);
     await feature.locator("[data-checkout]").hover();
     await expect(card).toBeVisible();
     await expect(card.locator("[data-checkout-card-badge]")).toHaveText("Approved");
@@ -156,7 +158,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await expect(card.locator('[data-checkout-card-row="agents"]')).toHaveCount(0);
     await expect(card.locator('[data-checkout-card-row="commit"]')).toHaveText("now");
     await expect(card.locator("[data-checkout-card-open]")).toHaveText("Open PR");
-    expect(await rowGeometry(featureRow, project.locator("[data-inactive-checkouts]").or(project.locator("[data-checkout-row]").last()), parts)).toEqual(atRest);
+    expect(await rowGeometry(featureRow, project.locator("[data-checkout-row]").last(), parts)).toEqual(atRest);
     await screenshot(page, "checkout-pr-card-dark");
 
     // B9: the card stays while the pointer crosses onto it, and Escape closes it.
@@ -289,13 +291,17 @@ test("a checkout's card names the checkout by its real path", { tag: "@platform"
 
     daemon = await startHided(engine, "checkout-path");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await withControl(daemon, async (control) => {
-      await openProject(control, repo, "repo");
+    const main = await withControl(daemon, async (control) => {
+      const opened = await openProject(control, repo, "repo");
       await openWorktree(control, worktree);
+      return opened;
     });
     await enterWorkspace(page, "repo");
+    // The main checkout's row is drawn only while it is in front or holds an agent, so bring it in front; the worktree's waits in the Checkouts fold.
+    await withControl(daemon, (control) => focusTab(control, main, main.tab));
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
+    await openOtherCheckouts(project);
     const plain = page.locator('[data-checkout-card="plain"]');
     for (const [row, folder] of [
       [project.locator("[data-checkout-row]", { hasText: /^main/ }), repo],

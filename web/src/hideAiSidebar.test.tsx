@@ -42,7 +42,7 @@ function agent(id: string, label: string, over: Partial<AgentRow> = {}): AgentRo
 
 function setup(listed: HideAiCheckout[], focused: string | null) {
   const workspace = { agent_scope: emptyScope(), id: "workspace:w1", label: "herdr-ide", path: "/repo", device_id: "local", is_git: true, registered: true,
-    temporary: false, pinned: false, remote_target_id: null, inactive_checkouts: { expanded: false, checkout_ids: [] },
+    temporary: false, pinned: false, remote_target_id: null, inactive_checkouts: { expanded: true, checkout_ids: [] },
     checkouts: [
       checkout("checkout:main", "main", "/repo"),
       checkout("checkout:m43", "hide-memory-m43-mv4n0561", "/repo.worktrees/hide-memory-m43-mv4n0561"),

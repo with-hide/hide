@@ -12,7 +12,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { openProject, openWorktree, tabOfPane, viewPane, withControl } from "./daemon-actions";
 import { labelAgentPane, startAgentIn } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot, showProjectRow } from "./wire";
+import { countSent, enterWorkspace, openOtherCheckouts, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -47,23 +47,16 @@ async function openDeletionProject(daemon: Daemon, repo: string, worktree: strin
 }
 
 /**
- * B7 leaves the front checkout and local changes outside the empty-worktree
- * fold. Reach the branch either there or through its fold, then wait for
- * the Git facts that the deletion dialog needs, without prescribing focus.
+ * The linked worktree is not the project's main checkout, so its row waits in
+ * the project's Checkouts fold, whether it is in front, holds local changes or
+ * neither. Open the fold, then wait for the Git facts that the deletion
+ * dialog needs, without prescribing focus.
  */
 async function featureRow(page: Page) {
   const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]").filter({ hasText: "preflight-repo" }) });
-  const emptyFold = project.locator("[data-empty-worktrees]");
-  // A project with no agent waits under No agents (PRD sidebar-titlebar-refresh B1).
-  await showProjectRow(page, project);
+  await openOtherCheckouts(project);
   const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
-  await expect.poll(async () => await feature.locator("[data-checkout-age]").isVisible() || await emptyFold.isVisible(), { timeout: 30_000 }).toBe(true);
-  if (!await feature.isVisible()) {
-    await expect(emptyFold).toHaveAttribute("aria-expanded", "false");
-    await emptyFold.click();
-  }
   await expect(feature.locator("[data-checkout-age]")).toBeVisible({ timeout: 30_000 });
-  await expect(project.locator("[data-inactive-checkouts]")).toHaveCount(0);
   return feature;
 }
 
@@ -308,6 +301,8 @@ test("a dirty worktree with an unmerged branch and an agent is deleted once both
     await startAgentIn(fixture, daemon, pane);
     await labelAgentPane(fixture, daemon, pane, { task: "삭제 대상 작업 정리" });
 
+    // The worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }));
     const feature = page.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     await expect(feature).toBeVisible({ timeout: 30_000 });
     await feature.locator("[data-checkout-menu]").click({ button: "right" });

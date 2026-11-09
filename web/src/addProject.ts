@@ -117,9 +117,14 @@ export function folderLabel(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-/** True when `path` is already a project on `device`; no event goes out for it. */
+/** The project `path` already is on `device`, if any; no event goes out for it, the dialog goes to it. */
+export function registeredProject(path: string, device: string, registrations: readonly WorkspaceRegistration[]): WorkspaceRegistration | undefined {
+  return registrations.find((row) => row.device_id === device && trimFolder(row.path) === path);
+}
+
+/** True when `path` is already a project on `device`. */
 export function alreadyRegistered(path: string, device: string, registrations: readonly WorkspaceRegistration[]): boolean {
-  return registrations.some((row) => row.device_id === device && trimFolder(row.path) === path);
+  return registeredProject(path, device, registrations) !== undefined;
 }
 
 /**
