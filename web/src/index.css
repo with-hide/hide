@@ -60,8 +60,8 @@
  */
 @theme inline {
   --color-selected: color-mix(in oklab, var(--primary) calc(var(--opacity-selected-fill) * 100%), transparent);
-  /* The fainter share of the same accent, on the project that holds the selected row: it says whose the selection is without competing with it. */
-  --color-holds-selected: color-mix(in oklab, var(--primary) calc(var(--opacity-subtle-fill) * 100%), transparent);
+  /* A neutral wash, so it reads as a box around what holds the selected row and never as a second accent; the selected row keeps its own fill on top. */
+  --color-holds-selected: color-mix(in oklab, var(--foreground) calc(var(--opacity-subtle-fill) * 100%), transparent);
 }
 
 /*
