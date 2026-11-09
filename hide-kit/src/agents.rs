@@ -236,22 +236,23 @@ pub const GUIDE_SKILL: Skill = Skill {
     // adds the row for splitting the work across agents (PRD
     // hide-plan-delegate D-11), version 6 names `hide task` for it, and
     // version 7 sends an alias or a new account to the guide's profiles
-    // (PRD agent-profiles D-33, D-34).
+    // (PRD agent-profiles D-33, D-34). Version 8 routes complex work,
+    // planning and review requests to missions (PRD hide-task-skill-merge B7, B8).
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 7,
+    version: 8,
 };
 
-/// Routes a session's own steps to `hide task help` and a mission of
-/// agents to `hide mission help`. Version 2 folds in the retired `hide-task`
+/// Routes work that needs a Conductor to `hide mission help`, leaving
+/// small work with the current agent. Version 2 folds in the retired `hide-task`
 /// stub; earlier builds also wrote `hide-conductor` (versions 1 to 3),
 /// which [`RETIRED_SKILLS`] takes out.
 pub const MISSION_SKILL: Skill = Skill {
     name: "hide-mission",
-    description: "Plan and carry work in Hide: keep a task's steps yourself, or conduct a mission of agents. Use when a task in a Hide pane takes more than a few steps, the operator asks you to plan first or have the steps reviewed, or asks for a mission or several PRs carried as a group.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, for a task you carry yourself with several steps, run `hide task help` and follow what it prints, including how to put the steps up for the operator's review and keep them current. For several agents carrying PRs as a group, or when the operator asks for a mission, run `hide mission help` and follow what it prints: it is the Conductor's contract for planning, starting workers, replanning and reporting. When solo work grows into several independent PRs to hand to agents, ask the operator whether to raise it to a mission.",
+    description: "Conduct a mission of agents in Hide. Use when a task in a Hide pane takes more than a few steps, the operator asks you to plan first or have the work reviewed, or asks for a mission or several PRs carried as a group.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting when any of these signals applies:\n\n- The operator asks for planning first, review or a mission.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf none applies, do the work directly without a mission. If it is unclear, ask the operator in one line before starting: Shall I do it directly, or delegate it as a mission?",
     version: 2,
 };
 

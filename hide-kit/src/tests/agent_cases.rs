@@ -185,9 +185,10 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
     apply(&fixture.target, &Scope::agents(["grok"], []));
     let path = shared_skill(&fixture);
     let current = std::fs::read_to_string(&path).unwrap();
-    let older = format!("hide-skill@{}", GUIDE_SKILL.version - 1);
+    // B8: the released v7 stub must advance to the mission-routing guide.
+    let older = "hide-skill@7";
     let marker = format!("hide-skill@{}", GUIDE_SKILL.version);
-    std::fs::write(&path, current.replace(&marker, &older)).unwrap();
+    std::fs::write(&path, current.replace(&marker, older)).unwrap();
 
     let before = status(&fixture.target);
     assert_eq!(agent(&before, "grok").skill.state, ComponentState::Outdated);
@@ -267,7 +268,8 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@7:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@8:"));
+    assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
     assert!(
@@ -278,10 +280,10 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
     assert!(
         MISSION_SKILL
             .text()
-            .contains("description: \"Plan and carry work in Hide")
+            .contains("description: \"Conduct a mission of agents in Hide")
     );
-    assert!(MISSION_SKILL.text().contains("run `hide mission help`"));
-    assert!(MISSION_SKILL.text().contains("run `hide task help`"));
+    assert!(MISSION_SKILL.text().contains("Run `hide mission help`"));
+    assert!(!MISSION_SKILL.text().contains("hide task help"));
     assert!(MISSION_SKILL.text().contains("<!-- hide-skill@2:"));
 }
 
