@@ -1143,13 +1143,17 @@ impl Runtime {
     pub fn ingest_usage(&mut self, usage: Vec<crate::usage::model::AgentUsage>) -> bool {
         let mut changed = false;
         for reading in usage {
-            if let Some(row) = self.snapshot.usage.nodes[0]
+            let Some(row) = self.snapshot.usage.nodes[0]
                 .agents
                 .iter_mut()
                 .find(|row| row.agent == reading.agent)
-                && row.limits != reading.limits
-            {
+            else {
+                continue;
+            };
+            // Each profile account's reading rides with its agent's (B23).
+            if row.limits != reading.limits || row.profiles != reading.profiles {
                 row.limits = reading.limits;
+                row.profiles = reading.profiles;
                 changed = true;
             }
         }

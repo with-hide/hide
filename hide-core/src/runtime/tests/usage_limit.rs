@@ -463,3 +463,36 @@ fn limits_and_ledger_publications_preserve_each_others_values() {
     assert!(cleared.usage.as_ref().unwrap().nodes[0].history.is_none());
     assert!(cleared.rest.is_none());
 }
+
+/// B23: a profile account's reading reaches the snapshot with its agent's
+/// row, also when the agent's own figure did not move.
+#[test]
+fn a_profile_accounts_reading_reaches_the_snapshot_beside_its_agents() {
+    use crate::usage::model::{Cell, ProfileUsage};
+    let mut runtime = runtime();
+    let mut claude = weekly("claude", Some(40.0), next_week_ms());
+    assert!(runtime.ingest_usage(vec![claude.clone()]));
+    claude.profiles = vec![
+        ProfileUsage {
+            id: "p-work".into(),
+            shared: false,
+            limits: Some(Cell::Loading),
+        },
+        ProfileUsage {
+            id: "p-gate".into(),
+            shared: true,
+            limits: None,
+        },
+    ];
+    assert!(runtime.ingest_usage(vec![claude.clone()]));
+    let shown = runtime.snapshot.usage.nodes[0]
+        .agents
+        .iter()
+        .find(|row| row.agent == "claude")
+        .unwrap();
+    assert_eq!(shown.profiles, claude.profiles);
+    assert!(
+        !runtime.ingest_usage(vec![claude]),
+        "the same reading again moves nothing"
+    );
+}
