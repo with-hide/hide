@@ -146,7 +146,13 @@ pub enum Command {
         parent: Option<String>,
         project: Option<String>,
     },
-    List,
+    /// Every registration, or with `live` only those not ended: running or
+    /// asleep. Left out on the wire when false, so a plain list reads as it
+    /// always did.
+    List {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        live: bool,
+    },
     Show {
         id: String,
     },
@@ -1143,6 +1149,30 @@ fn past_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
     });
     let first = found.next()?;
     found.next().is_none().then_some(first)
+}
+
+/// The registration `hide agent show` reads for a `key` that is no id: the
+/// one live registration named `key` or sitting in `pane` (the key as the
+/// caller's machine names a pane), as a letter's recipient is named, else
+/// the last that was and has ended, so an agent that ended is answered
+/// `ended` rather than unknown. Two live ones are `target_ambiguous`.
+pub(crate) fn shown_record<'a>(
+    ledger: &'a Ledger,
+    key: &str,
+    pane: &str,
+) -> Result<Option<&'a AgentRecord>, &'static str> {
+    let named =
+        |record: &&AgentRecord| record.name.as_deref() == Some(key) || record.actor.pane_id == pane;
+    let mut live = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended)
+        .filter(named);
+    match (live.next(), live.next()) {
+        (Some(_), Some(_)) => Err("target_ambiguous"),
+        (Some(record), None) => Ok(Some(record)),
+        (None, _) => Ok(ledger.agents.iter().rev().find(named)),
+    }
 }
 
 fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&AgentRecord> {

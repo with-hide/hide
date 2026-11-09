@@ -4147,6 +4147,12 @@
             "command": "agent list",
             "options": [
                 {
+                    "name": "--live",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
@@ -4179,7 +4185,8 @@
                 }
             ],
             "refusals": [
-                "agent_unavailable"
+                "agent_unavailable",
+                "target_ambiguous"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6525,7 +6532,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:cc697d232f460d8e7595ebad8ca69c1914cc02b5c35d8b22839a8399e2d7154f",
+    "digest": "sha256:7dd4745f98b5a3586ba2da330826946f31f8e4879418580b15a32081e8bee570",
     "envelopes": {
         "agent": {
             "answer": "value",
