@@ -796,24 +796,26 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     const pair = project.locator("[data-row-actions]");
     await expect(row).toBeVisible({ timeout: 20_000 });
     await rest(page);
-    // The pair is not drawn at all until the pointer or the keyboard comes.
-    await expect(pair).toBeHidden();
+    // The pair waits unseen until the pointer or the keyboard comes.
+    await expect(pair).toHaveCSS("opacity", "0");
 
     // B6: the pointer shows the pair.
     await row.hover();
-    await expect(pair).toBeVisible();
+    await expect(pair).toHaveCSS("opacity", "1");
     await screenshot(page, "projects-row-actions-hover");
     await rest(page);
-    await expect(pair).toBeHidden();
+    await expect(pair).toHaveCSS("opacity", "0");
 
-    // Focus on the row's button draws the pair, which the keyboard then reaches.
+    // Focus on the row's button draws the pair.
     await keyboardFocus(page, row);
-    await expect(pair).toBeVisible();
-    // B8: each has its own name, and the keyboard reaches and presses them.
+    await expect(pair).toHaveCSS("opacity", "1");
+    await rest(page);
+    // B8: each has its own name, and the keyboard reaches and presses them,
+    // from outside the row too, as a closing dialog hands focus back to one.
     await expect(start).toHaveAccessibleName("Start agent in tools-repo");
     await expect(more).toHaveAccessibleName("More actions for tools-repo");
     await keyboardFocus(page, start);
-    await expect(pair).toBeVisible();
+    await expect(pair).toHaveCSS("opacity", "1");
     // B7: + aims the start panel at the project's main checkout.
     await page.keyboard.press("Enter");
     const panel = page.locator("[data-start-panel]");
@@ -833,7 +835,7 @@ test("a project row's + and ⋯ appear on hover and focus, start in its main che
     expect(await menu.locator("[data-menu-item]").evaluateAll((items) => items.map((item) => item.getAttribute("data-menu-item")))).toEqual(contextItems);
     const button = (await more.boundingBox())!;
     expect((await menu.boundingBox())!.y).toBeGreaterThanOrEqual(button.y + button.height - 1);
-    await expect(pair).toBeVisible();
+    await expect(pair).toHaveCSS("opacity", "1");
     await screenshot(page, "projects-row-actions-menu");
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
