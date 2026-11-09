@@ -952,6 +952,18 @@ export function conductorUnanswered(mission: Mission): boolean {
 }
 
 /**
+ * Why a raise reached the operator, as 내 차례's card says it: the core gives
+ * a raise to the Conductor first and to the operator once it stood
+ * unsettled (`waited`), at once with no Conductor (`noConductor`), and at
+ * once for a reason the operator settles first (`failed`, the Conductor's
+ * own failure).
+ */
+export function raisedWhy(mission: Pick<Mission, "conductor">, attention: Pick<MissionAttention, "reason">): "failed" | "noConductor" | "waited" {
+  if (OPERATOR_FIRST.includes(attention.reason)) return "failed";
+  return mission.conductor.present ? "waited" : "noConductor";
+}
+
+/**
  * The pull request a raise is about, for the words beside its choices: the
  * raise's own, else the node's current one or the outside one it follows,
  * with its state as the project's list reads it, else as the node keeps it.

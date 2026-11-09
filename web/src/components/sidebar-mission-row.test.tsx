@@ -20,15 +20,15 @@ afterAll(() => browserCanvas.restore());
 
 // PRD mission-node-simple B14 and the approved mockup: a mission with no
 // Conductor or worker row to carry what waits on the operator is its own
-// Needs You item, with 이어받기 and the node's choice for its cause beside
-// the line that says why.
+// Needs You item, with 이어받기 and 확인하기 under the line that says why;
+// the node's choices wait in the mission's 내 차례 card.
 afterEach(async () => {
   await clientI18n.changeLanguage("en");
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
-it("offers take over and the cause's choice on the mission's own Needs You item, and a choice sends one settle", async () => {
+it("offers take over and 확인하기 on the mission's own Needs You item, and 확인하기 opens the mission without settling anything", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("ko");
   const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
@@ -36,7 +36,8 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
   const [ask] = missionAsks([mission], [mission.id]);
   expect(ask).toBeDefined();
   const sent: unknown[] = [];
-  const actions = createActions((event) => sent.push(event));
+  const opened: string[] = [];
+  const actions = { ...createActions((event) => sent.push(event)), openMission: (id: string) => { opened.push(id); } };
   const container = document.createElement("ul");
   document.body.append(container);
   const root = createRoot(container);
@@ -44,10 +45,11 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
   try {
     const row = container.querySelector<HTMLElement>(`[data-mission-ask="${mission.id}"]`)!;
     const buttons = [...row.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
-    expect(buttons).toEqual(["지휘 다시 열기", "끝으로"]);
-    await act(async () => row.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
-    await act(async () => row.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
-    expect(sent).toEqual([{ schema_version: 2, kind: "mission_attention", payload: { mission: mission.id, node: ask!.node.key, action: "done", since_unix_ms: ask!.attention.since_unix_ms } }]);
+    expect(buttons).toEqual(["지휘 다시 열기", "확인하기"]);
+    expect(row.querySelector("[data-attention-choice]")).toBeNull();
+    await act(async () => row.querySelector<HTMLButtonElement>("[data-mission-ask-look]")!.click());
+    expect(opened).toEqual([mission.id]);
+    expect(sent.filter((event) => (event as { kind: string }).kind === "mission_attention")).toEqual([]);
   } finally {
     await act(async () => root.unmount());
   }
@@ -67,34 +69,9 @@ it("offers no take over while a Conductor holds the mission", async () => {
   await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={createActions(() => true)} /></TooltipProvider>));
   try {
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
-    expect(buttons).toEqual(["끝으로"]);
+    expect(buttons).toEqual(["확인하기"]);
   } finally {
     await act(async () => root.unmount());
   }
 });
 
-it("gives the next node its own choices once the first one's choice is sent", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
-  useShellStore.setState({ rest, connection: "live" });
-  const [first] = missionAsks([mission], [mission.id]);
-  const next = { ...first!, node: { ...first!.node, key: "screen", title: "API 쓰는 화면" }, attention: { ...first!.attention, reason: "worker_ended" as const, choices: ["drop" as const], since_unix_ms: first!.attention.since_unix_ms + 1 } };
-  const sent: unknown[] = [];
-  const actions = createActions((event) => sent.push(event));
-  const container = document.createElement("ul");
-  document.body.append(container);
-  const root = createRoot(container);
-  const draw = (ask: typeof first) => act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={actions} /></TooltipProvider>));
-  await draw(first);
-  try {
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
-    await draw(next);
-    const drop = container.querySelector<HTMLButtonElement>('[data-attention-choice="drop"]')!;
-    expect(drop.disabled).toBe(false);
-    await act(async () => drop.click());
-    await act(async () => drop.click());
-    expect(sent.map((event) => (event as { payload: { node: string; action: string } }).payload)).toMatchObject([{ node: first!.node.key, action: "done" }, { node: "screen", action: "drop" }]);
-  } finally {
-    await act(async () => root.unmount());
-  }
-});

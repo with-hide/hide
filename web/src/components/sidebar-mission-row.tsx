@@ -14,7 +14,6 @@ import { AskLine } from "./agent-tree";
 import { DeviceChip } from "./device-chip";
 import { Elapsed } from "./elapsed";
 import { KindIcon } from "./kind-mark";
-import { AttentionChoices } from "./mission-attention";
 import { Button } from "./ui/button";
 import { Hint } from "./ui/tooltip";
 import { FoldLane } from "./sidebar-agent-row";
@@ -72,12 +71,21 @@ export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?
   return <AskLine ask={line} className={className} />;
 }
 
-/** The node's choices for its cause, wherever the mission is its own Needs You item, led by 이어받기 while no Conductor holds the mission. */
+/**
+ * 확인하기, which opens the mission where its 내 차례 card says what happened,
+ * why it came to the operator and offers the node's choices, wherever the
+ * mission is its own Needs You item; led by 이어받기 while no Conductor holds
+ * the mission. The choices are not drawn here: read without the card's
+ * context they left the operator guessing (operator report on M41).
+ */
 export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk; actions: Actions; className?: string }) {
+  const { t } = useInterfaceTranslation();
   return (
     <span className={cn("flex min-w-0 flex-wrap items-center gap-xs", className)} data-mission-ask-choices={ask.mission.id}>
       {ask.mission.conductor.present ? null : <MissionTakeOver mission={ask.mission} actions={actions} />}
-      <AttentionChoices key={`${ask.node.key}-${ask.attention.since_unix_ms}`} mission={ask.mission} node={ask.node} attention={ask.attention} actions={actions} />
+      <Button size="sm" variant="secondary" onClick={() => actions.openMission(ask.mission.id)} data-mission-ask-look={ask.mission.id}>
+        {t("missionScreen.pill.attention")}
+      </Button>
     </span>
   );
 }
@@ -87,11 +95,11 @@ export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk
  * B14): no Conductor or worker row stands to carry what waits on the
  * operator, so the mission's title is the row, with the Needs You mark and
  * the line a carried one reads (`확인 필요 · <node> · <why>`, `외 N건`).
- * Under it are 이어받기, which starts a Conductor for the mission, and the
- * node's own choices for its cause; opening the row opens the mission's map.
+ * Under it are 이어받기 while no Conductor holds the mission, which starts
+ * one, and 확인하기; opening the row, or 확인하기, opens the mission's map.
  * It reads as the agent rows beside it do: the mission's mark in the logo's
  * place (shown as the logos are), how long the node has waited at the end of
- * the title line, the project as the place line, and the choices on the
+ * the title line, the project as the place line, and the buttons on the
  * columns of the lines above.
  * The 프로젝트 list's Needs You and the 태스크 list's 내 차례 both draw it;
  * A mission of another device than the one in front names it with the

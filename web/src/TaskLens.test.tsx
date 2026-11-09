@@ -250,14 +250,14 @@ it("in 프로젝트별 draws one group per project, the asking project first, wi
   expect([...container.querySelectorAll('[data-task-group-head="project"]')][1]?.textContent).toBe("herdr-ide읽을 것 1작업 중 2");
 });
 
-it.each(["status", "project"] as const)("in %s draws a mission that is its own Needs You item in 내 차례 with its choices, counted with the tasks as the 프로젝트 list counts it (UI_BEHAVIOR, Needs You)", async (view) => {
+it.each(["status", "project"] as const)("in %s draws a mission that is its own Needs You item in 내 차례 with 확인하기, counted with the tasks as the 프로젝트 list counts it (UI_BEHAVIOR, Needs You)", async (view) => {
   const agents = [row("works"), row("ask", {}, { group: "needs_you" })];
   const cards = [card("works", "working", "hide-main"), card("ask", "needs_you", "site-main")];
   const rest = withMissionAsk(snapshot(agents, cards, view), "local", Date.UTC(2026, 10, 1));
   const { container, sent } = await render(rest, agents);
   const mission = container.querySelector<HTMLElement>("[data-mission-ask]")!;
   expect(mission.getAttribute("data-mission-ask")).toBe("mission-1");
-  expect([...mission.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["지휘 다시 열기", "끝으로"]);
+  expect([...mission.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["지휘 다시 열기", "확인하기"]);
   // It reads as a task row does: how long it has waited, and its project where a 상태별 row names it.
   expect(mission.querySelector("[data-mission-ask-elapsed]")).not.toBeNull();
   expect(mission.querySelector("[data-mission-ask-place]")?.textContent ?? null).toBe(view === "status" ? "herdr-ide" : null);
@@ -281,9 +281,9 @@ it.each(["status", "project"] as const)("in %s draws a mission that is its own N
     expect(container.querySelector('[data-task-group="hide"] [data-task-band-list="needs_you"] [data-mission-ask]')).not.toBeNull();
     expect(container.querySelector('[data-task-group="hide"] [data-task-group-head="project"]')?.textContent).toBe("herdr-ide내 차례 1작업 중 1");
   }
-  await act(async () => mission.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
-  await act(async () => mission.querySelector<HTMLButtonElement>('[data-attention-choice="done"]')!.click());
-  expect(sent.filter((event) => event.kind === "mission_attention").map((event) => event.payload)).toMatchObject([{ mission: "mission-1", action: "done" }]);
+  // The node's choices wait in the mission's own 내 차례 card; the row only opens it.
+  expect(mission.querySelector("[data-attention-choice]")).toBeNull();
+  expect(sent.filter((event) => event.kind === "mission_attention")).toEqual([]);
 });
 
 /** 내 차례's rows top to bottom in 상태별, a task by its root pane and a mission as `mission:<id>`. */

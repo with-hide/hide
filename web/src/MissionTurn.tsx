@@ -7,7 +7,7 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { DecisionBanner } from "./MissionDecision";
-import { attentionReasonText, heldLettersText, turnItems, type TurnItem } from "./missions";
+import { attentionReasonText, heldLettersText, raisedWhy, turnItems, type TurnItem } from "./missions";
 import { useWorkerEscalation } from "./missionWorkers";
 import type { Mission, MissionAttention, MissionNode } from "./snapshot";
 
@@ -97,6 +97,7 @@ function AttentionCard({ mission, node, attention, actions, onSelect }: { missio
   const [open, setOpen] = useState(false);
   const lines = failedLines(node, false);
   const what = attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes);
+  const why = raisedWhy(mission, attention);
   return (
     <div className="flex min-w-0 flex-col gap-xs rounded-md border border-mission-hold bg-mission-hold/10 px-sm py-xs" data-mission-turn-item="attention" data-mission-turn-reason={attention.reason}>
       <div className="flex min-w-0 items-center gap-sm">
@@ -111,7 +112,7 @@ function AttentionCard({ mission, node, attention, actions, onSelect }: { missio
           <AttentionFacts mission={mission} node={node} attention={attention} />
         </dd>
         <dt className="text-caption text-muted-foreground">{t("mission.turn.why")}</dt>
-        <dd className="min-w-0 truncate" data-mission-turn-why={whyYou(mission, attention)}>{t(`mission.turn.why.${whyYou(mission, attention)}`)}</dd>
+        <dd className="min-w-0 truncate" data-mission-turn-why={why}>{t(`mission.turn.why.${why}`)}</dd>
       </dl>
       <div className="flex min-w-0 flex-wrap items-center gap-xs">
         <AttentionChoices mission={mission} node={node} attention={attention} actions={actions} facts={false} />
@@ -139,20 +140,14 @@ function AttentionCard({ mission, node, attention, actions, onSelect }: { missio
   );
 }
 
-/** Why a raise reached the operator: the core gives a raise to the Conductor first and to the operator once it stood unsettled, at once with no Conductor or for the Conductor's own failure. */
-function whyYou(mission: Mission, attention: MissionAttention): "failed" | "noConductor" | "waited" {
-  if (attention.reason === "conductor_failed") return "failed";
-  return mission.conductor.present ? "waited" : "noConductor";
-}
-
 function Row({ children, ...data }: { children: ReactNode } & Record<`data-${string}`, string>) {
   return <div className="flex min-w-0 items-center gap-sm" {...data}>{children}</div>;
 }
 
 /** A node named in 내 차례, which picks it on the map (B25): its title, with its pull request's mark when it has one (PRD mission-tool B18). */
-function NodeChip({ node, onSelect, pr: withPr = true }: { node: MissionNode; onSelect: (key: string) => void; pr?: boolean }) {
+function NodeChip({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
   // The pull request a node waits on now is its last one (D-10).
-  const pr = withPr ? (node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null)) : null;
+  const pr = node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
   return (
     <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex min-w-0 max-w-(--size-flow-title) shrink items-center gap-xxs rounded-xs bg-muted px-xs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-mission-turn-node={node.key}>
       <span className="min-w-0 truncate">{node.title}</span>
