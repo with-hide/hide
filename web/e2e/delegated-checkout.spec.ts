@@ -54,7 +54,7 @@ test("a checkout whose only tab is delegated opens on the child's pane", async (
     await screenshot(page, "delegated-checkout-raised-from");
 
     // Back on the first checkout, the root's chevron opens its child in place (agent-hierarchy-screens B10).
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(page.locator(`[data-pane-view="${parent}"]`)).toBeVisible({ timeout: 20_000 });
     await page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-tree-chevron="${parent}"]`).first().click();
     await page.locator(`nav[data-sidebar] [data-pane="${child}"] [data-agent-open="${child}"]`).first().click();

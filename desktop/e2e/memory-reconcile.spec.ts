@@ -28,7 +28,7 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     app = launched.app;
     const page = launched.page;
     countSent(page);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await expect(page.locator('[data-memory="off"]')).toBeVisible();
@@ -59,7 +59,7 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     await screenshot(page, "memory-compare-dark");
     await tab.locator('[data-memory-compare="2"]').click();
     // Return to this Memory, then the light/narrow state.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await page.evaluate(() => { document.documentElement.classList.remove("dark"); document.documentElement.classList.add("light"); });
     await fitWindow(app, { width: 900, height: 760 });

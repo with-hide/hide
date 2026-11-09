@@ -48,7 +48,7 @@ test("the sidebar's edge drags between its bounds, lands once, survives a reload
     const edge = page.locator("[data-sidebar-edge]");
     const main = page.locator("main");
     // Open the folder's Workspace so a terminal sits beside the sidebar.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: /^notes/ }).locator("[data-checkout]"))).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: /^notes/ }).locator("[data-checkout]"))).click({ position: { x: 12, y: 8 } });
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator(".xterm").first()).toBeVisible({ timeout: 20_000 });
     // The notes shell has drawn its prompt, so the terminal is settled before the first resize count.

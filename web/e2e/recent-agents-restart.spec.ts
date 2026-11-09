@@ -32,7 +32,7 @@ test("the recent agent pane order survives a daemon restart and a reload", async
     // while a screen shows it.
     const beta = await withControl(daemon, (control) => openProject(control, path.join(fixture.root, "beta"), "beta"));
     const betaPane = beta.pane;
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(canvas).toHaveAttribute("data-canvas", beta.tab);
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", betaPane), { timeout: 20_000, message: "the prompt in beta" }).toContain("fixture %");
     await withControl(daemon, async (control) => {
@@ -42,7 +42,7 @@ test("the recent agent pane order survives a daemon restart and a reload", async
 
     // The keyboard in beta's Codex, then back in the fixture's pane.
     await page.locator(`[data-pane-view="${betaPane}"]`).click();
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(canvas).not.toHaveAttribute("data-canvas", beta.tab);
     const fixturePane = (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!;
     await page.locator(`[data-pane-view="${fixturePane}"]`).click({ position: { x: 30, y: 60 } });

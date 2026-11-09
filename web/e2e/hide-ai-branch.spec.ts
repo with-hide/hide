@@ -101,7 +101,7 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     await open(page, daemon.origin, daemon.token);
     const project = page.locator("[data-project]", { hasText: "branchy" });
     // Opening the Hide AI tool makes the Project's suggestion store; the lines are seeded into it while the core is down.
-    await (await showProjectRow(page, projectOpener(project))).click();
+    await (await showProjectRow(page, projectOpener(project))).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await expect.poll(() => sent.get("memory_open")?.workspace_id).toBeTruthy();
     const lane = page.locator('[data-lane="memory"]');
@@ -109,7 +109,7 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     const node = daemon.node;
     daemon = await daemon.restart((dir) => seedLines(path.join(dir, "suggestions.sqlite3"), `project:${digest(`${node}\0${repo}`)}`, node, repo));
     await open(page, daemon.origin, daemon.token);
-    await (await showProjectRow(page, projectOpener(project))).click();
+    await (await showProjectRow(page, projectOpener(project))).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR ?? engine.root;
 

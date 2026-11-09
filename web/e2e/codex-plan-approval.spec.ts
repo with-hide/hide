@@ -105,7 +105,7 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     // the page draws it: a pane takes the operator's keys only while a screen shows it.
     const plan = await withControl(daemon, (control) => openProject(control, cwd, "plan"));
     const pane = plan.pane;
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "plan" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "plan" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-canvas", plan.tab);
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: "the prompt in the plan project" }).toContain("fixture %");
     await startCodex(fixture, daemon, pane);

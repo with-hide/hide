@@ -72,8 +72,9 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
     // beta is opened the way the operator would, through its project row. Its main
     // checkout's row is drawn once it is in front.
     const betaProject = page.locator("nav[data-sidebar] [data-project]", { hasText: "beta" });
-    await (await showProjectRow(page, betaProject.locator("[data-project-row]"))).click();
     const betaRow = betaProject.locator("[data-checkout]").first();
+    // A project already in front folds when its row is pressed again, so beta is pressed only when it is not.
+    if ((await betaRow.getAttribute("aria-current", { timeout: 1_000 }).catch(() => null)) !== "true") await (await showProjectRow(page, betaProject.locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
     await expect(betaRow).toHaveAttribute("aria-current", "true");
     const foregroundPaneLocator = page.locator('[data-pane-view][data-focused="true"]');
     await expect(foregroundPaneLocator).toHaveAttribute("data-pane-view", /./);
@@ -111,7 +112,7 @@ test("pane CLI opens its own file and diff while another Workspace remains in fr
       await page.screenshot({ path: path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "workspace-cli-background.png") });
     }
     const firstProject = page.locator("[data-project]", { hasText: "fixture" });
-    await (await showProjectRow(page, projectOpener(firstProject))).click();
+    await (await showProjectRow(page, projectOpener(firstProject))).click({ position: { x: 12, y: 8 } });
     // Opened, the project's main checkout is its row, which the focus keeps drawn.
     await expect(firstProject.locator("button[data-checkout]").first()).toHaveAttribute("aria-current", "true");
     // Background opens kept beta intact and left the caller's lane alone

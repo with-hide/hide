@@ -27,7 +27,7 @@ test("Hide AI opens the front checkout's Project with its two tabs, and its head
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "hide-ai-repo" })))).click();
+    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "hide-ai-repo" })))).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
 
     // One `memory_open` names the Project for both tabs; the head names it too.
