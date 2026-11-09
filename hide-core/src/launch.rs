@@ -28,6 +28,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::ProfilesSnapshot;
 use crate::node_access::{LinkError, NodeLink};
 
+pub(crate) mod holds;
+
 /// How long a start waits for its machine to answer its profile: a read of
 /// one small file and a look for one program.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,6 +52,10 @@ pub struct LaunchProfile {
 pub(crate) struct Request {
     pub(crate) target: LaunchTarget,
     name: Option<String>,
+    /// The start's hold on its profile, taken under the runtime lock
+    /// ([`holds`]); none for the built-in default and for a start that
+    /// brings back an agent whose record already holds the profile.
+    hold: Option<holds::Hold>,
 }
 
 impl Request {
@@ -65,7 +71,19 @@ impl Request {
                     .map_or_else(ProfileId::default_profile, |(id, _)| id.clone()),
             },
             name: profile.map(|(_, name)| name),
+            hold: None,
         }
+    }
+
+    /// The start's hold on its profile.
+    pub(crate) fn hold(&self) -> Option<holds::Hold> {
+        self.hold.clone()
+    }
+
+    /// This start, holding its profile with `hold`.
+    pub(crate) fn held(mut self, hold: Option<holds::Hold>) -> Self {
+        self.hold = hold;
+        self
     }
 
     /// A start of `kind` with its built-in default profile.
@@ -99,12 +117,21 @@ impl Request {
 pub(crate) struct Launch {
     kind: String,
     profile: Option<(ProfileId, ProfileStart)>,
+    hold: Option<holds::Hold>,
 }
 
 impl Launch {
     /// The agent, in the spelling the start was asked with.
     pub(crate) fn kind(&self) -> &str {
         &self.kind
+    }
+
+    /// The start was typed into `pane`: its hold on the profile stays until
+    /// the runtime sees what came of it ([`holds`]).
+    pub(crate) fn typed(&self, pane: &str) {
+        if let Some(hold) = &self.hold {
+            hold.typed(pane);
+        }
     }
 
     /// What the profile's machine answered for it, `None` for the built-in
@@ -188,6 +215,7 @@ impl Launch {
         Self {
             kind: kind.to_owned(),
             profile: None,
+            hold: None,
         }
     }
 
@@ -198,6 +226,7 @@ impl Launch {
         Self {
             kind: kind.to_owned(),
             profile: Some((ProfileId(id.to_owned()), start)),
+            hold: None,
         }
     }
 }
@@ -245,6 +274,10 @@ pub(crate) const PROFILES_UNSUPPORTED: &str = "profiles_unsupported";
 pub(crate) const PROFILE_REFUSED: &str = "profile_refused";
 /// The machine did not answer for the profile.
 pub(crate) const PROFILE_UNANSWERED: &str = "profile_unanswered";
+/// As many launch records are kept, or held by starts under way, as the core
+/// keeps (`runtime::agent_choice::PANE_LAUNCH_LIMIT`): a start with a profile
+/// is refused before it runs rather than run with no record of its account.
+pub(crate) const LAUNCH_RECORDS_FULL: &str = "launch_records_full";
 /// A profile's start was typed and nothing says whether its program runs
 /// (`engine::own::attempt`): neither that it ran nor that it did not, and
 /// nothing starts again on it.
@@ -267,6 +300,7 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
         return Ok(Launch {
             kind: kind.to_owned(),
             profile: None,
+            hold: None,
         });
     };
     let agent = label(kind);
@@ -343,6 +377,7 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
     Ok(Launch {
         kind: kind.to_owned(),
         profile: Some((id, start)),
+        hold: request.hold.clone(),
     })
 }
 
@@ -352,8 +387,12 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Parent {
     /// No parent hands one down: the start has none, or it is another
-    /// agent, on another machine, or one whose start Hide has no record of.
+    /// agent, or on another machine.
     None,
+    /// The parent is the same agent, and Hide has no record of its start
+    /// that describes it, so its account is not known: the start picks as
+    /// one with no parent does, never assuming the built-in default.
+    Unknown,
     /// The parent runs with the built-in default profile.
     Default,
     /// The parent runs with this profile; whether its machine still has it
@@ -395,7 +434,7 @@ pub(crate) fn pick(
                 listed(&profile.id).unwrap_or_else(|| (profile.id.clone(), profile.name.clone()));
             return Request::new(kind, Some(named));
         }
-        Parent::None => {}
+        Parent::None | Parent::Unknown => {}
     }
     // A project that names the built-in default starts it (D-31): only no
     // choice at all falls through to the agent's default.

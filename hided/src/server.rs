@@ -1484,6 +1484,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "profile_unconfirmed" => {
             "The agent's start was typed but Hide could not confirm its program runs; look at the agent's pane before starting it again, since it may be running"
         }
+        "launch_records_full" => {
+            "Hide keeps as many records of how its agents started as it can, so an agent with a profile does not start; close agents you no longer need, then run the same command again"
+        }
         "beside_pane_unavailable" => {
             "The engine could not split your pane (it closed, or the engine refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
         }

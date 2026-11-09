@@ -325,7 +325,8 @@ export function ProfileFormDialog({ open, onOpenChange, view, mode, profile, dra
   );
 }
 
-export type InUseAgent = { id: string; title: string; place: string; asleep: boolean };
+/** An agent running with the profile, or starting with it before it has a pane to show (`starting`). */
+export type InUseAgent = { id: string; title: string; place: string; asleep: boolean; starting?: boolean };
 
 /**
  * Deleting a profile (B27): refused while agents run with it, sleeping ones
@@ -344,11 +345,18 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inU
         </AlertDialogHeader>
         {refused ? (
           <ul className="flex flex-col divide-y divide-border rounded-md border border-border" data-profile-in-use="true">
-            {inUse.map((agent) => (
-              <li key={agent.id} className="flex min-w-0 items-center gap-sm px-md py-sm">
-                <span className="min-w-0 flex-1 truncate text-body text-foreground">{agent.title}<span className="text-muted-foreground"> · {agent.place}</span></span>
-                {agent.asleep ? <Badge>{t("agentProfiles.asleep")}</Badge> : null}
-                <Button variant="text" size="inline" onClick={() => onShow?.(agent.id)} data-profile-in-use-open={agent.id}>{t("agentProfiles.show")}</Button>
+            {inUse.map((agent, index) => (
+              <li key={agent.id || `starting-${index}`} className="flex min-w-0 items-center gap-sm px-md py-sm" data-profile-in-use-starting={agent.starting ? "true" : undefined}>
+                <span className="min-w-0 flex-1 truncate text-body text-foreground">
+                  {agent.title}
+                  {agent.place ? <span className="text-muted-foreground"> · {agent.place}</span> : null}
+                </span>
+                {agent.starting ? <Badge>{t("agentProfiles.starting")}</Badge> : agent.asleep ? <Badge>{t("agentProfiles.asleep")}</Badge> : null}
+                {agent.starting ? null : (
+                  <Button variant="text" size="inline" onClick={() => onShow?.(agent.id)} data-profile-in-use-open={agent.id}>
+                    {t("agentProfiles.show")}
+                  </Button>
+                )}
               </li>
             ))}
           </ul>

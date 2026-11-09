@@ -4586,7 +4586,8 @@
                 "profiles_unsupported",
                 "profile_refused",
                 "profile_unanswered",
-                "profile_unconfirmed"
+                "profile_unconfirmed",
+                "launch_records_full"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -6492,7 +6493,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:ae9f841dd21635c9d8f1aef66a52cf22116118a59dc00dc80f5b09dc08b20301",
+    "digest": "sha256:5cbd30bac5cdc02aab702bcd860d9ec45ea327e1b7fdafdbd2a278a10ecacf28",
     "envelopes": {
         "agent": {
             "answer": "value",

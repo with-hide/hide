@@ -533,7 +533,21 @@ pub(crate) fn start_within(
                     return Err(StartError::Engine(EngineError::Refused { code, message }));
                 }
             }
-            answer => return answer.map_err(StartError::Engine),
+            answer => {
+                // A start that may have run keeps its hold on the profile
+                // until the runtime sees what came of it; one refused
+                // before it ran, or whose attempt failed, lets it go with
+                // its values (`launch::holds`).
+                let ran_nothing = matches!(
+                    &answer,
+                    Err(EngineError::Refused { code, .. })
+                        if code != crate::launch::PROFILE_UNCONFIRMED
+                );
+                if !ran_nothing {
+                    start.launch().launch.typed(pane_id);
+                }
+                return answer.map_err(StartError::Engine);
+            }
         }
     }
 }

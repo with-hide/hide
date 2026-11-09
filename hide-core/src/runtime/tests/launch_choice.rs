@@ -299,7 +299,16 @@ fn a_wake_of_an_agent_with_no_recorded_choice_resumes_as_before() {
     let (fake, starts) = starting_engine();
     wake(&mut runtime, &fake);
     assert_eq!(next_start(&starts).1, resumed("claude", &[]));
-    assert!(runtime.snapshot().ui_state.pane_launches.is_empty());
+    // Its pane records the start on the CLI's defaults and the built-in
+    // profile, which a child it starts reads (D-32).
+    assert!(
+        runtime
+            .snapshot()
+            .ui_state
+            .pane_launches
+            .values()
+            .all(|launch| launch.choice.is_default() && launch.profile.is_none())
+    );
 }
 
 #[test]

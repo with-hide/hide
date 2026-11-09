@@ -311,6 +311,23 @@ fn caller_profile(
         .caller_launch_profile(actor, kind))
 }
 
+/// `request` holding its profile on `device` while it starts
+/// (`launch::holds`).
+fn hold_start(
+    client: &Client,
+    device: &str,
+    request: crate::launch::Request,
+) -> Result<crate::launch::Request, String> {
+    client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .hold_profile_start(device, request)
+        .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))
+}
+
 /// The profile Project settings choose for `kind` in the project of `repo`
 /// on `device` (D-31), when they choose one.
 fn project_profile(
@@ -1346,6 +1363,9 @@ fn spawn(
         project_profile(client, &child_device, repo, kind)?.as_ref(),
         profiles.as_ref(),
     );
+    // The start holds its profile from here, so a removal planned
+    // meanwhile is refused, and one under way refuses it (B27).
+    let agent = hold_start(client, &child_device, agent)?;
     // The child's machine answers for its profile before the spawn makes
     // its pane, so a profile that is gone or a program that cannot run
     // leaves no pane behind (PRD agent-profiles B20, B22).

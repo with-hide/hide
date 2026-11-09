@@ -176,14 +176,18 @@ it("saves nothing on close when the values could not be read", async () => {
   await tab.unmount();
 });
 
-it("refuses a delete while an agent runs with the profile and lists it (B27)", async () => {
+it("refuses a delete while an agent runs or starts with the profile and lists it (B27)", async () => {
   const tab = await mount(listed([work]));
   await tab.click(tab.q('[data-profile-row="p-work"] button'));
   await tab.answer({ values: [["A", "1"]] });
   await tab.click(tab.q("[data-profile-delete]"));
-  await tab.answer({ in_use: [{ pane_id: "w1:p1", title: "fix-bell", place: "blog", asleep: true }], projects: [] });
+  await tab.answer({ in_use: [{ pane_id: "w1:p1", title: "fix-bell", place: "blog", asleep: true }, { pane_id: "", title: "Claude Code", place: "", asleep: false, starting: true }], projects: [] });
   expect(tab.q("[data-profile-delete-dialog]")?.dataset.profileDeleteDialog).toBe("refused");
   expect(tab.q("[data-profile-in-use]")?.textContent).toContain("fix-bell");
   expect(tab.q("[data-profile-delete-confirm]")).toBeNull();
+  // A start holding the profile has no pane yet: it says so and links nowhere.
+  const starting = tab.q("[data-profile-in-use-starting]");
+  expect(starting?.textContent).toContain("Starting");
+  expect(starting?.querySelector("[data-profile-in-use-open]")).toBeNull();
   await tab.unmount();
 });

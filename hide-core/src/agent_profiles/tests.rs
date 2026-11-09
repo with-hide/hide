@@ -63,6 +63,7 @@ fn job(link: Arc<Scripted>, change: Change, version: u64) -> Prepared {
         request: None,
         runtime: Weak::new(),
         notifier: crate::handle::ChangeNotifier::new(),
+        holds: Arc::default(),
         // Nothing here settles into a runtime.
         settled: true,
     }

@@ -185,7 +185,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
           onOpenChange={(next) => !next && close()}
           profile={profile.name}
           location={profile.account ?? profile.program ?? ""}
-          inUse={(checked?.in_use ?? []).map((agent) => ({ id: agent.pane_id, title: agent.title, place: agent.place, asleep: agent.asleep }))}
+          inUse={(checked?.in_use ?? []).map((agent) => ({ id: agent.pane_id, title: agent.title, place: agent.place, asleep: agent.asleep, starting: agent.starting }))}
           projects={checked?.projects ?? []}
           onConfirm={() => send({ op: "remove", id: profile.id })}
           onShow={(pane) => {

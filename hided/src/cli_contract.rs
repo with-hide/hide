@@ -607,6 +607,7 @@ pub const COMMANDS: &[Spec] = &[
             "profile_refused",
             "profile_unanswered",
             "profile_unconfirmed",
+            "launch_records_full",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.

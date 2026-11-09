@@ -143,6 +143,15 @@ impl Runtime {
         let version = self
             .machine_profiles(machine)
             .map_or(0, |listed| listed.version);
+        // A removal that will be made reads as being removed from here, in
+        // the same hold of the lock as its check (`launch::holds`).
+        if let Change::Remove { id, .. } = &change {
+            self.profile_holds
+                .remove(machine, id, version)
+                .map_err(|starting| {
+                    Refusal::in_use(starting.iter().map(InUse::starting).collect())
+                })?;
+        }
         self.agent_profile_busy = true;
         Ok(Prepared {
             machine: machine.to_owned(),
@@ -153,6 +162,7 @@ impl Runtime {
             request: request.map(str::to_owned),
             runtime: context.runtime.clone(),
             notifier: context.notifier.clone(),
+            holds: Arc::clone(&self.profile_holds),
             settled: false,
         })
     }
@@ -304,7 +314,9 @@ impl Runtime {
     }
 
     /// A removal, refused while an agent runs with the profile, sleeping
-    /// ones included (D-11, B27).
+    /// ones included, or starts with it (D-11, B27); once its job is
+    /// prepared the profile reads as being removed, so no start takes it
+    /// meanwhile (`launch::holds`).
     fn plan_remove(&self, machine: &str, id: ProfileId) -> Result<Change, Refusal> {
         let in_use = self.profile_in_use(machine, &id);
         if !in_use.is_empty() {
@@ -314,6 +326,75 @@ impl Runtime {
             projects: self.profile_projects(machine, &id),
             id,
         })
+    }
+
+    /// `request`, holding its profile on `machine` while it starts
+    /// (`launch::holds`): refused while the profile is being removed, or
+    /// when its launch record would have no room. The built-in default
+    /// holds nothing.
+    pub(crate) fn hold_profile_start(
+        &self,
+        machine: &str,
+        request: crate::launch::Request,
+    ) -> Result<crate::launch::Request, crate::launch::Refusal> {
+        use crate::launch::holds::Refused;
+        let Some((id, name)) = request.profile() else {
+            return Ok(request);
+        };
+        let kind = request.kind().to_owned();
+        let records = self.snapshot.ui_state.pane_launches.len();
+        match self.profile_holds.hold(
+            machine,
+            &id,
+            &kind,
+            records,
+            agent_choice::PANE_LAUNCH_LIMIT,
+        ) {
+            Ok(hold) => Ok(request.held(Some(hold))),
+            Err(Refused::Removing) => Err(crate::launch::Refusal {
+                code: crate::launch::PROFILE_GONE,
+                detail: format!("{kind}'s profile {name} is being removed, so it was not started"),
+            }),
+            Err(Refused::RecordsFull) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_profiles",
+                    "kind": "profile_start.records_full",
+                    "device_id": machine,
+                    "profile": id.0,
+                    "limit": agent_choice::PANE_LAUNCH_LIMIT,
+                }));
+                Err(crate::launch::Refusal {
+                    code: crate::launch::LAUNCH_RECORDS_FULL,
+                    detail: format!(
+                        "{kind} with the profile {name} was not started: Hide keeps no more records of what its agents started with"
+                    ),
+                })
+            }
+        }
+    }
+
+    /// Ends the holds of starts typed into a pane this pass settles: the
+    /// pane is gone from the topology the pass owns, or the agent row the
+    /// start made shows, described by a launch record naming the profile,
+    /// which carries the use from then on (`launch::holds`).
+    pub(super) fn settle_profile_holds(
+        &self,
+        agents: &[SidebarAgentSnapshot],
+        scope: crate::agent_state::ReadRecordScope<'_>,
+        live_pane_ids: Option<&HashSet<String>>,
+    ) {
+        let node = self.node.as_str();
+        self.profile_holds.settle(|start, pane| {
+            let pane = crate::address::pane_id_on(node, &start.machine, pane);
+            let gone = live_pane_ids.is_some_and(|live| scope.owns(&pane) && !live.contains(&pane));
+            let shown = agents.iter().any(|row| {
+                row.pane_id == pane
+                    && self
+                        .launch_profile_of(row)
+                        .is_some_and(|profile| profile.id == start.profile)
+            });
+            gone || shown
+        });
     }
 
     /// The profile of `kind` named `name` on `machine`, one of the
@@ -359,8 +440,8 @@ impl Runtime {
     }
 
     /// The agents on `machine` that run with the profile `id`: running
-    /// ones whose pane's record names it, and sleeping ones whose record
-    /// does, here or closed (D-11).
+    /// ones whose pane's record names it, sleeping ones whose record does,
+    /// here or closed (D-11), and starts that hold it (`launch::holds`).
     pub(super) fn profile_in_use(&self, machine: &str, id: &ProfileId) -> Vec<InUse> {
         let node = self.node.as_str();
         let on = |pane: &str| crate::address::split_pane(node, pane).0 == machine;
@@ -378,6 +459,7 @@ impl Runtime {
                     title: row.identity_label.clone(),
                     place: row.workspace_label.clone(),
                     asleep: record.is_some(),
+                    starting: false,
                 })
             })
             .collect();
@@ -399,9 +481,17 @@ impl Runtime {
                         .as_ref()
                         .map_or_else(String::new, |owner| owner.label.clone()),
                     asleep: true,
+                    starting: false,
                 });
             }
         }
+        // Starts under way hold it too, before they have a pane to show.
+        found.extend(
+            self.profile_holds
+                .starting(machine, id)
+                .iter()
+                .map(InUse::starting),
+        );
         found
     }
 
@@ -459,6 +549,14 @@ impl Runtime {
     pub(crate) fn settle_agent_profiles(&mut self, job: &Prepared, outcome: &Outcome) -> bool {
         self.agent_profile_busy = false;
         let mut changed = false;
+        // A removal the node definitely did not make leaves the profile to
+        // its starts; one it may have made reads as being removed until a
+        // list settles it (`launch::holds`).
+        if let (Change::Remove { id, .. }, Err(refusal)) = (&job.change, &outcome.result)
+            && refusal.code != profiles::UNANSWERED
+        {
+            self.profile_holds.not_removed(&job.machine, id);
+        }
         if let Some(list) = &outcome.list {
             changed |= self.ingest_profiles(&job.machine, kit::ProfilesRead::Listed(list.clone()));
         }
@@ -494,6 +592,8 @@ impl Runtime {
     /// A job that ended without an outcome gives the slot back, and its
     /// screen request reads refused.
     pub(crate) fn abandon_agent_profiles(&mut self, request: Option<&str>) {
+        // A removal that ended without an outcome may still be made: its
+        // profile reads as being removed until a list settles it.
         self.agent_profile_busy = false;
         if let Some(answer) = self
             .snapshot

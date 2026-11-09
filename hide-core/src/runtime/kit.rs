@@ -577,6 +577,14 @@ impl Runtime {
                         "reason": reason,
                     }));
                 }
+                // What the list says of the removals under way
+                // (`launch::holds`).
+                self.profile_holds.listed(device_id, list.version, |id| {
+                    list.profiles
+                        .iter()
+                        .find(|profile| profile.id == *id)
+                        .map(|profile| profile.removing)
+                });
                 crate::model::ProfilesSnapshot::from_list(&list)
             }
             ProfilesRead::Unsupported => crate::model::ProfilesSnapshot::unsupported(),

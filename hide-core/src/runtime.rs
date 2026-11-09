@@ -1648,6 +1648,9 @@ pub struct Runtime {
     /// A change of a machine's agent profiles is under way
     /// (`runtime/agent_profiles.rs`): one at a time, for every machine.
     agent_profile_busy: bool,
+    /// The profiles being started and removed (`launch::holds`): a start
+    /// and a removal of one profile see each other under this lock.
+    pub(crate) profile_holds: Arc<crate::launch::holds::ProfileHolds>,
     /// When an agent last worked or waited on the operator; 0 until one has.
     agent_worked_at_unix_ms: u64,
     /// What the operator looks at: this machine's chosen pane, the device in
@@ -2535,6 +2538,7 @@ impl Runtime {
             editor_tab_history: Vec::new(),
             worker_context: None,
             agent_profile_busy: false,
+            profile_holds: Arc::default(),
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),

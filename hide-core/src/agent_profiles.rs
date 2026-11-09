@@ -318,6 +318,10 @@ pub struct InUse {
     pub title: String,
     pub place: String,
     pub asleep: bool,
+    /// An agent starting with the profile, before it has a pane to show
+    /// (`launch::holds`): `pane_id` and `place` are empty.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub starting: bool,
 }
 
 /// What the screen's last profile request came to
@@ -366,6 +370,21 @@ pub enum AnswerState {
     Pending,
     Done,
     Refused,
+}
+
+impl InUse {
+    /// A start holding the profile, as a removal it refuses lists it: no
+    /// pane to show yet.
+    pub(crate) fn starting(start: &crate::launch::holds::Start) -> Self {
+        Self {
+            pane_id: String::new(),
+            title: hide_agent_adapter::adapter(&start.kind)
+                .map_or_else(|| start.kind.clone(), |adapter| adapter.label.to_owned()),
+            place: String::new(),
+            asleep: false,
+            starting: true,
+        }
+    }
 }
 
 impl ProfileAnswer {
@@ -489,6 +508,9 @@ pub struct Prepared {
     pub(crate) request: Option<String>,
     pub(crate) runtime: Weak<Mutex<crate::runtime::Runtime>>,
     pub(crate) notifier: crate::handle::ChangeNotifier,
+    /// Where a removal made again on a moved list says which version it
+    /// names now (`launch::holds`).
+    pub(crate) holds: Arc<crate::launch::holds::ProfileHolds>,
     /// Set once the outcome reached the runtime; a run that ends without
     /// one gives the slot back on drop.
     pub(crate) settled: bool,
@@ -674,7 +696,24 @@ impl Prepared {
                     if error.code == ErrorCode::Conflict && attempt == 0 =>
                 {
                     match list(link, false) {
-                        Ok(list) => expected = list.version,
+                        Ok(list) => {
+                            expected = list.version;
+                            // Only a list newer than this one settles
+                            // whether the removal made again was made, and
+                            // a start that took the profile meanwhile
+                            // keeps it.
+                            if let ProfileOp::Remove { id } = &op
+                                && let Err(starting) =
+                                    self.holds.removing_at(&self.machine, id, expected)
+                            {
+                                return Outcome {
+                                    list: Some(list),
+                                    result: Err(Refusal::in_use(
+                                        starting.iter().map(InUse::starting).collect(),
+                                    )),
+                                };
+                            }
+                        }
                         Err(refusal) => {
                             return Outcome {
                                 list: None,

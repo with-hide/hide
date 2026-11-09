@@ -5043,6 +5043,16 @@ impl Runtime {
         }
     }
 
+    /// The machine the task `id`'s agent starts on.
+    pub(crate) fn task_agent_machine(&self, id: u64) -> String {
+        self.snapshot
+            .task_operation
+            .as_ref()
+            .filter(|operation| operation.id == id)
+            .and_then(|operation| operation.device_id.clone())
+            .unwrap_or_else(|| self.node.as_str().to_owned())
+    }
+
     pub(crate) fn pending_task_agent_start(
         &self,
         id: u64,
