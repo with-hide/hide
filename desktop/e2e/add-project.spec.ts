@@ -108,6 +108,7 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await page.keyboard.press("Enter");
     await expect(dialog).toHaveCount(0, { timeout: 20_000 });
     await expect(page.locator("[data-project]", { hasText: "alpha" })).toHaveCount(1);
+    await page.locator("nav[data-sidebar]").getByRole("button", { name: /^Overview/ }).first().click();
 
     // Over All projects, the page a first run stays on, with a project listed, the Projects title's + still opens the same dialog, and its × closes it.
     await expect(page.locator("[data-overview-page]")).toBeVisible();

@@ -882,6 +882,8 @@ test("a section head stays at the top of the scrolled list, and a row the keyboa
 
     // B10: the keyboard brings the first project row under the head into view below it, whole.
     const first = page.locator("[data-project-list] > li[data-project] [data-project-row]").first();
+    // The pin's menu returned focus to this row, and focusing a focused element scrolls nothing.
+    await first.evaluate((element) => element.blur());
     await keyboardFocus(page, first);
     await expect.poll(async () => (await first.boundingBox())!.y).toBeGreaterThanOrEqual((await head.boundingBox())!.y + (await head.boundingBox())!.height - 0.5);
 
