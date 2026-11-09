@@ -803,7 +803,7 @@ fn load_opencode_detail(
                 Agent::OpenCode,
                 hide_node_link::sessions::ReaderFeature::Conversation,
                 Call::LabelTranscript {
-                    request: request.clone(),
+                    request: Box::new(request.clone()),
                 },
                 SESSION_CALL_TIMEOUT,
             )

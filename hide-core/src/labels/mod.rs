@@ -292,7 +292,7 @@ impl TranscriptSource for NodeTranscripts {
         call_as::<LabelTranscript>(
             channel.as_ref(),
             Call::LabelTranscript {
-                request: request.clone(),
+                request: Box::new(request.clone()),
             },
             DEVICE_READ_TIMEOUT,
         )

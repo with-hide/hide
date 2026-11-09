@@ -563,7 +563,7 @@ mod tests {
 
     fn label_call(agent: hide_session::Agent) -> Call {
         Call::LabelTranscript {
-            request: hide_session::label_transcript::LabelTranscriptRequest {
+            request: Box::new(hide_session::label_transcript::LabelTranscriptRequest {
                 agent,
                 account: Default::default(),
                 reference_kind: "id".to_owned(),
@@ -573,7 +573,7 @@ mod tests {
                 subagents: Default::default(),
                 turns: Some(Default::default()),
                 tools: None,
-            },
+            }),
         }
     }
 

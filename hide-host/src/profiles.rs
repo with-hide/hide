@@ -1425,7 +1425,7 @@ mod tests {
         .unwrap();
         let read = |account: AccountKey| {
             node.call(Call::LabelTranscript {
-                request: LabelTranscriptRequest {
+                request: Box::new(LabelTranscriptRequest {
                     agent: hide_session::Agent::Claude,
                     account,
                     reference_kind: "id".to_owned(),
@@ -1435,7 +1435,7 @@ mod tests {
                     subagents: Default::default(),
                     turns: None,
                     tools: None,
-                },
+                }),
             })
         };
 

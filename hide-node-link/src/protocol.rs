@@ -1136,7 +1136,9 @@ pub enum Call {
     /// The helper keeps nothing between reads; it answers events and the
     /// next checkpoint, never a path.
     LabelTranscript {
-        request: hide_session::label_transcript::LabelTranscriptRequest,
+        /// Boxed: the request is the largest a node takes, and the call
+        /// enum is as large as its largest variant.
+        request: Box<hide_session::label_transcript::LabelTranscriptRequest>,
     },
     /// The one original turn a backlog item came from, for its panel's
     /// origin and the Start prompt. No other turn is returned.
