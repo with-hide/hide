@@ -191,8 +191,9 @@ impl Record {
     }
 
     /// Keeps what Herdr's integration for `agent` wrote, as earlier builds
-    /// did; true when that changed the record. Only a fixture writes it now.
-    #[cfg(test)]
+    /// did; true when that changed the record. Only a fixture writes it now,
+    /// one of the Unix kit cases (`tests::herdr_cases`).
+    #[cfg(all(test, unix))]
     pub(crate) fn set_herdr_hook_entries(&mut self, agent: &str, entries: Vec<HookEntry>) -> bool {
         if entries.is_empty() {
             return self.herdr_hooks.remove(agent).is_some();

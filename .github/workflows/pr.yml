@@ -612,7 +612,10 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(hide-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
-      - name: Install kit and its Windows command shim
+      - name: Install kit, its Windows command shim and its pieces in profile accounts
+        # hide-kit/src/tests/profile_cases.rs runs here too: a profile
+        # account's folder made private, its hook, skills and trust put in
+        # and taken out, and a link in it followed nowhere outside it.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-kit)'
