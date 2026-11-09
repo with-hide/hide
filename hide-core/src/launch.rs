@@ -49,6 +49,18 @@ impl LaunchProfile {
     pub(crate) fn account_of(profile: Option<&Self>) -> AccountKey {
         profile.map_or_else(AccountKey::default, |profile| profile.account.clone())
     }
+
+    /// The profile as the operator reads it, named after its `kind` agent
+    /// (`Claude · work`): a row, `hide agent list` and the start line all
+    /// say it so.
+    pub(crate) fn shown(&self, kind: &str) -> String {
+        shown(kind, &self.name)
+    }
+}
+
+/// `name`, a profile of the `kind` agent, as the operator reads it.
+fn shown(kind: &str, name: &str) -> String {
+    format!("{} · {name}", label(kind))
 }
 
 /// What a start asks for before its machine is asked: the agent and the
@@ -167,7 +179,7 @@ impl Launch {
             hide_agent_hooks::hook_request::AGENT_EXEC_ATTEMPT.to_owned(),
             attempt.clone(),
             "--profile".to_owned(),
-            format!("{} · {}", label(&self.kind), start.name),
+            shown(&self.kind, &start.name),
         ];
         for (name, value) in &start.env {
             line.push("--env".to_owned());

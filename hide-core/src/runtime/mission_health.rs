@@ -48,7 +48,7 @@ pub(crate) struct HealthMadeFrom {
     /// Held, so its address is not reused by a later ledger and two
     /// publishes cannot read as one.
     ledger: Option<Arc<crate::delivery::ledger::Ledger>>,
-    sleeping: crate::coordination::Sleeping,
+    sleeping: crate::coordination::RegistrationFacts,
     present: Vec<bool>,
     stale: Vec<bool>,
     made: bool,
@@ -673,7 +673,7 @@ impl Runtime {
         &self,
         mission: &Mission,
         ledger: Option<&crate::delivery::ledger::Ledger>,
-    ) -> crate::coordination::Sleeping {
+    ) -> crate::coordination::RegistrationFacts {
         self.sleeping_registrations(
             mission
                 .nodes
@@ -687,7 +687,7 @@ impl Runtime {
         &'a self,
         mission: &Mission,
         ledger: Option<&crate::delivery::ledger::Ledger>,
-        sleeping: &crate::coordination::Sleeping,
+        sleeping: &crate::coordination::RegistrationFacts,
     ) -> Facts<'a> {
         let pulls = self.mission_pulls(mission);
         let nodes = mission

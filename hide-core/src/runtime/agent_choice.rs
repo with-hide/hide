@@ -444,11 +444,12 @@ impl Runtime {
         }
     }
 
-    /// Settles the launch records against one pass's agent rows, and saves
-    /// them when one moved.
+    /// Settles the launch records against one pass's agent rows, saves
+    /// them when one moved, and lays each row's profile from them
+    /// ([`Self::lay_profiles`]).
     pub(super) fn apply_pane_launches(
         &mut self,
-        agents: &[SidebarAgentSnapshot],
+        agents: &mut [SidebarAgentSnapshot],
         scope: crate::agent_state::ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) {
@@ -465,6 +466,52 @@ impl Runtime {
         // worker's conversation (a settle, a wake or a resume writes it) and
         // the worker is bound to its node.
         self.record_node_launches();
+        self.lay_profiles(agents);
+    }
+
+    /// The profile each of `records`' live agents runs with, by registration
+    /// id, as its row names it (`SidebarAgentSnapshot::profile`): what
+    /// `hide agent list` and `hide agent show` say beside the agent.
+    pub(crate) fn registration_profiles<'a>(
+        &self,
+        records: impl IntoIterator<Item = &'a crate::coordination::AgentRecord>,
+    ) -> BTreeMap<String, String> {
+        let rows: HashMap<&str, &SidebarAgentSnapshot> = self
+            .agent_rows()
+            .filter(|row| row.profile.is_some())
+            .map(|row| (row.pane_id.as_str(), row))
+            .collect();
+        if rows.is_empty() {
+            return BTreeMap::new();
+        }
+        records
+            .into_iter()
+            .filter(|record| !record.ended)
+            .filter_map(|record| {
+                let row = rows.get(record.actor.pane_id.as_str())?;
+                (hide_agent_adapter::canonical_kind(&row.agent_kind)
+                    == hide_agent_adapter::canonical_kind(&record.actor.kind))
+                .then(|| Some((record.id.clone(), row.profile.clone()?)))?
+            })
+            .collect()
+    }
+
+    /// Names on each row the profile its agent runs with, when its pane's
+    /// record describes it and the profile is not the built-in default, and
+    /// calls a row with no title of its own by it (`Claude · work`) (PRD
+    /// agent-profiles B17). One map lookup a row.
+    fn lay_profiles(&self, agents: &mut [SidebarAgentSnapshot]) {
+        for agent in agents {
+            let Some(profile) = self.launch_profile_of(agent) else {
+                continue;
+            };
+            let shown = profile.shown(&agent.agent_kind);
+            if agent.untitled {
+                agent.identity_label.clone_from(&shown);
+                agent.untitled = false;
+            }
+            agent.profile = Some(shown);
+        }
     }
 
     /// Remembers the kind and model a start named, so every start surface

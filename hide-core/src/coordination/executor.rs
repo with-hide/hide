@@ -97,11 +97,17 @@ fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String
 /// hold of the runtime's lock so the two agree.
 pub(super) fn registrations(
     client: &Client,
-) -> Result<(Arc<crate::delivery::ledger::Ledger>, super::Sleeping), String> {
+) -> Result<
+    (
+        Arc<crate::delivery::ledger::Ledger>,
+        super::RegistrationFacts,
+    ),
+    String,
+> {
     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
     let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
     let ledger = runtime.delivery_state()?;
-    let sleeping = runtime.sleeping_registrations(&ledger.agents);
+    let sleeping = runtime.registration_facts(&ledger.agents);
     Ok((ledger, sleeping))
 }
 /// `hide agent show <key>`, read only: a registration by its id (or the
@@ -121,7 +127,7 @@ fn show(client: &Client, actor: &Actor, key: &str) -> Result<Value, String> {
 /// runtime's lock.
 pub(crate) struct Shown {
     ledger: Arc<crate::delivery::ledger::Ledger>,
-    sleeping: super::Sleeping,
+    sleeping: super::RegistrationFacts,
     found: Found,
 }
 
@@ -142,7 +148,7 @@ impl Shown {
     ) -> Result<Self, String> {
         use crate::runtime::agent_show::spawns_of;
         let ledger = runtime.delivery_state()?;
-        let sleeping = runtime.sleeping_registrations(&ledger.agents);
+        let sleeping = runtime.registration_facts(&ledger.agents);
         let registered = |record: &AgentRecord| {
             let facts =
                 runtime.agent_state_facts(&record.actor, &spawns_of(&ledger, Some(&record.id)));

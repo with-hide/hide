@@ -555,7 +555,7 @@ struct ViewsMadeFrom {
     /// its mission's cap (`MISSION_RESERVATION_HOLD_MS`).
     until: u64,
     /// The missions' workers Hide holds asleep, which their cards read.
-    sleeping: crate::coordination::Sleeping,
+    sleeping: crate::coordination::RegistrationFacts,
     /// The rows carrying a core question, which decide whether a node's
     /// attention is on a row (`on_row`).
     laid: Vec<String>,
@@ -2922,7 +2922,7 @@ impl Runtime {
         &self,
         mission: &Mission,
         agents: &HashMap<&str, &crate::coordination::AgentRecord>,
-        sleeping: &crate::coordination::Sleeping,
+        sleeping: &crate::coordination::RegistrationFacts,
         ledger: Option<&crate::delivery::ledger::Ledger>,
     ) -> MissionView {
         let github = self.github_project_on(&mission.device_id, &mission.project);

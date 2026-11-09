@@ -750,3 +750,133 @@ fn a_permission_is_kept_per_agent_and_machine_and_refused_when_it_names_nothing_
         crate::agent_permission::AgentPermission::Full
     );
 }
+
+/// B17: an agent started with a profile is called by its agent and the
+/// profile (`Claude · a`) where no title names it, keeps the title one
+/// gives it, and `hide agent list` names the profile beside it; an agent
+/// on its built-in default reads as before.
+#[test]
+fn a_profile_agent_is_called_by_its_agent_and_profile_until_a_title_names_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let checkout = checkout_of(&folder);
+    let (mut runtime, _) = live_tab_order_runtime(&checkout);
+    let untitled = || {
+        let mut payload = tab_order_payload(&checkout, &TABS, &TABS, "w-order:t1");
+        payload.agents.push(
+            serde_json::from_value(json!({
+                "id": NAME, "name": NAME, "pane_id": AGENT, "agent": "claude",
+                "agent_status": "idle", "state_change_seq": 4, "cwd": checkout,
+            }))
+            .unwrap(),
+        );
+        payload
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime.agent_row(AGENT).unwrap();
+        (row.identity_label.clone(), row.profile.clone())
+    };
+
+    runtime.record_pane_launch(AGENT, "claude", NAME, &LaunchChoice::default(), None, None);
+    runtime.ingest_session(Ok(untitled()));
+    assert_eq!(row(&runtime), ("Claude".to_owned(), None));
+
+    let profile = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-a".to_owned()),
+        name: "a".to_owned(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/a".to_owned()),
+    };
+    runtime.record_pane_launch(
+        AGENT,
+        "claude",
+        NAME,
+        &LaunchChoice::default(),
+        Some(&profile),
+        None,
+    );
+    runtime.ingest_session(Ok(untitled()));
+    assert_eq!(
+        row(&runtime),
+        ("Claude · a".to_owned(), Some("Claude · a".to_owned()))
+    );
+
+    runtime.ingest_session(Ok(session(&checkout, "claude", true)));
+    assert_eq!(
+        row(&runtime),
+        (
+            "Review the parser".to_owned(),
+            Some("Claude · a".to_owned())
+        ),
+        "a title names the agent; the profile stays beside it"
+    );
+
+    let record: crate::coordination::AgentRecord = serde_json::from_value(json!({
+        "id": "agent-1", "name": NAME, "machine": crate::node::TEST_NODE,
+        "host_scope": "scope", "native_machine": crate::node::TEST_NODE,
+        "session": SESSION, "instance": AGENT, "pane": AGENT,
+        "parent": null, "project": null, "ended": false,
+        "actor": {"pane_id": AGENT, "name": NAME, "kind": "claude",
+                  "device_id": crate::node::TEST_NODE, "session": null},
+    }))
+    .unwrap();
+    let ledger = crate::delivery::ledger::Ledger::default();
+    let facts = runtime.registration_facts(std::slice::from_ref(&record));
+    assert_eq!(
+        crate::coordination::agent_view(&record, &ledger, &facts).profile,
+        Some("Claude · a".to_owned())
+    );
+}
+
+/// A session picked from the session list that recorded no profile resumes
+/// with the profile whose account folder holds its file, the agent's
+/// default among two first, and with the built-in default when none holds
+/// it (PRD agent-profiles B19).
+#[test]
+fn a_listed_session_resumes_with_the_profile_whose_account_holds_its_file() {
+    let (mut runtime, _) = live_tab_order_runtime("/repo");
+    let profile = |id: &str, kind: &str, account: &str| crate::model::ProfileSnapshot {
+        id: id.to_owned(),
+        kind: kind.to_owned(),
+        name: id.to_owned(),
+        account: Some(account.to_owned()),
+        program: None,
+        env_keys: Vec::new(),
+        version: 1,
+        install: None,
+        folder: None,
+        hook: None,
+        skill: None,
+    };
+    let mut kit = runtime.kit_state(crate::node::TEST_NODE);
+    kit.profiles = Some(crate::model::ProfilesSnapshot {
+        state: crate::model::ProfilesState::Listed,
+        version: 1,
+        profiles: vec![
+            profile("work", "claude-code", "/accounts/work/"),
+            profile("shared", "claude-code", "/accounts/shared"),
+            profile("shared-default", "claude-code", "/accounts/shared"),
+            profile("codex-work", "codex", "/accounts/work"),
+        ],
+        defaults: [("claude-code".to_owned(), "shared-default".to_owned())].into(),
+    });
+    runtime.set_kit_state(crate::node::TEST_NODE, kit);
+    let resumed = |path: &str| {
+        runtime
+            .resume_profile(crate::node::TEST_NODE, Some("claude"), Some(path))
+            .map(|(id, _)| id.0)
+    };
+
+    assert_eq!(
+        resumed("/accounts/work/projects/-repo/s.jsonl").as_deref(),
+        Some("work")
+    );
+    assert_eq!(
+        resumed("/accounts/shared/projects/-repo/s.jsonl").as_deref(),
+        Some("shared-default")
+    );
+    assert_eq!(resumed("/home/me/.claude/projects/-repo/s.jsonl"), None);
+    assert_eq!(
+        resumed("/accounts/workshop/projects/-repo/s.jsonl"),
+        None,
+        "a folder is matched whole"
+    );
+}

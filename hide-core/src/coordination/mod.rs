@@ -1294,34 +1294,45 @@ pub(crate) fn here<'a>(
 
 /// The live registrations whose agent Hide put to sleep, by id, as the
 /// runtime reads them from its sleep records under its lock
-/// (`Runtime::sleeping_registrations`).
+/// (`Runtime::sleeping_registrations`), and the profile each live agent runs
+/// with, as its row names it (`Runtime::registration_profiles`).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Sleeping(pub(crate) std::collections::BTreeSet<String>);
+pub(crate) struct RegistrationFacts {
+    pub(crate) asleep: std::collections::BTreeSet<String>,
+    pub(crate) profiles: std::collections::BTreeMap<String, String>,
+}
 
-impl Sleeping {
+impl RegistrationFacts {
     /// For an answer about a registration its own running agent just made,
-    /// or one just ended: neither is asleep.
-    pub(crate) const NONE: Self = Self(std::collections::BTreeSet::new());
+    /// or one just ended: neither is asleep, and its row is not read.
+    pub(crate) const NONE: Self = Self {
+        asleep: std::collections::BTreeSet::new(),
+        profiles: std::collections::BTreeMap::new(),
+    };
 }
 
 /// Where a registration's agent is in its life: ended with its record,
 /// asleep while Hide holds it asleep, running otherwise. The one decision
 /// `hide agent list`, `hide agent show` and `hide ps` answer from.
-pub(crate) fn life(record: &AgentRecord, sleeping: &Sleeping) -> Runtime {
+pub(crate) fn life(record: &AgentRecord, sleeping: &RegistrationFacts) -> Runtime {
     if record.ended {
         Runtime::Ended
-    } else if sleeping.0.contains(&record.id) {
+    } else if sleeping.asleep.contains(&record.id) {
         Runtime::Asleep
     } else {
         Runtime::Running
     }
 }
 
-pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &Sleeping) -> Value {
+pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &RegistrationFacts) -> Value {
     json!(agent_view(record, ledger, sleeping))
 }
 
-pub(crate) fn agent_view(record: &AgentRecord, ledger: &Ledger, sleeping: &Sleeping) -> AgentView {
+pub(crate) fn agent_view(
+    record: &AgentRecord,
+    ledger: &Ledger,
+    sleeping: &RegistrationFacts,
+) -> AgentView {
     let runtime = life(record, sleeping);
     AgentView {
         names: ledger
@@ -1339,6 +1350,7 @@ pub(crate) fn agent_view(record: &AgentRecord, ledger: &Ledger, sleeping: &Sleep
         parent: record.parent.clone(),
         origin: record.origin.clone().or_else(|| record.parent.clone()),
         project: record.project.clone(),
+        profile: sleeping.profiles.get(&record.id).cloned(),
         runtime,
         // Only a running agent has a connection; a sleeping one has none
         // until it wakes (status-model.md, Not connected).
@@ -1566,7 +1578,7 @@ pub(crate) fn apply(
                     .find(|record| &record.id == id)
                     .ok_or("agent_unavailable")?,
                 ledger,
-                &Sleeping::NONE,
+                &RegistrationFacts::NONE,
             ))
         }
         Mutation::Reserve { parent, command } => {
@@ -2375,7 +2387,7 @@ fn insert_record(ledger: &mut Ledger, record: &AgentRecord, check: bool) -> Resu
             return Err("registration_conflict".into());
         }
         // The caller is that registration's own running agent.
-        return Ok(view(existing, ledger, &Sleeping::NONE));
+        return Ok(view(existing, ledger, &RegistrationFacts::NONE));
     }
     if ledger.agents.iter().any(|existing| {
         !existing.ended
@@ -2399,7 +2411,7 @@ fn insert_record(ledger: &mut Ledger, record: &AgentRecord, check: bool) -> Resu
     let mut record = record.clone();
     record.id = allocate(ledger, "agent")?;
     ledger.agents.push(record.clone());
-    Ok(view(&record, ledger, &Sleeping::NONE))
+    Ok(view(&record, ledger, &RegistrationFacts::NONE))
 }
 
 /// Ends a registration, the watches on it and the answer waits of the letters
@@ -2843,7 +2855,7 @@ mod tests {
         assert_eq!(ledger, before);
         let id = register(&mut ledger, fork(), &source.actor);
         let fork = ledger.agents.iter().find(|record| record.id == id).unwrap();
-        let shown = view(fork, &ledger, &Sleeping::NONE);
+        let shown = view(fork, &ledger, &RegistrationFacts::NONE);
         assert!(shown["parent"].is_null());
         assert_eq!(shown["origin"], source_id);
         // Without the fork's provenance, the source is not the new pane.
@@ -4814,7 +4826,10 @@ mod tests {
                 let ended = ledger.agents.iter().find(|r| r.id == child_id).unwrap();
                 assert!(ended.ended);
                 assert_eq!(ended.parent, expected_parent);
-                assert_eq!(view(ended, &ledger, &Sleeping::NONE)["origin"], origin);
+                assert_eq!(
+                    view(ended, &ledger, &RegistrationFacts::NONE)["origin"],
+                    origin
+                );
                 assert!(ledger.watches.is_empty());
                 assert!(!ledger.agents.iter().find(|r| r.id == origin).unwrap().ended);
                 let mut restored: Ledger =
@@ -4842,7 +4857,10 @@ mod tests {
                 let child = ledger.agents.iter().find(|r| r.id == child_id).unwrap();
                 assert!(!child.ended);
                 assert_eq!(child.parent, expected_parent);
-                assert_eq!(view(child, &ledger, &Sleeping::NONE)["origin"], origin);
+                assert_eq!(
+                    view(child, &ledger, &RegistrationFacts::NONE)["origin"],
+                    origin
+                );
                 assert_eq!(ledger.watches.len(), 1);
             }
         }
@@ -4887,12 +4905,12 @@ mod tests {
                     .find(|record| record.id == child)
                     .unwrap(),
                 &ledger,
-                &Sleeping::NONE,
+                &RegistrationFacts::NONE,
             );
             assert!(child_view["parent"].is_null());
             assert_eq!(child_view["origin"], origin);
             assert!(child_view["watch"].is_null());
-            assert!(view(&ledger.agents[0], &ledger, &Sleeping::NONE)["origin"].is_null());
+            assert!(view(&ledger.agents[0], &ledger, &RegistrationFacts::NONE)["origin"].is_null());
             let before = ledger.clone();
             assert_eq!(
                 apply(
@@ -4943,7 +4961,10 @@ mod tests {
                 .find(|record| record.id == child)
                 .unwrap();
             assert!(!live.ended);
-            assert_eq!(view(live, &restored, &Sleeping::NONE)["origin"], origin);
+            assert_eq!(
+                view(live, &restored, &RegistrationFacts::NONE)["origin"],
+                origin
+            );
             apply(
                 &mut restored,
                 &child_actor,
@@ -5052,7 +5073,7 @@ mod tests {
         assert_eq!(restored, ledger);
         assert_eq!(restored.spawns[0].mode, SpawnMode::Delegation);
         assert_eq!(
-            view(&restored.agents[1], &restored, &Sleeping::NONE)["origin"],
+            view(&restored.agents[1], &restored, &RegistrationFacts::NONE)["origin"],
             parent
         );
         let before = restored.clone();
