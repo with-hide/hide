@@ -8796,7 +8796,7 @@ fn a_ci_letter_still_waiting_is_withdrawn_when_a_check_runs_again_on_its_head() 
     };
     let waiting = mailed(&mut runtime, &again[0], false);
     runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
-    assert_eq!(runtime.missions.withdraw, [waiting.clone()]);
+    assert_eq!(runtime.missions.withdraw, std::slice::from_ref(&waiting));
     assert_eq!(ci_told(&runtime), (Vec::new(), 2));
     let third =
         runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
