@@ -143,6 +143,11 @@ export type AgentRow = {
   lineage_parent_pane_id?: string | null;
   /** On a lineage root: the asks its raised descendants make, lead first; `what` is the line the row's second line says. */
   raised?: { raised_pane_id: string; what: string | null }[];
+  group?: string;
+  /** What a quiet row waits on (`children`, `background`, `checks`, `reply`), absent when nothing. */
+  wait?: string;
+  /** On a root whose finished turn is not read yet: the descendants still working, which its line ends with. */
+  children_left?: number;
 };
 
 /** The agent row the snapshot lists for `pane`, once an agent runs there. */
