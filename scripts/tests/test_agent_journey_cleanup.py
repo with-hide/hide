@@ -182,6 +182,35 @@ class FinishedAgent(unittest.TestCase):
         journey.close()
         self.assertEqual(calls, ["w4:p3", "w4:p2", "w4:p4", "w5:p2"])
 
+    def test_a_refused_spawns_pane_closes_with_the_journeys_other_panes(self):
+        # One left open held OpenCode's 293 MB until the guardian's 2 GiB
+        # cap ended the run's daemon (Windows, run 42586901056).
+        from unittest import mock
+        from agent_journey import journey as journey_module
+        calls = []
+
+        def close_pane(pane):
+            calls.append(pane)
+            return 0, ""
+        runtime = SimpleNamespace(run=Path("/run"), probe=Path("/probe"), close_pane=close_pane,
+                                  owner=SimpleNamespace(cancelled=threading.Event()))
+        journey = Journey(runtime, None, None, {}, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
+                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={},
+                          composer_judge=None, failure_logs=None)
+        refused = {"ok": False, "reason": "native_identity_unavailable", "message": "not reported yet"}
+        settled = []
+        with mock.patch.object(journey, "spawn", return_value=(["agent", "spawn"], refused, [refused])), \
+                mock.patch.object(journey, "pane_of", return_value="w4:p9"), \
+                mock.patch.object(journey, "engine_view", return_value={}), \
+                mock.patch.object(journey, "shell_children", return_value={}), \
+                mock.patch.object(journey, "evidence", return_value=None), \
+                mock.patch.object(journey, "settle", side_effect=lambda *cell: settled.append(cell[0])), \
+                mock.patch.object(journey_module, "created_branch", return_value={}):
+            journey.start()
+        self.assertEqual(settled, ["start"])
+        journey.close()
+        self.assertEqual(calls, ["w4:p9"])
+
 
 class FailedCellScreen(unittest.TestCase):
     def test_a_failed_cell_keeps_the_screen_of_the_pane_it_measured(self):

@@ -440,7 +440,7 @@ jobs:
       # times and compiling took about 6 of the job's 11 minutes (2026-10-05).
       TEST_TARGETS: >-
         -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p hide-core -p hide-ai
-        -p hide-agent-adapter -p hide-desk -p hide-shell
+        -p hide-agent-adapter -p hide-desk -p hide-shell -p hide-session
         --lib --bin hide-agent-hooks --test it
     steps:
       - name: Keep line endings as committed
@@ -497,6 +497,21 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-agent-adapter::it) & test(/^account::/)'
+      - name: A profile's account folder is private
+        # PRD agent-profiles D-36: the node makes a profile's account folder
+        # private, which Windows judges by the folder's access list, not a
+        # mode (hide-host/src/profiles.rs), and reads a session only in an
+        # account it registered, a folder or one of omp's named profiles,
+        # spelled as Windows spells a path (hide-session/src/account.rs).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(/^profiles::tests::/)'
+      - name: A session is read only in registered accounts
+        # Run even when the separate folder check failed, so a failed host
+        # assertion cannot hide a session-reader portability gap.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(binary_id(hide-session::it) & test(/^session_account::/)) | (package(hide-session) & kind(lib) & test(/^account::/))'
       - name: Retiring Hide's old Home removes only what its marker lists
         # An old Windows Home held no link (every process of an ssh session
         # refuses a junction no administrator made), only the guide and the
@@ -601,7 +616,10 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(hide-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
-      - name: Install kit and its Windows command shim
+      - name: Install kit, its Windows command shim and its pieces in profile accounts
+        # hide-kit/src/tests/profile_cases.rs runs here too: a profile
+        # account's folder made private, its hook, skills and trust put in
+        # and taken out, and a link in it followed nowhere outside it.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-kit)'

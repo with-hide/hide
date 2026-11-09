@@ -81,15 +81,133 @@ fn a_session_file_belongs_to_the_innermost_registered_account_that_holds_it() {
     );
 }
 
+/// An agent whose accounts are named (omp's profiles) keeps a profile's
+/// sessions in the folder its name gives under the home, which is read in
+/// that account and in no other (journey run 42586901056: an omp profile's
+/// session on Windows was refused as outside every account).
+#[test]
+fn a_named_accounts_session_belongs_to_that_account() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().canonicalize().unwrap().join("home");
+    let journey = Profile {
+        account: Some(AccountRef::Name("journey".to_owned())),
+        ..Profile::builtin_default("omp")
+    };
+    let accounts = Accounts::new(&home).with_profiles([&journey]);
+    let workspace = "--w--";
+    let in_profile = file(
+        &home
+            .join(".omp")
+            .join("profiles")
+            .join("journey")
+            .join("agent")
+            .join("sessions")
+            .join(workspace)
+            .join("s.jsonl"),
+    );
+    let in_default = file(
+        &home
+            .join(".omp")
+            .join("agent")
+            .join("sessions")
+            .join(workspace)
+            .join("s.jsonl"),
+    );
+    let in_other = file(
+        &home
+            .join(".omp")
+            .join("profiles")
+            .join("other")
+            .join("agent")
+            .join("sessions")
+            .join(workspace)
+            .join("s.jsonl"),
+    );
+
+    assert_eq!(
+        of(&accounts, Agent::Omp, &in_profile),
+        Ok(AccountKey::Name("journey".to_owned()))
+    );
+    assert_eq!(
+        of(&accounts, Agent::Omp, &in_default),
+        Ok(AccountKey::Default)
+    );
+    assert!(hide_session::inside_session_root(&accounts, &[Agent::Omp], &in_profile).is_ok());
+    assert_eq!(
+        hide_session::inside_session_root(&accounts, &[Agent::Omp], &in_other),
+        Err(RootRefusal::Outside)
+    );
+}
+
+/// The node confirms a session twice: once by the engine's native path and
+/// again by the resolved path it returns. On Windows, a long file can keep
+/// its extended path prefix while its shorter account home does not.
+#[test]
+fn a_long_named_account_session_stays_in_its_account_after_resolution() {
+    let root = tempfile::tempdir().unwrap();
+    let home = hide_platform::fs::identity::canonical(root.path())
+        .unwrap()
+        .join("home");
+    let journey = Profile {
+        account: Some(AccountRef::Name("journey".to_owned())),
+        ..Profile::builtin_default("omp")
+    };
+    let accounts = Accounts::new(&home).with_profiles([&journey]);
+    let name = format!("session-{}.jsonl", "x".repeat(220));
+    let native = file(
+        &home
+            .join(".omp/profiles/journey/agent/sessions/--w--")
+            .join(name),
+    );
+    assert!(native.as_os_str().len() > 259);
+
+    let resolved = hide_session::inside_session_root(&accounts, &[Agent::Omp], &native).unwrap();
+    assert_eq!(
+        hide_session::inside_session_root(&accounts, &[Agent::Omp], &resolved),
+        Ok(resolved.clone())
+    );
+    let expected = AccountKey::Name("journey".to_owned());
+    assert_eq!(accounts.account_of(Agent::Omp, &resolved), Some(&expected));
+    assert_eq!(of(&accounts, Agent::Omp, &resolved), Ok(expected));
+}
+
+/// A malformed path inside a profile nested in the default account must
+/// not fall back to the default account when profile routing refuses it.
+#[test]
+fn a_parent_component_in_a_nested_profile_never_reads_as_the_default_account() {
+    let root = tempfile::tempdir().unwrap();
+    let home = hide_platform::fs::identity::canonical(root.path())
+        .unwrap()
+        .join("home");
+    let folder = home.join(".claude/projects/profile");
+    let session = file(&folder.join("projects/-w/s.jsonl"));
+    let accounts = Accounts::new(&home).with_profiles([&profile("claude-code", &folder)]);
+    assert_eq!(of(&accounts, Agent::Claude, &session), Ok(key(&folder)));
+    let malformed = folder
+        .join("projects")
+        .join("-w")
+        .join("..")
+        .join("-w")
+        .join("s.jsonl");
+
+    assert_eq!(
+        hide_session::inside_session_root(&accounts, &[Agent::Claude], &malformed),
+        Err(RootRefusal::Outside)
+    );
+    assert_eq!(
+        of(&accounts, Agent::Claude, &malformed),
+        Err(RootRefusal::Outside.reason().to_owned())
+    );
+}
+
 /// A link below a profile's folder never makes a session of an account the
 /// node did not register readable or listed, nor does `..` in a path; the
 /// default account's own link is followed as before profiles.
-#[cfg(unix)]
 #[test]
 fn a_link_below_a_profile_account_leads_nowhere_while_the_default_account_s_link_is_followed() {
-    use std::os::unix::fs::symlink;
+    use hide_platform::fs::link::create_link;
     let root = tempfile::tempdir().unwrap();
-    let root = root.path().canonicalize().unwrap();
+    let root = hide_platform::fs::identity::canonical(root.path()).unwrap();
     let home = root.join("home");
     let a = root.join("a");
     let codex_a = root.join("codex-a");
@@ -99,16 +217,16 @@ fn a_link_below_a_profile_account_leads_nowhere_while_the_default_account_s_link
     let codex_theirs = file(&b.join("sessions/2026/11/09/rollout-1.jsonl"));
     std::fs::create_dir_all(&a).unwrap();
     std::fs::create_dir_all(&codex_a).unwrap();
-    symlink(b.join("projects"), a.join("projects")).unwrap();
-    symlink(b.join("sessions"), codex_a.join("sessions")).unwrap();
+    create_link(&b.join("projects"), &a.join("projects")).unwrap();
+    create_link(&b.join("sessions"), &codex_a.join("sessions")).unwrap();
     // A folder between the account's sessions folder and the file.
     std::fs::create_dir_all(middle.join("projects")).unwrap();
-    symlink(b.join("projects/-w"), middle.join("projects/-w")).unwrap();
+    create_link(&b.join("projects/-w"), &middle.join("projects/-w")).unwrap();
     let linked_default = file(&root.join("elsewhere/claude-projects/-w/s.jsonl"));
     std::fs::create_dir_all(home.join(".claude")).unwrap();
-    symlink(
-        root.join("elsewhere/claude-projects"),
-        home.join(".claude/projects"),
+    create_link(
+        &root.join("elsewhere/claude-projects"),
+        &home.join(".claude/projects"),
     )
     .unwrap();
     let accounts = Accounts::new(&home).with_profiles([
@@ -141,9 +259,11 @@ fn a_link_below_a_profile_account_leads_nowhere_while_the_default_account_s_link
     );
     let listed = listed(&accounts);
     assert!(
-        !listed.iter().any(|path| path.contains("/b/")
-            || path.starts_with(a.to_str().unwrap())
-            || path.starts_with(codex_a.to_str().unwrap())),
+        !listed.iter().any(|path| {
+            [&a, &codex_a, &middle, &b]
+                .iter()
+                .any(|root| Path::new(path).starts_with(root))
+        }),
         "{listed:?} lists {theirs:?} or {codex_theirs:?}"
     );
 
@@ -208,8 +328,13 @@ fn an_opencode_session_belongs_to_the_one_account_whose_database_holds_it() {
     opencode_account(&b, &["ses_in_both"]);
     std::fs::create_dir_all(c.join("data/opencode")).unwrap();
     std::fs::write(c.join("data/opencode/opencode.db"), "not a database").unwrap();
-    // `a` spelled twice is two accounts of one database, read once.
-    let a_again = PathBuf::from(format!("{}/", a.display()));
+    // `a` spelled twice is two accounts of one database, read once. A
+    // Windows extended path accepts only its native trailing separator.
+    let a_again = PathBuf::from(format!(
+        "{}{sep}",
+        a.display(),
+        sep = std::path::MAIN_SEPARATOR
+    ));
     let two = Accounts::new(&home).with_profiles([
         &profile("opencode", &a),
         &profile("opencode", &a_again),

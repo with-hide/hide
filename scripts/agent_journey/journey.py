@@ -431,11 +431,15 @@ class Journey:
         spawned = cells.spawn_verdict(answer)
         view = answer.get("value") or {}
         self.pane, self.agent, self.session = view.get("pane"), view.get("id"), view.get("session")
+        if spawned[0] != cells.PASS:
+            self.pane = self.pane or self.pane_of(answer)
+        # A refused spawn's pane closes with the rest too: one left open held
+        # OpenCode's 293 MB until the guardian's 2 GiB cap ended the run's
+        # daemon (Windows, run 42586901056).
         self.opened.append(self.pane)
         self.checkout = worktree.resolve()
         evidence = self.evidence("spawn", self.record["spawn"])
         if spawned[0] != cells.PASS:
-            self.pane = self.pane or self.pane_of(answer)
             self.record["spawn"]["engine"] = self.engine_view(worktree)
             if self.pane:
                 self.record["spawn"]["shell_children"] = self.shell_children(self.pane)

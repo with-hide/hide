@@ -6,24 +6,6 @@
 
 use super::*;
 
-/// The stand-in app-server of `hide-agent-hooks`'s tests, ready to run: its
-/// first start in a checkout would wait inside `initialize`'s deadline
-/// (issue 824).
-fn fake_codex() -> PathBuf {
-    let codex = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../hide-agent-hooks/tests/fixtures/fake-codex.py");
-    stand_ins::ready(&codex);
-    codex
-}
-
-/// A fixture whose Codex is the stand-in app-server.
-pub(super) fn with_codex() -> Fixture {
-    let mut fixture = Fixture::new();
-    std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
-    fixture.use_codex(&fake_codex());
-    fixture
-}
-
 fn codex_file(fixture: &Fixture, name: &str) -> PathBuf {
     fixture.home().join(".codex").join(name)
 }
@@ -288,7 +270,7 @@ fn the_first_run_pass_that_switches_codex_on_has_codex_trust_the_hook_in_that_pa
     // scope's own switch is what says the agent is on.
     let mut fixture = Fixture::fresh();
     std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
-    fixture.use_codex(&fake_codex());
+    fixture.use_codex(&trust_codex());
 
     let held = apply(&fixture.target, &Scope::automatic());
     assert_eq!(codex_part(&held).state, ComponentState::Off, "{held:?}");

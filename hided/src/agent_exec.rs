@@ -14,7 +14,10 @@
 //! it now, at the version the start was checked with
 //! (`hide_core::launch::exec_start`). It adds the profile's variables to its
 //! own environment and runs the agent's program in its place
-//! (`hide_platform::process::hand_over`), so the variables reach that
+//! (`hide_platform::process::hand_over`), the file its check found and read
+//! as the system starts it (`hide_platform::programs::Start`: on Windows a
+//! name found by `PATHEXT`, npm's launcher run as its Node and script), so
+//! the variables reach that
 //! program alone and never the shell that typed the line or its history. A
 //! profile with a program of its own (its wrapper) runs that program, with
 //! its leading words before the agent's arguments, instead of the agent's
@@ -47,6 +50,8 @@
 
 use std::ffi::{OsStr, OsString};
 use std::process::Command;
+
+use hide_platform::programs::{Program, Start};
 
 use hide_agent_hooks::hook_request::{
     AGENT_EXEC_FAILURE_LIMIT, AgentExecEvent, ExecProcess, ExecProfile, ExecStart,
@@ -129,16 +134,19 @@ fn run_start(attempt: &str, start: &ExecStart, argv: &[OsString]) -> i32 {
         .map(|(_, value)| OsString::from(value))
         .or_else(|| std::env::var_os("PATH"))
         .unwrap_or_default();
-    if let Err((why, code)) = startable(&program, &search) {
-        let failure = failure(&why);
-        report(
-            attempt,
-            AgentExecEvent::Refused {
-                failure: failure.clone(),
-            },
-        );
-        return ended(&failure, code);
-    }
+    let found = match startable(&program, &search) {
+        Ok(found) => found,
+        Err((why, code)) => {
+            let failure = failure(&why);
+            report(
+                attempt,
+                AgentExecEvent::Refused {
+                    failure: failure.clone(),
+                },
+            );
+            return ended(&failure, code);
+        }
+    };
     // The program starts only once the engine has taken this start: one it
     // has already answered for is not run late.
     if let Err(why) = ready(attempt) {
@@ -147,7 +155,11 @@ fn run_start(attempt: &str, start: &ExecStart, argv: &[OsString]) -> i32 {
             NOT_RUN,
         );
     }
-    let mut command = Command::new(&program);
+    let mut command = command(&found);
+    // The program keeps the name the line gave it, as a shell's start
+    // gives it; Unix alone starts a program by its file with another name.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::arg0(&mut command, &program);
     command.args(&start.leading).args(rest);
     for (name, value) in &start.env {
         command.env(name, value);
@@ -185,14 +197,16 @@ fn attempt_of(arguments: &[OsString]) -> Result<&str, String> {
     }
 }
 
-/// Whether `program` starts with `search` as its `PATH`, as the system
-/// will start it: a name found there, or a path, that this account can run
-/// (`hide_platform::programs::runnable`). Why not, and the exit code a shell
-/// gives it, otherwise.
-fn startable(program: &OsStr, search: &OsStr) -> Result<(), (String, i32)> {
+/// The program `program` names when it starts with `search` as its `PATH`,
+/// as the system will start it: a name found there, or a path, that this
+/// account can run (`hide_platform::programs::runnable`). Why not, and the
+/// exit code a shell gives it, otherwise. The start runs this program
+/// ([`command`]), so what is checked is what runs: on Windows a name is
+/// found by `PATHEXT`, which a start by the bare name would not do.
+fn startable(program: &OsStr, search: &OsStr) -> Result<Program, (String, i32)> {
     let named = std::path::Path::new(program);
     if named.components().count() > 1 {
-        return hide_platform::programs::runnable(named, Some(search)).map_err(|why| {
+        return Program::at(named, search.to_owned()).map_err(|why| {
             let code = if named.exists() { NOT_RUN } else { NOT_FOUND };
             (why, code)
         });
@@ -200,9 +214,26 @@ fn startable(program: &OsStr, search: &OsStr) -> Result<(), (String, i32)> {
     let name = program
         .to_str()
         .ok_or_else(|| ("its name is not text".to_owned(), NOT_FOUND))?;
-    let found = hide_platform::programs::Program::find(search, name)
+    let found = Program::find(search, name)
         .ok_or_else(|| (format!("{name} is not on this pane's PATH"), NOT_FOUND))?;
-    hide_platform::programs::runnable(found.path(), Some(search)).map_err(|why| (why, NOT_RUN))
+    hide_platform::programs::runnable(found.path(), Some(search)).map_err(|why| (why, NOT_RUN))?;
+    Ok(found)
+}
+
+/// The command that starts `found`, as every start of an agent program does
+/// (`hide_platform::programs::Start`): npm's Windows launcher as the Node
+/// and script it runs, so each argument reaches the agent whole, and
+/// another batch file as the file itself, which Windows runs through
+/// `cmd.exe`.
+fn command(found: &Program) -> Command {
+    match found.start() {
+        Start::Direct { program, leading } => {
+            let mut command = Command::new(&program);
+            command.args(leading);
+            command
+        }
+        Start::Batch => Command::new(found.path()),
+    }
 }
 
 /// Asks the pane's node how the profile of `attempt` runs now: its answer,

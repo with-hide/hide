@@ -231,7 +231,9 @@ impl RootRefusal {
 /// open a file elsewhere. A path in a profile's account is proven down from
 /// the account's folder, the innermost account that holds it
 /// ([`Accounts::account_of`]), with no link and no `..` on the way (D-36),
-/// as the readers of Pi, omp and Grok prove every account's. Claude Code's
+/// as the readers of Pi, omp and Grok prove every account's. Native path
+/// spellings compare through the platform boundary, so resolving a long
+/// Windows path preserves its account. Claude Code's
 /// and Codex's default account keeps following every link, as before
 /// profiles (B29): an operator's `~/.claude/projects` may be a link.
 pub fn inside_session_root(

@@ -19,3 +19,4 @@ mod stdio;
 mod time;
 mod user_agents;
 mod watch;
+mod widen;

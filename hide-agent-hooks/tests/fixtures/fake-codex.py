@@ -47,6 +47,9 @@ import subprocess
 import sys
 import time
 
+if "--help" in sys.argv:
+    sys.exit(0)
+
 HOME = os.environ["CODEX_HOME"]
 
 

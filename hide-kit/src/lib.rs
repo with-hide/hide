@@ -1317,10 +1317,9 @@ pub(crate) fn short_tempdir() -> tempfile::TempDir {
     return folder.tempdir().unwrap();
 }
 
-// The suite drives the kit against a stand-in daemon on a Unix socket and with
-// shell scripts for the programs it installs, so it runs where those do; the
-// Windows kit is tested with the device helper that installs it there.
-#[cfg(all(test, unix))]
+// The kit against a HOME fixture, on every system; its cases that need a
+// stand-in daemon on a Unix socket or shell scripts run where those do.
+#[cfg(test)]
 mod tests;
 // What released builds' kits left in an account, read by this build.
 #[cfg(test)]

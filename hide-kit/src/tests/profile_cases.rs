@@ -5,7 +5,6 @@ use super::*;
 use crate::{KitProfiles, ProfilePlace, ProfileReport, prepare_account};
 use hide_agent_adapter::{AccountRef, Profile, ProfileId};
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::PermissionsExt;
 
 fn claude(id: &str, folder: &str) -> Profile {
     Profile {
@@ -141,8 +140,11 @@ fn a_missing_profile_folder_is_made_private_and_gets_the_hook() {
     prepare_account(fixture.home(), &profile).unwrap();
 
     for made in [fixture.root.join("new"), folder.clone()] {
-        let mode = std::fs::metadata(&made).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", made.display());
+        assert!(
+            hide_platform::fs::private::is_private(&made).unwrap(),
+            "{}",
+            made.display()
+        );
     }
     with_profiles(&mut fixture, &[&profile], &[]);
     let applied = crate::apply_profiles(&fixture.target, &BTreeSet::new()).unwrap();
@@ -164,7 +166,7 @@ fn a_folder_another_account_can_change_is_refused_and_left_alone() {
     let mut fixture = Fixture::new();
     let folder = fixture.root.join("shared");
     std::fs::create_dir_all(&folder).unwrap();
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o777)).unwrap();
+    super::widen::widen(&folder, true);
     let profile = claude("p-open", &folder.display().to_string());
 
     let refused = prepare_account(fixture.home(), &profile).unwrap_err();
@@ -262,7 +264,10 @@ fn the_agents_switch_reinstall_and_removal_reach_every_account() {
     );
 
     let removed = remove(&fixture.target);
-    let key = format!("profile:claude-code:{}", folder.display());
+    // Removal names the resolved account, including native separators,
+    // even when the profile was added with a mixed-separator spelling.
+    let resolved = hide_platform::fs::identity::canonical(&folder).unwrap();
+    let key = format!("profile:claude-code:{}", resolved.display());
     assert!(
         removed
             .agents
@@ -290,9 +295,9 @@ fn written(paths: &[PathBuf]) -> Vec<(PathBuf, Seen)> {
         .collect()
 }
 
-/// An account a released build's device helper set up, upgraded by a pass
-/// that knows profiles: its pieces stay the agent's default account's, and
-/// the pass after the upgrade writes nothing.
+/// An account a released build's device helper set up, relocated to this
+/// machine before a pass that knows profiles: its pieces stay the agent's
+/// default account's, and the following pass writes nothing.
 #[test]
 fn a_released_account_keeps_its_pieces_in_the_default_account_and_a_second_pass_writes_nothing() {
     for released in crate::upgrade_tests::homes() {
@@ -310,6 +315,12 @@ fn a_released_account_keeps_its_pieces_in_the_default_account_and_a_second_pass_
             .next()
             .unwrap();
         fixture.target.install = install.clone();
+        // The released home came from another machine. Bind only its state
+        // route to this native private home before the full kit pass; the
+        // raw released records are checked separately in upgrade_tests.
+        let mut copied = record::load(fixture.home(), &fixture.target.install).unwrap();
+        copied.remember_state_route(layout::state_dir_from_process(fixture.home()));
+        record::save(fixture.home(), &copied).unwrap();
         let default = Profile::builtin_default("claude-code");
         with_profiles(&mut fixture, &[&default], &[]);
 
@@ -543,15 +554,15 @@ fn moving_a_link_takes_out_the_old_accounts_pieces_and_keeps_the_new_ones() {
     let direct = claude("p-direct", &second.display().to_string());
     added(&fixture, &direct);
     hide_platform::fs::private::create_dir_all(&first).unwrap();
-    std::os::unix::fs::symlink(&first, &link).unwrap();
+    symlink(&first, &link);
     added(&fixture, &linked);
     with_profiles(&mut fixture, &[&linked, &direct], &[]);
     apply(&fixture.target, &Scope::automatic());
     assert!(hide_hooks(&first.join("settings.json")) > 0);
     assert!(hide_hooks(&second.join("settings.json")) > 0);
 
-    std::fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink(&second, &link).unwrap();
+    hide_platform::fs::link::remove_link(&link).unwrap();
+    symlink(&second, &link);
     let report = apply(&fixture.target, &Scope::automatic());
 
     assert_eq!(hide_hooks(&first.join("settings.json")), 0, "{report:?}");
@@ -677,17 +688,19 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
             Some((at, to)) => format!("{kind}: {at} -> ~/{to}"),
             None => format!("{kind}: no link"),
         };
-        let mut fixture = if kind == "codex" {
-            let fixture = super::codex_trust_cases::with_codex();
-            let home = fixture.home();
-            std::fs::write(home.join(".codex/config.toml"), "model = \"kept\"\n").unwrap();
-            std::fs::create_dir_all(home.join("elsewhere")).unwrap();
-            std::fs::write(home.join("elsewhere/config.toml"), "model = \"outside\"\n").unwrap();
-            // Codex is installed: its program is what says so.
-            executable(&home.join(".local/bin/codex"), "#!/bin/sh\n");
-            fixture
-        } else {
-            Fixture::new()
+        let mut fixture = match kind {
+            "codex" => {
+                let fixture = with_codex();
+                let home = fixture.home();
+                std::fs::write(home.join(".codex/config.toml"), "model = \"kept\"\n").unwrap();
+                std::fs::create_dir_all(home.join("elsewhere")).unwrap();
+                std::fs::write(home.join("elsewhere/config.toml"), "model = \"outside\"\n")
+                    .unwrap();
+                // Codex is installed: its program is what says so.
+                installed(&home.join(".local/bin"), "codex");
+                fixture
+            }
+            _ => Fixture::new(),
         };
         let home = fixture.home().to_path_buf();
         crate::agents::install_skill(crate::agents::SkillDir::Shared, &home, false).unwrap();
@@ -703,7 +716,7 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
                 std::fs::create_dir_all(link.parent().unwrap()).unwrap();
                 link
             };
-            std::os::unix::fs::symlink(home.join(to), &link).unwrap();
+            symlink(&home.join(to), &link);
             (link, home.join(to))
         });
         let profile = Profile {
@@ -837,7 +850,7 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
 fn made_worktree(root: &Path) -> PathBuf {
     let tree = root.join("repo-task");
     std::fs::create_dir_all(tree.join(".git")).unwrap();
-    std::fs::canonicalize(&tree).unwrap()
+    hide_platform::fs::identity::canonical(&tree).unwrap()
 }
 
 #[test]
@@ -865,8 +878,8 @@ fn the_folder_trust_hide_wrote_in_a_profile_account_leaves_with_its_last_profile
         account: &account,
     };
     let tree = made_worktree(&fixture.root);
-    // Claude Code keys a folder by its path as written.
-    let key = tree.to_str().unwrap().to_owned();
+    // Claude Code reads resolved folder keys with forward slashes on Windows too.
+    let key = hide_platform::path::to_wire(&tree).unwrap();
     folder_trust::trust_worktree(Agent::ClaudeCode, at, &tree, Tools::none()).unwrap();
     folder_trust::trust_worktree(Agent::ClaudeCode, &home, &tree, Tools::none()).unwrap();
     let in_account = Agent::ClaudeCode.settings_path(at);
@@ -962,7 +975,7 @@ fn a_profile_account_whose_trust_file_leads_out_of_it_is_refused_a_trust() {
     apply(&fixture.target, &Scope::automatic());
     let theirs = home.join(".claude.json");
     std::fs::write(&theirs, "{}\n").unwrap();
-    std::os::unix::fs::symlink(&theirs, folder.join(".claude.json")).unwrap();
+    symlink(&theirs, &folder.join(".claude.json"));
 
     let refused = crate::trust_writable(&home, &profile).unwrap_err();
 
