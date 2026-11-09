@@ -110,9 +110,8 @@ test("the last card opens the Start panel on the mission sentence, unsent, and c
     }
     await expect(practice.locator("[data-practice-layer]")).toHaveAttribute("data-practice-step", "mission");
     await drawn(practice);
-    const closed = practice.waitForEvent("close");
-    await practice.keyboard.press("Enter");
-    await closed;
+    // The page closes on this press, so the button the press stands for is clicked through the helper that waits out that close.
+    await clickClosingItsPage(practice.locator("[data-practice-go]"));
     await shell.bringToFront();
     // Either the Start panel with the sentence waiting, or, with no project to start in, adding one first.
     const panel = shell.locator("[data-start-text]");
