@@ -779,7 +779,6 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
                 .or_else(|| line_text(r.metadata.native_title.as_deref(), MAX_LABEL_TEXT_CHARS))
         })
     });
-    let untitled = title.is_none();
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
         device_id: Default::default(),
@@ -840,7 +839,6 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         status_code: AgentStatusCode::Unknown,
         requires_close_confirmation: false,
         requires_close_status_check: false,
-        untitled,
         identity_label,
         profile: None,
         progress,

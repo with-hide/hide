@@ -555,26 +555,25 @@ impl Runtime {
                 let row = rows.get(record.actor.pane_id.as_str())?;
                 (hide_agent_adapter::canonical_kind(&row.agent_kind)
                     == hide_agent_adapter::canonical_kind(&record.actor.kind))
-                .then(|| Some((record.id.clone(), row.profile.clone()?)))?
+                .then(|| {
+                    Some((
+                        record.id.clone(),
+                        crate::launch::shown(&row.agent_kind, row.profile.as_deref()?),
+                    ))
+                })?
             })
             .collect()
     }
 
     /// Names on each row the profile its agent runs with, when its pane's
-    /// record describes it and the profile is not the built-in default, and
-    /// calls a row with no title of its own by it (`Claude · work`) (PRD
-    /// agent-profiles B17). One map lookup a row.
+    /// record describes it and the profile is not the built-in default (PRD
+    /// agent-profiles B17); the row's title stays as it is. One map lookup a
+    /// row.
     fn lay_profiles(&self, agents: &mut [SidebarAgentSnapshot]) {
         for agent in agents {
-            let Some(profile) = self.launch_profile_of(agent) else {
-                continue;
-            };
-            let shown = profile.shown(&agent.agent_kind);
-            if agent.untitled {
-                agent.identity_label.clone_from(&shown);
-                agent.untitled = false;
+            if let Some(profile) = self.launch_profile_of(agent) {
+                agent.profile = Some(profile.name);
             }
-            agent.profile = Some(shown);
         }
     }
 

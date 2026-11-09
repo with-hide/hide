@@ -123,6 +123,8 @@ export type AgentRow = {
   id: string;
   pane_id: string;
   identity_label: string;
+  /** The name of the profile the agent runs with (`b`), absent on its agent's built-in default; the title stays the default's (PRD agent-profiles B17). */
+  profile?: string;
   /** Conversation display provenance, independent of lifecycle and hook health. */
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;

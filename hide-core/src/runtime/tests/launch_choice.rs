@@ -760,12 +760,13 @@ fn a_permission_is_kept_per_agent_and_machine_and_refused_when_it_names_nothing_
     );
 }
 
-/// B17: an agent started with a profile is called by its agent and the
-/// profile (`Claude · a`) where no title names it, keeps the title one
-/// gives it, and `hide agent list` names the profile beside it; an agent
-/// on its built-in default reads as before.
+/// B17: an agent started with a profile keeps the title it would have with
+/// the built-in default (`Claude`, then its task's), and its row names the
+/// profile beside it (`a`), which the screens mark beside its logo and
+/// `hide agent list` names after its agent (`Claude · a`); an agent on its
+/// built-in default reads as before.
 #[test]
-fn a_profile_agent_is_called_by_its_agent_and_profile_until_a_title_names_it() {
+fn a_profile_agent_keeps_its_title_and_its_row_names_the_profile_beside_it() {
     let folder = tempfile::tempdir().unwrap();
     let checkout = checkout_of(&folder);
     let (mut runtime, _) = live_tab_order_runtime(&checkout);
@@ -803,18 +804,12 @@ fn a_profile_agent_is_called_by_its_agent_and_profile_until_a_title_names_it() {
         None,
     );
     runtime.ingest_session(Ok(untitled()));
-    assert_eq!(
-        row(&runtime),
-        ("Claude · a".to_owned(), Some("Claude · a".to_owned()))
-    );
+    assert_eq!(row(&runtime), ("Claude".to_owned(), Some("a".to_owned())));
 
     runtime.ingest_session(Ok(session(&checkout, "claude", true)));
     assert_eq!(
         row(&runtime),
-        (
-            "Review the parser".to_owned(),
-            Some("Claude · a".to_owned())
-        ),
+        ("Review the parser".to_owned(), Some("a".to_owned())),
         "a title names the agent; the profile stays beside it"
     );
 

@@ -1869,19 +1869,16 @@ pub struct SidebarAgentSnapshot {
     /// must wait for a fresh status rather than assuming the pane is idle.
     pub requires_close_status_check: bool,
     /// The title every surface calls this agent by; `sidebar.rs` owns the
-    /// ladder that picks it (PRD D-01). With no title of its own, an agent
-    /// started with a profile is called by its agent and the profile, as
-    /// `profile` reads.
+    /// ladder that picks it (PRD D-01). A profile agent's title is the one
+    /// its agent would have with the built-in default.
     pub identity_label: String,
-    /// The profile the agent runs with, named after its agent (`Claude ·
-    /// work`), when it is not the agent's built-in default (PRD
-    /// agent-profiles B17); laid from the pane's launch record
+    /// The name of the profile the agent runs with, when it is not the
+    /// agent's built-in default (PRD agent-profiles B17): the screens mark
+    /// the agent with it beside its logo, and `hide agent list` names it
+    /// after its agent (`Claude · work`). Laid from the pane's launch record
     /// (`Runtime::lay_profiles`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
-    /// `identity_label` is the agent's name for want of any title.
-    #[serde(skip)]
-    pub(crate) untitled: bool,
     /// The label's one-line progress sentence (`labels`).
     #[serde(skip_serializing)]
     pub progress: Option<String>,
