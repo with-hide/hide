@@ -6,7 +6,9 @@
 //! most one job at a time, so arrival order is a round robin between servers
 //! and a busy server cannot starve another. The router's own one-in-flight
 //! budget is therefore never exceeded, which would otherwise park a second
-//! server's pane for the ten-minute provider wait.
+//! server's pane for the ten-minute provider wait. Word that profiles moved
+//! waits once at most: the thread reads the profiles as they are when it
+//! takes the word, so a second word before then would say nothing new.
 //!
 //! A changed choice rebuilds the router before the next job; the job already
 //! running finishes on the router it started with (B17). A profile the
@@ -17,6 +19,7 @@
 //! summaries off (PRD overview-request-view D-11) a queued job is answered
 //! as stopped without running, and `cancel_running` ends the one running.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -55,6 +58,8 @@ enum Message {
 
 pub(crate) struct LabelAnalyzer {
     queue: Mutex<Option<Sender<Message>>>,
+    /// Set while a `ProfilesMoved` waits in `queue`, so one waits at most.
+    moved: Arc<AtomicBool>,
     cancel: CancelToken,
     /// The running job's own token, cancelled on shutdown too.
     running: Arc<Mutex<Option<CancelToken>>>,
@@ -87,11 +92,13 @@ impl LabelAnalyzer {
         standing: Arc<crate::ai::AiStanding>,
     ) -> Result<Self, String> {
         let (sender, receiver) = channel();
+        let moved = Arc::new(AtomicBool::new(false));
         let cancel = CancelToken::new();
         let running = Arc::new(Mutex::new(None));
         let thread = Running {
             stopping: cancel.clone(),
             job: Arc::clone(&running),
+            moved: Arc::clone(&moved),
         };
         let worker = std::thread::Builder::new()
             .name("hide-core-labels-analyzer".to_owned())
@@ -99,6 +106,7 @@ impl LabelAnalyzer {
             .map_err(|error| format!("label analyzer could not be started: {error}"))?;
         Ok(Self {
             queue: Mutex::new(Some(sender)),
+            moved,
             cancel,
             running,
             worker: Mutex::new(Some(worker)),
@@ -127,8 +135,12 @@ impl LabelAnalyzer {
 
     /// Says a profile moved: the thread lets its router go when that
     /// router asks it, so the backend it kept is released there, off the
-    /// runtime's lock. Only a send, so it may be called under that lock.
+    /// runtime's lock. Only a send, so it may be called under that lock,
+    /// and none while one already waits, so the queue holds one at most.
     pub(crate) fn profiles_moved(&self) {
+        if self.moved.swap(true, Ordering::SeqCst) {
+            return;
+        }
         if let Some(sender) = self
             .queue
             .lock()
@@ -182,6 +194,8 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 struct Running {
     stopping: CancelToken,
     job: Arc<Mutex<Option<CancelToken>>>,
+    /// [`LabelAnalyzer::moved`].
+    moved: Arc<AtomicBool>,
 }
 
 fn run(
@@ -197,6 +211,9 @@ fn run(
         let job = match message {
             Message::Job(job) => *job,
             Message::ProfilesMoved => {
+                // Cleared before the profiles are read, so a move after the
+                // read sends word again rather than being taken as read.
+                running.moved.store(false, Ordering::SeqCst);
                 // Dropped here, on this thread: its backends' release
                 // calls never run under the runtime's lock.
                 if router
@@ -597,6 +614,16 @@ mod tests {
         released: Mutex<Vec<u64>>,
         /// Woken at each release.
         release: std::sync::Condvar,
+        /// While closed, each request waits here before it runs.
+        hold: Mutex<Hold>,
+        /// Woken when `hold` changes.
+        held: std::sync::Condvar,
+    }
+
+    #[derive(Default)]
+    struct Hold {
+        closed: bool,
+        waiting: usize,
     }
 
     impl ProfileNode {
@@ -618,6 +645,26 @@ mod tests {
                 })
                 .unwrap_or_else(|error| error.into_inner());
             released.contains(&instance)
+        }
+
+        fn close(&self) {
+            lock(&self.hold).closed = true;
+        }
+
+        fn open(&self) {
+            lock(&self.hold).closed = false;
+            self.held.notify_all();
+        }
+
+        /// Waits, up to ten seconds, until a request waits at the hold.
+        fn wait_held(&self) -> bool {
+            let (hold, _) = self
+                .held
+                .wait_timeout_while(lock(&self.hold), Duration::from_secs(10), |hold| {
+                    hold.waiting == 0
+                })
+                .unwrap_or_else(|error| error.into_inner());
+            hold.waiting > 0
         }
     }
 
@@ -666,6 +713,17 @@ mod tests {
             };
             let value = match call {
                 Call::AiExecute { .. } => {
+                    let mut hold = lock(&self.hold);
+                    hold.waiting += 1;
+                    self.held.notify_all();
+                    while hold.closed {
+                        hold = self
+                            .held
+                            .wait(hold)
+                            .unwrap_or_else(|error| error.into_inner());
+                    }
+                    hold.waiting -= 1;
+                    drop(hold);
                     lock(&self.ran).push(account.clone());
                     serde_json::to_value(hide_node_link::ai::Logged {
                         value: Ok::<AiResponse, AiError>(AiResponse {
@@ -720,6 +778,7 @@ mod tests {
         Arc<ProfileNode>,
         crate::ai::AiMachines,
         Arc<crate::ai::AiStanding>,
+        Arc<std::sync::atomic::AtomicUsize>,
     ) {
         let node = Arc::new(ProfileNode::default());
         lock(&node.accounts).insert("p-work".to_owned(), "/accounts/work".to_owned());
@@ -736,15 +795,26 @@ mod tests {
             .unwrap();
         settings.chosen = true;
         let standing = Arc::new(crate::ai::AiStanding::default());
-        let analyzer = LabelAnalyzer::spawn(
+        // What `LabelAnalyzer::spawn` builds, with each read of the facts
+        // counted.
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (build, reach, counted) = (machines.clone(), machines.clone(), Arc::clone(&reads));
+        let gate = Arc::new(hide_ai::UsageLimits::new());
+        let usage =
+            crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn hide_ai::AiUsageSink>;
+        let analyzer = LabelAnalyzer::spawn_with(
             Box::new(move || settings.clone()),
+            Box::new(move |settings| {
+                Arc::new(crate::ai::labels_router(&build, settings, &gate, &usage))
+            }),
+            Box::new(move |settings| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                reach.facts(settings)
+            }),
             Arc::clone(&standing),
-            machines.clone(),
-            Arc::new(hide_ai::UsageLimits::new()),
-            crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn hide_ai::AiUsageSink>,
         )
         .unwrap();
-        (analyzer, node, machines, standing)
+        (analyzer, node, machines, standing, reads)
     }
 
     /// PRD agent-profiles-phase2 B21, engineering 14: a profile Runs on used
@@ -754,7 +824,7 @@ mod tests {
     /// while the settings still name it.
     #[test]
     fn a_profile_deleted_after_use_releases_its_backend_and_the_next_job_passes_it_over() {
-        let (analyzer, node, machines, standing) = profile_analyzer();
+        let (analyzer, node, machines, standing, _) = profile_analyzer();
         assert_eq!(
             run_job(&analyzer),
             Ok((ProviderId::CLAUDE, "/accounts/work".to_owned()))
@@ -798,7 +868,7 @@ mod tests {
     /// the old backend is released and a new one runs in the new account.
     #[test]
     fn a_profile_edited_after_use_runs_in_its_new_account_at_the_next_job() {
-        let (analyzer, node, machines, _) = profile_analyzer();
+        let (analyzer, node, machines, _, _) = profile_analyzer();
         assert_eq!(
             run_job(&analyzer),
             Ok((ProviderId::CLAUDE, "/accounts/work".to_owned()))
@@ -826,7 +896,7 @@ mod tests {
     /// Word of a profile the router does not ask leaves it as it is.
     #[test]
     fn a_profile_change_the_router_does_not_ask_keeps_its_backend() {
-        let (analyzer, node, machines, _) = profile_analyzer();
+        let (analyzer, node, machines, _, _) = profile_analyzer();
         run_job(&analyzer).unwrap();
         let work = node.built_for("/accounts/work");
         let other = (
@@ -863,6 +933,84 @@ mod tests {
         run_job(&analyzer).unwrap();
         assert!(lock(&node.released).is_empty(), "the router was kept");
         assert_eq!(node.built_for("/accounts/work"), work);
+    }
+
+    /// Engineering 15: word that profiles moved, sent at every edit while a
+    /// request runs, waits once at most, so the thread reads the facts once
+    /// for a thousand edits; a move after it took the word is still heard.
+    #[test]
+    fn profile_moves_during_a_job_wait_as_one_word_and_a_later_move_is_heard() {
+        let (analyzer, node, machines, _, reads) = profile_analyzer();
+        let read = || reads.load(std::sync::atomic::Ordering::SeqCst);
+        let item = |profile: &str| {
+            hide_ai::Item::of(
+                ProviderId::CLAUDE,
+                Some(hide_agent_adapter::ProfileId(profile.to_owned())),
+            )
+        };
+        // `p-work` as it is, and `p-other`, which the router does not ask,
+        // at `version`: the router stays, and every word is read.
+        let list_other = |version: u64| {
+            machines.profiles.set(std::collections::BTreeMap::from([
+                (
+                    (None, item("p-work")),
+                    crate::ai::ItemProfile {
+                        version: 1,
+                        account: Some(hide_agent_adapter::AccountKey::Folder(
+                            "/accounts/work/".to_owned(),
+                        )),
+                    },
+                ),
+                (
+                    (None, item("p-other")),
+                    crate::ai::ItemProfile {
+                        version,
+                        account: None,
+                    },
+                ),
+            ]));
+        };
+        run_job(&analyzer).unwrap();
+        let work = node.built_for("/accounts/work");
+
+        node.close();
+        let (done, outcome) = channel();
+        analyzer.submit(AnalysisJob {
+            phase: AnalysisPhase::TurnEnd,
+            request: context_label::request(
+                AnalysisPhase::TurnEnd,
+                hide_ai::OutputLanguage::English,
+                "pane",
+                format!("job-{}", rand_id()),
+                "context",
+            ),
+            done: Box::new(move |result| {
+                let _ = done.send(result.is_ok());
+            }),
+        });
+        assert!(node.wait_held(), "the second job is running");
+        for version in 1..=1_000 {
+            list_other(version);
+            analyzer.profiles_moved();
+        }
+        node.open();
+        assert_eq!(outcome.recv_timeout(Duration::from_secs(30)), Ok(true));
+        // Jobs are taken in order, so the word was taken before this one.
+        run_job(&analyzer).unwrap();
+        assert_eq!(
+            read(),
+            4,
+            "three jobs and one word read the facts, not a thousand words"
+        );
+        assert!(lock(&node.released).is_empty(), "the router was kept");
+
+        lock(&node.accounts).remove("p-work");
+        list_work(&machines, None);
+        analyzer.profiles_moved();
+        assert!(
+            node.wait_released(work[0]),
+            "a move after the word was taken is heard"
+        );
     }
 
     fn rand_id() -> u64 {
