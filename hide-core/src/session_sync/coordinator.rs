@@ -284,6 +284,7 @@ fn run_coordinator(
         let window_attached = window_reads(&context, worktree_reader.as_mut());
         let connected = pulled.is_some();
         let run_background_reads = connected && !defer_background_reads && window_attached;
+        let probe = provider_probe_reads(connected, window_attached, defer_background_reads);
         let read_usage = connected
             && !defer_background_reads
             && (run_background_reads || read_memory_reads_usage(&context));
@@ -396,47 +397,56 @@ fn run_coordinator(
                     return;
                 }
             }
+        }
 
-            if let Some(reader) = ai_reader.as_mut() {
-                let Some((request, queued_settings, standing_moved)) = read_ai_request(&context)
-                else {
-                    return;
-                };
-                if standing_moved {
-                    context.notifier.notify();
-                }
-                // The settings write is file I/O, so it happens here rather than
-                // under the runtime mutex that took the operator's choice.
-                if let Some(settings) = queued_settings {
-                    // The choice has already been taken out of the runtime, so a
-                    // home this process could not resolve must not swallow it in
-                    // silence; it is the same failure as a refused write and it
-                    // reaches the same line on the group.
-                    let saved = match hook_home.as_deref() {
-                        Some(home) => save_ai_settings(&context, home, &settings),
-                        None => {
-                            crate::diagnostic!(serde_json::json!({
-                                "component": "ai_settings",
-                                "kind": "settings.write_skipped",
-                                "message": "no home directory on this session",
-                            }));
-                            report_ai_settings_failure(
-                                &context,
-                                "The choice could not be saved (no home directory); \
-                             it applies to this session only"
-                                    .to_string(),
-                            )
-                        }
-                    };
-                    if !saved {
-                        return;
+        if let Some(for_window) = probe
+            && let Some(reader) = ai_reader.as_mut()
+        {
+            let Some((request, queued_settings, standing_moved)) = read_ai_request(&context) else {
+                return;
+            };
+            let request = if for_window {
+                request
+            } else {
+                crate::ai::AiRequest::default()
+            };
+            if standing_moved {
+                context.notifier.notify();
+            }
+            // The settings write is file I/O, so it happens here rather than
+            // under the runtime mutex that took the operator's choice.
+            if let Some(settings) = queued_settings {
+                // The choice has already been taken out of the runtime, so a
+                // home this process could not resolve must not swallow it in
+                // silence; it is the same failure as a refused write and it
+                // reaches the same line on the group.
+                let saved = match hook_home.as_deref() {
+                    Some(home) => save_ai_settings(&context, home, &settings),
+                    None => {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "ai_settings",
+                            "kind": "settings.write_skipped",
+                            "message": "no home directory on this session",
+                        }));
+                        report_ai_settings_failure(
+                            &context,
+                            "The choice could not be saved (no home directory); \
+                         it applies to this session only"
+                                .to_string(),
+                        )
                     }
-                }
-                if let Some(background_ai) = reader.read_if_due(request)
-                    && !publish_background_ai(&context, background_ai)
-                {
+                };
+                if !saved {
                     return;
                 }
+            }
+            // With no window the answer is not published: `hide agent
+            // catalog` keeps the lists the last window read.
+            if let Some(background_ai) = reader.read_if_due(request)
+                && for_window
+                && !publish_background_ai(&context, background_ai)
+            {
+                return;
             }
         }
 
@@ -1293,6 +1303,21 @@ fn window_reads(
     attached
 }
 
+/// What the provider probe is asked on a wake: `None` leaves it as it is,
+/// on a wake that defers the reads; `Some(true)` the runtime's request,
+/// while a window reads for a connected engine; `Some(false)` nothing, which
+/// ends its routers and item backends on its worker, so their app-servers
+/// end with the window rather than at their idle exit (engineering 14).
+fn provider_probe_reads(connected: bool, window_attached: bool, deferred: bool) -> Option<bool> {
+    if !(connected && window_attached) {
+        Some(false)
+    } else if deferred {
+        None
+    } else {
+        Some(true)
+    }
+}
+
 fn read_ui_attached(context: &SessionSyncContext) -> bool {
     context
         .runtime
@@ -2124,6 +2149,19 @@ mod window_reads_tests {
                 )),
             }
         }
+    }
+
+    /// Engineering 14: the provider probe is asked for nothing once no
+    /// window reads, the last renderer gone or the engine link lost, even
+    /// on a wake that defers the other reads, so its app-servers end with
+    /// the window; a deferring wake with a window leaves it as it is.
+    #[test]
+    fn the_provider_probe_is_asked_for_nothing_without_a_window_or_an_engine() {
+        assert_eq!(provider_probe_reads(true, true, false), Some(true));
+        assert_eq!(provider_probe_reads(true, true, true), None);
+        assert_eq!(provider_probe_reads(true, false, false), Some(false));
+        assert_eq!(provider_probe_reads(true, false, true), Some(false));
+        assert_eq!(provider_probe_reads(false, true, false), Some(false));
     }
 
     /// The last renderer leaving, dispatched as the daemon sends it, ends the

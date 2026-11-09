@@ -409,6 +409,8 @@ Both come from asking the provider, so no model list is written into the core or
 An agent that is installed and not selectable is shown with that reason, never hidden.
 Asking costs child processes, so the probe is a capability reader like the project panel's: the session-sync coordinator drives it, the work runs on a worker thread, the runtime mutex is never held across it, and it asks nothing at all while the group is off screen.
 In the web shell the daemon holds that flag for every connected page: each page reports only its own demand, and a page that closes or disconnects releases it (`hided/src/demand.rs`).
+With no window attached, or no engine to read for, the coordinator asks the probe for nothing on every wake (`provider_probe_reads` in `hide-core/src/session_sync/coordinator.rs`), so its worker drops every router and profile backend and their app-servers end with the window, not at the ten-minute idle exit; that answer is not published, so `hide agent catalog` keeps the lists the last window read.
+A read under way when the window leaves starts no further profile or device: the one it is on ends within its own read limit, and the next read releases it.
 `scripts/check-capability-readers-off-lock.sh` asserts that structurally, by name.
 
 ### A profile's model list
@@ -423,7 +425,7 @@ Codex still runs under Hide's private `CODEX_HOME`, linking the `auth.json` of t
 A read starts the agent's CLI, so the state that CLI updates on its own at every start may change: Claude Code's `.claude.json`, its plugin cache and its telemetry queue in the account's folder.
 What the operator edits (`settings.json`, the sign-in, `CLAUDE.md`, the hooks) and the conversations do not.
 A list that cannot be read is answered with its reason, which the core logs once per change (`ai.models.unavailable` with the provider, profile and machine), and the screens and `hide agent catalog` offer the agent's own list in its place (`models_from_default`); nothing is shown as a banner.
-What was logged of an item goes with its backend: when the screen closes, the profile is removed or its device is gone.
+What was logged of an item goes with it: when the screen closes, the profile is removed or its device is gone; a profile past the cap stays logged once while it is asked.
 Each list says the profile version it was read for, and a list counts only at the profile's version now: after an edit, the list read before is no list of it until the next read lands.
 Which agents list a custom or gateway model a profile configures is the support table's ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 The snapshot carries each list beside its agent's row (`BackgroundAiProviderSnapshot::profile_models`, with `model_labels` for the names Claude Code shows), and the web shell reads an item's list with `catalogFor(ai, kind, { id, version })` of the chosen machine's profile.

@@ -13,8 +13,8 @@ vector when set, FAKE_INSTRUCTIONS_FILE the base instructions of the last
 thread/start, FAKE_TURN_FILE the parameters of the last turn/start, and
 FAKE_STARTED_FILE is created once a slow turn has
 started and is waiting. FAKE_ENV_FILE records, at `model/list` and at
-`turn/start`, the `CODEX_HOME` the app-server runs under, the file its
-`auth.json` link points at, and the variables a profile or a wrapper set
+`turn/start`, the app-server's pid, the `CODEX_HOME` it runs under, the file
+its `auth.json` link points at, and the variables a profile or a wrapper set
 (`ENV_SEEN`); a wrapper that
 sets FAKE_GATEWAY_MODEL makes `model/list` answer that model alone.
 interrupted_after_usage, stream_disconnected and stream_disconnected_500 end
@@ -48,6 +48,7 @@ def record_env():
         auth = os.path.join(home, "auth.json") if home else None
         with open(path, "w", encoding="utf-8") as f:
             json.dump({
+                "pid": os.getpid(),
                 "CODEX_HOME": home,
                 "auth_link": os.readlink(auth) if auth and os.path.islink(auth) else None,
                 **{name: os.environ.get(name) for name in ENV_SEEN},
