@@ -75,8 +75,6 @@ const FITTED: Record<string, string> = {
   session: '[data-sidebar-box] [data-pane="a2"]',
   pr: '[data-sidebar-box] [data-pane="a2"] [data-pr-mark]',
   mission: '[data-sidebar-box] [data-pane="a2"] [data-mission-chip]',
-  ask: '[data-task-row="q1"]',
-  approve: '[data-task-row="a3"]',
   pane: '[data-pane-view="a2"]',
   line1: '[data-pane-view="a2"] [data-pane-move-row]',
   line2: '[data-pane-view="a2"] [data-pane-header-band]',
@@ -86,7 +84,7 @@ const FITTED: Record<string, string> = {
 };
 
 /** The first-run cards, in order: one ring and one card a screen. A card that asks for a press (`tree`, `missionChip`, `explorerButton`) goes on when its target is pressed, and ⏎ presses it. */
-const FIRST_RUN = ["left", "middle", "right", "projects", "session", "pr", "mission", "ask", "approve", "read", "work", "pane", "line1", "line2", "tree", "kids", "missionChip", "conduct", "explorerButton", "explorer", "find", "devices"];
+const FIRST_RUN = ["left", "middle", "right", "projects", "session", "pr", "mission", "needs", "read", "work", "pane", "line1", "line2", "tree", "kids", "missionChip", "conduct", "explorerButton", "explorer", "find", "devices"];
 
 /** Plays the first run with Enter alone up to the card `id`, waiting for each card to come up before the next press. */
 async function toStep(practice: Page, id: string): Promise<void> {
@@ -128,7 +126,7 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       await expect.poll(ringed, { message: `${id}'s ring is missing, off screen, or under its card`, timeout: 5_000 }).toBe(true);
       // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
-      if (id === "ask") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
+      if (id === "needs") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
       // The project cards fold 내 차례 · 읽을 것 away, so the list shows the projects alone.
       if (id === "projects" || id === "session" || id === "pr" || id === "mission") await expect.poll(() => practice.locator("[data-raised-group]").evaluateAll((all) => all.length > 0 && all.every((one) => getComputedStyle(one).display === "none")), { message: "the raised sections are folded away" }).toBe(true);
       // A card says it all in its own words: no tag is drawn, and the one ring fits what it names.
@@ -145,8 +143,8 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       // The children list is open on its own card only; leaving a card closes what it opened.
       if (id === "kids") await expect(practice.locator('[data-agent-tree="a2"]')).toBeVisible();
       else await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);
-      // 내 차례 is shown one line at a time: a question, then an approval, and no 볼 것 anywhere.
-      if (id === "ask" || id === "approve") await expect(practice.locator('[data-task-group="needs_you"] [data-mark="look"]')).toHaveCount(0);
+      // 내 차례 holds what waits for the learner (a question, an approval) and no 볼 것; its ring takes the switch with it, 태스크 on.
+      if (id === "needs") await expect(practice.locator('[data-task-group="needs_you"] [data-mark="look"]')).toHaveCount(0);
       // The Explorer card shows what the agent changed, marked in the tree, with a result opened beside it.
       if (id === "explorer") {
         await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");

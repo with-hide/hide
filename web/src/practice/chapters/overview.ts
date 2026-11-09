@@ -23,14 +23,13 @@ export default chapter<TourModel>({
     { id: "left", target: "[data-sidebar-box]", scene: { lens: "tasks", lane: "closed", focus: null, solo: null } },
     { id: "middle", target: "[data-agent-area]", hides: OUTLINE },
     { id: "right", target: "[data-tool-rail]" },
-    // The project view: the list with 내 차례 · 읽을 것 folded away, then one line of it (one session), then the marks on that line.
-    { id: "projects", target: "[data-project-list]", hides: RAISED, scene: { lens: "projects" } },
+    // The project view: the switch with its 프로젝트 tab on and the list under it with 내 차례 · 읽을 것 folded away, then one line of it (one session), then the marks on that line.
+    { id: "projects", target: "[data-sidebar-lens-option], [data-project-list]", hides: RAISED, scene: { lens: "projects" } },
     { id: "session", target: '[data-sidebar-box] [data-pane="a2"]', hides: RAISED },
     { id: "pr", target: '[data-pane="a2"] [data-pr-mark]', hides: RAISED },
     { id: "mission", target: '[data-pane="a2"] [data-mission-chip]', hides: RAISED },
-    // The task view, one line of 내 차례 at a time (a question, then an approval), then what finished quietly and what is working.
-    { id: "ask", target: '[data-task-row="q1"]', scene: { lens: "tasks" } },
-    { id: "approve", target: '[data-task-row="a3"]' },
+    // The task view: the switch with its 태스크 tab on and 내 차례 under it, then what finished quietly and what is working.
+    { id: "needs", target: '[data-sidebar-lens-option], [data-task-group="needs_you"] > *', scene: { lens: "tasks" } },
     { id: "read", target: '[data-task-group="done"] > *' },
     // Two kinds of Working: a session working by itself, and one waiting on its children (its second line says so).
     { id: "work", target: '[data-task-group="working"] > *' },

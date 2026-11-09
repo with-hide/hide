@@ -10,14 +10,14 @@ const GLIDE = ".35s";
 export const COACH_CSS = `
 .pc-layer{position:fixed;inset:0;z-index:60;pointer-events:none}
 /* The ring is the hole in the dim: its own shadow dims the rest of the screen, so the dim glides with it from one target to the next. */
-.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 calc(var(--size-tab-indicator) * 1.5) var(--practice-accent),0 0 0 var(--spacing-md) color-mix(in srgb,var(--practice-accent) 28%,transparent),0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);
+.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 var(--size-tab-indicator) var(--practice-accent),0 0 0 var(--spacing-xs) color-mix(in srgb,var(--practice-accent) 16%,transparent),0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);
   transition:left ${GLIDE} ${EASE},top ${GLIDE} ${EASE},width ${GLIDE} ${EASE},height ${GLIDE} ${EASE},box-shadow .3s ease;animation:pc-in .4s backwards}
-.pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1.5);border-radius:var(--radius-xl);border:var(--size-tab-indicator) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
-@keyframes pc-pulse{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(1.04)}}
+.pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1);border-radius:var(--radius-xl);border:var(--size-hairline) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
+@keyframes pc-pulse{0%{opacity:.5;transform:scale(1)}100%{opacity:0;transform:scale(1.02)}}
 @keyframes pc-in{from{opacity:0}to{opacity:1}}
 /* While a card's scene change is on screen the card steps aside and comes back once it has settled; the ring's border and glow step aside too, but its dim stays, so the screen never brightens between two cards. */
 .pc-away{opacity:0;pointer-events:none;transition:opacity .15s ease,left 0s,top 0s,width 0s,height 0s !important}
-.pc-spot.pc-away{opacity:1;box-shadow:0 0 0 calc(var(--size-tab-indicator) * 1.5) transparent,0 0 0 var(--spacing-md) transparent,0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);transition:box-shadow .15s ease,left 0s,top 0s,width 0s,height 0s !important}
+.pc-spot.pc-away{opacity:1;box-shadow:0 0 0 var(--size-tab-indicator) transparent,0 0 0 var(--spacing-xs) transparent,0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);transition:box-shadow .15s ease,left 0s,top 0s,width 0s,height 0s !important}
 .pc-spot.pc-away::after{opacity:0;animation:none}
 .pc-kick{font-size:var(--text-caption);font-weight:600;letter-spacing:.02em;color:color-mix(in srgb,var(--practice-accent-strong) 60%,var(--practice-ink));display:flex;justify-content:space-between;gap:var(--spacing-sm)}
 .pc-kick span:last-child{flex:none;white-space:nowrap}
