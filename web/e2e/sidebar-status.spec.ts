@@ -3,7 +3,7 @@
 // parent's responsibility; children unfold under their root only when the
 // operator opens it, and the pane header's tree button opens the same tree.
 import { expect, test } from "@playwright/test";
-import { closePane, withControl } from "./daemon-actions";
+import { agentIn, closePane, focusPane, focusTab, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { elsewhereTab, finishUnseenTurn, setAgentAsking, setAgentState } from "./fixture-agents";
 import { continueFixtureTranscript } from "./pane-fixture";
@@ -25,11 +25,18 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     const [parent, child] = fixture.panes;
     // A relationship holds only on the session it was spawned on, so each agent is labelled by a turn appended to its own session.
     const childSession = "fixture-two";
-    // Its label reads the turn as waiting on the children: a turn read as finished and not read yet would stand in Done instead (status-model.md, A quiet row that waits).
-    continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE, end: "waiting" });
-    await finishUnseenTurn(fixture, daemon, parent, await elsewhereTab(fixture, daemon));
+    continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE });
+    const elsewhere = await elsewhereTab(fixture, daemon);
+    await finishUnseenTurn(fixture, daemon, parent, elsewhere);
     continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, progress: "계보 투영 구현 중" });
     await setAgentState(daemon, child, "working");
+    // A finished turn not read yet is not hidden by the working child: the root is Done, counting the child on its line; once read, it waits on the child again (status-model.md, A quiet row that waits).
+    await withControl(daemon, async (control) => {
+      await control.until((rest) => { const row = agentIn(rest, parent); return (row?.group === "done" && row.children_left === 1) || undefined; }, `${parent} done past its working child`, 20_000);
+      await focusPane(control, parent);
+      await control.until((rest) => agentIn(rest, parent)?.wait === "children" || undefined, `${parent} waiting on its child once read`, 20_000);
+      await focusTab(control, fixture, elsewhere);
+    });
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
