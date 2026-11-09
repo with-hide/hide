@@ -62,6 +62,19 @@ fn holds_pull_request(checkout: &CheckoutSnapshot, pull_request: &PullRequestSna
     )
 }
 
+/// The agent that made pull request `number`: the first agent its
+/// project's pull request rows name.
+pub(super) fn pull_request_lead(project: &WorkspaceSnapshot, number: u32) -> Option<String> {
+    project
+        .agent_scope
+        .prs
+        .rows
+        .iter()
+        .find(|row| row.number == number)
+        .and_then(|row| row.agents.first())
+        .map(|agent| agent.pane_id.clone())
+}
+
 /// The checkout a pull request's card opens in when the operator did not ask
 /// from one of the project's: the one its agent is in, else the one on its
 /// branch, else the project's own (PRD work-tab-pr-lens B22).
@@ -101,9 +114,12 @@ fn card_checkout<'a>(
 
 impl Runtime {
     /// `pr_open`: the pull request's card in the lane's 보기 slot, read
-    /// again, with the Workspace, its Agent tab and the keyboard where they
-    /// are (PRD sidebar-task-lens D-43, D-50). Asked from Home, the pull
-    /// request's Workspace opens too and its live agent comes forward (B17).
+    /// again, in the Agent tab of the agent that made it, which comes
+    /// forward with the keyboard (operator decision 2026-11-09, replacing
+    /// PRD sidebar-task-lens D-43); with no such agent on this machine the
+    /// Workspace, its Agent tab and the keyboard stay. Asked from Home, the
+    /// pull request's Workspace opens too and its live agent comes forward
+    /// (B17).
     /// One event, so a refusal partway cannot leave the screen half moved.
     pub(super) fn open_pull_request_card(&mut self, payload: PrOpenPayload) -> bool {
         if !self.separate_view_areas() {
@@ -143,14 +159,7 @@ impl Runtime {
         let number = payload.pr_number;
         let workspace_id = project.id.clone();
         if payload.open_workspace {
-            let lead = project
-                .agent_scope
-                .prs
-                .rows
-                .iter()
-                .find(|row| row.number == number)
-                .and_then(|row| row.agents.first())
-                .map(|agent| agent.pane_id.clone());
+            let lead = pull_request_lead(&project, number);
             let Some(target) = card_checkout(
                 &project,
                 pull_request,
@@ -177,10 +186,15 @@ impl Runtime {
             "project": workspace_id, "pr": number,
             "open_workspace": payload.open_workspace,
         }));
-        self.open_detail(crate::model::DetailItem::PullRequest {
+        let item = crate::model::DetailItem::PullRequest {
             workspace_id: payload.workspace_id,
             number,
-        })
+        };
+        if payload.open_workspace {
+            self.open_detail(item)
+        } else {
+            self.open_detail_in_owner_tab(item)
+        }
     }
 
     /// A Git project of this machine or of a node that dials this core,

@@ -190,7 +190,8 @@ describe("what the detail opens in the 보기 slot (D-09)", () => {
       rest: { ...state.rest!, workspace_view: {}, navigator: { ...state.rest!.navigator!, focused_checkout_id: "c1", workspaces: [{ id: "w", label: "herdr-ide", device_id: "mac", checkouts: [{ id: "c1", path: "/repo" }] }] } } as unknown as SnapshotRest,
     })));
     const session = { pane_id: "w1:p4", device_id: "mac" } as never;
-    act(() => actions.openPlan(session));
+    // A node's `크게 ›` keeps the plan in the slot the map was pressed in.
+    act(() => actions.openPlan(session, false));
     expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
     expect(events.filter((event) => event.kind === "detail_open").map((event) => (event.payload as { item: { kind: string } }).item.kind)).toEqual(["plan"]);
     act(() => useUiStore.setState({ screen: { kind: "missions" } }));
@@ -223,14 +224,14 @@ describe("the turn pill (B5)", () => {
 });
 
 describe("opening a mission (B2, B13, D-04; operator decision 2026-11-09)", () => {
-  it("opens a mission pressed outside the screen as a card in the 보기 slot, leaving the screen for the Workspace in front", async () => {
+  it("opens a mission pressed outside the screen as a card in its Conductor's tab, leaving the screen for the Workspace", async () => {
     const { actions, events } = await mount({ place: { selected: "mission-2" } });
     act(() => useShellStore.setState((state) => ({
       rest: { ...state.rest!, workspace_view: {}, navigator: { ...state.rest!.navigator!, focused_checkout_id: "c1", workspaces: [{ id: "w", label: "herdr-ide", device_id: "mac", checkouts: [{ id: "c1", path: "/repo" }] }] } } as unknown as SnapshotRest,
     })));
     act(() => actions.openMission("mission-1"));
     expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
-    expect(events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" } }]);
+    expect(events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, in_owner_tab: true }]);
     // The screen's own detail is left as it was, for the sidebar row to come back to.
     expect(useUiStore.getState().missions.selected).toBe("mission-2");
   });

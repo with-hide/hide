@@ -3023,6 +3023,41 @@ fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
     assert_eq!(runtime.snapshot.mission_events.mission, None);
 }
 
+/// Operator decision 2026-11-09: a mission pressed outside the slot opens
+/// in its Conductor's tab, the Conductor's pane coming forward with it, and
+/// leaves the focus where it was while no Conductor holds it.
+#[test]
+fn a_mission_opens_in_its_conductors_tab() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.refresh_missions();
+    let open = |runtime: &mut Runtime| {
+        assert!(runtime.dispatch_json(&explorer_event(
+            "detail_open",
+            json!({"item": {"kind": "mission", "mission": "mission-1"}, "in_owner_tab": true}),
+        )));
+    };
+    assert!(runtime.dispatch_json(&operator_focus_event("recipient")));
+    open(&mut runtime);
+    assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items.last(),
+        Some(&DetailItem::Mission {
+            mission: "mission-1".into()
+        })
+    );
+
+    // Its Conductor's pane is gone: the pane in front stays.
+    runtime.missions.book.missions[0].conductor.actor.pane_id = "gone".into();
+    runtime.refresh_missions();
+    assert!(!runtime.snapshot.missions.items[0].conductor.present);
+    let front = runtime.snapshot.focused.pane_id.clone();
+    open(&mut runtime);
+    assert_eq!(runtime.snapshot.focused.pane_id, front);
+    assert_eq!(runtime.snapshot.status.last_error, None);
+}
+
 /// The fixture's `recipient` pane as the node's worker and a third pane,
 /// `reviewer`, as another agent, each registered in the ledger.
 fn with_worker_and_reviewer(runtime: &mut Runtime) {
