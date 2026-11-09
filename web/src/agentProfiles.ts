@@ -80,6 +80,8 @@ export function agentProfilesView(profiles: MachineAgentProfiles | null, agent: 
 
 /** The profile a start of `agent` picks with nothing chosen (D-32): the project's default while its machine lists it, else the agent's default there. The core's `launch::pick` decides the start; this only says which one the menu shows chosen. */
 export function pickedProfile(profiles: MachineAgentProfiles | null, agent: string, projectDefault: string | null): string {
+  // A project that names the built-in profile starts it; only no choice falls through to the agent's default.
+  if (projectDefault === BUILT_IN_PROFILE) return BUILT_IN_PROFILE;
   const listed = (id: string | null | undefined) => (id && profiles?.profiles.some((profile) => profile.kind === agent && profile.id === id && profile.install !== "removing" && profile.install !== "remove_failed") ? id : null);
   return listed(projectDefault) ?? listed(profiles?.defaults[agent]) ?? BUILT_IN_PROFILE;
 }

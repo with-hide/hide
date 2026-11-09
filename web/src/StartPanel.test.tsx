@@ -231,6 +231,11 @@ it("shows the profile the core would pick, the project's first, and sends a prof
     expect(started().at(-1)).not.toHaveProperty("profile");
     await act(async () => root.render(<></>));
 
+    // A project that names the built-in profile opens on it, though the agent's default is side.
+    await render(snapshot(profiles, "default"));
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("default");
+    await act(async () => root.render(<></>));
+
     await render(snapshot(profiles, null));
     expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-side");
     const trigger = q("[data-profile-pick]")!;

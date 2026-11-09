@@ -397,6 +397,11 @@ pub(crate) fn pick(
         }
         Parent::None => {}
     }
+    // A project that names the built-in default starts it (D-31): only no
+    // choice at all falls through to the agent's default.
+    if project.is_some_and(ProfileId::is_default) {
+        return Request::new(kind, None);
+    }
     let profile = project.and_then(listed).or_else(|| {
         let agent = hide_agent_adapter::adapter(kind)?.id;
         let id = profiles?.defaults.get(agent)?;

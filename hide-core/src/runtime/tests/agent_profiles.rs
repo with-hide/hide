@@ -143,6 +143,10 @@ fn a_new_start_takes_the_chosen_profile_then_the_projects_then_the_agents_defaul
     // A choice the machine does not list, or another agent's, is refused.
     assert!(start(&runtime, Some(ROOT), Some("p-gone")).is_err());
     assert!(start(&runtime, Some(ROOT), Some("p-team")).is_err());
+    // A project that names the built-in default starts it, though the agent's
+    // default is `side` (D-31).
+    project_default(&mut runtime, "default");
+    assert_eq!(start(&runtime, Some(ROOT), None), Ok(None));
     // A project's choice the machine no longer lists falls through to the
     // agent's default.
     project_default(&mut runtime, "p-gone");
