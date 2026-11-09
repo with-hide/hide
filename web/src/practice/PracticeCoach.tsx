@@ -77,6 +77,11 @@ async function pressTarget(selector: string | undefined, pace: number, follow: (
   window.setTimeout(() => follow(null), 250 * pace);
 }
 
+/** A card's text with the words between `**` marks in bold, so its few key words stand out. */
+function Emphasis({ text }: { text: string }) {
+  return <>{text.split("**").map((part, at) => (at % 2 ? <b key={at}>{part}</b> : part))}</>;
+}
+
 /** A hand's press on `element` at `point`: down, up, then the click. */
 function pressAt(element: Element, point: Point) {
   const at = { bubbles: true, cancelable: true, composed: true, isPrimary: true, button: 0, detail: 1, clientX: point.x, clientY: point.y, pointerType: "mouse" };
@@ -614,7 +619,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         {place.arrow ? <div className="pc-arrow" style={place.arrow} /> : null}
         <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
         <h3>{words("title")}</h3>
-        <p>{palette && step.afterClose ? say("practice.palette.line") : words("text")}</p>
+        <p><Emphasis text={palette && step.afterClose ? say("practice.palette.line") : words("text")} /></p>
         {via && !(palette && step.afterClose) ? <div className="pc-via">{via}</div> : null}
         <div className="pc-row">
           {/* Leaving is always where the eye is, a stuck step included; it goes back to the real Hide, and the chapter list keeps where it stopped. */}

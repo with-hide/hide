@@ -35,6 +35,7 @@ ${ZONES}
 .pc-kick span:last-child{flex:none;white-space:nowrap}
 .pc-bubble h3{margin:var(--spacing-sm) 0 var(--spacing-xs);font-size:var(--text-headline);line-height:1.35;font-weight:600}
 .pc-bubble p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
+.pc-bubble p b{font-weight:600;color:var(--practice-text)}
 .pc-via{margin-top:var(--spacing-sm);font-size:var(--text-body);color:var(--practice-mute);display:flex;gap:var(--spacing-sm);align-items:center;flex-wrap:wrap}
 .pc-row{display:flex;align-items:center;gap:var(--spacing-sm);margin-top:var(--spacing-md)}
 .pc-dots{display:flex;gap:var(--spacing-xs);margin-right:auto;min-width:0;overflow:hidden}
