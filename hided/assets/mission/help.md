@@ -42,6 +42,7 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 ## 1. Before the plan
 
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates and the verification strength (`default_strength`).
+  Each candidate is an agent item: `item` is its name, and `profile` the `--profile` value that starts it (`default` for the built-in); a candidate with `profile_gone` names a profile this machine no longer has and starts no worker.
 - Run `hide agent catalog` for the agent items here: each agent's built-in default and each of its profiles a start can take, `profile` being the `--profile` value that starts it (`default` for the built-in), with its models, its efforts and its account's weekly usage.
   A model is named as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
@@ -115,7 +116,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.
   Send no effort to an agent that takes none (`hide agent catalog` lists `efforts`).
   If no candidate can run, say so in the plan.
-  Hide refuses a worker that is none of the candidates (`mission_candidate_refused`): another agent, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
+  Start each worker with `--profile` set to its candidate's `profile`, `default` included: a spawn without `--profile` runs with your own profile when the worker is your kind of agent, else the project's choice, and Hide judges the profile the worker would actually start with.
+  Hide refuses a worker that is none of the candidates (`mission_candidate_refused`, naming the item it would have started): another agent or another profile of it, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
 - Every node other than an outside one gets `steps`: three to five short lines of how its work goes, each something it delivers or checks (the core change, the screen, the tests, the pull request), in the operator's language, never the node's title restated and never research (at most 8 steps, each one line of at most 80 characters, otherwise `mission_steps_invalid` names the node).
   They show on the node's card as one bar cell per step and in its panel as a list before anyone has started, so the operator reads how each node will be worked when they read the plan.
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
