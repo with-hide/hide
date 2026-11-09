@@ -179,3 +179,76 @@ it("offers Add a project in place of Start when the device has no project, and o
     vi.unstubAllGlobals();
   }
 });
+
+it("shows the profile the core would pick, the project's first, and sends a profile only when the operator picks one (agent-profiles B1, B14)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const events: { kind: string; payload: Record<string, unknown> }[] = [];
+  const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null });
+  const snapshot = (profiles: unknown, projectProfile: string | null) => ({
+    navigator: {
+      focused_device_id: "core-machine",
+      workspaces: [{ id: "blog", label: "blog", path: "/local/blog", device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: "blog-main", workspace_id: "blog", label: "main", path: "/local/blog", exists: true, is_primary: true }] }],
+      devices: [{ id: "core-machine", kind: "local", label: "Core machine", state: "local", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], profiles } }],
+    },
+    ui_state: {
+      agent_start: { kind: "claude", models: {} },
+      project_settings: projectProfile ? { blog: { version: 1, device_id: "core-machine", root: "/local/blog", agent_profiles: { "claude-code": projectProfile } } } : {},
+    },
+    status: {},
+  }) as unknown as SnapshotRest;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const q = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+  const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+  const render = async (rest: SnapshotRest) => {
+    await act(async () => {
+      useShellStore.setState({ rest, connection: "live" });
+      useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null });
+      useStartPanel.setState(panel, true);
+      useStartPanel.getState().open(false, { projectId: "blog", kind: "claude" });
+      root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+    });
+  };
+  try {
+    // No profile on the machine: no menu, and the start names none.
+    await render(snapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, null));
+    expect(q("[data-profile-pick]")).toBeNull();
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).not.toHaveProperty("profile");
+    await act(async () => root.render(<></>));
+
+    const profiles = { state: "listed", version: 2, profiles: [listed("p-work", "work"), listed("p-side", "side")], defaults: { "claude-code": "p-side" } };
+    await render(snapshot(profiles, "p-work"));
+    // The project's choice is shown chosen and sent as no choice at all.
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).not.toHaveProperty("profile");
+    await act(async () => root.render(<></>));
+
+    await render(snapshot(profiles, null));
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-side");
+    const trigger = q("[data-profile-pick]")!;
+    trigger.focus();
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect([...document.querySelectorAll("[data-profile-pick-option]")].map((option) => option.getAttribute("data-profile-pick-option"))).toEqual(["default", "p-work", "p-side"]);
+    const option = q('[data-profile-pick-option="p-work"]')!;
+    option.focus();
+    await act(async () => { option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ checkout_path: "/local/blog", provider: "claude", profile: "p-work" });
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
+});

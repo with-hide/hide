@@ -1750,6 +1750,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       model?: string | null;
       prompt?: string | null;
       requestId?: string;
+      /** The profile the operator picked in the start panel; absent lets the core pick (PRD agent-profiles D-32). */
+      profile?: string | null;
       tabTarget?: import("./agentLayout").AgentStartTarget;
       confirmOnly?: boolean;
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
@@ -1767,6 +1769,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
           ...(request.model ? { model: request.model } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
           ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(request.profile ? { profile: request.profile } : {}),
           ...(request.tabTarget ? { target: request.tabTarget } : {}),
           ...(request.confirmOnly ? { confirm_only: true } : {}),
           ...(request.resumeSessionId ? { resume_session_id: request.resumeSessionId } : {}),
@@ -2679,6 +2682,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       purpose: string | null;
       taskKey?: string | null;
       prompt?: string | null;
+      /** As `startAgent`'s. */
+      profile?: string | null;
     }) {
       // A worktree on this machine comes forward through its start's follow
       // in the core; the page only presents what the core selected, as for an
@@ -2701,6 +2706,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
           purpose: request.purpose,
           ...(request.taskKey ? { task_key: request.taskKey } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
+          ...(request.profile ? { profile: request.profile } : {}),
         },
       });
     },

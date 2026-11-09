@@ -4,9 +4,10 @@
 // screen reads only the answer that carries its own request id.
 
 import { agentAdapter } from "./agentAdapters";
-import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine } from "./components/agent-profiles";
+import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
+import { projectSettings, settingsTarget } from "./projectSettings";
 import { kitPartNeedsReinstall } from "./settings";
-import type { AgentProfileAnswer, AgentProfileWire, Device, MachineAgentProfiles, SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
 
 /** The built-in profile's id on every machine (`ProfileId::default_profile`). */
 export const BUILT_IN_PROFILE = "default";
@@ -168,4 +169,42 @@ export function editChange(id: string, draft: ProfileDraft): ProfileChange {
 /** Whether two drafts would save the same profile. */
 export function sameDraft(a: ProfileDraft, b: ProfileDraft): boolean {
   return JSON.stringify(editChange("", a)) === JSON.stringify(editChange("", b));
+}
+
+/** The project's chosen profile for `agent` (`project_settings.agent_profiles`), by the catalog project a start target names. */
+export function projectProfile(rest: SnapshotRest | null, deviceId: string, workspaceId: string, agent: string): string | null {
+  const workspace = catalogWorkspaces(rest).find((row) => row.id === workspaceId && row.device_id === deviceId);
+  return workspace ? (projectSettings(rest, settingsTarget(workspace)).record?.agent_profiles?.[agent] ?? null) : null;
+}
+
+/**
+ * The start panel's profile menu for a start of `kind` on a target (B14):
+ * absent unless the machine lists another profile of that agent, else its
+ * profiles with the one D-32 would pick.
+ */
+export function startProfiles(rest: SnapshotRest | null, deviceId: string, workspaceId: string, kind: string): { view: AgentProfilesView; projectDefault: string | null; picked: string } | null {
+  const adapter = agentAdapter(kind);
+  const device = rest?.navigator?.devices?.find((row) => row.id === deviceId);
+  const listed = listedProfiles(device);
+  if (!adapter || !listed) return null;
+  const view = agentProfilesView(listed, adapter.id, adapter.label);
+  if (!view || view.profiles.length < 2) return null;
+  const projectDefault = projectProfile(rest, deviceId, workspaceId, adapter.id);
+  return { view, projectDefault, picked: pickedProfile(listed, adapter.id, projectDefault) };
+}
+
+/**
+ * Project settings › Agent accounts (B15): each agent the machine keeps
+ * profiles for, with the project's choice while the machine still lists it;
+ * `ProjectAgentAccounts` leaves out an agent with no profile of its own.
+ */
+export function projectAccountChoices(device: Device | undefined, chosen: Record<string, string> | undefined): ProjectProfileChoice[] {
+  const listed = listedProfiles(device);
+  if (!listed) return [];
+  return (device?.kit?.agents ?? []).flatMap((agent) => {
+    const view = agentProfilesView(listed, agent.id, agent.label);
+    if (!view) return [];
+    const id = chosen?.[agent.id] ?? null;
+    return [{ view, chosen: id && view.profiles.some((row) => row.id === id) ? id : null }];
+  });
 }

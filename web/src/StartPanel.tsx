@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { rememberedSelection, modelToSend, selectKind, type AgentSelection } from "./agentPicker";
 import { AgentPicker } from "./components/agent-picker";
+import { ProfilePicker } from "./components/agent-profiles";
+import { startProfiles } from "./agentProfiles";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
@@ -266,6 +268,12 @@ function StartPanel({ actions }: { actions: Actions }) {
     const start = useShellStore.getState().rest?.ui_state?.agent_start;
     return preset?.kind ? selectKind(preset.kind, start) : rememberedSelection(start);
   });
+  // The profile menu (PRD agent-profiles B14): what the core would pick is
+  // shown chosen, and only a profile the operator picked is sent.
+  const profiles = target && selection.kind !== "terminal" ? startProfiles(rest, target.deviceId, target.workspaceId, selection.kind) : null;
+  const profileKey = target && profiles ? `${target.deviceId}:${target.workspaceId}:${profiles.view.agent}` : null;
+  const [profilePick, setProfilePick] = useState<{ key: string; id: string } | null>(null);
+  const pickedProfile = profilePick && profilePick.key === profileKey && profiles?.view.profiles.some((row) => row.id === profilePick.id) ? profilePick.id : null;
   const surface = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const previous = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -302,7 +310,7 @@ function StartPanel({ actions }: { actions: Actions }) {
     const id = startRequestId();
     useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start");
     if (target.kind === "worktree") {
-      actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(selection), prompt: text.trim() || null, purpose: null });
+      actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(selection), prompt: text.trim() || null, purpose: null, profile: pickedProfile });
       return;
     }
     actions.startAgent({
@@ -312,6 +320,7 @@ function StartPanel({ actions }: { actions: Actions }) {
       model: modelToSend(selection),
       prompt: text.trim() || null,
       requestId: id,
+      profile: pickedProfile,
     });
   };
 
@@ -394,12 +403,17 @@ function StartPanel({ actions }: { actions: Actions }) {
           onChange={setSelection}
           disabled={working}
           kindNote={
-            // The provider probe describes the core machine, never a remote target's login (B23, B37).
-            target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
-              <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
-                <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
-              </span>
-            ) : null
+            <>
+              {profiles && profileKey ? (
+                <ProfilePicker view={profiles.view} value={pickedProfile ?? profiles.picked} projectDefault={profiles.projectDefault} disabled={working} onChange={(id) => setProfilePick({ key: profileKey, id })} />
+              ) : null}
+              {/* The provider probe describes the core machine, never a remote target's login (B23, B37). */}
+              {target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
+                <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
+                  <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
+                </span>
+              ) : null}
+            </>
           }
         />
         <span className="flex-1" />
