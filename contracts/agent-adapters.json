@@ -79,7 +79,8 @@
         "{\"skipDangerousModePermissionPrompt\":true}"
       ]
     ],
-    "hook_kind": "hook"
+    "hook_kind": "hook",
+    "account_by": "folder"
   },
   {
     "usage": {
@@ -164,7 +165,8 @@
         "sandbox_mode=danger-full-access"
       ]
     ],
-    "hook_kind": "hook"
+    "hook_kind": "hook",
+    "account_by": "folder"
   },
   {
     "usage": {
@@ -252,7 +254,8 @@
         "--always-approve"
       ]
     ],
-    "hook_kind": "hook"
+    "hook_kind": "hook",
+    "account_by": "folder"
   },
   {
     "usage": {
@@ -339,7 +342,8 @@
         "--auto"
       ]
     ],
-    "hook_kind": "plugin"
+    "hook_kind": "plugin",
+    "account_by": "folder"
   },
   {
     "usage": {
@@ -422,7 +426,8 @@
     "can_pick_model": true,
     "program": "pi",
     "full_access": [],
-    "hook_kind": "extension"
+    "hook_kind": "extension",
+    "account_by": "folder"
   },
   {
     "usage": {
@@ -509,7 +514,8 @@
         "--auto-approve"
       ]
     ],
-    "hook_kind": "extension"
+    "hook_kind": "extension",
+    "account_by": "name"
   },
   {
     "usage": {
@@ -600,6 +606,7 @@
         "--dangerously-skip-permissions"
       ]
     ],
-    "hook_kind": "hook"
+    "hook_kind": "hook",
+    "account_by": "none"
   }
 ]

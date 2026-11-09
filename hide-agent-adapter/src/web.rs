@@ -29,6 +29,10 @@ pub struct WebAdapter {
     /// What Settings calls the agent's hook piece: a hook entry, a plugin
     /// file or an extension file; absent for an agent Hide writes no hook for.
     pub hook_kind: Option<HookKind>,
+    /// How the agent keeps one account apart from another, which the
+    /// profile form's account field follows (PRD agent-profiles D-14, B3):
+    /// absent for an agent Hide keeps no profiles for (D-25).
+    pub account_by: Option<super::definition::By>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -68,5 +72,9 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
             }
             super::HookInstall::None => None,
         },
+        account_by: row
+            .start
+            .and(super::definition::builtin_account(row.id))
+            .map(|rule| rule.by),
     })
 }
