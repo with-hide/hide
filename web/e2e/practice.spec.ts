@@ -70,11 +70,15 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
   }
 }
 
-/** The tags a card hangs on the parts of what it rings (`callouts`), by card. */
-const CALLOUTS: Record<string, number> = { projects: 5, needs: 2, read: 1, work: 1, head: 6 };
+/** The parts a card rings that are small, by card: the ring is the one box that fits them, a few pixels off each edge. */
+const FITTED: Record<string, string> = {
+  pr: '[data-sidebar-box] [data-pane="a2"] [data-pr-mark]',
+  mission: '[data-sidebar-box] [data-pane="a2"] [data-mission-chip]',
+  head: '[data-pane-view="a2"] [data-pane-move-row]',
+};
 
 /** The first-run cards, in order: one screen each, the real part they point at on screen. */
-const FIRST_RUN = ["parts", "projects", "needs", "read", "work", "head", "agents", "explorer", "conduct", "find", "devices"];
+const FIRST_RUN = ["parts", "projects", "pr", "mission", "needs", "read", "work", "head", "agents", "explorer", "conduct", "find", "devices"];
 
 test("the first-run cards play with Enter alone, each pointing at a part of the screen, with the card clear of it", async ({ page }) => {
   await withPractice(page, async (practice) => {
@@ -92,6 +96,8 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
         const card = await practice.locator("[data-practice-card]").boundingBox();
         const rings = await practice.locator("[data-practice-ring]").evaluateAll((spots) => spots.map((spot) => spot.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
         if (!marks) return rings.length === 0;
+        // One ring a card, never a ring inside a ring.
+        if (rings.length !== 1) return false;
         const view = practice.viewportSize()!;
         if (!card || rings.length === 0) return false;
         return rings.every((ring) => ring.width > 24 && ring.height > 16 && ring.x >= -4 && ring.y >= -4 && ring.x + ring.width <= view.width + 4 && ring.y + ring.height <= view.height + 4
@@ -101,25 +107,19 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
       if (id === "needs") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
-      // The project view folds 내 차례 · 읽을 것 away, so its ring takes the projects alone, and each mark of a row has a tag that covers no tag or card.
-      if (id === "projects") await expect.poll(() => practice.locator("[data-raised-group]").evaluateAll((all) => all.length > 0 && all.every((one) => getComputedStyle(one).display === "none")), { message: "the raised sections are folded away" }).toBe(true);
-      // A missing tag names its part: the card's callouts are ordered, so the ones present say which target has no box.
-      await expect.poll(async () => { const said = await practice.locator("[data-practice-callout]").allInnerTexts(); return said.length === (CALLOUTS[id] ?? 0) ? "all" : said.join(" | "); }, { message: `${id}'s callouts`, timeout: 5_000 }).toBe("all");
-      // Once the card has settled (it glides to its place), each part a card names has its own box and its tag stands against that box: on screen, not under the card, and covering neither another tag nor another box.
-      const clear = async () => {
-        const boxes = (selector: string) => practice.locator(selector).evaluateAll((all) => all.map((one) => one.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
-        const tags = await boxes("[data-practice-callout]");
-        const marks = await boxes("[data-practice-mark]");
-        const card = await practice.locator("[data-practice-card]").boundingBox();
-        const view = practice.viewportSize()!;
-        type Rect = { x: number; y: number; width: number; height: number };
-        const apart = (a: Rect, b: Rect) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
-        const gap = (a: Rect, b: Rect) => Math.hypot(Math.max(0, a.x - (b.x + b.width), b.x - (a.x + a.width)), Math.max(0, a.y - (b.y + b.height), b.y - (a.y + a.height)));
-        return marks.length === tags.length && tags.every((tag, at) => tag.x >= 0 && tag.y >= 0 && tag.x + tag.width <= view.width && tag.y + tag.height <= view.height
-          && (!card || apart(tag, card)) && gap(tag, marks[at]!) <= 6
-          && tags.every((other, to) => to === at || apart(tag, other)) && marks.every((mark, to) => to === at || apart(tag, mark)));
-      };
-      await expect.poll(clear, { message: `${id}'s tags are off screen, under the card, off their box, or on another tag or box`, timeout: 5_000 }).toBe(true);
+      // The project cards fold 내 차례 · 읽을 것 away, so the list shows the projects alone.
+      if (id === "projects" || id === "pr" || id === "mission") await expect.poll(() => practice.locator("[data-raised-group]").evaluateAll((all) => all.length > 0 && all.every((one) => getComputedStyle(one).display === "none")), { message: "the raised sections are folded away" }).toBe(true);
+      // A card says it all in its own words: no tag is drawn, and the one ring fits what it names.
+      await expect(practice.locator("[data-practice-callout], [data-practice-mark]")).toHaveCount(0);
+      const fitted = FITTED[id];
+      if (fitted) {
+        const fits = async () => {
+          const ring = await practice.locator("[data-practice-ring]").boundingBox();
+          const part = await practice.locator(fitted).first().boundingBox();
+          return !!ring && !!part && [ring.x - part.x, ring.y - part.y, part.x + part.width - (ring.x + ring.width), part.y + part.height - (ring.y + ring.height)].every((gap) => gap <= 0 && gap >= -8);
+        };
+        await expect.poll(fits, { message: `${id}'s ring does not fit its part`, timeout: 5_000 }).toBe(true);
+      }
       // The agents card opens the lead's children list from the chip, and leaving the card closes it.
       if (id === "agents") await expect(practice.locator('[data-agent-tree="a1"]')).toBeVisible();
       else await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);

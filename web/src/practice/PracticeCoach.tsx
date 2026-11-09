@@ -14,7 +14,6 @@ import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import type { PracticeChapter, PracticeScene } from "./chapter";
 import { placeCard, type Box } from "./cardPlace";
-import { placeTags } from "./calloutPlace";
 import { cardLines } from "./cardText";
 import { COACH_CSS } from "./coachStyle";
 
@@ -59,9 +58,6 @@ const ZONES = [
   { selector: "[data-lane-slot], [data-tool-rail]", key: "project" },
 ] as const;
 
-/** A callout as drawn: the box around what it names, and where its tag sits against that box. */
-type Call = { text: string; box: Box; x: number; y: number; side: string };
-
 type Props = {
   chapter: PracticeChapter;
   onStep: (step: number, finished: boolean) => void;
@@ -79,10 +75,6 @@ const boxOf = (element: Element | null): Box | null => {
 
 /** How much the ring stands off its target, and how round it is. */
 const RING = 3;
-/** A callout's tag before it is drawn: its size, and how far its box stands off what it names. */
-const CALL_HEIGHT = 26;
-const CALL_WIDTH = 160;
-const CALL_PAD = 2;
 const ROUND = 12;
 
 export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Props) {
@@ -92,7 +84,6 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
   const [rings, setRings] = useState<Rect[]>([]);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [place, setPlace] = useState<{ x: number; y: number } | null>(null);
-  const [calls, setCalls] = useState<Call[]>([]);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   const go = useRef<HTMLButtonElement>(null);
@@ -135,9 +126,8 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
     let scrolled = false;
     let frame = requestAnimationFrame(function follow() {
       // What the card points at may sit below the fold of its own list: bring it into view once, then ring it.
-      const named = (step.callouts ?? []).map((call) => call.target);
-      if (!scrolled && targets.length && [...targets, ...named].every((selector) => document.querySelector(selector))) {
-        for (const selector of [...targets, ...named]) document.querySelector(selector)?.scrollIntoView({ block: "nearest" });
+      if (!scrolled && targets.length && targets.every((selector) => document.querySelector(selector))) {
+        for (const selector of targets) document.querySelector(selector)?.scrollIntoView({ block: "nearest" });
         scrolled = true;
       }
       const marked = targets.flatMap((selector) => rectOf(selector) ?? []);
@@ -146,24 +136,11 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
-      // Each callout is a box drawn close around what it names, with its tag stuck to the side of that box where it covers the least.
-      const found = (step.callouts ?? []).flatMap((call) => {
-        const box = rectOf(call.target);
-        return box ? [{ text: say(`practice.${chapter.id}.${step.id}.tag.${call.say}`), box: { x: box.x - CALL_PAD, y: box.y - CALL_PAD, w: box.w + 2 * CALL_PAD, h: box.h + 2 * CALL_PAD } }] : [];
-      });
-      const drawn = [...document.querySelectorAll(".pc-call")].map((tag) => tag.getBoundingClientRect());
-      const sizes = found.map((_, at) => ({ w: drawn[at]?.width || CALL_WIDTH, h: drawn[at]?.height || CALL_HEIGHT }));
-      const barBox = boxOf(bar.current);
-      const spots = placeTags(found.map((call) => call.box), sizes, barBox ? [barBox] : [], { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight });
-      const next = found.map((call, at) => ({ ...call, x: spots[at]!.x, y: spots[at]!.y, side: spots[at]!.side }));
-      setCalls((before) => (JSON.stringify(before) === JSON.stringify(next) ? before : next));
-      // The card floats where nothing it talks about, nor the zone tags, nor the callouts, nor the mode bar is.
+      // The card floats where nothing it talks about, nor the zone tags, nor the mode bar is.
       const own = boxOf(card.current);
       if (own) {
         const kept = (step.keepClear ?? []).flatMap((selector) => [...document.querySelectorAll(selector)]);
-        // The callouts' places of this very frame, not the last one drawn: a card never lands where a tag is about to stand.
-        const tagBoxes = next.flatMap((call, at) => [call.box, { x: call.x, y: call.y, w: sizes[at]!.w, h: sizes[at]!.h }]);
-        const avoid = [...document.querySelectorAll(".pc-tag"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []).concat(tagBoxes);
+        const avoid = [...document.querySelectorAll(".pc-tag"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
         const at = placeCard(own, marked, avoid, { w: window.innerWidth, h: window.innerHeight });
         setPlace((before) => (before && before.x === at.x && before.y === at.y ? before : at));
       }
@@ -218,8 +195,6 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         </svg>
       ) : null}
       {rings.map((rect, at) => <div key={at} className="pc-spot" data-practice-ring style={{ left: rect.x - RING, top: rect.y - RING, width: rect.w + 2 * RING, height: rect.h + 2 * RING }} />)}
-      {calls.map((call) => <div key={`${call.text}:mark`} className="pc-mark" data-practice-mark style={{ left: call.box.x, top: call.box.y, width: call.box.w, height: call.box.h }} />)}
-      {calls.map((call) => <div key={call.text} className="pc-call" data-practice-callout data-side={call.side} style={{ left: call.x, top: call.y }}>{call.text}</div>)}
       <div className="pc-mode" ref={bar}>
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
