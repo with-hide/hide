@@ -53,6 +53,26 @@ it("offers take over and the cause's choice on the mission's own Needs You item,
   }
 });
 
+// A mission whose Conductor is at work offers only the node's choices: 지휘 다시 열기 there read as a second, unrelated thing to do (operator report on M41).
+it("offers no take over while a Conductor holds the mission", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  await clientI18n.changeLanguage("ko");
+  const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
+  const held = { ...mission, conductor: { ...mission.conductor, present: true } };
+  useShellStore.setState({ rest, connection: "live" });
+  const [ask] = missionAsks([held], [held.id]);
+  const container = document.createElement("ul");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={createActions(() => true)} /></TooltipProvider>));
+  try {
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("[data-mission-ask-choices] button")].map((button) => button.textContent);
+    expect(buttons).toEqual(["끝으로"]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 it("gives the next node its own choices once the first one's choice is sent", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));

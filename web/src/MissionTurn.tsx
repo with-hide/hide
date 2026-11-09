@@ -69,15 +69,15 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
     case "attention": {
       const why = attentionReasonText(item.attention.reason, item.attention.pr, t, item.attention.unmet_nodes);
       return (
-        // The choices wrap under the line in a narrow slot rather than overflow it (B30).
-        <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>
-          <span className="flex min-w-0 flex-1 basis-(--size-flow-title) items-center gap-sm">
-            <span aria-hidden="true" className="shrink-0 font-semibold text-mission-hold">!</span>
+        // What happened on its line, and under it what the operator can do, so the choices never crowd the reason out (B30).
+        <div className="flex min-w-0 flex-col gap-xxs" data-mission-turn-item="attention" data-mission-turn-reason={item.attention.reason}>
+          <Row>
+            <StatusMark mark="turn" />
             {/* The pull request stands beside the choices, with its state. */}
             <NodeChip node={item.node} onSelect={onSelect} pr={false} />
             <span className="min-w-0 flex-1 truncate text-body" title={why}>{why}</span>
-          </span>
-          <AttentionChoices key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} />
+          </Row>
+          <AttentionChoices key={`${item.node.key}-${item.attention.since_unix_ms}`} mission={mission} node={item.node} attention={item.attention} actions={actions} className="pl-(--size-icon-sm) ml-sm" />
         </div>
       );
     }

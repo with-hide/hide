@@ -204,7 +204,7 @@ it("draws a pressed choice as sent for five seconds and then the core's state ag
   }
 });
 
-it("lists the step the decision stopped and a worker the core raised under needs a look in the summary, as the phone's 지금 holds them, and not under in progress (PRD mobile-companion-ui B36)", async () => {
+it("leaves to 내 차례 the steps waiting on the operator, the decision's and a raised worker's, and lists a step waiting on the Conductor in progress, saying so (operator report on M41)", async () => {
   const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
   const nodes = [
     node("api", { status: "working", pane_id: "p2" }),
@@ -215,11 +215,13 @@ it("lists the step the decision stopped and a worker the core raised under needs
   const map = await mount({ items: [asked({ nodes })] }, [], [], {}, [raised]);
   try {
     const row = (field: string) => [...map.container.querySelectorAll<HTMLElement>(`[data-mission-summary-row="${field}"] [data-mission-summary-node]`)].map((name) => name.dataset.missionSummaryNode);
-    expect(row("attention")).toEqual(["waits", "api", "screen"]);
-    expect(row("working")).toEqual(["other"]);
-    expect(map.q('[data-mission-summary-row="attention"] dt')?.textContent).toBe("Needs a look 3");
-    const why = [...map.container.querySelectorAll<HTMLElement>("[data-mission-summary-hold]")].map((line) => [line.dataset.missionSummaryHold, line.textContent]);
-    expect(why).toEqual([["attention", "! Conductor · Worker ended with work left"], ["worker", "! You · Login expired"], ["decision", "! You · Decision"]]);
+    expect(map.q('[data-mission-summary-row="attention"]')).toBeNull();
+    expect(row("working")).toEqual(["waits", "other"]);
+    expect(map.q('[data-mission-summary-row="working"] dt')?.textContent).toBe("In progress 2");
+    expect(map.q('[data-mission-summary-line="waits"]')?.textContent).toBe("Conductor · Worker ended with work left");
+    expect(map.q('[data-mission-summary-line="waits"]')?.getAttribute("data-mission-summary-attention")).toBe("conductor");
+    // The decision and the raised worker stand in 내 차례 above the map.
+    expect(map.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toContain("worker_blocked");
   } finally { await map.unmount(); }
 });
 
@@ -499,10 +501,13 @@ it("draws each card as its mark, its title, its pull requests, its worker's mode
     expect(card(map, "core").querySelector("[data-node-criteria], [data-node-line], [data-node-stage], [data-node-time], [data-node-reopened], [data-node-changed], [data-node-landing]")).toBeNull();
     expect(card(map, "core").getAttribute("aria-label")).toBe(`제안 core: 기록·공책·점수·반영 · In progress · opus·high (planned) · PR ${"#"}1703 · PR ${"#"}1704`);
     expect(card(map, "launched").getAttribute("aria-label")).toMatch(new RegExp(`^Node launched · In progress · Opus 5\\.5·high · PR ${"#"}1910 · Needs a look · Conductor · `));
-    // `! 나` or `! Conductor` in the decision colour's border, its reason on hover and in the name (B2).
-    expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["! You", "! Conductor"]);
+    // The operator's turn wears 내 차례's word and mark in the decision colour's border; one waiting on the Conductor names it quietly in its own border (B2).
+    expect([card(map, "raised").querySelector("[data-node-attention-tag]")?.textContent, card(map, "asked").querySelector("[data-node-attention-tag]")?.textContent]).toEqual(["Needs you", "Conductor"]);
     expect(card(map, "raised").dataset.nodeAttention).toBe("operator");
     expect(card(map, "raised").className).toContain("border-mission-hold");
+    expect(card(map, "raised").querySelector("[data-node-turn]")).not.toBeNull();
+    expect(card(map, "asked").className).not.toContain("border-mission-hold");
+    expect(card(map, "asked").querySelector("[data-node-turn]")).toBeNull();
     expect(card(map, "raised").getAttribute("aria-label")).toBe(`Node raised · In progress · PR ${"#"}1840 · Needs a look · You · PR ${"#"}1840 merged, a finish line missing or failed`);
     // Hide's mark on the card it changed last, what it did and why in the name (B3).
     expect(card(map, "api").querySelector("[data-node-hide]")).not.toBeNull();
@@ -1043,7 +1048,7 @@ it("leads a finished mission with its result tiles, its pull requests and its re
   } finally { await bare.unmount(); }
 });
 
-it("sums up an open mission beside the map until a node is picked: needs a look, in progress and done with their counts and names, its pull requests and the workers at work of the most allowed (PRD mission-tool B19, B22; PRD mission-node-simple B5)", async () => {
+it("sums up an open mission beside the map until a node is picked: in progress (a step waiting on the Conductor first) and done with their counts and names, its pull requests and the workers at work of the most allowed (PRD mission-tool B19, B22; PRD mission-node-simple B5)", async () => {
   const nodes = [
     node("api", { title: "API", status: "done", pr: 1901, pr_state: "merged" }),
     node("screen", { title: "Screen", status: "working", depends_on: ["api"], line: "moving tabs", stage: 1 }),
@@ -1057,9 +1062,8 @@ it("sums up an open mission beside the map until a node is picked: needs a look,
     expect(parts).toEqual(["missionSummary", "missionConductor", "missionTurn", "missionMap", "missionSide"]);
     const row = (field: string) => map.q(`[data-mission-summary-row="${field}"] dd`);
     const name = (field: string) => map.q(`[data-mission-summary-row="${field}"] dt`)?.textContent;
-    expect([name("attention"), name("working"), name("done")]).toEqual(["Needs a look 1", "In progress 1", "Done 1"]);
-    expect(row("attention")?.textContent).toBe("Docs! Conductor · Worker ended with work left");
-    expect(row("working")?.textContent).toBe("Screenmoving tabs");
+    expect([name("attention"), name("working"), name("done")]).toEqual([undefined, "In progress 2", "Done 1"]);
+    expect(row("working")?.textContent).toBe("DocsConductor · Worker ended with work leftScreenmoving tabs");
     expect(row("done")?.textContent).toBe("API");
     expect(row("pr")?.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("merged");
     expect(row("workers")?.textContent).toBe("2 working / up to 3");

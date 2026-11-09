@@ -72,11 +72,11 @@ export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?
   return <AskLine ask={line} className={className} />;
 }
 
-/** 이어받기 and the node's choices for its cause, wherever the mission is its own Needs You item. */
+/** The node's choices for its cause, wherever the mission is its own Needs You item, led by 이어받기 while no Conductor holds the mission. */
 export function MissionAskChoices({ ask, actions, className }: { ask: MissionAsk; actions: Actions; className?: string }) {
   return (
-    <span className={cn("flex flex-wrap items-center gap-xs", className)} data-mission-ask-choices={ask.mission.id}>
-      <MissionTakeOver mission={ask.mission} actions={actions} />
+    <span className={cn("flex min-w-0 flex-wrap items-center gap-xs", className)} data-mission-ask-choices={ask.mission.id}>
+      {ask.mission.conductor.present ? null : <MissionTakeOver mission={ask.mission} actions={actions} />}
       <AttentionChoices key={`${ask.node.key}-${ask.attention.since_unix_ms}`} mission={ask.mission} node={ask.node} attention={ask.attention} actions={actions} />
     </span>
   );

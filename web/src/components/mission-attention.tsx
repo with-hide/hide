@@ -5,6 +5,7 @@ import { attentionPr, criterionName } from "../missions";
 import { ReasonLine } from "../prReason";
 import { catalogWorkspaces, type Mission, type MissionAttention, type MissionCriterion, type MissionNode } from "../snapshot";
 import { useShellStore } from "../store";
+import { cn } from "../lib/utils";
 import { MissionPrMark } from "./mission-pr";
 import { Button } from "./ui/button";
 
@@ -26,26 +27,26 @@ import { Button } from "./ui/button";
 // the Conductor (B17). Once one is sent every choice is off; the item goes
 // when the core's next snapshot settles it.
 
-export function AttentionChoices({ mission, node, attention, actions }: { mission: Mission; node: MissionNode; attention: MissionAttention; actions: Actions }) {
+export function AttentionChoices({ mission, node, attention, actions, className }: { mission: Mission; node: MissionNode; attention: MissionAttention; actions: Actions; className?: string }) {
   const { t } = useInterfaceTranslation();
   const [sent, setSent] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const project = useShellStore((s) => catalogWorkspaces(s.rest).find((row) => row.id === mission.workspace_id) ?? null);
   const pr = attentionPr(node, attention, project?.pull_requests);
   const row = pr ? (project?.agent_scope.prs.rows.find((candidate) => candidate.number === pr.number) ?? null) : null;
-  // The pull request's own words already say a failed CI.
-  const failed = node.criteria.filter((line) => line.state === "fail" && !(pr && line.kind === "ci")).map((line) => failedLine(line, t));
+  // The pull request's own words already say a failed CI; the node's own finish lines are counted, their sentences on hover.
+  const failed = failedWords(node.criteria.filter((line) => line.state === "fail" && !(pr && line.kind === "ci")), t);
   return (
-    <span className="flex min-w-0 shrink-0 flex-wrap items-center gap-xs" data-attention-choices={attention.reason}>
+    <span className={cn("flex min-w-0 flex-wrap items-center gap-xs", className)} data-attention-choices={attention.reason}>
       {pr ? (
         <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-attention-pr={pr.number} data-attention-pr-reason={row?.reason.kind ?? pr.state ?? "unread"}>
           <MissionPrMark number={pr.number} state={pr.state} />
           {row ? <ReasonLine reason={row.reason} group={row.group} className="text-caption" /> : pr.state ? <span className="min-w-0 truncate">{t(`agentSessions.pr.${pr.state}`)}</span> : null}
         </span>
       ) : null}
-      {failed.length > 0 ? (
-        <span className="min-w-0 truncate text-caption text-destructive" data-attention-failed={failed.length}>
-          {failed.join(", ")}
+      {failed ? (
+        <span className="min-w-0 truncate text-caption text-destructive" title={failed.full} data-attention-failed={failed.count}>
+          {failed.short}
         </span>
       ) : null}
       {attention.choices.map((choice) => {
@@ -86,8 +87,26 @@ export function AttentionChoices({ mission, node, attention, actions }: { missio
   );
 }
 
+type Translate = ReturnType<typeof useInterfaceTranslation>["t"];
+
+/**
+ * The failed lines in a few words: a CI, a check, a review or a verification
+ * by its kind (`리뷰 실패`), and the lines the plan wrote, whose sentences run
+ * long, as one count (`완료 기준 3개 실패`); `full` names every line for the hover.
+ * Null with none failed.
+ */
+function failedWords(lines: MissionCriterion[], t: Translate): { short: string; full: string; count: number } | null {
+  if (lines.length === 0) return null;
+  // A line the node's plan wrote (its own or a defect's) is a sentence; every other kind has a short name.
+  const written = (line: MissionCriterion) => line.kind === "own" || line.kind === "defect";
+  const named = lines.filter((line) => !written(line)).map((line) => failedLine(line, t));
+  const own = lines.length - named.length;
+  const short = [...named, ...(own > 0 ? [t("mission.attention.criteriaFailed", { count: own })] : [])].join(", ");
+  return { short, full: lines.map((line) => failedLine(line, t)).join("\n"), count: lines.length };
+}
+
 /** A failed line as `<line> 실패`: a review or a verification by its kind alone, a CI with no pull request to say it as `CI 실패`. */
-function failedLine(line: MissionCriterion, t: ReturnType<typeof useInterfaceTranslation>["t"]): string {
+function failedLine(line: MissionCriterion, t: Translate): string {
   switch (line.kind) {
     case "ci":
       return t("mission.fix.ci_failed");
