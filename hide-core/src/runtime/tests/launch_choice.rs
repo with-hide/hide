@@ -781,8 +781,23 @@ fn a_profile_agent_keeps_its_title_and_its_row_names_the_profile_beside_it() {
         );
         payload
     };
+    // The row's title and profile, and the tab's agent wears the same profile.
     let row = |runtime: &Runtime| {
         let row = runtime.agent_row(AGENT).unwrap();
+        let tab = runtime
+            .snapshot()
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.checkouts.iter())
+            .flat_map(|checkout| checkout.tabs.iter())
+            .find(|tab| tab.panes.iter().any(|pane| pane.id == AGENT))
+            .and_then(|tab| tab.agent.clone())
+            .unwrap();
+        assert_eq!(
+            tab.profile, row.profile,
+            "the tab's logo wears the row's profile"
+        );
         (row.identity_label.clone(), row.profile.clone())
     };
 

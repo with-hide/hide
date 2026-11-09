@@ -4,13 +4,12 @@ import { PanelsTopLeftIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { StatusMark } from "./components/status-mark";
-import { markTone, markWords, recordWords } from "./agentRow";
+import { agentWithProfile, markTone, markWords, recordWords } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { agentsByPane } from "./paneAgents";
 import { usePaneAgents } from "./PaneHeaderBand";
-import { AgentMark } from "./AgentMark";
+import { AgentMark, ProfileBadge } from "./AgentMark";
 import { useAgentLogosShown } from "./agentLogoMode";
-import { agentProductName } from "./agentAdapters";
 import { Button } from "./components/ui/button";
 import { Keycap } from "./components/ui/keycap";
 import { Input } from "./components/ui/input";
@@ -52,20 +51,21 @@ export function AgentTab({ entry, checkout, interaction, actions, renaming, onCa
   // The core gives only agent panes an identity, on local and device tabs alike.
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;
-  const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentProductName(agent.agent_kind), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
+  const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentWithProfile(t, agent), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
   return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
 }
 
 /**
  * An agent tab's mark: its status, then its logo while logos are shown or an
- * ⌥ hold peeks at them (PRD agent-logo-view-mode B7, B13); a tab with no agent
- * is the neutral `>_` in both modes.
+ * ⌥ hold peeks at them (PRD agent-logo-view-mode B7, B13), wearing the profile
+ * badge of a profile agent, which stands alone while logos are hidden (PRD
+ * agent-profiles B17); a tab with no agent is the neutral `>_` in both modes.
  */
 function TabMark({ agent }: { agent: TabAgent | null | undefined }) {
   const shown = useAgentLogosShown();
   const status = agent ? <StatusMark mark={agent.mark} className={markTone(agent)} data-tab-status={agent.status_code} /> : null;
-  if (agent && !shown) return status;
-  return <>{status}<AgentMark kind={agent?.agent_kind} /></>;
+  if (agent && !shown) return <>{status}{agent.profile ? <ProfileBadge profile={agent.profile} standalone /> : null}</>;
+  return <>{status}<AgentMark kind={agent?.agent_kind} profile={agent?.profile} /></>;
 }
 
 function TabRenameInput({ entry, actions, onCancel }: { entry: StripTab; actions: Actions; onCancel: () => void }) {

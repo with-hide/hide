@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it } from "vitest";
+import { profileInitial } from "./AgentMark";
 import { AgentRowMark } from "./AgentRowMark";
 import { agentLogosShown } from "./agentLogoMode";
 import type { SnapshotRest } from "./snapshot";
@@ -61,4 +62,33 @@ it("draws the logo while the Agents hold is revealed and not for the devices hol
 it("draws the neutral mark for a kind with no logo when shown", () => {
   withMode("shown");
   expect(renderToStaticMarkup(<AgentRowMark kind="future-agent" />)).toContain('data-agent-mark="neutral"');
+});
+
+// PRD agent-profiles B17: a profile agent's logo wears its profile's first letter, and the badge stands alone while logos are hidden.
+it("marks a profile agent with its profile's first letter in both modes and a default agent with none", () => {
+  const profiled = (profile: string | null) => renderToStaticMarkup(<AgentRowMark kind="claude" profile={profile} />);
+  withMode("hidden");
+  expect(profiled("work")).toContain('data-profile-badge="work"');
+  expect(profiled("work")).toContain(">W</span>");
+  expect(profiled("work")).not.toContain("data-agent-mark");
+  expect(profiled(null)).toBe("");
+  withMode("shown");
+  expect(profiled("work")).toContain('data-agent-mark="claude"');
+  expect(profiled("work")).toContain('data-profile-badge="work"');
+  expect(profiled("work")).toContain(">W</span>");
+  expect(profiled(null)).not.toContain("data-profile-badge");
+});
+
+it("keeps a Hide AI agent's owl on the corner a profile badge would take", () => {
+  const profiled = (hideAi: "sidebar" | null) => renderToStaticMarkup(<AgentRowMark kind="claude" profile="work" hideAi={hideAi} />);
+  withMode("shown");
+  expect(profiled("sidebar")).toContain("data-hide-ai-badge");
+  expect(profiled("sidebar")).not.toContain("data-profile-badge");
+  withMode("hidden");
+  expect(profiled("sidebar")).toContain("data-hide-mark");
+  expect(profiled("sidebar")).not.toContain("data-profile-badge");
+});
+
+it.each([["work", "W"], ["회사", "회"], [" personal", "P"]])("draws profile %s as %s", (profile, letter) => {
+  expect(profileInitial(profile)).toBe(letter);
 });

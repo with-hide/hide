@@ -2793,6 +2793,10 @@ pub struct TabAgentSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<AgentWait>,
     pub status_code: AgentStatusCode,
+    /// The row's profile name, which the tab's logo wears as its badge
+    /// (`SidebarAgentSnapshot::profile`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
@@ -2808,6 +2812,7 @@ impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
             emphasized: agent.emphasized,
             wait: agent.wait,
             status_code: agent.status_code,
+            profile: agent.profile.clone(),
         }
     }
 }

@@ -771,7 +771,7 @@ export type PaneRow = {
   fork?: PaneFork;
 };
 
-export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code"> & { state: Pick<AgentState, "mark_tone"> };
+export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code" | "profile"> & { state: Pick<AgentState, "mark_tone"> };
 
 export type Tab = {
   /** `named_by_operator`: the manual name is one the operator gave through Rename, which keeps the tab when its agents leave. */
