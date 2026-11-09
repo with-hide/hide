@@ -358,28 +358,18 @@ it("offers Take over on the Conductor row when no Conductor holds an open missio
   } finally { await done.unmount(); }
 });
 
-it("offers Take over beside 터미널로 once a raise the live Conductor was asked first reached the operator, starting a new agent rather than resuming its live conversation (PRD mission-node-simple B15)", async () => {
+// Operator report on M41: 지휘 다시 열기 beside a Conductor at rest started a second Conductor; a raise for a live Conductor is handed back with 지휘 에이전트에게 넘기기 in 내 차례.
+it("offers no 지휘 다시 열기 while a Conductor holds the mission, even once a raise it was asked first reached the operator", async () => {
   const conductor = [{ pane_id: "p1", mark: "quiet" } as AgentRow];
-  const asked = (to: "conductor" | "operator") => mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to, since_unix_ms: 1, on_row: false, item: to === "operator", choices: ["leave", "drop"] } })] });
-  const fresh = await mount({ items: [asked("conductor")] }, [], [], {}, conductor);
+  const late = mission({ conductor: { ...mission().conductor, session: { device_id: "mac", agent: "claude", session_id: "s-1" } }, nodes: [node("a", { status: "working", pr: 7, attention: { reason: "pr_closed", pr: 7, to: "operator", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } })] });
+  const map = await mount({ items: [late] }, [], [], {}, conductor);
   try {
-    expect(fresh.q("[data-mission-conductor] [data-mission-takeover]")).toBeNull();
-  } finally { await fresh.unmount(); }
-  const late = await mount({ items: [asked("operator")] }, [], [], {}, conductor);
-  try {
-    const row = late.q("[data-mission-conductor]")!;
+    const row = map.q("[data-mission-conductor]")!;
     expect(row.dataset.missionConductor).toBe("resting");
-    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal", "Resume command"]);
-    await act(async () => row.querySelector<HTMLElement>("[data-mission-takeover]")!.click());
-    const start = late.events.find((event) => event.kind === "agent_start_in_checkout");
-    expect(start?.payload).not.toHaveProperty("resume_session_id");
-    // The core is handed one token for this start, and only its prompt names it, so the take passes once and for it alone.
-    const handover = late.events.filter((event) => event.kind === "mission_handover").map((event) => event.payload as { mission: string; token: string });
-    expect(handover).toHaveLength(1);
-    const [made] = handover as [{ mission: string; token: string }];
-    expect(made.mission).toBe("mission-1");
-    expect(String((start?.payload as { prompt: string }).prompt)).toContain(`hide mission take mission-1 --handover ${made.token}`);
-  } finally { await late.unmount(); }
+    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal"]);
+    expect(map.q("[data-mission-takeover]")).toBeNull();
+    expect(map.q('[data-mission-turn-item="attention"] [data-attention-choice="leave"]')).not.toBeNull();
+  } finally { await map.unmount(); }
 });
 
 it("names the Conductor under the head with its model and state, and 터미널로 brings its pane forward (PRD mission-tool B12)", async () => {

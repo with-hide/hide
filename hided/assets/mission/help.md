@@ -321,8 +321,6 @@ Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read th
 When you hand the mission over, leave a handover note in a file beside your plan file: each node's state and what it waits on, the open decisions, and your next step.
 The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.
 Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).
-When a raise that Conductor was asked first stood ten minutes and reached the operator, the operator may hand the mission to a new session from the map: that session's prompt names `--handover <token>`, the take passes once with it, and the old Conductor's commands are refused from then on.
-What reached the operator because the old Conductor did not answer comes to you first, with your own ten minutes.
 
 ## 9. For workers and checkers
 

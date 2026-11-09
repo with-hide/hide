@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -497,16 +497,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
     expect(conductorState(mission("m", { status: "done", conductor: gone }), null)).toBeNull();
   });
 
-  it("offers 이어받기 of a Conductor still there only once a raise it was asked first reached the operator, and never resumes its live conversation", () => {
-    const asked = (to: "conductor" | "operator", reason: MissionAttention["reason"]) => mission("m", { nodes: [node("n", { status: "working", attention: raised(to, reason, 12) })] });
-    // A raise the Conductor still has (B14) or one only the operator settles (B26) is no sign it stopped answering.
-    expect(conductorUnanswered(asked("conductor", "pr_closed"))).toBe(false);
-    expect(conductorUnanswered(asked("operator", "conductor_failed"))).toBe(false);
-    // Ten minutes unanswered moved it to the operator (D-05, B15).
-    expect(conductorUnanswered(asked("operator", "pr_closed"))).toBe(true);
-    // A mission no Conductor holds already offers it on its gone row; a closed one is not taken over.
-    expect(conductorUnanswered({ ...asked("operator", "pr_closed"), conductor: { ...mission("m").conductor, present: false } })).toBe(false);
-    expect(conductorUnanswered({ ...asked("operator", "pr_closed"), status: "done" })).toBe(false);
+  it("resumes only a gone Conductor's own conversation, never a live one's", () => {
     // The live Conductor keeps its own conversation; the gone one's is resumed first.
     expect(conductorResume(mission("m"))).toBeNull();
     expect(conductorResume(mission("m", { conductor: { ...mission("m").conductor, present: false } }))).toEqual({ provider: "claude", sessionId: "s-1" });
