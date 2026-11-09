@@ -471,6 +471,32 @@
         },
         "consumption": {
           "$ref": "#/$defs/consumptionCell"
+        },
+        "profiles": {
+          "description": "The limits of each of this machine's profiles of the agent, in the list's order (PRD agent-profiles B23); absent with none.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/profileUsage"
+          }
+        }
+      }
+    },
+    "profileUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "shared": {
+          "description": "Another profile listed before it, or the agent's default account, runs in the same account: drawn as a dash.",
+          "type": "boolean"
+        },
+        "limits": {
+          "$ref": "#/$defs/limitCell"
         }
       }
     },

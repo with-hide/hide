@@ -168,7 +168,7 @@ pub fn list(env: &Env, values: bool) -> HostResult<ProfileList> {
     let place = place(env)?;
     let judged = judge(env, None);
     let file = read(&place.file)?;
-    Ok(listed(&file, judged, values))
+    Ok(listed(&place.home, &file, judged, values))
 }
 
 /// Applies `op` to the profiles of the version `expected_version`, then
@@ -198,7 +198,7 @@ pub fn apply(env: &Env, op: ProfileOp, expected_version: u64) -> HostResult<Prof
             return Ok(ProfileApplied {
                 refused: Some(refused),
                 added: None,
-                list: listed(&file, judge(env, None), false),
+                list: listed(&place.home, &file, judge(env, None), false),
             });
         }
     };
@@ -207,7 +207,7 @@ pub fn apply(env: &Env, op: ProfileOp, expected_version: u64) -> HostResult<Prof
     Ok(ProfileApplied {
         refused: None,
         added: changed.added,
-        list: listed(&file, judged, false),
+        list: listed(&place.home, &file, judged, false),
     })
 }
 
@@ -228,7 +228,7 @@ pub fn install(env: &Env, id: ProfileId) -> HostResult<ProfileList> {
     }
     let judged = judge(env, Some(BTreeSet::from([id])));
     let file = settle(&place.file, &judged)?;
-    Ok(listed(&file, judged, false))
+    Ok(listed(&place.home, &file, judged, false))
 }
 
 /// How a start of `kind` with the profile `id` runs on this machine (PRD
@@ -595,7 +595,99 @@ fn kit_profiles(file: &File) -> KitProfiles {
     }
 }
 
-fn listed(file: &File, judged: Judged, values: bool) -> ProfileList {
+/// What a list says of a profile's account beside its pieces: whether it
+/// is signed in (`crate::login`), for a profile in an account of its own
+/// that runs the agent's own program (a program of its own signs in its own
+/// way, D-16), and the account variables a start of it sets, exactly as it
+/// sets them and a hook reports them (D-15), by which the core knows a pane
+/// the operator started by hand (D-03). A
+/// profile this node cannot resolve has neither; its add was refused for
+/// that reason already.
+fn account_facts(
+    home: &Path,
+    stored: &Stored,
+) -> (
+    Option<hide_node_link::profiles::ProfileLogin>,
+    Vec<(String, String)>,
+) {
+    let profile = &stored.profile;
+    if stored.removing || profile.account.is_none() {
+        return (None, Vec::new());
+    }
+    let Some(adapter) = hide_agent_adapter::adapter(&profile.kind) else {
+        return (None, Vec::new());
+    };
+    let Ok(account) = adapter.resolve(profile, &NodeEnv::new(Some(home.to_path_buf()))) else {
+        return (None, Vec::new());
+    };
+    let variables = adapter
+        .account_rule()
+        .into_iter()
+        .flat_map(|rule| &rule.vars)
+        .filter_map(|var| {
+            account
+                .env
+                .iter()
+                .find(|(name, _)| *name == var.name)
+                .map(|(name, value)| (name.clone(), value.clone()))
+        })
+        .collect();
+    let login = profile
+        .program
+        .is_none()
+        .then(|| crate::login::login(&profile.kind, &account))
+        .flatten();
+    (login, variables)
+}
+
+/// The account of the profile `id` that a usage read of `source` reads
+/// (PRD agent-profiles B23): one of this node's profiles, of the agent the
+/// source is, in an account of its own. The core names the profile and
+/// never its folder, so a read stays inside an account this node keeps.
+pub fn usage_account(
+    env: &Env,
+    source: hide_node_link::usage::LimitSource,
+    id: &ProfileId,
+) -> HostResult<hide_agent_adapter::Account> {
+    use hide_node_link::usage::LimitSource;
+    let refused = |text: String| HostError::new(ErrorCode::InvalidPath, text);
+    let kind = match source {
+        LimitSource::ClaudeUsage => hide_agent_adapter::AgentId::ClaudeCode,
+        LimitSource::CodexUsage => hide_agent_adapter::AgentId::Codex,
+        LimitSource::AntigravityUsage => {
+            return Err(refused("agy keeps no profile accounts".to_owned()));
+        }
+    }
+    .adapter();
+    let place = place(env)?;
+    let file = read(&place.file)?;
+    let stored = file
+        .profiles
+        .iter()
+        .find(|stored| stored.profile.id == *id && !stored.removing)
+        .ok_or_else(|| {
+            HostError::new(
+                ErrorCode::NotFound,
+                format!("This machine has no profile {}", id.0),
+            )
+        })?;
+    let profile = &stored.profile;
+    if profile.kind != kind.id || profile.account.is_none() {
+        return Err(refused(format!(
+            "the profile {} has no {} account of its own",
+            profile.name, kind.label
+        )));
+    }
+    kind.resolve(profile, &NodeEnv::new(Some(place.home.clone())))
+        .map_err(|refusal| {
+            refused(format!(
+                "the profile {} cannot be read here: {refusal}",
+                profile.name
+            ))
+        })
+}
+
+fn listed(home: &Path, file: &File, judged: Judged, values: bool) -> ProfileList {
     let places: BTreeMap<(&ProfileId, u64), &ProfilePlace> = judged
         .reports
         .iter()
@@ -607,6 +699,7 @@ fn listed(file: &File, judged: Judged, values: bool) -> ProfileList {
         .iter()
         .map(|stored| {
             let profile = &stored.profile;
+            let (login, account_variables) = account_facts(home, stored);
             ListedProfile {
                 id: profile.id.clone(),
                 kind: profile.kind.clone(),
@@ -620,6 +713,8 @@ fn listed(file: &File, judged: Judged, values: bool) -> ProfileList {
                 place: places
                     .get(&(&profile.id, profile.version))
                     .map(|place| (*place).clone()),
+                login,
+                account_variables,
             }
         })
         .collect();

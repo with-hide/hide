@@ -69,3 +69,148 @@ impl<'a> AccountAt<'a> {
         }
     }
 }
+
+/// The most account variables one report carries: no agent's `[account]`
+/// names more than three.
+pub const REPORTED_VARIABLES: usize = 8;
+
+/// The longest value of one reported variable, a profile account's own
+/// limit (`hide_agent_adapter::account::MAX_ACCOUNT_BYTES`) and room for
+/// the folder a definition puts below it.
+pub const REPORTED_VALUE_BYTES: usize = hide_agent_adapter::account::MAX_ACCOUNT_BYTES + 256;
+
+/// The account variables of the `kind` agent's `[account]` that are set in
+/// its process, as `variable` reads them, each exactly as set: what a hook
+/// reports at a session's start, so the core reads the pane in the account
+/// the agent runs in when the operator started it by hand (PRD
+/// agent-profiles D-03, B24, B25). An account is the value as set (D-15):
+/// Claude Code keys its login by the string, so `/a` and `/a/` are two
+/// accounts, and nothing here resolves or respells a folder. An empty list
+/// is the agent's default account; `None` for an agent Hide keeps no
+/// accounts of.
+///
+/// Claude Code drops its variables from a hook's environment when
+/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`; its folder is then read from the
+/// session's `CLAUDE_ENV_FILE`, which Claude Code keeps below the account's
+/// folder ([`claude_env_file_folder`]).
+pub fn reported_variables(
+    kind: &str,
+    variable: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<Vec<(String, String)>> {
+    use hide_agent_adapter::definition::By;
+    let adapter = hide_agent_adapter::adapter(kind)?;
+    let rule = adapter.account_rule()?;
+    if rule.by == By::None {
+        return None;
+    }
+    let read = |name: &str| {
+        variable(name)
+            .and_then(|value| value.into_string().ok())
+            .filter(|value| !value.is_empty() && value.len() <= REPORTED_VALUE_BYTES)
+    };
+    let mut reported = Vec::new();
+    for var in rule.vars.iter().take(REPORTED_VARIABLES) {
+        let value = read(&var.name).or_else(|| {
+            (adapter.id == hide_agent_adapter::AgentId::ClaudeCode.adapter().id
+                && read("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB").as_deref() == Some("1"))
+            .then(|| read("CLAUDE_ENV_FILE"))
+            .flatten()
+            .and_then(|file| claude_env_file_folder(&file))
+        });
+        if let Some(value) = value {
+            reported.push((var.name.clone(), value));
+        }
+    }
+    Some(reported)
+}
+
+/// The account folder above a `CLAUDE_ENV_FILE`, which Claude Code writes at
+/// `<folder>/session-env/<session>/…`: the folder above its `session-env`.
+fn claude_env_file_folder(file: &str) -> Option<String> {
+    let path = Path::new(file);
+    path.ancestors()
+        .find(|folder| folder.file_name().is_some_and(|name| name == "session-env"))
+        .and_then(Path::parent)
+        .filter(|folder| folder.is_absolute())
+        .and_then(|folder| folder.to_str())
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+
+    fn read(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let vars: BTreeMap<String, OsString> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), OsString::from(v)))
+            .collect();
+        move |name| vars.get(name).cloned()
+    }
+
+    #[test]
+    fn a_hook_reports_the_account_variables_its_agent_runs_with() {
+        // Exactly as set, the final separator kept: Claude Code's login is
+        // keyed by the string (D-15).
+        for spelled in ["/accounts/claude-a/", "/accounts/claude-a"] {
+            assert_eq!(
+                reported_variables("claude-code", read(&[("CLAUDE_CONFIG_DIR", spelled)])),
+                Some(vec![("CLAUDE_CONFIG_DIR".to_owned(), spelled.to_owned())])
+            );
+        }
+        // The default account sets none; agy keeps no accounts apart.
+        assert_eq!(
+            reported_variables("claude-code", read(&[])),
+            Some(Vec::new())
+        );
+        assert_eq!(reported_variables("antigravity", read(&[])), None);
+        // omp names its account; the name is reported as written.
+        assert_eq!(
+            reported_variables("omp", read(&[("OMP_PROFILE", "work")])),
+            Some(vec![("OMP_PROFILE".to_owned(), "work".to_owned())])
+        );
+    }
+
+    #[test]
+    fn a_scrubbed_claude_hook_reports_the_folder_its_session_env_file_is_in() {
+        // The file as Claude Code writes it on this system: below the
+        // account's folder, in the system's own spelling (a drive and `\`
+        // on Windows), which the folder is reported in as it is there.
+        let folder = if cfg!(windows) {
+            r"C:\Users\me\accounts\claude-a"
+        } else {
+            "/Users/me/accounts/claude-a"
+        };
+        let env_file = Path::new(folder)
+            .join("session-env")
+            .join("s-1")
+            .join("hook-1.sh");
+        let env_file = env_file.to_str().unwrap();
+        let scrubbed = |file: &str| {
+            read(&[
+                ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
+                ("CLAUDE_ENV_FILE", file),
+            ])
+        };
+        assert_eq!(
+            reported_variables("claude-code", scrubbed(env_file)),
+            Some(vec![("CLAUDE_CONFIG_DIR".to_owned(), folder.to_owned())])
+        );
+        // A file outside any account folder, or not absolute, names none.
+        for file in ["session-env/s-1/hook-1.sh", "/tmp/hook-1.sh"] {
+            assert_eq!(
+                reported_variables("claude-code", scrubbed(file)),
+                Some(Vec::new()),
+                "{file}"
+            );
+        }
+        // Without the scrub the file says nothing: the variable is absent
+        // because the agent runs in its default account.
+        assert_eq!(
+            reported_variables("claude-code", read(&[("CLAUDE_ENV_FILE", env_file)])),
+            Some(Vec::new())
+        );
+    }
+}

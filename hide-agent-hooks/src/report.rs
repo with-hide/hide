@@ -62,6 +62,14 @@ pub struct HookStatusReport {
     /// turn says. Absent for an event that says nothing of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Vec<String>>,
+    /// At a session's start, the account variables set in the agent's
+    /// process (`account::reported_variables`), empty for its default
+    /// account: the core reads a pane the operator started by hand in that
+    /// account (PRD agent-profiles D-03, D-35). Absent on every other event,
+    /// for an agent Hide keeps no accounts of, and from a helper that
+    /// predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<Vec<(String, String)>>,
 }
 
 /// Where a session's turn stands, as its hook saw it.
@@ -228,6 +236,7 @@ mod tests {
             }),
             session_start: false,
             waiting: None,
+            account: None,
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
@@ -238,7 +247,24 @@ mod tests {
         let bare: HookStatusReport =
             serde_json::from_value(json!({"runtime": "grok", "version": crate::HOOK_VERSION}))
                 .unwrap();
-        assert_eq!((bare.session, bare.turn, bare.counts), (None, None, None));
+        assert_eq!(
+            (bare.session, bare.turn, bare.counts, bare.account),
+            (None, None, None, None)
+        );
+        // A session's start says the account its agent runs in; the default
+        // account is an empty list, not an absent one.
+        let started: HookStatusReport = serde_json::from_value(json!({
+            "runtime": "claude-code", "version": crate::HOOK_VERSION, "session_start": true,
+            "account": [["CLAUDE_CONFIG_DIR", "/accounts/claude-a"]],
+        }))
+        .unwrap();
+        assert_eq!(
+            started.account,
+            Some(vec![(
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                "/accounts/claude-a".to_owned()
+            )])
+        );
     }
 
     #[test]

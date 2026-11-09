@@ -6,6 +6,7 @@ import { emptyScope } from "../../test/legacyAgentScope";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import type { AgentProfileAnswer, Device, KitAgent, KitPiece, MachineAgentProfiles } from "../snapshot";
+import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { AgentsTab } from "./AgentsTab";
@@ -31,7 +32,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount(profiles: MachineAgentProfiles | undefined) {
+async function mount(profiles: MachineAgentProfiles | undefined, workspaces: unknown[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -40,7 +41,7 @@ async function mount(profiles: MachineAgentProfiles | undefined) {
   document.body.append(container);
   const root = createRoot(container);
   const saved = useShellStore.getState();
-  const rest = (answer?: AgentProfileAnswer) => ({ navigator: { focused_device_id: "local", devices: [device(profiles)] }, status: { agent_profile_answer: answer }, ui_state: {} });
+  const rest = (answer?: AgentProfileAnswer) => ({ navigator: { focused_device_id: "local", devices: [device(profiles)], workspaces }, status: { agent_profile_answer: answer }, ui_state: {} });
   await act(async () => {
     useShellStore.setState({ connection: "live", rest: rest() } as never);
     root.render(<TooltipProvider><AgentsTab actions={actions} /></TooltipProvider>);
@@ -61,7 +62,7 @@ async function mount(profiles: MachineAgentProfiles | undefined) {
     const last = changes().at(-1)!;
     await act(async () => { useShellStore.setState({ rest: rest({ request_id: last.request_id, device_id: "local", state: "done", ...over }) } as never); });
   };
-  return { q, all, click, type, changes, answer, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
+  return { q, all, click, type, changes, answer, events, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
 it("adds nothing to the tab on a machine whose profiles were never read, and only an add button per agent with no profile (B1)", async () => {
@@ -221,4 +222,22 @@ it("refuses a delete while an agent runs or starts with the profile and lists it
   expect(starting?.textContent).toContain("Starting");
   expect(starting?.querySelector("[data-profile-in-use-open]")).toBeNull();
   await tab.unmount();
+});
+
+it("starts the profile's agent in a new tab to sign in, with the start the start panel sends, and opens the start panel where there is no checkout (B10)", async () => {
+  const signedOut = { ...work, id: "p-new", name: "new", login: "signed_out" as const };
+  const blog = { agent_scope: emptyScope(), id: "w-blog", label: "blog", path: "/home/me/blog", device_id: "local", temporary: false, registered: true, checkouts: [{ id: "c-blog", workspace_id: "w-blog", label: "main", path: "/home/me/blog", exists: true, is_primary: true }] };
+  const tab = await mount(listed([signedOut]), [blog]);
+  await tab.click(tab.q('[data-profile-row="p-new"] [data-profile-action="open"]'));
+  const starts = tab.events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload as Record<string, unknown>);
+  expect(starts).toEqual([expect.objectContaining({ checkout_path: "/home/me/blog", provider: "claude", profile: "p-new" })]);
+  expect(useStartPanel.getState().isOpen).toBe(false);
+  await tab.unmount();
+
+  const none = await mount(listed([signedOut]));
+  await none.click(none.q('[data-profile-row="p-new"] [data-profile-action="open"]'));
+  expect(none.events.filter((event) => event.kind === "agent_start_in_checkout")).toEqual([]);
+  expect(useStartPanel.getState().isOpen).toBe(true);
+  useStartPanel.getState().close();
+  await none.unmount();
 });

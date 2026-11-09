@@ -6018,6 +6018,7 @@ mod tests {
                 counts: None,
                 session_start: false,
                 waiting: None,
+                account: None,
             };
             facts.record(&pane, &report).unwrap();
             engine.hook_session(&pane, "claude-code", "s-1").unwrap();

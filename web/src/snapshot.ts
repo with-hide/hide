@@ -2169,7 +2169,14 @@ export type AgentProfileWire = {
   folder: string | null;
   hook: KitPiece | null;
   skill: KitPiece | null;
+  /** Whether its account is signed in (`profile_login`); null where nothing is shown: a program of its own, the agent's default account, no way to look (B10). */
+  login?: AgentProfileLogin | null;
+  /** Its last start ran in another of the machine's accounts: its program sets a folder of its own (B25). */
+  wrapper_folder?: boolean;
 };
+
+/** What a node found of a profile account's sign-in (`contracts/snapshot-wire-enums.json`: `profile_login`). */
+export type AgentProfileLogin = "signed_in" | "signed_out" | "unknown";
 
 export type MachineAgentProfiles = {
   state: AgentProfilesState;

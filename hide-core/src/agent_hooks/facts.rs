@@ -75,6 +75,23 @@ struct SessionFact {
     /// its approval (a refusal in the dialog sends no hook event).
     #[serde(skip)]
     waiting_seq: Option<Laid>,
+    /// The account variables the session's start reported its agent runs
+    /// with, empty for the default account
+    /// (`hide_agent_hooks::account::reported_variables`); kept, so a restart
+    /// reads the pane in the same account. None before a start reported
+    /// them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account: Option<Vec<(String, String)>>,
+    /// Where the start that reported `account` falls among this machine's
+    /// reported starts, later ones higher, so the last start of a profile
+    /// is known whatever its pane is called (D-35, B25); 0 for one saved
+    /// before it was kept, older than any.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    account_start: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// The engine state a running turn or an open approval was first laid
@@ -129,6 +146,18 @@ struct PaneFacts {
 struct Stored {
     schema_version: u32,
     panes: BTreeMap<String, PaneFacts>,
+}
+
+/// The account one pane's agent reported at its session's start.
+pub(crate) struct Reported<'a> {
+    pub pane: &'a str,
+    /// The agent's adapter id.
+    pub runtime: &'a str,
+    pub session: Option<&'a str>,
+    /// Empty for the agent's default account.
+    pub variables: &'a [(String, String)],
+    /// The start's place among the machine's reported starts, later higher.
+    pub start: u64,
 }
 
 /// What recording a report did.
@@ -228,6 +257,26 @@ impl HookFacts {
         }) {
             return Err("hook_waiting_invalid");
         }
+        if report.account.as_ref().is_some_and(|account| {
+            account.len() > hide_agent_hooks::account::REPORTED_VARIABLES
+                || account.iter().any(|(name, value)| {
+                    name.is_empty()
+                        || name.len() > 256
+                        || value.len() > hide_agent_hooks::account::REPORTED_VALUE_BYTES
+                })
+        }) {
+            return Err("hook_account_invalid");
+        }
+        // A start's place among the reported ones: one past the last.
+        let start = report.account.as_ref().map(|_| {
+            self.panes
+                .values()
+                .flat_map(|facts| &facts.sessions)
+                .map(|fact| fact.account_start)
+                .max()
+                .unwrap_or(0)
+                + 1
+        });
         let facts = self.panes.entry(pane.to_owned()).or_default();
         let before = facts.clone();
         let same = |fact: &SessionFact| {
@@ -251,16 +300,29 @@ impl HookFacts {
                 turn_seq: None,
                 waiting: Vec::new(),
                 waiting_seq: None,
+                account: None,
+                account_start: 0,
             },
         };
         facts.reported_since_engine = true;
         let turn_before = fact.turn;
+        // The same start delivered again (its session and account already
+        // kept) keeps its place: only a start not seen yet is the latest.
+        let start = start.filter(|_| {
+            fact.account_start == 0
+                || fact.account != report.account
+                || (report.session.is_some() && fact.session != report.session)
+        });
         fact.version = report.version;
         if report.session.is_some() {
             fact.session.clone_from(&report.session);
         }
         if report.counts.is_some() {
             fact.counts = report.counts;
+        }
+        if let Some(start) = start {
+            fact.account.clone_from(&report.account);
+            fact.account_start = start;
         }
         if report.session_start {
             // A resumed or compacted session has no turn running yet.
@@ -302,6 +364,25 @@ impl HookFacts {
             self.save();
         }
         Ok(Recorded { changed })
+    }
+
+    /// Each pane's account as its agent's latest session start reported it
+    /// (`SessionFact::account`).
+    pub(crate) fn reported_accounts(&self) -> impl Iterator<Item = Reported<'_>> {
+        self.panes.iter().filter_map(|(pane, facts)| {
+            let fact = facts
+                .sessions
+                .iter()
+                .rev()
+                .find(|fact| fact.account.is_some())?;
+            Some(Reported {
+                pane,
+                runtime: &fact.runtime,
+                session: fact.session.as_deref(),
+                variables: fact.account.as_deref()?,
+                start: fact.account_start,
+            })
+        })
     }
 
     /// Lays the facts on `payload`'s agents and answers each agent pane's
@@ -523,6 +604,8 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             turn_seq: None,
             waiting: Vec::new(),
             waiting_seq: None,
+            account: None,
+            account_start: 0,
         })
         .collect();
     PaneFacts {
@@ -540,8 +623,21 @@ fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
             .iter()
             .zip(&after.sessions)
             .any(|(left, right)| {
-                (&left.runtime, left.version, &left.session, left.counts)
-                    != (&right.runtime, right.version, &right.session, right.counts)
+                (
+                    &left.runtime,
+                    left.version,
+                    &left.session,
+                    left.counts,
+                    &left.account,
+                    left.account_start,
+                ) != (
+                    &right.runtime,
+                    right.version,
+                    &right.session,
+                    right.counts,
+                    &right.account,
+                    right.account_start,
+                )
             })
 }
 
@@ -567,6 +663,7 @@ mod tests {
             counts: None,
             session_start: false,
             waiting: None,
+            account: None,
         }
     }
 
@@ -639,6 +736,51 @@ mod tests {
     /// agent at rest and the session read under that state says the turn
     /// ended. A lower sequence alone, read as if it were the same engine's,
     /// never ended it, and the restore's unknown step does not either.
+    /// A session's start keeps the account it reported through a restart;
+    /// facts an earlier build saved, with no account, read as before.
+    #[test]
+    fn a_reported_account_is_kept_and_facts_saved_before_it_read_as_before() {
+        let mut facts = HookFacts::default();
+        let mut started = report(Some("s-1"), None);
+        started.session_start = true;
+        started.account = Some(vec![("CLAUDE_CONFIG_DIR".into(), "/accounts/a".into())]);
+        assert!(facts.record("w1:p1", &started).unwrap().changed);
+        let saved = encode(&facts.panes).unwrap();
+        let stored: Stored = serde_json::from_slice(&saved).unwrap();
+        let restored = HookFacts {
+            panes: stored.panes,
+            file: None,
+        };
+        let reported: Vec<_> = restored
+            .reported_accounts()
+            .map(|r| (r.pane, r.session, r.variables.to_vec()))
+            .collect();
+        assert_eq!(
+            reported,
+            [(
+                "w1:p1",
+                Some("s-1"),
+                vec![("CLAUDE_CONFIG_DIR".to_owned(), "/accounts/a".to_owned())]
+            )]
+        );
+        // A later event of the session says nothing of it and keeps it.
+        let mut facts = restored;
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)))
+            .unwrap();
+        assert_eq!(facts.reported_accounts().count(), 1);
+        let older: Stored = serde_json::from_value(serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "panes": {"w1:p2": {"sessions": [{"runtime": "claude-code", "version": 1, "session": "s-2", "counts": null}], "seen_agent": true}},
+        }))
+        .unwrap();
+        let older = HookFacts {
+            panes: older.panes,
+            file: None,
+        };
+        assert_eq!(older.reported_accounts().count(), 0);
+    }
+
     #[test]
     fn a_turn_from_an_engine_that_ended_ends_on_the_next_engines_read_of_it_at_rest() {
         use hide_session::turns::TurnEnded::Completed;

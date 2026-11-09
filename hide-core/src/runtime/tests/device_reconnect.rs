@@ -98,6 +98,7 @@ fn hook(runtime: &mut Runtime, turn: HookTurn) {
                 counts: None,
                 session_start: false,
                 waiting: None,
+                account: None,
             },
         )
         .unwrap();

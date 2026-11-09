@@ -13,11 +13,13 @@ import {
   answerRefusal,
   editChange,
   listedProfiles,
+  ownAgentUsage,
   profileAnswer,
   profileDraft,
   profileRequestId,
   profilesMachine,
   sameDraft,
+  signInStart,
   type ProfileChange,
   type Worded,
 } from "../agentProfiles";
@@ -26,6 +28,8 @@ import { Note } from "../components/settings-rows";
 import { hostBridge } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { AgentProfileAnswer, Device, KitAgent } from "../snapshot";
+import { startRequestId } from "../startAnswer";
+import { startTargets } from "../startTargets";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -54,6 +58,8 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
   const machine = profilesMachine(device, live);
   // The folder chooser is this computer's, so only its own machine offers it (B30).
   const native = useShellStore((s) => hostWays(device.id, s.rest?.navigator?.devices, hostBridge() !== null).native);
+  // Limits are read on this machine alone, for its own profiles (B23).
+  const ownUsage = useShellStore((s) => (s.usage?.nodes[0]?.node === device.id ? s.usage : null));
   const [open, setOpen] = useState<Open | null>(null);
   const [sent, setSent] = useState<Sent | null>(null);
   const answer = useShellStore((s) => profileAnswer(s.rest, sent?.id ?? null));
@@ -103,7 +109,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
 
   function view(agent: string) {
     const kit = device.kit?.agents.find((row) => row.id === agent);
-    return agentProfilesView(listed, agent, kit?.label ?? agent);
+    return agentProfilesView(listed, agent, kit?.label ?? agent, ownUsage ? ownAgentUsage(ownUsage, agent) : null);
   }
 
   const refusal = answerRefusal(answer);
@@ -144,6 +150,19 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
     if (folder) setOpen((now) => (now?.kind === "add" ? { ...now, draft: { ...now.draft, account: folder } } : now));
   };
 
+  /**
+   * Signing in happens in the agent the profile starts (B10): a new tab with it,
+   * as the start panel would start it over Settings; the agent shows its own
+   * sign-in. A device with no checkout opens the start panel instead.
+   */
+  const signIn = (agent: string, id: string) => {
+    const ui = useUiStore.getState();
+    const start = signInStart(startTargets(useShellStore.getState().rest, ui.screen, t, true), device.id, agent);
+    if (!start) return actions.openStartPanel();
+    ui.closeOverlay("settings");
+    actions.startAgent({ target: { checkoutPath: start.checkoutPath }, deviceId: device.id, provider: start.provider, profile: id, requestId: startRequestId() });
+  };
+
   const inline = (agent: KitAgent) => {
     if (!machine || machine === "unsupported") return null;
     const shown = view(agent.id);
@@ -163,8 +182,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
         onAction={(id, action) => {
           if (action === "reinstall") send({ op: "reinstall", id });
           else if (action === "retry") send({ op: "remove", id });
-          // Signing in happens in the agent the profile starts: from the start panel.
-          else actions.openStartPanel();
+          else signIn(agent.id, id);
         }}
       />
     );

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+mod account_reports;
 mod agent_areas;
 mod agent_catalog;
 pub(crate) mod agent_choice;
@@ -1657,6 +1658,15 @@ pub struct Runtime {
     /// The profiles being started and removed (`launch::holds`): a start
     /// and a removal of one profile see each other under this lock.
     pub(crate) profile_holds: Arc<crate::launch::holds::ProfileHolds>,
+    /// The account each pane's agent runs in as its hook reported it, by
+    /// the pane's id (`runtime/account_reports.rs`).
+    reported_accounts: BTreeMap<String, account_reports::ReportedAccount>,
+    /// Raised each time `reported_accounts` moves, so the label reads take
+    /// them again (`account_launches`).
+    reported_edit: u64,
+    /// The profiles whose last start ran in another account than their own,
+    /// by machine and id (`runtime/account_reports.rs`, D-35).
+    wrapper_folders: std::collections::BTreeSet<(String, String)>,
     /// When an agent last worked or waited on the operator; 0 until one has.
     agent_worked_at_unix_ms: u64,
     /// What the operator looks at: this machine's chosen pane, the device in
@@ -2545,6 +2555,9 @@ impl Runtime {
             worker_context: None,
             agent_profile_busy: false,
             profile_holds: Arc::default(),
+            reported_accounts: BTreeMap::new(),
+            reported_edit: 0,
+            wrapper_folders: std::collections::BTreeSet::new(),
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),

@@ -23,6 +23,10 @@ fn profile(id: &str, kind: &str, name: &str) -> ProfileSnapshot {
         folder: None,
         hook: None,
         skill: None,
+        login: None,
+        wrapper_folder: false,
+        account_key: hide_agent_adapter::AccountKey::Default,
+        account_variables: Vec::new(),
     }
 }
 

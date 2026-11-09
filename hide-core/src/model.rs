@@ -1138,6 +1138,22 @@ pub struct ProfileSnapshot {
     pub folder: Option<String>,
     pub hook: Option<KitPieceSnapshot>,
     pub skill: Option<KitPieceSnapshot>,
+    /// Whether its account is signed in, as its node found it (B10); `None`
+    /// where nothing is shown: a program of its own, the agent's default
+    /// account, no way to look.
+    pub login: Option<hide_node_link::profiles::ProfileLogin>,
+    /// The last start of it ran in another of the machine's accounts, as its
+    /// hook reported (D-35, B25): its program sets a folder of its own.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub wrapper_folder: bool,
+    /// Its account's identity (`hide_agent_adapter::AccountKey`); the shell
+    /// does not see it.
+    #[serde(skip)]
+    pub account_key: hide_agent_adapter::AccountKey,
+    /// The account variables a start of it sets, as a hook reports them
+    /// (`ListedProfile::account_variables`); the shell does not see them.
+    #[serde(skip)]
+    pub account_variables: Vec<(String, String)>,
 }
 
 /// Where a profile's pieces are (`contracts/snapshot-wire-enums.json`:
@@ -1190,6 +1206,18 @@ impl ProfilesSnapshot {
                     folder: None,
                     hook: None,
                     skill: None,
+                    login: profile.login,
+                    wrapper_folder: false,
+                    account_key: match &profile.account {
+                        None => hide_agent_adapter::AccountKey::Default,
+                        Some(hide_agent_adapter::AccountRef::Folder(folder)) => {
+                            hide_agent_adapter::AccountKey::Folder(folder.clone())
+                        }
+                        Some(hide_agent_adapter::AccountRef::Name(name)) => {
+                            hide_agent_adapter::AccountKey::Name(name.clone())
+                        }
+                    },
+                    account_variables: profile.account_variables.clone(),
                 })
                 .collect(),
             defaults: list
@@ -9143,6 +9171,20 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "profile_install", &installs);
         checked.insert("profile_install");
+
+        use hide_node_link::profiles::ProfileLogin;
+        let logins = [
+            ProfileLogin::SignedIn,
+            ProfileLogin::SignedOut,
+            ProfileLogin::Unknown,
+        ];
+        for variant in logins {
+            match variant {
+                ProfileLogin::SignedIn | ProfileLogin::SignedOut | ProfileLogin::Unknown => {}
+            }
+        }
+        assert_wire(&contract, "profile_login", &logins);
+        checked.insert("profile_login");
 
         use crate::agent_profiles::AnswerState as ProfileAnswerState;
         let answers = [

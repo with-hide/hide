@@ -469,10 +469,9 @@ pub(crate) struct LabelWorker {
     input: Arc<OperatorInput>,
     records: BTreeMap<String, PaneRecord>,
     panes: BTreeMap<String, PaneState>,
-    /// The launch records of this machine's panes whose agent runs in an
-    /// account other than the default, with the edit they were taken at
-    /// (`Runtime::account_launches`).
-    account_launches: Option<(u64, BTreeMap<String, crate::model::PaneLaunch>)>,
+    /// What names the account of each of this machine's panes, with the
+    /// edits it was taken at (`Runtime::account_launches`).
+    account_launches: Option<((u64, u64), crate::runtime::agent_choice::AccountReads)>,
     generator: GeneratorLock,
     reader: Reader,
     results: Receiver<WorkerResult>,
@@ -1118,22 +1117,23 @@ impl LabelWorker {
 
     /// The edit of the launch records [`Self::account_of`] reads, which the
     /// core hands again only once they moved.
-    pub(crate) fn account_launches_edit(&self) -> Option<u64> {
+    pub(crate) fn account_launches_edit(&self) -> Option<(u64, u64)> {
         self.account_launches.as_ref().map(|(edit, _)| *edit)
     }
 
-    /// Takes the launch records `Runtime::account_launches` answered.
+    /// Takes what `Runtime::account_launches` answered.
     pub(crate) fn follow_account_launches(
         &mut self,
-        launches: (u64, BTreeMap<String, crate::model::PaneLaunch>),
+        launches: ((u64, u64), crate::runtime::agent_choice::AccountReads),
     ) {
         self.account_launches = Some(launches);
     }
 
     /// The account the `kind` agent started under `name` whose
     /// conversation is `session` reads its sessions in, in this machine's
-    /// pane `pane_id`: its launch record's profile's, when the record
-    /// describes it, else the default (`Runtime::pane_account`).
+    /// pane `pane_id`, decided as `Runtime::pane_account` decides it: the
+    /// one its hook reported, else its launch record's profile's when the
+    /// record describes it, else the default.
     pub(crate) fn account_of(
         &self,
         pane_id: &str,
@@ -1141,9 +1141,19 @@ impl LabelWorker {
         name: Option<&str>,
         session: Option<&str>,
     ) -> hide_agent_adapter::AccountKey {
-        self.account_launches
-            .as_ref()
-            .and_then(|(_, launches)| launches.get(pane_id))
+        let reads = self.account_launches.as_ref().map(|(_, reads)| reads);
+        if let Some((_, key)) =
+            reads
+                .and_then(|reads| reads.reported.get(pane_id))
+                .filter(|(agent, _)| {
+                    hide_agent_adapter::adapter(kind).map(|adapter| adapter.id)
+                        == Some(agent.as_str())
+                })
+        {
+            return key.clone();
+        }
+        reads
+            .and_then(|reads| reads.launches.get(pane_id))
             .filter(|launch| {
                 crate::runtime::agent_choice::launch_describes(launch, kind, name, session)
             })

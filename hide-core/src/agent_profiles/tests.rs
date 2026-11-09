@@ -47,6 +47,8 @@ fn list(version: u64, env: Option<Vec<(&str, &str)>>) -> ProfileList {
             version: 1,
             removing: false,
             place: None,
+            login: None,
+            account_variables: Vec::new(),
         }],
         defaults: Default::default(),
         unjudged: None,
