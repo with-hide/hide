@@ -447,22 +447,35 @@ pub(crate) fn settle_after_kit(env: &Env, reports: &[ProfileReport]) {
 /// no profiles, or whose file cannot be read, reads the default accounts
 /// alone, and the log says why; one whose file cannot be read never answers
 /// that the default account is all it keeps
-/// (`hide_session::Accounts::default_alone`). The answer is kept while the file's stamp
-/// holds, so a session read costs one stat of the file.
+/// (`hide_session::Accounts::default_alone`), nor does one that could not be
+/// looked at. The answer is kept while a look at the file finds what it found
+/// (`hide_session::stamp::Seen`), so a session read costs one stat of it.
 pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::Accounts> {
     static KEPT: Mutex<Option<KeptAccounts>> = Mutex::new(None);
+    use hide_session::stamp::Seen;
     let file = state.map(hide_kit::layout::agent_profiles);
-    let stamp = file.as_deref().and_then(hide_session::stamp::stamp_at);
+    let seen = file
+        .as_deref()
+        .map_or(Seen::Absent, hide_session::stamp::seen_at);
     let mut kept = KEPT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(kept) = kept
         .as_ref()
-        .filter(|kept| kept.home == home && kept.file == file && kept.stamp == stamp)
+        .filter(|kept| kept.home == home && kept.file == file && kept.seen == seen)
     {
         return Arc::clone(&kept.accounts);
     }
-    let accounts = match file.as_deref().map(read).transpose() {
+    // A file that could not be looked at is not read: what it keeps is not
+    // known, never the default accounts alone a missing file reads as.
+    let profiles = match &seen {
+        Seen::Unseen(kind) => Err(HostError::new(
+            ErrorCode::Io,
+            format!("the profile file could not be looked at: {kind}"),
+        )),
+        Seen::At(_) | Seen::Absent => file.as_deref().map(read).transpose(),
+    };
+    let accounts = match profiles {
         Ok(read) => {
             let profiles: Vec<_> = read.map_or_else(Vec::new, |read| {
                 read.profiles
@@ -481,7 +494,7 @@ pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::
     *kept = Some(KeptAccounts {
         home: home.to_path_buf(),
         file,
-        stamp,
+        seen,
         accounts: Arc::clone(&accounts),
     });
     accounts
@@ -491,7 +504,7 @@ pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::
 struct KeptAccounts {
     home: PathBuf,
     file: Option<PathBuf>,
-    stamp: Option<String>,
+    seen: hide_session::stamp::Seen,
     accounts: Arc<hide_session::Accounts>,
 }
 
@@ -1462,6 +1475,48 @@ mod tests {
                 "{agent:?}"
             );
         }
+    }
+
+    /// The node keeps its accounts while a look at the profile file finds
+    /// what it found: one that cannot look at the file (a link to itself)
+    /// refuses an id-only resume however often it is asked, never reusing
+    /// the default it answered while the file was missing, and answers again
+    /// once the file can be looked at.
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_file_that_cannot_be_looked_at_never_reuses_the_default_a_missing_one_answered() {
+        use hide_agent_adapter::AccountKey;
+        use hide_session::Agent;
+        use hide_session::session_account::{SessionAccountRequest, UNPROVEN};
+
+        let node = Node::new();
+        let ask = || {
+            node.call(Call::SessionAccount {
+                request: SessionAccountRequest {
+                    agent: Agent::Claude,
+                    reference_kind: "id".to_owned(),
+                    reference_value: "019a-session".to_owned(),
+                },
+            })
+        };
+        let default = serde_json::to_value(AccountKey::Default).unwrap();
+        let file = hide_kit::layout::agent_profiles(node.env.state.as_deref().unwrap());
+        assert_eq!(ask().unwrap(), default, "missing");
+
+        std::os::unix::fs::symlink(&file, &file).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                ask().unwrap_err().message,
+                hide_session::account::ACCOUNTS_UNSETTLED,
+                "a file that cannot be looked at"
+            );
+        }
+
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(ask().unwrap(), default, "missing again");
+        let work = node.apply(add("claude-code", "work", folder("~/accounts/work/")));
+        assert_eq!(work.refused, None, "{work:?}");
+        assert_eq!(ask().unwrap_err().message, UNPROVEN, "the file read again");
     }
 
     #[test]
