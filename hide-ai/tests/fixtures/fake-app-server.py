@@ -12,7 +12,10 @@ so a killed owner leaves no survivors. FAKE_ARGS_FILE records the argument
 vector when set, FAKE_INSTRUCTIONS_FILE the base instructions of the last
 thread/start, FAKE_TURN_FILE the parameters of the last turn/start, and
 FAKE_STARTED_FILE is created once a slow turn has
-started and is waiting.
+started and is waiting. FAKE_ENV_FILE records, at `model/list`, the
+`CODEX_HOME` the app-server runs under, the file its `auth.json` link points
+at, and the variables a profile or a wrapper set (`ENV_SEEN`); a wrapper that
+sets FAKE_GATEWAY_MODEL makes `model/list` answer that model alone.
 interrupted_after_usage, stream_disconnected and stream_disconnected_500 end
 an already-started turn after it reported tokens without a usable answer.
 generic_failure and unknown_failure do the same with missing or unfamiliar
@@ -34,6 +37,9 @@ REPLY = os.environ.get("FAKE_REPLY", '{"summary":"fixture","attention":"none"}')
 if path := os.environ.get("FAKE_ARGS_FILE"):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(sys.argv[1:], f)
+
+# The variables a profile or its wrapper set, recorded at `model/list`.
+ENV_SEEN = ["OPENAI_BASE_URL", "FAKE_WRAPPED"]
 
 # Children started per thread, ended when this process does (atexit) or when
 # stdin reaches EOF - the same ownership the real app-server has over its tree.
@@ -107,7 +113,19 @@ for raw in sys.stdin:
         account = None if MODE == "no_account" else {"type": "chatgpt", "planType": "pro"}
         result(rid, {"account": account, "requiresOpenaiAuth": True})
     elif method == "model/list":
-        models = [] if MODE == "no_model" else [{"id": "gpt-5.6-luna", "model": "gpt-5.6-luna"}]
+        if path := os.environ.get("FAKE_ENV_FILE"):
+            home = os.environ.get("CODEX_HOME")
+            auth = os.path.join(home, "auth.json") if home else None
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "CODEX_HOME": home,
+                    "auth_link": os.readlink(auth) if auth and os.path.islink(auth) else None,
+                    **{name: os.environ.get(name) for name in ENV_SEEN},
+                }, f)
+        gateway = os.environ.get("FAKE_GATEWAY_MODEL")
+        models = ([] if MODE == "no_model"
+                  else [{"id": gateway, "model": gateway}] if gateway
+                  else [{"id": "gpt-5.6-luna", "model": "gpt-5.6-luna"}])
         result(rid, {"data": models, "nextCursor": None})
     elif method == "account/rateLimits/read":
         result(rid, {"rateLimits": {"primary": {"usedPercent": 100, "resetsAt": int(time.time()) + 120}}})

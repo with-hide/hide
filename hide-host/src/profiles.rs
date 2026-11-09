@@ -1624,6 +1624,134 @@ mod tests {
         );
     }
 
+    /// A gateway wrapper of the profile tests, a program this account can
+    /// start: a script on Unix, a batch file on Windows.
+    fn gateway(node: &Node, body: &str) -> PathBuf {
+        #[cfg(unix)]
+        {
+            let program = node.root.join("claude-gw");
+            crate::executable_fixture::write_executable(&program, &format!("#!/bin/sh\n{body}\n"));
+            program
+        }
+        #[cfg(windows)]
+        {
+            let _ = body;
+            let program = node.root.join("claude-gw.cmd");
+            std::fs::write(&program, "@echo off\r\n").unwrap();
+            program
+        }
+    }
+
+    /// PRD agent-profiles-phase2 D-09: Hide AI's backend of a profile runs
+    /// as a start of it would, with its account's variables, its own and its
+    /// wrapper; the built-in default runs as the agent always has, and a
+    /// profile that cannot start is refused with the start's sentence.
+    #[test]
+    fn a_hide_ai_backend_of_a_profile_runs_as_a_start_of_it_would() {
+        let node = Node::new();
+        let wrapper = gateway(&node, "exit 0");
+        let added = node.apply(ProfileOp::Add {
+            kind: "claude-code".to_owned(),
+            name: "gw".to_owned(),
+            account: folder("~/accounts/gw/"),
+            program: Some(wrapper.display().to_string()),
+            env: vec![(
+                "ANTHROPIC_BASE_URL".to_owned(),
+                "https://gw.example".to_owned(),
+            )],
+            default: false,
+        });
+        assert_eq!(added.refused, None, "{added:?}");
+        let id = added.added.clone().unwrap();
+        let account = format!("{}/", node.home().join("accounts/gw").display());
+
+        assert_eq!(
+            ai_run(&node.env, "claude-code", &id).unwrap(),
+            hide_ai::ItemRun {
+                env: vec![
+                    ("CLAUDE_CONFIG_DIR".to_owned(), account),
+                    (
+                        "ANTHROPIC_BASE_URL".to_owned(),
+                        "https://gw.example".to_owned()
+                    ),
+                ],
+                program: Some(hide_ai::Wrapper {
+                    file: wrapper,
+                    leading: Vec::new(),
+                }),
+            }
+        );
+        assert_eq!(
+            ai_run(&node.env, "claude-code", &ProfileId::default_profile()).unwrap(),
+            hide_ai::ItemRun::default()
+        );
+        let other = ai_run(&node.env, "codex", &id).unwrap_err();
+        assert_eq!(other.message, "the profile gw is not one of codex's");
+
+        assert_eq!(
+            node.apply(ProfileOp::Remove { id: id.clone() }).refused,
+            None
+        );
+        let gone = ai_run(&node.env, "claude-code", &id).unwrap_err();
+        assert_eq!(gone.code, ErrorCode::NotFound, "{gone:?}");
+    }
+
+    /// The node answers a Hide AI model list of one profile by running that
+    /// profile's wrapper with its account's and its own variables: the list
+    /// is the one the gateway names, which the default account's is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_profiles_model_list_is_answered_by_its_wrapper_in_its_account() {
+        let node = Node::new();
+        let seen = node.root.join("seen");
+        let wrapper = gateway(
+            &node,
+            &format!(
+                "cat > /dev/null\nprintf '%s %s' \"$CLAUDE_CONFIG_DIR\" \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" > '{}'\nprintf '%s\\n' '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"response\":{{\"models\":[{{\"value\":\"default\"}},{{\"value\":\"opus\",\"displayName\":\"'\"$ANTHROPIC_DEFAULT_OPUS_MODEL\"'\"}},{{\"value\":\"sonnet\",\"displayName\":\"'\"$ANTHROPIC_DEFAULT_OPUS_MODEL\"'\"}}]}}}}}}'",
+                seen.display()
+            ),
+        );
+        let added = node.apply(ProfileOp::Add {
+            kind: "claude-code".to_owned(),
+            name: "gw".to_owned(),
+            account: folder("~/accounts/gw/"),
+            program: Some(wrapper.display().to_string()),
+            env: vec![(
+                "ANTHROPIC_DEFAULT_OPUS_MODEL".to_owned(),
+                "glm-4.6".to_owned(),
+            )],
+            default: false,
+        });
+        let id = added.added.clone().unwrap();
+        let backend = hide_node_link::ai::BackendSpec {
+            instance: 9_001,
+            provider: hide_ai::ProviderId::CLAUDE,
+            model: "sonnet".to_owned(),
+            profile: Some(id),
+        };
+
+        let answer: hide_node_link::ai::Logged<hide_ai::ModelCatalog> = serde_json::from_value(
+            node.call(Call::AiModels {
+                backend: backend.clone(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        node.call(Call::AiRelease { instance: 9_001 }).unwrap();
+
+        assert_eq!(
+            answer.value,
+            hide_ai::ModelCatalog::Offered(vec![hide_ai::Model {
+                id: "opus".to_owned(),
+                label: Some("glm-4.6".to_owned()),
+            }])
+        );
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            format!("{}/ glm-4.6", node.home().join("accounts/gw").display())
+        );
+    }
+
     #[test]
     fn a_profile_that_is_gone_another_agents_or_whose_program_is_missing_starts_nothing() {
         let node = Node::new();

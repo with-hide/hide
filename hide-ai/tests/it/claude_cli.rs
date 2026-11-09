@@ -708,6 +708,89 @@ fn the_model_list_is_asked_of_the_cli_without_a_model_turn_and_leaks_no_account(
     });
 }
 
+/// The stand-in of an operator's gateway wrapper: a shell script, or on
+/// Windows its batch file.
+fn wrapper() -> PathBuf {
+    let name = if cfg!(windows) {
+        "wrap-claude.cmd"
+    } else {
+        "wrap-claude.sh"
+    };
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// One read of the model list of the item `run`, and the account and
+/// gateway variables its child received.
+fn models_of(run: hide_ai::ItemRun) -> (hide_ai::ModelCatalog, Value) {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let catalog = ClaudeCliBackend::new(ClaudeConfig {
+        binary: fixture(),
+        model: "haiku".to_owned(),
+        cwd: std::env::temp_dir(),
+        // The wrapper runs with the account's search, which a test gives as
+        // its own `PATH` rather than asking the login shell.
+        search_path: std::env::var_os("PATH"),
+        run,
+    })
+    .models();
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+    let env = serde_json::from_slice(&std::fs::read(&env_file).unwrap()).unwrap();
+    (catalog, env)
+}
+
+/// PRD agent-profiles-phase2 B8, D-09: an item's list is the one the CLI
+/// gives in that item's account and variables, run through its wrapper, and
+/// a gateway's models show their names once while a start passes the value.
+#[test]
+fn an_items_model_list_is_read_in_its_own_account_and_through_its_wrapper() {
+    let inherited = |name: &str| std::env::var(name).map_or(Value::Null, Value::from);
+    let (default, seen) = models_of(hide_ai::ItemRun::default());
+    assert_eq!(default, hide_ai::ModelCatalog::plain(["opus", "sonnet"]));
+    for name in ["CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "FAKE_WRAPPED"] {
+        assert_eq!(
+            seen[name],
+            inherited(name),
+            "the default read adds no {name}"
+        );
+    }
+
+    let account = tempfile::tempdir().unwrap();
+    let account = format!("{}/", account.path().display());
+    let (profiled, seen) = models_of(hide_ai::ItemRun {
+        env: vec![
+            ("CLAUDE_CONFIG_DIR".to_owned(), account.clone()),
+            (
+                "ANTHROPIC_BASE_URL".to_owned(),
+                "https://gw.example".to_owned(),
+            ),
+        ],
+        program: Some(hide_ai::Wrapper {
+            file: wrapper(),
+            leading: Vec::new(),
+        }),
+    });
+    assert_eq!(
+        profiled,
+        hide_ai::ModelCatalog::Offered(vec![
+            hide_ai::Model {
+                id: "opus".to_owned(),
+                label: Some("glm-4.6".to_owned()),
+            },
+            hide_ai::Model::plain("deepseek-reasoner"),
+        ]),
+        "sonnet shows the same gateway model as opus and is listed once"
+    );
+    assert_eq!(seen["CLAUDE_CONFIG_DIR"], Value::from(account));
+    assert_eq!(seen["ANTHROPIC_BASE_URL"], "https://gw.example");
+    assert_eq!(seen["FAKE_WRAPPED"], "1", "the wrapper ran the read");
+}
+
 #[test]
 fn a_model_list_the_cli_cannot_give_is_reported_not_replaced_by_a_guess() {
     with_mode("init_broken", || match backend().models() {
