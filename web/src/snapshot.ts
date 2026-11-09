@@ -1528,8 +1528,8 @@ export type MissionBriefSnapshot = { mission: string | null; node: string | null
 /** The agent a node or a candidate names, with its model and effort. */
 export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
 
-/** The agent, model and effort Hide started a node's worker with (`missions::NodeLaunch`). */
-export type MissionNodeLaunch = { agent_id: string; agent: string; model?: string | null; effort?: string | null };
+/** The agent item, model and effort Hide started a node's worker with (`missions::NodeLaunch`): `profile` is the profile it started with, by its id on the worker's machine and its name then; none for the built-in default. */
+export type MissionNodeLaunch = { agent_id: string; agent: string; profile?: { id: string; name: string } | null; model?: string | null; effort?: string | null };
 
 /** One node of a mission's map, with what the map draws and nothing the shell works out (`NodeView`). */
 export type MissionNode = {
@@ -1746,7 +1746,8 @@ export type PlanView = {
 export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
-export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
+/** A candidate's `profile` is a profile's id on this machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08, B14). */
+export type ConductorCandidate = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; purpose: string };
 /** Which way every mission's map runs: what a node waits on above it, or to its left. */
 export type MissionMapFlow = "down" | "across";
 export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
@@ -2262,6 +2263,8 @@ export type AgentProfileAnswer = {
   /** Agents running with it, and starts holding it with no pane yet (`starting`). */
   in_use?: { pane_id: string; title: string; place: string; asleep: boolean; starting?: boolean }[];
   projects?: string[];
+  /** How many of Settings › Mission's candidates name the profile (PRD agent-profiles-phase2 B22). */
+  candidates?: number;
   values?: [string, string][];
   added?: string;
 };

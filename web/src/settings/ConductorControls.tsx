@@ -1,9 +1,10 @@
 import { PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
-import { agentAdapter } from "../agentAdapters";
-import { catalogFor, providerLabel, takesModel, PROVIDER_KINDS, type ProviderKind } from "../agentPicker";
+import { agentAdapter, agentProductName } from "../agentAdapters";
+import { catalogFor, modelLabel, providerLabel, takesModel, type ProviderKind } from "../agentPicker";
+import { BUILT_IN_PROFILE, itemName, missingItemName, type AgentItem } from "../agentProfiles";
 import { Note } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -14,7 +15,7 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, addCandidate, candidateAgent, effortsOf, replaceCandidate } from "../conductorSettings";
+import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, addCandidate, candidateAgent, candidateGone, candidateItems, candidateProfile, effortsOf, pickItem, replaceCandidate } from "../conductorSettings";
 import type { BackgroundAi, ConductorCandidate, ConductorSettings, MissionScope, MissionStrength } from "../snapshot";
 import type { CoreError } from "../coreError";
 import { useShellStore } from "../store";
@@ -118,22 +119,43 @@ export function CandidateAdd({ settings, send }: Pick<ConductorEdit, "settings" 
 
 /** Every candidate's row, each edit sending the whole list as Settings › Mission does. */
 export function CandidateRows({ settings, send, layout }: Pick<ConductorEdit, "settings" | "send"> & { layout: CandidateLayout }) {
+  // The candidates name this machine's profiles (PRD agent-profiles-phase2 D-08): its list is every row's agent cell.
+  const device = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.kind !== "remote"));
+  const list = useMemo(() => candidateItems(device), [device]);
   return (
     <>
       {settings.candidates.map((candidate, index) => (
-        <CandidateRow key={index} candidate={candidate} layout={layout} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
+        <CandidateRow key={index} candidate={candidate} list={list} layout={layout} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
       ))}
     </>
   );
 }
 
+/** A Radix item value for an agent item: its kind and profile id. */
+const itemValue = (item: Pick<AgentItem, "kind" | "profile">) => JSON.stringify([item.kind, item.profile]);
+
+/** Radix items cannot carry an empty value; this stands for a row whose item the list no longer holds. */
+const NO_ITEM = "__no_item";
+
 /** A candidate's cells as one row of the settings page's grid, or stacked on lines of their own in a narrow tool column. */
 export type CandidateLayout = "grid" | "stack";
 
-/** One candidate: the agent, its model where it takes one, its effort automatic or fixed, and what it is for. */
-function CandidateRow({ candidate, layout, onChange }: { candidate: ConductorCandidate; layout: CandidateLayout; onChange: (next: ConductorCandidate | null) => void }) {
+/**
+ * One candidate: the agent item (an agent, or one of its profiles on this
+ * machine), its model from that item's list where it takes one, its effort
+ * automatic or fixed, and what it is for. A row whose profile this machine
+ * no longer lists is dimmed as `없는 프로필` and its item is not in the list
+ * to pick again (B15); picking another item mends it.
+ */
+function CandidateRow({ candidate, list, layout, onChange }: { candidate: ConductorCandidate; list: { items: AgentItem[]; named: boolean }; layout: CandidateLayout; onChange: (next: ConductorCandidate | null) => void }) {
   const { t } = useInterfaceTranslation();
   const kind = candidateAgent(candidate.agent);
+  const profile = candidateProfile(candidate);
+  const gone = candidateGone(candidate, list.items);
+  // The start panel's names: the agents' product names once any agent has a profile, as before with none (B1).
+  const agentLabel = (of: ProviderKind) => (list.named ? agentProductName(of) : providerLabel(of));
+  const named = (item: AgentItem) => itemName(t, agentLabel(item.kind), item.name);
+  const item = list.items.find((row) => row.kind === kind && row.profile === profile) ?? null;
   const ai = useShellStore((s) => s.rest?.status?.background_ai);
   const installed = useShellStore((s) => {
     const id = agentAdapter(candidate.agent)?.id;
@@ -143,26 +165,31 @@ function CandidateRow({ candidate, layout, onChange }: { candidate: ConductorCan
   const [purpose, setPurpose] = useState(candidate.purpose);
   useEffect(() => setPurpose(candidate.purpose), [candidate.purpose]);
   const efforts = effortsOf(candidate.agent);
-  const catalog = modelCatalog(ai, kind, t);
-  const label = kind ? providerLabel(kind) : candidate.agent;
+  const catalog = modelCatalog(ai, kind, profile, t);
+  const label = !kind ? candidate.agent : gone ? missingItemName(t, agentLabel(kind)) : item ? named(item) : agentLabel(kind);
   const agent = (
-    <Select value={kind ?? candidate.agent} onValueChange={(value) => onChange({ agent: value, purpose: candidate.purpose })}>
-      <SelectTrigger aria-label={t("conductor.column.agent")} className="w-full min-w-0">
+    <Select value={item ? itemValue(item) : NO_ITEM} onValueChange={(value) => {
+      const [nextKind, nextProfile] = JSON.parse(value) as [ProviderKind, string];
+      onChange(pickItem(candidate, { kind: nextKind, profile: nextProfile }));
+    }}>
+      <SelectTrigger aria-label={t("conductor.column.agent")} className="w-full min-w-0" data-candidate-item={gone ? "gone" : profile}>
         <SelectValue>
           <span className="flex min-w-0 items-center gap-xs"><AgentMark kind={kind ?? candidate.agent} /><span className="truncate">{label}</span></span>
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {PROVIDER_KINDS.map((option) => (
-          <SelectItem key={option} value={option} data-conductor-agent-option={option}>
-            <AgentMark kind={option} />{providerLabel(option)}
+        {list.items.map((option) => (
+          <SelectItem key={itemValue(option)} value={itemValue(option)} data-conductor-agent-option={option.kind} data-conductor-item-option={option.profile}>
+            <AgentMark kind={option.kind} />{named(option)}
           </SelectItem>
         ))}
       </SelectContent>
     </Select>
   );
   const remove = <Button variant="ghost" size="icon-sm" aria-label={t("conductor.remove", { agent: label })} onClick={() => onChange(null)} data-candidate-remove="true"><XIcon /></Button>;
-  const missing = <span className={cn("text-caption text-muted-foreground", layout === "grid" && "col-span-3")} data-candidate-missing="true">{t("conductor.notInstalled")}</span>;
+  // A row that cannot start says why in place of its other cells: its agent is not installed, or its profile is gone.
+  const unusable = gone ? "gone" : installed === false ? "missing" : null;
+  const missing = <span className={cn("text-caption text-muted-foreground", layout === "grid" && "col-span-3")} data-candidate-missing={unusable ?? undefined}>{unusable === "gone" ? t("conductor.profileGone") : t("conductor.notInstalled")}</span>;
   const model = catalog === null ? (
     <span className="truncate text-caption text-muted-foreground" data-candidate-no-model="true">{t("conductor.noModel")}</span>
   ) : (
@@ -179,12 +206,12 @@ function CandidateRow({ candidate, layout, onChange }: { candidate: ConductorCan
       onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) event.currentTarget.blur(); }}
       data-candidate-purpose="true" />
   );
-  const data = { "data-conductor-candidate": candidate.agent, "data-candidate-installed": installed === false ? "false" : undefined };
+  const data = { "data-conductor-candidate": candidate.agent, "data-candidate-installed": installed === false ? "false" : undefined, "data-candidate-gone": gone ? "true" : undefined };
   if (layout === "stack") {
     return (
-      <div className={cn("flex min-w-0 flex-col gap-xs border-t border-border py-sm", installed === false && "opacity-(--opacity-dimmed)")} {...data}>
+      <div className={cn("flex min-w-0 flex-col gap-xs border-t border-border py-sm", unusable && "opacity-(--opacity-dimmed)")} {...data}>
         <div className="flex min-w-0 items-center gap-xs"><div className="min-w-0 flex-1">{agent}</div>{remove}</div>
-        {installed === false ? missing : (
+        {unusable ? missing : (
           <>
             <div className="flex min-w-0 flex-wrap items-center gap-xs"><div className="min-w-0 flex-1">{model}</div>{effort}</div>
             {purposeInput}
@@ -194,20 +221,21 @@ function CandidateRow({ candidate, layout, onChange }: { candidate: ConductorCan
     );
   }
   return (
-    <div className={cn("col-span-full grid grid-cols-subgrid items-center border-t border-border px-md py-xs", installed === false && "opacity-(--opacity-dimmed)")} {...data}>
+    <div className={cn("col-span-full grid grid-cols-subgrid items-center border-t border-border px-md py-xs", unusable && "opacity-(--opacity-dimmed)")} {...data}>
       {agent}
-      {installed === false ? missing : <>{model}{effort}{purposeInput}</>}
+      {unusable ? missing : <>{model}{effort}{purposeInput}</>}
       {remove}
     </div>
   );
 }
 
-/** The start panel's models for an agent that takes one, with why it cannot list them; null for an agent that takes none. */
-function modelCatalog(ai: BackgroundAi | undefined, kind: ProviderKind | null, t: (key: string, values?: Record<string, string>) => string) {
-  const catalog = kind && takesModel(kind) ? catalogFor(ai, kind) : null;
+/** The start panel's models of an item whose agent takes one (its profile's own list, B7), with why it cannot list them; null for an agent that takes none. */
+function modelCatalog(ai: BackgroundAi | undefined, kind: ProviderKind | null, profile: string, t: (key: string, values?: Record<string, string>) => string) {
+  const catalog = kind && takesModel(kind) ? catalogFor(ai, kind, profile === BUILT_IN_PROFILE ? null : profile) : null;
   if (!catalog) return null;
   return {
     models: catalog.state === "ready" ? catalog.models : [],
+    label: (model: string) => modelLabel(catalog, model),
     reason: catalog.state === "unavailable" ? t("conductor.modelsUnavailable", { reason: catalog.reason ?? "-" }) : null,
     loading: catalog.state === "loading",
   };
@@ -232,8 +260,8 @@ function EffortChoice({ efforts, value, onChange, ...data }: { efforts: readonly
   );
 }
 
-/** The start panel's model list for the agent (B49), disabled with why when it cannot be read. */
-function ModelMenu({ kind, value, models, reason, loading, onChange }: { kind: ProviderKind; value: string | null; models: readonly string[]; reason: string | null; loading: boolean; onChange: (model: string | null) => void }) {
+/** The start panel's model list for the item (B49), each model by the name its agent shows for it, disabled with why when it cannot be read. */
+function ModelMenu({ kind, value, models, label, reason, loading, onChange }: { kind: ProviderKind; value: string | null; models: readonly string[]; label: (model: string) => string; reason: string | null; loading: boolean; onChange: (model: string | null) => void }) {
   const { t } = useInterfaceTranslation();
   const listed = value && !models.includes(value) ? [value, ...models] : models;
   const menu = (
@@ -241,7 +269,7 @@ function ModelMenu({ kind, value, models, reason, loading, onChange }: { kind: P
       <SelectTrigger aria-label={t("conductor.column.model")} className="w-full min-w-0" data-candidate-model={value ?? ""} data-candidate-model-kind={kind}><SelectValue /></SelectTrigger>
       <SelectContent>
         <SelectItem value={DEFAULT_MODEL}>{t("conductor.defaultModel")}</SelectItem>
-        {listed.map((model) => <SelectItem key={model} value={model}>{model}</SelectItem>)}
+        {listed.map((model) => <SelectItem key={model} value={model}>{label(model)}</SelectItem>)}
       </SelectContent>
     </Select>
   );

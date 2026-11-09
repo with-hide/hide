@@ -9,7 +9,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, launchedProfileName, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { machineName, windowDeviceId } from "./screenMachine";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
@@ -160,14 +160,15 @@ function runLabel(run: ReturnType<typeof runWords>, t: TFunction<"translation">)
  * plan's, marked planned, while the node has not finished; otherwise
  * nothing, so finished work never shows the plan as what ran.
  */
-export function useNodeRun(node: MissionNode): { run: RunLabel; agent: string | null } | null {
+export function useNodeRun(node: MissionNode): { run: RunLabel; agent: string | null; profile: string | null } | null {
   const { t } = useInterfaceTranslation();
   const launched = node.launched ?? null;
+  const profile = useShellStore((s) => launchedProfileName(s.rest?.navigator?.devices, node.machine, launched));
   const planned = node.status !== "done" && node.status !== "dropped";
-  const launch = launched ? { launch_model: launched.model ?? null, launch_effort: launched.effort ?? null } : null;
+  const launch = launched ? { launch_model: launched.model ?? null, launch_effort: launched.effort ?? null, profile } : null;
   const run = runLabel(runWords(launch, planned ? node.worker : null, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
   if (!run) return null;
-  return { run, agent: run.from === "launch" ? launched!.agent : (node.worker?.agent ?? null) };
+  return run.from === "launch" ? { run, agent: launched!.agent, profile } : { run, agent: node.worker?.agent ?? null, profile: null };
 }
 
 /** A run's words, which truncate, before its planned mark, which never does, so a planned model never reads as launched. */

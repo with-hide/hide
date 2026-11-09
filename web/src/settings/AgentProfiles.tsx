@@ -23,7 +23,7 @@ import {
   type ProfileChange,
   type Worded,
 } from "../agentProfiles";
-import { InlineProfiles, ProfileDeleteDialog, ProfileFormDialog, ProfilesMachineNote, type ProfileDraft, type ProfileView } from "../components/agent-profiles";
+import { InlineProfiles, ProfileDeleteDialog, ProfileFormDialog, ProfilesMachineNote, type ProfileDraft, type ProfileUse, type ProfileView } from "../components/agent-profiles";
 import { Note } from "../components/settings-rows";
 import { hostBridge } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -43,7 +43,15 @@ type Open =
   // delete meets: kept while the delete itself is on its way.
   | { kind: "delete"; agent: string; id: string; found: Found | null };
 
-type Found = { inUse: NonNullable<AgentProfileAnswer["in_use"]>; projects: string[] };
+type Found = { inUse: NonNullable<AgentProfileAnswer["in_use"]>; uses: ProfileUse[] };
+
+/** What the core's check says uses the profile: the projects that start with it, then the mission candidates that name it (PRD agent-profiles-phase2 B22). */
+function profileUses(answer: AgentProfileAnswer): ProfileUse[] {
+  return [
+    ...(answer.projects ?? []).map((name): ProfileUse => ({ kind: "project", name })),
+    ...(answer.candidates ? [{ kind: "candidates", count: answer.candidates } as const] : []),
+  ];
+}
 
 type Sent = { id: string; change: ProfileChange; draft?: ProfileDraft };
 
@@ -101,10 +109,10 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
     }
     if (change.op === "add" && done && open.kind === "add") setOpen(null);
     if (open.kind !== "delete") return;
-    if (change.op === "remove_check" && done) setOpen({ ...open, found: { inUse: answer.in_use ?? [], projects: answer.projects ?? [] } });
+    if (change.op === "remove_check" && done) setOpen({ ...open, found: { inUse: answer.in_use ?? [], uses: profileUses(answer) } });
     // An agent that started with it since the check refuses the delete: the
     // dialog lists it then, as the check would have.
-    else if (change.op === "remove") setOpen(answer.code === "profile_in_use" ? { ...open, found: { inUse: answer.in_use ?? [], projects: [] } } : null);
+    else if (change.op === "remove") setOpen(answer.code === "profile_in_use" ? { ...open, found: { inUse: answer.in_use ?? [], uses: [] } } : null);
   }, [sent?.id, answer?.state]);
 
   function view(agent: string) {
@@ -211,7 +219,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
           profile={profile.name}
           location={profile.account ?? profile.program ?? ""}
           inUse={(found?.inUse ?? []).map((agent) => ({ id: agent.pane_id, title: agent.title, place: agent.place, asleep: agent.asleep, starting: agent.starting }))}
-          projects={found?.projects ?? []}
+          uses={found?.uses ?? []}
           busy={waiting}
           onConfirm={() => send({ op: "remove", id: profile.id })}
           onShow={(pane) => {

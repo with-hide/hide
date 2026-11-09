@@ -5,7 +5,8 @@
 
 import { agentAdapter } from "./agentAdapters";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
-import type { ConductorCandidate, ConductorSettings, MissionStrength } from "./snapshot";
+import { agentItems, BUILT_IN_PROFILE, type AgentItem } from "./agentProfiles";
+import type { ConductorCandidate, ConductorSettings, Device, MissionStrength } from "./snapshot";
 
 /** The cap's range (`CAP_LIMIT`) and the candidate list's (`CANDIDATE_LIMIT`). */
 export const CAP_LIMIT = 16;
@@ -42,4 +43,34 @@ export function addCandidate(settings: ConductorSettings): ConductorSettings {
 export function replaceCandidate(settings: ConductorSettings, index: number, next: ConductorCandidate | null): ConductorSettings {
   const candidates = next === null ? settings.candidates.filter((_, at) => at !== index) : settings.candidates.map((candidate, at) => (at === index ? next : candidate));
   return { ...settings, candidates };
+}
+
+/** The profile a candidate names, by its id on this machine; `default` for the agent's built-in one, which a row kept before profiles names by leaving it out (PRD agent-profiles-phase2 B14). */
+export function candidateProfile(candidate: ConductorCandidate): string {
+  return candidate.profile ?? BUILT_IN_PROFILE;
+}
+
+/** The row an item picked in its agent cell makes: that agent and profile, with the model and effort cleared since they were the other item's, and no profile sent for the built-in one, so it is kept as a row was before profiles. */
+export function pickItem(candidate: ConductorCandidate, item: Pick<AgentItem, "kind" | "profile">): ConductorCandidate {
+  return { agent: item.kind, ...(item.profile === BUILT_IN_PROFILE ? {} : { profile: item.profile }), purpose: candidate.purpose };
+}
+
+/**
+ * The agent cell's list on this machine (`device`, the one the candidates'
+ * profiles are of): every agent Hide starts, each with its built-in item
+ * first and then the profiles the machine lists (B7). `named` says some
+ * agent has a profile of its own, when the items read by the agents'
+ * product names as the start panel's do; with none the cell names the
+ * agents as it always did (B1).
+ */
+export function candidateItems(device: Device | undefined): { items: AgentItem[]; named: boolean } {
+  const items = PROVIDER_KINDS.flatMap((kind) => agentItems(device, kind));
+  return { items, named: items.some((item) => item.name !== null) };
+}
+
+/** Whether the candidate's profile is one this machine no longer lists (B15): such a row admits no worker, and its item cannot be picked again. */
+export function candidateGone(candidate: ConductorCandidate, items: readonly AgentItem[]): boolean {
+  const kind = candidateAgent(candidate.agent);
+  const profile = candidateProfile(candidate);
+  return profile !== BUILT_IN_PROFILE && !items.some((item) => item.kind === kind && item.profile === profile);
 }
