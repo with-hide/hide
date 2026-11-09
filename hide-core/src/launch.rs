@@ -103,6 +103,15 @@ impl Request {
         }
     }
 
+    /// The start as the operator reads it: the agent, named with its
+    /// profile when that is not the built-in default (`Claude · work`).
+    pub(crate) fn shown(&self) -> String {
+        self.name.as_deref().map_or_else(
+            || label(&self.target.kind).to_owned(),
+            |name| shown(&self.target.kind, name),
+        )
+    }
+
     pub(crate) fn with_choice(mut self, choice: &hide_agent_adapter::LaunchChoice) -> Self {
         self.choice = choice.clone();
         self

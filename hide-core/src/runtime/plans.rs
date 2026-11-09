@@ -1402,8 +1402,7 @@ impl Runtime {
         device: &str,
         parent: Option<&str>,
         plan_node: Option<&str>,
-        kind: &str,
-        launch: &hide_agent_adapter::LaunchChoice,
+        worker: &crate::runtime::missions::SpawnWorker<'_>,
         conducting: bool,
     ) -> Result<Option<PlanAdmission>, String> {
         let ledger = self.delivery_state()?;
@@ -1474,12 +1473,8 @@ impl Runtime {
             ));
         }
         let candidates = &self.snapshot.ui_state.conductor_settings.candidates;
-        if !candidates.is_empty()
-            && !candidates
-                .iter()
-                .any(|candidate| candidate.admits(kind, launch))
-        {
-            return Err("plan_candidate_refused".into());
+        if let Some(started) = self.outside_candidates(actor, worker, candidates)? {
+            return Err(refusal("plan_candidate_refused", &started));
         }
         let id = plan.id();
         // The attempt the step is on: the same while its child works or has

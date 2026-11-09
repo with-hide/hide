@@ -1254,27 +1254,9 @@ fn spawn(
     let agent = if earlier.as_ref().is_some_and(|record| record.completed) {
         None
     } else {
-        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
         let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
         let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
-        let profiles = locked.machine_profiles(child_machine);
-        let parent = if machine.is_none() {
-            locked.caller_launch_profile(actor, kind)
-        } else {
-            crate::launch::Parent::None
-        };
-        Some(crate::launch::pick(
-            kind,
-            profile
-                .as_deref()
-                .map(|name| crate::launch::chosen(kind, name, profiles))
-                .transpose()?,
-            &parent,
-            locked
-                .project_agent_profile(child_machine, repo, kind)
-                .as_ref(),
-            profiles,
-        ))
+        Some(locked.spawn_request(actor, machine.as_deref(), kind, profile.as_deref(), repo)?)
     };
     let mut hook_proof = None;
     // The child's hook is judged before anything is made for it, on every

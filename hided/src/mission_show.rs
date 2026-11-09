@@ -257,6 +257,12 @@ fn worker_words(node: &Value) -> Option<String> {
         .into_iter()
         .find(|worker| worker.is_object())?;
     let mut words = text(worker, "agent").to_owned();
+    // The profile the launch started with, by its name then (PRD
+    // agent-profiles-phase2 B12); a plan names none, and the built-in
+    // default reads as it always did.
+    if let Some(profile) = worker["profile"]["name"].as_str() {
+        let _ = write!(words, "·{profile}");
+    }
     for part in [&worker["model"], &worker["effort"]] {
         if let Some(part) = part.as_str() {
             let _ = write!(words, " {part}");
@@ -635,6 +641,35 @@ mod tests {
             draw(&unread, NOW)
                 .unwrap()
                 .ends_with("최근 편지 · 읽지 못함\n")
+        );
+    }
+
+    /// A worker launched with a profile names it beside its agent, and one
+    /// on the built-in default reads as before (PRD agent-profiles-phase2
+    /// B1, B12).
+    #[test]
+    fn a_workers_line_names_the_profile_it_was_launched_with() {
+        let mut node = mission()["mission"]["nodes"][0].clone();
+        node["agent_id"] = json!("agent-2");
+        let worker = |node: &Value| {
+            draw(
+                &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                NOW,
+            )
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with("작업자 "))
+            .map(str::to_owned)
+        };
+        node["launched"] = json!({"agent_id": "agent-2", "agent": "claude", "model": "opus"});
+        assert_eq!(
+            worker(&node).as_deref(),
+            Some("작업자 claude opus · agent-2 · 깨어 있음")
+        );
+        node["launched"]["profile"] = json!({"id": "p-work", "name": "work"});
+        assert_eq!(
+            worker(&node).as_deref(),
+            Some("작업자 claude·work opus · agent-2 · 깨어 있음")
         );
     }
 

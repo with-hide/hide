@@ -881,20 +881,34 @@ pub struct MissionNode {
     pub warnings: Vec<NodeWarning>,
 }
 
-/// The agent, model and effort Hide started a node's worker with, proven for
-/// one registration: its pane's launch record named the registration's own
-/// conversation. A start on the CLI's defaults records no launch, so it
-/// proves none.
+/// The agent item, model and effort Hide started a node's worker with,
+/// proven for one registration: its pane's launch record named the
+/// registration's own conversation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NodeLaunch {
     /// The worker's registration the launch was proven for.
     pub agent_id: String,
     /// The agent kind, in the engine's spelling.
     pub agent: String,
+    /// The profile it started with (PRD agent-profiles-phase2 B12); none
+    /// for the built-in default, as in every launch recorded before it. A
+    /// build before it reads a launch without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<NodeProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+}
+
+/// A profile a node's worker started with: its id on the worker's machine,
+/// by which the map names it as it is called now, and its name then, which
+/// the map shows once the profile is gone (B23) and `hide mission show`
+/// prints. Never its account.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeProfile {
+    pub id: hide_agent_adapter::ProfileId,
+    pub name: String,
 }
 
 /// Causes a node remembers as raised; past this a new cause is refused
@@ -1399,13 +1413,22 @@ fn default_cap() -> u8 {
     DEFAULT_CAP
 }
 
-/// One worker candidate (D-31, D-34): an agent, its model or the CLI's
-/// default, a fixed effort or none for the Conductor to choose, and what it
-/// is for.
+/// One worker candidate (D-31, D-34): an agent item (the agent and one of
+/// its profiles on the mission's machine, PRD agent-profiles-phase2 D-08),
+/// its model or the CLI's default, a fixed effort or none for the Conductor
+/// to choose, and what it is for.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Candidate {
     pub agent: String,
+    /// The profile, by its id on the mission's machine; `None` for the
+    /// agent's built-in default, which is left out of what is kept, so a
+    /// value of built-in defaults only is the bytes a build before profiles
+    /// wrote and reads (B14). A build before it refuses a value that names
+    /// one (`deny_unknown_fields`): `docs/INSTALL.md`, What each system
+    /// supports, says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<hide_agent_adapter::ProfileId>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -1415,17 +1438,40 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// Whether a worker started as `kind` with `launch` is this candidate
-    /// (D-34): the same agent, its model where the candidate fixes one or
-    /// the CLI's default where it names none, and its effort only where the
-    /// candidate fixes one; an automatic effort is the Conductor's choice.
-    pub(crate) fn admits(&self, kind: &str, launch: &hide_agent_adapter::LaunchChoice) -> bool {
-        hide_agent_adapter::canonical_kind(&self.agent) == hide_agent_adapter::canonical_kind(kind)
+    /// Whether a worker started as `target` with `launch` is this candidate
+    /// (D-34, PRD agent-profiles-phase2 D-08, B13): the same agent and
+    /// profile, the one the start actually runs with (`launch::pick`'s
+    /// answer, never the profile the spawn named alone), its model where the
+    /// candidate fixes one or the CLI's default where it names none, and its
+    /// effort only where the candidate fixes one; an automatic effort is the
+    /// Conductor's choice.
+    pub(crate) fn admits(
+        &self,
+        target: &hide_agent_adapter::LaunchTarget,
+        launch: &hide_agent_adapter::LaunchChoice,
+    ) -> bool {
+        hide_agent_adapter::canonical_kind(&self.agent)
+            == hide_agent_adapter::canonical_kind(&target.kind)
+            && self.profile_id() == target.profile
             && self.model == launch.model
             && self
                 .effort
                 .as_ref()
                 .is_none_or(|effort| launch.effort.as_ref() == Some(effort))
+    }
+
+    /// The profile the candidate names, the built-in default for none.
+    pub(crate) fn profile_id(&self) -> hide_agent_adapter::ProfileId {
+        self.profile
+            .clone()
+            .unwrap_or_else(hide_agent_adapter::ProfileId::default_profile)
+    }
+
+    /// The row as it is kept: the built-in default named by its id is the
+    /// one left out, so both spellings are one row.
+    fn kept(mut self) -> Self {
+        self.profile = self.profile.filter(|id| !id.is_default());
+        self
     }
 }
 
@@ -1446,6 +1492,13 @@ impl ConductorSettings {
                 candidate.effort.as_deref(),
             )
             .map_err(|code| format!("conductor_settings.{code}"))?;
+            if candidate
+                .profile
+                .as_ref()
+                .is_some_and(|id| !crate::project_settings::valid_profile_id(&id.0))
+            {
+                return Err("conductor_settings.profile_invalid".into());
+            }
             if candidate.purpose.len() > LINE_LIMIT
                 || candidate.purpose.chars().any(char::is_control)
             {
@@ -1453,6 +1506,14 @@ impl ConductorSettings {
             }
         }
         Ok(())
+    }
+
+    /// The value an edit keeps: each row as it is kept, then checked
+    /// (`validate`).
+    pub(crate) fn edited(mut self) -> Result<Self, String> {
+        self.candidates = self.candidates.into_iter().map(Candidate::kept).collect();
+        self.validate()?;
+        Ok(self)
     }
 
     /// Reads the value `core-state.json` keeps. Fields a value kept by an
@@ -2693,7 +2754,7 @@ pub fn next_action(code: &str) -> &'static str {
             "The node holds 16 defects; ask the operator how to go on with it"
         }
         "mission_candidate_refused" => {
-            "Start the worker as one of the operator's candidates: run hide mission settings for the agents, models and efforts it allows"
+            "Start the worker as one of the operator's candidates: run hide mission settings for the agent items (each with its --profile value), models and efforts it allows"
         }
         "mission_cap_reached" => {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"
@@ -3831,6 +3892,7 @@ pub(crate) mod tests {
         settings.concurrency = 4;
         settings.candidates.push(Candidate {
             agent: "opencode".into(),
+            profile: None,
             model: None,
             effort: Some("high".into()),
             purpose: String::new(),
@@ -3841,11 +3903,48 @@ pub(crate) mod tests {
         );
         settings.candidates[0] = Candidate {
             agent: "claude".into(),
+            profile: None,
             model: Some("opus".into()),
             effort: Some("high".into()),
             purpose: "screens".into(),
         };
         assert!(settings.validate().is_ok());
+    }
+
+    /// A candidate kept before profiles names its agent alone and reads as
+    /// the agent's built-in default item, written back byte for byte, in
+    /// Settings › Mission and in the copy a mission keeps (PRD
+    /// agent-profiles-phase2 B14, D-12); one that names a profile keeps it,
+    /// and the built-in default named by its id is kept as no profile.
+    #[test]
+    fn a_candidate_kept_before_profiles_reads_as_its_agents_built_in_default() {
+        let kept = r#"{"agent":"claude","model":"opus","effort":null,"purpose":"changes"}"#;
+        let candidate: Candidate = serde_json::from_str(kept).unwrap();
+        assert_eq!(
+            candidate.profile_id(),
+            hide_agent_adapter::ProfileId::default_profile()
+        );
+        assert_eq!(serde_json::to_string(&candidate).unwrap(), kept);
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["candidates"] =
+            serde_json::json!([serde_json::from_str::<serde_json::Value>(kept).unwrap()]);
+        let copied: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(copied.candidates, vec![candidate.clone()]);
+        assert_eq!(serde_json::to_value(&copied).unwrap(), stored);
+
+        let work =
+            r#"{"agent":"claude","profile":"p-work","model":null,"effort":null,"purpose":""}"#;
+        let named: Candidate = serde_json::from_str(work).unwrap();
+        assert_eq!(named.profile_id().0, "p-work");
+        assert_eq!(serde_json::to_string(&named).unwrap(), work);
+
+        let mut settings = ConductorSettings::default();
+        settings.candidates.push(Candidate {
+            profile: Some(hide_agent_adapter::ProfileId::default_profile()),
+            ..candidate.clone()
+        });
+        let edited = settings.edited().unwrap();
+        assert_eq!(edited.candidates, vec![candidate]);
     }
 
     /// A Conductor recorded before profiles names none and reads as the

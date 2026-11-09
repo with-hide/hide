@@ -235,7 +235,7 @@ impl ProjectSettings {
 }
 
 /// A profile id as a node makes them: short, with no control character.
-fn valid_profile_id(id: &str) -> bool {
+pub(crate) fn valid_profile_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
 }
 

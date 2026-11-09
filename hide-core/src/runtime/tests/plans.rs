@@ -519,6 +519,22 @@ fn handing(spec: &str, ask: bool) -> Value {
     ]}})
 }
 
+/// A Codex spawn on the caller's machine in the fixture's project, on the
+/// CLI's defaults and naming no profile.
+fn codex() -> crate::runtime::missions::SpawnWorker<'static> {
+    static DEFAULTS: hide_agent_adapter::LaunchChoice = hide_agent_adapter::LaunchChoice {
+        model: None,
+        effort: None,
+    };
+    crate::runtime::missions::SpawnWorker {
+        machine: None,
+        kind: "codex",
+        profile: None,
+        repo: "/checkouts/fixture",
+        launch: &DEFAULTS,
+    }
+}
+
 fn spawn_step(step: &str, parent: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
@@ -565,8 +581,7 @@ fn admit(runtime: &Runtime, actor: &Actor, step: &str) -> crate::coordination::P
             crate::node::TEST_NODE,
             Some("here"),
             Some(step),
-            "codex",
-            &Default::default(),
+            &codex(),
             false,
         )
         .unwrap()
@@ -677,7 +692,7 @@ fn a_step_is_handed_to_a_child_only_after_its_earlier_steps_and_the_review() {
         vec![serde_json::from_value(json!({"agent": "claude"})).unwrap()];
     assert_eq!(
         prepare(&mut runtime, &sender, "web", Some("here")),
-        "plan_candidate_refused"
+        crate::coordination::refusal("plan_candidate_refused", "Codex")
     );
     runtime
         .snapshot
@@ -720,8 +735,7 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
             crate::node::TEST_NODE,
             Some("here"),
             None,
-            "codex",
-            &Default::default(),
+            &codex(),
             false,
         ),
         Ok(None)
@@ -734,8 +748,7 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
                 crate::node::TEST_NODE,
                 Some("here"),
                 step,
-                "codex",
-                &Default::default(),
+                &codex(),
                 false,
             ),
             Err("plan_delegate_not_permitted".into())
@@ -748,8 +761,7 @@ fn a_plan_child_or_a_mission_worker_starts_no_agents() {
             crate::node::TEST_NODE,
             Some("here"),
             Some("web"),
-            "codex",
-            &Default::default(),
+            &codex(),
             true,
         ),
         Err("plan_delegate_not_permitted".into())

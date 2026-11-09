@@ -1457,7 +1457,9 @@ impl Runtime {
                     machine,
                     mission,
                     kind,
+                    repo,
                     launch,
+                    profile,
                     intent,
                     brief,
                     plan_node,
@@ -1466,6 +1468,13 @@ impl Runtime {
                 },
         } = &mut command
         {
+            let worker = crate::runtime::missions::SpawnWorker {
+                machine: machine.as_deref(),
+                kind,
+                profile: profile.as_deref(),
+                repo,
+                launch,
+            };
             // A plan's child and a mission's worker or checker start no
             // agents, and a step's spawn takes the intent the core makes for
             // its attempt (PRD hide-plan-delegate B1, B7, B8).
@@ -1475,8 +1484,7 @@ impl Runtime {
                     device,
                     parent.as_deref(),
                     plan_node.as_deref(),
-                    kind,
-                    launch,
+                    &worker,
                     self.missions.book.conducted_open(&actor).is_some(),
                 )?
                 .map(Box::new);
@@ -1484,14 +1492,7 @@ impl Runtime {
                 *intent = crate::coordination::plan_intent(&admission.link);
             }
             *mission = self
-                .mission_spawn_admission(
-                    &actor,
-                    machine.as_deref(),
-                    kind,
-                    launch,
-                    intent,
-                    brief.is_some(),
-                )?
+                .mission_spawn_admission(&actor, &worker, intent, brief.is_some())?
                 .map(Box::new);
         }
         // Only the pane's own session proves its composer was submitted, so a

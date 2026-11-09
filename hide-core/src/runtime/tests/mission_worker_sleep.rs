@@ -1107,6 +1107,7 @@ fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
         Some(NodeLaunch {
             agent_id: agent_id.into(),
             agent: "claude".into(),
+            profile: None,
             model: Some("opus".into()),
             effort: Some("high".into()),
         })
@@ -1183,6 +1184,55 @@ fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
     runtime.save_missions();
     show(&mut runtime, session("w-order:t1", None));
     assert_eq!(launched(&mut runtime), None);
+}
+
+/// A node keeps the profile its worker started with, by id with its name
+/// then and never its account (PRD agent-profiles-phase2 B12, B23), as the
+/// pane's launch record has it; a worker on the built-in default keeps none,
+/// so its launch reads as one recorded before profiles.
+#[test]
+fn a_node_keeps_the_profile_its_worker_started_with() {
+    const NAME: &str = "fix-worker";
+    let mut runtime = mission_runtime();
+    let work = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-work".into()),
+        name: "work".into(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+    };
+    runtime.record_pane_launch(
+        WORKER,
+        "claude",
+        NAME,
+        &Default::default(),
+        Some(&work),
+        None,
+    );
+    let mut payload = session("w-order:t1", Some("idle"));
+    payload
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+        .unwrap()
+        .name = Some(NAME.into());
+    show(&mut runtime, payload);
+    runtime.refresh_missions();
+    let launched = runtime.snapshot.missions.items[0].nodes[0]
+        .launched
+        .clone()
+        .unwrap();
+    assert_eq!(
+        launched.profile,
+        Some(crate::missions::NodeProfile {
+            id: work.id.clone(),
+            name: "work".into(),
+        })
+    );
+    let kept = serde_json::to_value(&runtime.missions.book.missions[0].nodes[0].launched).unwrap();
+    assert_eq!(
+        kept["profile"],
+        serde_json::json!({"id": "p-work", "name": "work"})
+    );
+    assert!(!kept.to_string().contains("/accounts/work"));
 }
 
 /// A node's worker plan is found by its registration's conversation (the

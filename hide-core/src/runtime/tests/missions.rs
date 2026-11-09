@@ -106,6 +106,22 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
     }
 }
 
+/// A spawn of `kind` in the project with `launch`, on `machine`, naming no
+/// profile.
+fn worker<'a>(
+    machine: Option<&'a str>,
+    kind: &'a str,
+    launch: &'a hide_agent_adapter::LaunchChoice,
+) -> crate::runtime::missions::SpawnWorker<'a> {
+    crate::runtime::missions::SpawnWorker {
+        machine,
+        kind,
+        profile: None,
+        repo: PROJECT,
+        launch,
+    }
+}
+
 /// The node `cause`'s worker, started on its brief.
 fn prepare_spawn(
     runtime: &mut Runtime,
@@ -229,11 +245,9 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         runtime
             .mission_spawn_admission(
                 &conductor,
-                None,
-                "codex",
-                &Default::default(),
+                &worker(None, "codex", &Default::default()),
                 "plain",
-                false
+                false,
             )
             .unwrap()
             .is_none()
@@ -262,9 +276,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     let admission = runtime
         .mission_spawn_admission(
             &conductor,
-            None,
-            "codex",
-            &Default::default(),
+            &worker(None, "codex", &Default::default()),
             "plain",
             false,
         )
@@ -288,11 +300,9 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         runtime
             .mission_spawn_admission(
                 &conductor,
-                None,
-                "codex",
-                &Default::default(),
+                &worker(None, "codex", &Default::default()),
                 "plain",
-                false
+                false,
             )
             .unwrap()
             .is_none()
@@ -2102,8 +2112,9 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     };
     let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
         runtime
-            .mission_spawn_admission(&conductor, None, kind, &choice, "plain", false)
+            .mission_spawn_admission(&conductor, &worker(None, kind, &choice), "plain", false)
             .map(|admission| admission.is_some())
+            .map_err(|refusal| crate::coordination::split_refusal(&refusal).0.to_owned())
     };
     // No candidates: any agent the machine has.
     assert_eq!(admit(&runtime, "codex", launch(None, None)), Ok(true));
@@ -2111,12 +2122,14 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     let candidates = vec![
         crate::missions::Candidate {
             agent: "claude".into(),
+            profile: None,
             model: None,
             effort: None,
             purpose: "changes".into(),
         },
         crate::missions::Candidate {
             agent: "codex".into(),
+            profile: None,
             model: Some("gpt-x".into()),
             effort: Some("high".into()),
             purpose: "review".into(),
@@ -2165,7 +2178,166 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     runtime.missions.book.missions[0].candidates.truncate(1);
     assert_eq!(
         prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
-        "mission_candidate_refused"
+        crate::coordination::refusal("mission_candidate_refused", "Codex")
+    );
+}
+
+/// The fixture's own machine lists Codex's profile `team` (`p-team`), and
+/// the Conductor's pane (`sender`, a Codex session) records that it runs
+/// with it.
+fn conductor_runs_team(runtime: &mut Runtime) {
+    let node = runtime.node.to_string();
+    let mut kit = runtime.kit_state(&node);
+    kit.profiles = Some(crate::model::ProfilesSnapshot {
+        state: crate::model::ProfilesState::Listed,
+        version: 1,
+        profiles: vec![crate::model::ProfileSnapshot {
+            id: "p-team".into(),
+            kind: "codex".into(),
+            name: "team".into(),
+            account: Some("/accounts/team".into()),
+            program: None,
+            env_keys: Vec::new(),
+            version: 1,
+            install: None,
+            folder: None,
+            hook: None,
+            skill: None,
+            login: None,
+            wrapper_folder: false,
+            startable: true,
+            account_key: Some(hide_agent_adapter::AccountKey::Folder(
+                "/accounts/team".into(),
+            )),
+            account_variables: Vec::new(),
+        }],
+        defaults: Default::default(),
+    });
+    runtime.kit_states.insert(node, kit);
+    runtime.snapshot.ui_state.pane_launches.insert(
+        "sender".into(),
+        crate::model::PaneLaunch {
+            pending: false,
+            start: 0,
+            kind: "codex".into(),
+            name: "sender".into(),
+            choice: Default::default(),
+            session: Some("sender-session".into()),
+            profile: Some(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p-team".into()),
+                name: "team".into(),
+                account: hide_agent_adapter::AccountKey::Folder("/accounts/team".into()),
+            }),
+        },
+    );
+}
+
+/// A candidate holds the profile a worker actually starts with (PRD
+/// agent-profiles-phase2 D-08, B12, B13, B15): a Conductor running
+/// `Codex · team` that spawns a Codex worker without `--profile` hands it
+/// its own profile, which a candidate of Codex's built-in default does not
+/// admit, and the refusal names what would have started; the same spawn
+/// naming the built-in default is the candidate. A candidate of
+/// `Codex · team` admits a worker that inherits it or names it, and not one
+/// on the built-in default. A candidate of a profile the machine no longer
+/// lists admits no worker at all, since no start can take that profile.
+#[test]
+fn a_candidate_admits_the_profile_a_worker_starts_with() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    conductor_runs_team(&mut runtime);
+    let candidate = |profile: Option<&str>| crate::missions::Candidate {
+        agent: "codex".into(),
+        profile: profile.map(|id| hide_agent_adapter::ProfileId(id.into())),
+        model: None,
+        effort: None,
+        purpose: String::new(),
+    };
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![candidate(None)];
+    running(&mut runtime);
+    let defaults = hide_agent_adapter::LaunchChoice::default();
+    let admit = |runtime: &Runtime, profile: Option<&str>| {
+        runtime
+            .mission_spawn_admission(
+                &conductor,
+                &crate::runtime::missions::SpawnWorker {
+                    profile,
+                    ..worker(None, "codex", &defaults)
+                },
+                "plain",
+                false,
+            )
+            .map(|admission| admission.is_some())
+    };
+    let refused = |item: &str| {
+        Err(crate::coordination::refusal(
+            "mission_candidate_refused",
+            item,
+        ))
+    };
+
+    assert_eq!(admit(&runtime, None), refused("Codex · team"));
+    assert_eq!(admit(&runtime, Some("default")), Ok(true));
+    // The spawn command itself is refused, before the ledger reserves it.
+    assert_eq!(
+        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
+        crate::coordination::refusal("mission_candidate_refused", "Codex · team")
+    );
+
+    runtime.missions.book.missions[0].candidates = vec![candidate(Some("p-team"))];
+    assert_eq!(admit(&runtime, None), Ok(true));
+    assert_eq!(admit(&runtime, Some("team")), Ok(true));
+    assert_eq!(admit(&runtime, Some("default")), refused("Codex"));
+
+    runtime.missions.book.missions[0].candidates = vec![candidate(Some("p-gone"))];
+    assert_eq!(admit(&runtime, None), refused("Codex · team"));
+    assert_eq!(admit(&runtime, Some("default")), refused("Codex"));
+    assert!(
+        admit(&runtime, Some("gone"))
+            .unwrap_err()
+            .starts_with(crate::launch::PROFILE_GONE)
+    );
+}
+
+/// `hide mission settings` names each candidate as the agent item it
+/// starts and the `--profile` value that starts it (PRD
+/// agent-profiles-phase2 B11, B14, B15): a row kept with its agent alone is
+/// the built-in default, a row of a listed profile is named by that
+/// profile's name now, and a row whose profile this machine no longer lists
+/// says so and names none.
+#[test]
+fn mission_settings_name_each_candidates_item() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    conductor_runs_team(&mut runtime);
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![
+        serde_json::from_value(json!({"agent": "codex", "purpose": "changes"})).unwrap(),
+        serde_json::from_value(json!({"agent": "codex", "profile": "p-team", "model": "gpt-x"}))
+            .unwrap(),
+        serde_json::from_value(json!({"agent": "codex", "profile": "p-gone"})).unwrap(),
+    ];
+    let (answer, _) = command(&mut runtime, "sender", json!({"op": "settings"})).unwrap();
+    let rows = answer["settings"]["candidates"].as_array().unwrap().clone();
+    let named = |row: &Value| {
+        (
+            row["item"].clone(),
+            row["profile"].clone(),
+            row.get("profile_gone").cloned(),
+        )
+    };
+    assert_eq!(named(&rows[0]), (json!("Codex"), json!("default"), None));
+    assert_eq!(
+        named(&rows[1]),
+        (json!("Codex · team"), json!("team"), None)
+    );
+    assert_eq!(
+        named(&rows[2]),
+        (Value::Null, Value::Null, Some(json!(true)))
+    );
+    assert_eq!(
+        (rows[0]["purpose"].clone(), rows[1]["model"].clone()),
+        (json!("changes"), json!("gpt-x"))
     );
 }
 
@@ -7092,9 +7264,7 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
         runtime
             .mission_spawn_admission(
                 &conductor,
-                machine,
-                "codex",
-                &Default::default(),
+                &worker(machine, "codex", &Default::default()),
                 intent,
                 true,
             )
