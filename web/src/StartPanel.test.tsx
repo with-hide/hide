@@ -321,3 +321,40 @@ it("shows the core's choice for another project and opens again on the core's ch
     expect(q("[data-agent-item]")?.getAttribute("data-agent-item")).toBe("claude/p-side");
   });
 });
+
+it("opens a profile item on its own default model when the remembered model is not in its list, and sends the listed one as it is (agent-profiles-phase2 B5)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem, root }) => {
+    const profiles = { state: "listed", version: 2, profiles: [profileFixture.listed("p-gate", "gate")], defaults: {} };
+    const rest = profileSnapshot(profiles, { blog: "p-gate" }) as unknown as { ui_state: { agent_start: unknown }; status: Record<string, unknown> };
+    rest.ui_state.agent_start = { kind: "claude", models: { claude: "opus" } };
+    rest.status.background_ai = { providers: [{ id: "claude", agent: "claude-code", state: "ready", selectable: true, models: ["opus", "sonnet"], profile_models: [{ profile: "p-gate", models: ["deepseek-v4", "glm-5"], model_labels: { "deepseek-v4": "DeepSeek V4" }, models_fixed: false }] }] };
+    await render(rest as unknown as SnapshotRest);
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    // The remembered `opus` is the agent's, not this item's: the item opens on its default.
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "p-gate" });
+    expect(started().at(-1)).not.toHaveProperty("model");
+    await act(async () => root.render(<></>));
+    await render(rest as unknown as SnapshotRest);
+    // The item's own models show their labels and are sent by value.
+    const model = q("[data-agent-model-kind]");
+    expect(model).not.toBeNull();
+    expect(model!.hasAttribute("disabled")).toBe(false);
+    model!.focus();
+    await act(async () => { model!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect([...document.querySelectorAll("[data-agent-model-option]")].map((row) => row.getAttribute("data-agent-model-option"))).toEqual(["", "deepseek-v4", "glm-5"]);
+    expect(q('[data-agent-model-option="deepseek-v4"]')?.textContent).toBe("DeepSeek V4");
+    const option = q('[data-agent-model-option="deepseek-v4"]')!;
+    option.focus();
+    await act(async () => { option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "p-gate", model: "deepseek-v4" });
+    // The built-in item takes the agent's remembered model again.
+    await act(async () => root.render(<></>));
+    await render(rest as unknown as SnapshotRest);
+    await openItems();
+    await pickItem("claude/default");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default", model: "opus" });
+  });
+});
