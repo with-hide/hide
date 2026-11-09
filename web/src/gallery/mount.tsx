@@ -35,7 +35,6 @@ import { PrListScene } from "./PrListScene";
 import { CloseTreeScene } from "./CloseTreeScene";
 import { ViewsCloseScene } from "./ViewsCloseScene";
 import { MissionScene } from "./MissionScene";
-import { DecisionViewsProposalScene } from "./DecisionViewsProposalScene";
 import { PlanScene } from "./PlanScene";
 import { SharedPartsScene } from "./SharedPartsScene";
 import { DeskScene } from "./DeskScene";
@@ -115,10 +114,6 @@ export function mountGallery(root: Root) {
     }
     if (scene === "pr-list") {
       root.render(<StrictMode><PrListScene params={params} /></StrictMode>);
-      return;
-    }
-    if (scene === "decision-views-proposal") {
-      root.render(<StrictMode><DecisionViewsProposalScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "mission") {

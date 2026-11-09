@@ -1425,6 +1425,20 @@ export type MissionQuestion = {
   /** The node the decision stopped. */
   node: string | null;
   asked_at_unix_ms: number;
+  /** The operator asked the Conductor for something to look at (`자료 요청`); absent until then. */
+  material_asked?: boolean;
+};
+
+/** A View linked to a mission's open decision that is still open (`DecisionView`): the Conductor's, named or opened in the turn that asked, or the stopped node's worker's in its current attempt. */
+export type DecisionView = {
+  device_id: string;
+  checkout_path: string;
+  display_id: string;
+  kind: ViewDisplaySnapshot["kind"];
+  label: string;
+  /** The operator has not looked at it since it was opened; absent once they have. */
+  unseen?: boolean;
+  by: "conductor" | "worker";
 };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
@@ -1594,6 +1608,8 @@ export type Mission = {
   decision: string | null;
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
+  /** The Views linked to that decision that are still open; absent when none. */
+  decision_views?: DecisionView[];
   answer: MissionAnswer | null;
   /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
   end_asked?: boolean;

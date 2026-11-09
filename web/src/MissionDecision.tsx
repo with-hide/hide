@@ -1,13 +1,16 @@
-import { CheckIcon, CircleAlertIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon, FileDiffIcon, GlobeIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed } from "./components/elapsed";
+import { FileMark } from "./components/file-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
+import { RowButton } from "./components/ui/row-button";
+import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import type { Mission } from "./snapshot";
+import type { DecisionView, Mission } from "./snapshot";
 import { composingKey } from "./keys";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer, type PressedAnswer } from "./missionAnswer";
 
@@ -34,6 +37,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   const waited = useElapsed(mission.stale ? null : (question?.asked_at_unix_ms ?? null));
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
   const view = answerView(mission, device, pressed);
+  const views = mission.decision_views ?? [];
   const { key, options, sent, unreachable, closed } = view;
 
   // What was pressed shows until the core answers for it, refuses it, or asks something else (B26).
@@ -97,6 +101,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
         {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
+      {views.length > 0 ? <DecisionViews views={views} actions={actions} /> : null}
       {sent?.line === "unconfirmed" ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent="unconfirmed">
           <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />
@@ -157,9 +162,69 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           ) : (
             <Button ref={writeButton} size="sm" variant="ghost" disabled={closed} onClick={() => setWriting(true)} data-mission-write="true">{t("mission.banner.write")}</Button>
           )}
+          {/* With nothing linked to look at, the operator may ask for it; it never holds the answer back. */}
+          {views.length === 0 && question && !writing ? (
+            question.material_asked ? (
+              <span className="flex shrink-0 items-center gap-xxs text-caption text-muted-foreground" data-mission-material="asked">
+                <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) text-mission-done" />
+                {t("mission.banner.asked")}
+              </span>
+            ) : (
+              <Button variant="text" size="inline" className="text-caption text-muted-foreground" disabled={closed || unreachable} onClick={() => actions.askMissionMaterial(mission.id, key)} data-mission-material="ask">
+                {t("mission.banner.ask")}
+              </Button>
+            )
+          ) : null}
         </div>
       )}
       {view.reason ? <p className={cn("min-w-0 text-caption", view.refused ? "text-mission-failed" : "text-muted-foreground")} data-mission-banner-reason={view.reason.kind === "failed" ? view.reason.failure : view.reason.kind}>{reason}</p> : null}
     </div>
   );
+}
+
+/** The fewest linked Views the card shows before `+N` folds the rest. */
+const FIRST_VIEWS = 3;
+
+/**
+ * The Views linked to the decision that are still open, seen or not: each
+ * a row that brings its View forward, its kind's mark, its name, the eye
+ * while the operator has not looked at it, and who linked it.
+ */
+function DecisionViews({ views, actions }: { views: DecisionView[]; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const [all, setAll] = useState(false);
+  const shown = all ? views : views.slice(0, FIRST_VIEWS);
+  const more = views.length - shown.length;
+  return (
+    <div className="flex min-w-0 flex-col" data-mission-banner-views={views.length}>
+      <span className="text-caption text-muted-foreground">{t("mission.banner.looks", { count: views.length })}</span>
+      <ul className="flex min-w-0 flex-col">
+        {shown.map((view) => (
+          <li key={`${view.device_id}:${view.checkout_path}:${view.display_id}`} className="min-w-0">
+            <RowButton className="gap-xs px-xxs py-xxs text-body" title={view.label} onClick={() => actions.openViewAt(view.device_id, view.checkout_path, view.display_id)} data-mission-banner-view={view.display_id} data-mission-banner-view-by={view.by}>
+              <ViewMark view={view} />
+              <span className="min-w-0 flex-1 truncate">{view.label}</span>
+              {view.unseen ? <StatusMark mark="look" label={t("agents.mark.look")} /> : null}
+              <span className="shrink-0 text-caption text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
+              <span className="ml-xs shrink-0 text-caption font-semibold text-subtle-foreground">{t("mission.banner.open")}</span>
+            </RowButton>
+          </li>
+        ))}
+        {more > 0 ? (
+          <li>
+            <Button variant="text" size="inline" className="px-xxs text-caption text-muted-foreground" onClick={() => setAll(true)} data-mission-banner-views-more={more}>
+              {t("mission.banner.more", { count: more })}
+            </Button>
+          </li>
+        ) : null}
+      </ul>
+    </div>
+  );
+}
+
+/** A View's kind as its tab draws it: a page's globe, a diff's mark, a file's type. */
+function ViewMark({ view }: { view: DecisionView }) {
+  if (view.kind === "browser") return <GlobeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
+  if (view.kind === "diff") return <FileDiffIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
+  return <FileMark icon={fileIcon(view.label)} className="size-(--size-icon-sm)" />;
 }
