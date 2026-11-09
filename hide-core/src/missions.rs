@@ -1958,6 +1958,44 @@ pub struct NodePatch {
     pub verifier: Option<String>,
 }
 
+impl NodePatch {
+    /// Whether it sets only what a node's worker may set on its own node
+    /// (with-hide/hide#2302): the pull request and the branch it delivers
+    /// on, and the node's one line. Its status, stack base, agents, words
+    /// and verdicts stay its Conductor's.
+    pub fn workers_own(&self) -> bool {
+        let Self {
+            status,
+            agent_id,
+            pr: _,
+            base_pr,
+            branch: _,
+            attempts,
+            line: _,
+            change,
+            review,
+            worker,
+            commit,
+            verdict,
+            checks,
+            reviewer,
+            verifier,
+        } = self;
+        status.is_none()
+            && agent_id.is_none()
+            && base_pr.is_none()
+            && attempts.is_none()
+            && change.is_none()
+            && review.is_none()
+            && worker.is_none()
+            && commit.is_none()
+            && verdict.is_none()
+            && checks.is_none()
+            && reviewer.is_none()
+            && verifier.is_none()
+    }
+}
+
 /// A node's criteria: a list of lines, one sentence, or none.
 fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
@@ -2539,7 +2577,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Another session conducts this mission; ask the operator before taking it over"
         }
         "mission_not_conductor" => {
-            "Only the mission's Conductor can change it; take it over with hide mission take <id> once it has none"
+            "Only the mission's Conductor can change it, but a node's worker sets its own node's --pr, --branch and --line; take it over with hide mission take <id> once it has none"
         }
         "mission_already_conducting" => {
             "Close or cancel the mission you conduct before creating another"
@@ -2553,6 +2591,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
         "mission_too_many_nodes" => "Plan at most 64 nodes; merge or split the work differently",
         "mission_node_unknown" => "Run hide mission show to see the plan's node keys",
+        "mission_ambiguous" => {
+            "You work or check nodes of more than one open mission: name the one you mean with --mission <id> (hide mission list)"
+        }
         "mission_node_in_progress" => {
             "Drop the node with hide mission node <key> --status dropped before removing it from the plan"
         }
