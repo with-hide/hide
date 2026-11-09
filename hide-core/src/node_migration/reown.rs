@@ -1572,16 +1572,18 @@ mod tests {
                 "stray_dismissals": dismissals,
                 "session_open_folds": before("fold"),
             });
-            // The Agent tab the front 보기 slot belongs to, and the slots of
-            // the tabs not in front.
-            let tabs = before("tab");
-            core["detail_home"] = json!(tabs[0]);
-            core["detail_tabs"] = Value::Object(
+            // Whose the front 보기 slot is, and the slots of the sessions not
+            // in front.
+            core["detail_owner"] = json!({"pane": panes[0], "session": {"device_id": devices[0], "agent": "claude", "session_id": "s"}});
+            core["detail_sessions"] = Value::Array(
                 (0..3)
-                    .map(|index| (tabs[index].clone(), json!({"items": [
-                        {"kind": "remains", "workspace_id": registrations[index], "checkout_id": checkouts[index]},
-                        {"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},
-                    ], "shown": false})))
+                    .map(|index| json!({
+                        "session": {"device_id": devices[index], "agent": "claude", "session_id": format!("s{index}")},
+                        "slot": {"items": [
+                            {"kind": "remains", "workspace_id": registrations[index], "checkout_id": checkouts[index]},
+                            {"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},
+                        ], "shown": false},
+                    }))
                     .collect(),
             );
             core["agent_permissions"] = permissions;
