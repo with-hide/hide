@@ -764,6 +764,8 @@ The last conversation line is the newest request or reply the session read prove
 Until a session read proves a line, the change stamp stands in, so a restart only ever delays a sleep.
 A wake stamps a last look, as a visit does, because the conversation it resumes is as old as the sleep and would make the agent due again at the next minute.
 A relaunch forgets an end that was in flight, because it cannot know whether it landed, and reads a wake that was in flight as still asleep until an agent appears in the pane.
+An in-pane sleep keeps the read axis's engine mark beside the ended agent's state sequence: the sequence identifies the ended agent only on that engine, because an engine restart starts its counter again.
+A listed provider whose program has shown wakes the record when either the sequence or that mark differs; a pane with no mark uses its read connection's, and an older record with no mark cannot claim that a newly listed agent is still the ended one.
 
 ### Sleep by mission, letter and command
 

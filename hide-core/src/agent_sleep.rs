@@ -207,10 +207,15 @@ pub struct SleepRecord {
     /// elapsed time is counted from.
     pub last_activity: String,
     /// The engine's state change sequence of the agent that was ended. A listed
-    /// agent on the pane with this sequence is that agent still being
-    /// reported; any other sequence is a new agent (B18).
+    /// agent on the pane with this sequence and server mark is that agent
+    /// still being reported; another engine can reuse the sequence (B18).
     #[serde(default)]
     pub state_change_seq: Option<u64>,
+    /// The existing read-axis engine mark that scopes `state_change_seq`.
+    /// Older records have none and cannot identify a newly listed agent as
+    /// the ended one on this engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_mark: Option<String>,
     #[serde(default)]
     pub completed: bool,
     #[serde(default)]
@@ -283,6 +288,7 @@ impl SleepRecord {
             progress: agent.progress.clone(),
             last_activity: agent.last_activity.clone(),
             state_change_seq: agent.state_change_seq,
+            server_mark: agent.server_mark.clone(),
             completed: agent.completed,
             parent_pane_id: agent.spawned_from_pane_id.clone(),
             parent_session: agent.declared_parent_session.clone(),
@@ -440,6 +446,7 @@ impl AgentSleepStore {
         &mut self,
         payload: &mut SessionSnapshotPayload,
         scope: SleepScope<'_>,
+        connection_mark: Option<&str>,
     ) -> Vec<Settled> {
         let live = payload
             .layouts
@@ -475,7 +482,9 @@ impl AgentSleepStore {
                 return true;
             }
             // Only an entry that names a provider and carries another state
-            // sequence is a new agent. The ended agent can stay listed a
+            // sequence or engine mark is a new agent. Sequences restart with
+            // the engine; a pane without a mark uses its read connection's,
+            // as the read axis does. The ended agent can stay listed a
             // moment with its old sequence, and a pane whose metadata a
             // plugin reports stays listed with no provider at all. A start
             // the engine typed and whose program has not shown is not one
@@ -490,8 +499,12 @@ impl AgentSleepStore {
                         .agent
                         .as_deref()
                         .is_some_and(|kind| !kind.trim().is_empty())
-                    && agent.state_change_seq != record.state_change_seq
                     && !agent.start_unshown
+                    && (agent.state_change_seq != record.state_change_seq
+                        || crate::engine::tokens::server_mark(&agent.tokens)
+                            .as_deref()
+                            .or(connection_mark)
+                            != record.server_mark.as_deref())
             });
             if new_agent {
                 settled.push(Settled::Woke {
@@ -986,7 +999,7 @@ mod tests {
             let mut session = payload(serde_json::json!([]), &["w1:p1", "w1:p2"]);
             assert!(
                 store
-                    .settle_payload(&mut session, SleepScope::Core)
+                    .settle_payload(&mut session, SleepScope::Core, None)
                     .is_empty()
             );
             let mut rows = vec![parent.clone()];
@@ -1011,7 +1024,7 @@ mod tests {
         let mut session = payload(serde_json::json!([]), &["w1:p1", "w1:p2"]);
         assert!(
             store
-                .settle_payload(&mut session, SleepScope::Core)
+                .settle_payload(&mut session, SleepScope::Core, None)
                 .is_empty()
         );
         let rows = crate::sidebar::project_agents(session).agents;
@@ -1059,7 +1072,7 @@ mod tests {
         let mut session = payload(stale, &["w1:p1", "w1:p2"]);
         assert!(
             store
-                .settle_payload(&mut session, SleepScope::Core)
+                .settle_payload(&mut session, SleepScope::Core, None)
                 .is_empty(),
             "the ended agent still reported"
         );
@@ -1077,7 +1090,7 @@ mod tests {
         let mut session = payload(labelled, &["w1:p1", "w1:p2"]);
         assert!(
             store
-                .settle_payload(&mut session, SleepScope::Core)
+                .settle_payload(&mut session, SleepScope::Core, None)
                 .is_empty()
         );
         assert_eq!(session.agents.len(), 2);
@@ -1095,7 +1108,7 @@ mod tests {
         let mut session = payload(starting, &["w1:p1", "w1:p2"]);
         assert!(
             store
-                .settle_payload(&mut session, SleepScope::Core)
+                .settle_payload(&mut session, SleepScope::Core, None)
                 .is_empty(),
             "a start whose program has not shown wakes nothing"
         );
@@ -1107,7 +1120,7 @@ mod tests {
             "agent_status": "blocked", "state_change_seq": 8, "launch_pending": true}]);
         let mut session = payload(asking, &["w1:p1", "w1:p2"]);
         assert_eq!(
-            store.settle_payload(&mut session, SleepScope::Core),
+            store.settle_payload(&mut session, SleepScope::Core, None),
             [Settled::Woke {
                 pane_id: "w1:p2".into(),
                 phase: SleepPhase::Sleeping
@@ -1119,7 +1132,7 @@ mod tests {
             "agent_status": "idle", "state_change_seq": 9}]);
         let mut session = payload(fresh, &["w1:p1"]);
         assert_eq!(
-            store.settle_payload(&mut session, SleepScope::Core),
+            store.settle_payload(&mut session, SleepScope::Core, None),
             [
                 Settled::Woke {
                     pane_id: "w1:p1".into(),
@@ -1132,6 +1145,54 @@ mod tests {
         );
         assert!(store.records.is_empty());
         assert_eq!(session.agents.len(), 1, "the new agent alone");
+    }
+
+    #[test]
+    fn a_restarted_engine_wakes_an_agent_even_when_its_sequence_is_reused() {
+        let mut store = AgentSleepStore::default();
+        let mut ended = agent("w1:p1");
+        ended.agent_kind = "codex".into();
+        ended.state_change_seq = Some(7);
+        ended.server_mark = Some("before-restart".into());
+        asleep(&mut store, &ended);
+
+        // Reconnecting to the same engine does not change the pane's mark.
+        let mut stale = payload(
+            serde_json::json!([{"pane_id": "w1:p1", "agent": "codex",
+                "agent_status": "idle", "state_change_seq": 7,
+                "tokens": {"hide_server": "before-restart"}}]),
+            &["w1:p1"],
+        );
+        assert!(
+            store
+                .settle_payload(&mut stale, SleepScope::Core, Some("new-connection"))
+                .is_empty(),
+            "the pane's engine mark takes precedence over its connection's"
+        );
+
+        let mut session = payload(
+            serde_json::json!([{"pane_id": "w1:p1", "agent": "codex",
+                "agent_status": "idle", "state_change_seq": 7,
+                "tokens": {"hide_server": "after-restart"}}]),
+            &["w1:p1"],
+        );
+        session.agents[0].start_unshown = true;
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty(),
+            "a different engine does not prove the start's program has shown"
+        );
+        session.agents[0].start_unshown = false;
+        assert_eq!(
+            store.settle_payload(&mut session, SleepScope::Core, None),
+            [Settled::Woke {
+                pane_id: "w1:p1".into(),
+                phase: SleepPhase::Sleeping,
+            }],
+            "state sequences are only comparable within the engine that issued them"
+        );
+        assert!(store.records.is_empty());
     }
 
     #[test]
@@ -1163,7 +1224,7 @@ mod tests {
         asleep(&mut store, &sleeper);
 
         let mut core = payload(serde_json::json!([]), &["w1:p1"]);
-        assert!(store.settle_payload(&mut core, SleepScope::Core).is_empty());
+        assert!(store.settle_payload(&mut core, SleepScope::Core, None).is_empty());
         assert!(
             core.agents.is_empty(),
             "the core's own w1:p1 is another pane"
@@ -1172,7 +1233,7 @@ mod tests {
         let mut node = payload(serde_json::json!([]), &["w1:p1"]);
         assert!(
             store
-                .settle_payload(&mut node, SleepScope::Device(NODE))
+                .settle_payload(&mut node, SleepScope::Device(NODE), None)
                 .is_empty()
         );
         assert_eq!(
@@ -1186,7 +1247,7 @@ mod tests {
 
         let mut gone = payload(serde_json::json!([]), &["w1:p2"]);
         assert_eq!(
-            store.settle_payload(&mut gone, SleepScope::Device(NODE)),
+            store.settle_payload(&mut gone, SleepScope::Device(NODE), None),
             [Settled::Closed {
                 pane_id: "remote:screen:pane:w1:p1".into()
             }]
