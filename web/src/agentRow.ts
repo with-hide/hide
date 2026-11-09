@@ -87,6 +87,12 @@ export function treeLine(agent: Pick<AgentRow, "state" | "status_code" | "mark">
   return agent.status_code === "error" || stateLine(agent) || line.mode === "waiting" ? line : null;
 }
 
+/** A project tree's row keeps to one line, so it draws a tree line but a waiting one: its ring says it waits and its hint says what for. */
+export function projectTreeLine(agent: Pick<AgentRow, "state" | "status_code" | "mark">): RowLine | null {
+  const line = treeLine(agent);
+  return line?.mode === "waiting" ? null : line;
+}
+
 /** The background tasks a finished turn left, as its line's tail (B27), or null when none. */
 export function backgroundTail(t: TFunction<"translation">, agent: { background_left?: number | null }): string | null {
   return agent.background_left ? t("agents.line.backgroundLeft", { count: agent.background_left }) : null;

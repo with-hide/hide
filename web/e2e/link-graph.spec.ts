@@ -138,7 +138,7 @@ function writeSessions(projects: string, cwd: string): Record<string, string> {
  */
 async function openCard(page: Page, number: number, fresh = true): Promise<Locator> {
   // The repository's own row opens its main checkout, whose row is drawn only while it holds an agent or the focus.
-  if (fresh) await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click();
+  if (fresh) await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
   await showSidebarPrs(page);
   // Waiting starts folded (B7); a group opens from its header.
   await page.locator('[data-pr-group] [data-pr-focus="group"]').first().waitFor({ timeout: 30_000 });

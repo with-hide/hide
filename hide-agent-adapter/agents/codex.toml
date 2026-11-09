@@ -21,6 +21,10 @@ session = ["resume", "{session}"]
 [account]
 by = "folder"
 
+[account.login]
+at = "login"
+any = ["/OPENAI_API_KEY", "/tokens/access_token"]
+
 [account.vars]
 CODEX_HOME = { default = "~/.codex", profile = "{account}", isolated_home = true }
 

@@ -20,6 +20,10 @@ session = ["--resume", "{session}"]
 [account]
 by = "folder"
 
+[account.login]
+at = "login"
+any = ["/*/key", "/*/access_token", "/*/refresh_token"]
+
 [account.vars]
 GROK_HOME = { default = "~/.grok", profile = "{account}" }
 

@@ -63,7 +63,7 @@ test("the Project tool counts the worktrees, and measures the project's disk onl
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     // The repository's own row opens its main checkout, whose row is drawn only while it holds an agent or the focus.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
     await chooseTheme(page, "light");
 
     const cpuBefore = cpuMs(daemon.pid);

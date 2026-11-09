@@ -1461,9 +1461,9 @@ export class DesktopHost {
     // Decoration failure is diagnostic only. Accept a fixed event from our
     // local status document, never arbitrary renderer text or personal data.
     window.webContents.on("console-message", (details) => {
-      if (details.message === '{"event":"brand_owl.unavailable","scene":"startup","asset":"owl-roam"}'
+      if (details.message === '{"event":"brand_owl.unavailable","scene":"startup","asset":"owl-blink"}'
         && window.webContents.getURL().startsWith(pathToFileURL(STATUS_PAGE).href + "?")) {
-        this.log.event("brand_owl.unavailable", { scene: "startup", asset: "owl-roam" });
+        this.log.event("brand_owl.unavailable", { scene: "startup", asset: "owl-blink" });
       }
     });
     this.browsers?.attach(window);

@@ -230,7 +230,10 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
                 let runtime = context.runtime.upgrade();
                 let guard = runtime.as_ref().and_then(|runtime| runtime.lock().ok());
                 match guard {
-                    Some(guard) => guard.hold_profile_start(guard.node().as_str(), request),
+                    Some(mut guard) => {
+                        let machine = guard.node().to_string();
+                        guard.hold_profile_start(&machine, request)
+                    }
                     None => Err(crate::launch::Refusal {
                         code: crate::launch::PROFILE_UNANSWERED,
                         detail: "the core stopped before the agent was started again".to_owned(),
@@ -967,10 +970,10 @@ fn start_or_degrade_agent(
     // The profile the agent ran with is asked once, before the pane is
     // touched: one that is gone keeps the shell and says so, rather than
     // reading as a resume that failed (PRD agent-profiles D-27, B20).
-    let request = hold(crate::launch::Request::recorded(
-        &agent.kind,
-        agent.profile.as_ref(),
-    ));
+    let request = hold(
+        crate::launch::Request::recorded(&agent.kind, agent.profile.as_ref())
+            .with_choice(&agent.launch),
+    );
     let profile = match request.and_then(|request| {
         crate::launch::resolve(node, &request).map(|profile| (request, profile))
     }) {

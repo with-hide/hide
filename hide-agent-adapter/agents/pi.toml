@@ -20,6 +20,10 @@ session = ["--session", "{session}"]
 [account]
 by = "folder"
 
+[account.login]
+at = "login"
+any = ["/*/key", "/*/env", "/*/access", "/*/refresh"]
+
 [account.vars]
 PI_CODING_AGENT_DIR = { default = "~/.pi/agent", profile = "{account}" }
 

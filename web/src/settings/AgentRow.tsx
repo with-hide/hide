@@ -203,7 +203,7 @@ function PermissionField({ device, agent, offer, state }: { device: Device; agen
  * and the one command that updates it; why a hook waits; a removal that did
  * not finish.
  */
-export function AgentRow({ device, agent, actions, onAct }: { device: Device; agent: KitAgent; actions: Actions; onAct: () => void }) {
+export function AgentRow({ device, agent, actions, onAct, readOnly = false }: { device: Device; agent: KitAgent; actions: Actions; onAct: () => void; readOnly?: boolean }) {
   const { t } = useInterfaceTranslation();
   const detailId = useId();
   const busy = device.kit?.busy === true;
@@ -221,6 +221,7 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
   const permission = usePermission(device, agent, actions);
   const pieceText = (part: AgentPart, piece: KitPiece) => [t("agents.problem", { part: t(`agents.part.${part}`), state: kitPartText(piece, t) }), piece.location].filter(Boolean).join(" · ");
   const problemDetail = problems.map(({ part, piece }) => pieceText(part, piece)).join("; ");
+  if (readOnly) return <Row className="opacity-(--opacity-dimmed)" label={<Name agent={agent} />} data-agent-row={`${device.id}:${agent.id}:read-only`} />;
   return (
     <Row
       className="group/agent"

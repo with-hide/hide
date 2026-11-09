@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "../../../web/src/i18n/instance";
 import { REGISTRY, type Command } from "../../../web/src/shortcuts";
-import { BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL } from "../channel";
+import { BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { browserPartition } from "./browserSync";
 import { session } from "electron";
@@ -11,10 +11,12 @@ import type { HostLog } from "./log";
 
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const ipc = vi.hoisted(() => new Map<string, (event: unknown, value?: unknown) => void>());
+/** What `new WebContentsView()` returns, for a test that lets the host build its own pages. */
+const nativeView = vi.hoisted(() => ({ make: (): unknown => { throw new Error("this test builds no native view"); } }));
 vi.mock("electron", () => ({
   ipcMain: { on: (channel: string, listener: (event: unknown, value?: unknown) => void) => ipc.set(channel, listener), handle: vi.fn() },
   Menu: { getApplicationMenu: () => null },
-  BrowserWindow: {}, WebContentsView: {}, session: {}, shell: {},
+  BrowserWindow: {}, WebContentsView: function WebContentsView() { return nativeView.make(); }, session: {}, shell: {},
 }));
 
 describe("native browser load generations", () => {
@@ -78,7 +80,7 @@ describe("native browser load stages", () => {
       });
       const value = {
         key: `${workspace}/d1`, workspace, id: "d1", applied: 3, partition: browserPartition(workspace, url, "local"), route: null, loading: null,
-        state: { url, loading: true, failure: null }, report: null, settled: new Set(), device: null, bounds: null, emulated: null, view: { webContents: contents },
+        state: { url, loading: true, failure: null }, report: null, settled: new Set(), device: null, bounds: null, emulated: null, view: { webContents: contents }, contentsId: contents.id,
       };
       (Reflect.get(subject, "pages") as Map<string, unknown>).set(value.key, value);
       Reflect.get(subject, "watch").call(subject, value);
@@ -165,7 +167,7 @@ describe("native browser CDP inventory", () => {
     // The gateway closes its session on the first retirement, and with it its observation.
     const stop = subject.observeCdp((retirement) => { told.push(retirement); stop(); });
     // A page the inventory reported, still alive but no longer eligible for CDP.
-    const page = { key: "fixture\u0000manual", workspace: "fixture", id: "manual", view: { webContents: { id: 7, isDestroyed: () => false, getURL: () => "file:///manual.html" } }, state: { url: "file:///manual.html" } };
+    const page = { key: "fixture\u0000manual", workspace: "fixture", id: "manual", view: { webContents: { id: 7, isDestroyed: () => false, getURL: () => "file:///manual.html" } }, contentsId: 7, state: { url: "file:///manual.html" } };
     (Reflect.get(subject, "pages") as Map<string, unknown>).set("manual", page);
     Reflect.set(subject, "cdpObserved", [{ key: page.key, area: "a1", contents: 7, url: "file:///manual.html", title: "" }]);
     expect(() => Reflect.get(subject, "publishCdp").call(subject)).not.toThrow();
@@ -477,7 +479,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id });
       const value = {
         key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: new Set(),
-        view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, state: { url: `https://${id}.example/`, loading: false, failure: null },
+        view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, contentsId: contents.id, state: { url: `https://${id}.example/`, loading: false, failure: null },
         report: null, route: null, applied: 3, partition: "persist:hide-browser-web", fileRestricted: true, device: null, emulated: null, bounds: { x: 0, y: 0, width: 640, height: 480 }, ...extra,
       };
       Reflect.get(subject, "watch").call(subject, value);
@@ -636,6 +638,71 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       update({ loading: true, failure: null });
       update({ loading: false });
       expect(await retry).toBe("loaded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a page that closes itself", () => {
+  const workspace = "local\u0000/checkout";
+  const rect = { x: 0, y: 0, width: 640, height: 480 };
+  const placement = (id: string, visible: boolean) => ({ id, area_id: "a1", url: `https://${id}.example/`, load: 3, rect: visible ? rect : null, visible });
+  const retained = [{ workspace, id: "closer", area_id: "a1" }, { workspace, id: "other", area_id: "a1" }];
+
+  it("keeps placing the Workspace's other pages, and shows why on its slot without loading it again until reloaded", async () => {
+    vi.useFakeTimers();
+    try {
+      // What Electron does: the page's `window.close()` destroys its contents
+      // and the view then names none (reproduced on Electron 44.4.5).
+      let nextId = 0;
+      const views: { view: { webContents?: EventEmitter & { id: number }; setVisible: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn> }; closeItself: () => void }[] = [];
+      nativeView.make = () => {
+        const contents = Object.assign(new EventEmitter(), {
+          id: ++nextId, isDestroyed: () => false, isFocused: () => false, getZoomFactor: () => 1, getURL: () => "", getTitle: () => "",
+          loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined),
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+        });
+        const view: (typeof views)[number]["view"] = { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() };
+        views.push({ view, closeItself: () => { view.webContents = undefined; contents.emit("destroyed"); } });
+        return view;
+      };
+      Object.assign(session, { fromPartition: vi.fn(() => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), on: vi.fn(), webRequest: { onBeforeRequest: vi.fn() } })) });
+      const resolve = vi.fn(() => new Promise<ResolvedPage>(() => undefined));
+      const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
+      const send = vi.fn();
+      const shellContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send, focus: vi.fn(), getZoomFactor: () => 1 });
+      const removeChildView = vi.fn();
+      const window = Object.assign(new EventEmitter(), { isFocused: () => true, isDestroyed: () => false, webContents: shellContents, contentView: { removeChildView, addChildView: vi.fn() } });
+      subject.attach(window as never);
+      const sync = (displays: ReturnType<typeof placement>[]) => Reflect.get(subject, "sync").call(subject, workspace, displays, retained);
+
+      sync([placement("closer", true), placement("other", false)]);
+      expect(resolve).toHaveBeenCalledExactlyOnceWith(workspace, "closer", 3);
+      const closer = views[0]!;
+      closer.closeItself();
+      expect(removeChildView).toHaveBeenCalledWith(closer.view);
+      // A fresh page stands on the same slot, shown, and nothing loads it.
+      const fresh = views[1]!;
+      expect(fresh.view.setBounds).toHaveBeenLastCalledWith(rect);
+      expect(fresh.view.setVisible).toHaveBeenLastCalledWith(true);
+      await vi.advanceTimersByTimeAsync(200);
+      const states = send.mock.calls.map(([, event]) => event as { kind: string; id: string; state?: { loading: boolean; failure: string | null } }).filter((event) => event.kind === "state" && event.id === "closer");
+      expect(states.at(-1)?.state).toMatchObject({ url: "https://closer.example/", loading: false, failure: english("native.browser.closedItself") });
+
+      // The operator moves to the other page: it is built and shown, and the fresh one hides.
+      expect(() => sync([placement("closer", false), placement("other", true)])).not.toThrow();
+      const other = views[2]!;
+      expect(other.view.setVisible).toHaveBeenLastCalledWith(true);
+      expect(fresh.view.setVisible).toHaveBeenLastCalledWith(false);
+      expect(resolve).toHaveBeenCalledTimes(2);
+
+      // Back on it, the toolbar's reload loads its address again, once.
+      sync([placement("closer", true), placement("other", false)]);
+      expect(resolve).toHaveBeenCalledTimes(2);
+      (ipc.get(BROWSER_COMMAND_CHANNEL) as unknown as (event: unknown, target: unknown, name: unknown) => void)({}, { workspace, id: "closer" }, "reload");
+      expect(resolve).toHaveBeenLastCalledWith(workspace, "closer", 3);
+      expect(resolve).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

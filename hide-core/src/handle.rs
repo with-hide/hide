@@ -1431,6 +1431,18 @@ impl Core {
         lock_recover(&self.runtime).phone_looks(pane_id)
     }
 
+    /// The account the agent in this machine's pane `pane_id` reads its
+    /// sessions in, by the rule every reader of a pane's account follows
+    /// (PRD agent-profiles D-03, B19): the phone's conversation opens there
+    /// alone. `None` while no agent row shows there. One short read under
+    /// the lock.
+    pub fn pane_account(&self, pane_id: &str) -> Option<hide_agent_adapter::AccountKey> {
+        if !check_owner_thread(self, "pane_account") {
+            return None;
+        }
+        lock_recover(&self.runtime).phone_pane_account(pane_id)
+    }
+
     /// Prepares the read of the files changed in the checkout `device_id`
     /// holds at `checkout_path`, for the phone's change list (PRD
     /// mobile-companion-ui D-08): one short step under the lock, which finds

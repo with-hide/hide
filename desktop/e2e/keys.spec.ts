@@ -214,7 +214,7 @@ test("cycles: ⌃Tab and ⌥Tab commit once, on releasing the held modifier", as
   // Recent Projects gamma, beta, fixture: fixture is current.
   const checkout = (name: string) => page.locator("[data-project]", { hasText: name }).locator("[data-checkout]").first();
   for (const name of ["gamma", "beta", "fixture"]) {
-    await (await showProjectRow(page, checkout(name))).click();
+    await (await showProjectRow(page, checkout(name))).click({ position: { x: 12, y: 8 } });
     await expect(checkout(name)).toHaveAttribute("aria-current", "true");
   }
 

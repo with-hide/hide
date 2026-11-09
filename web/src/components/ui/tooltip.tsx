@@ -157,9 +157,12 @@ function Hint({
   side,
   reveals = false,
   active = true,
+  content,
   children,
 }: {
   label: string;
+  /** What the hint draws when it is richer than the label's plain lines; the label stays the control's name. */
+  content?: ReactNode;
   shortcut?: ReactNode;
   contentClassName?: string;
   side?: "top" | "right" | "bottom" | "left";
@@ -175,8 +178,8 @@ function Hint({
         {children}
       </TooltipTrigger>
       <TooltipContent side={side} className={contentClassName}>
-        <span className="inline-flex items-center gap-sm whitespace-pre-line">
-          {label}
+        <span className={content ? "block" : "inline-flex items-center gap-sm whitespace-pre-line"}>
+          {content ?? label}
           {shortcut ? <span className="text-muted-foreground">{shortcut}</span> : null}
         </span>
       </TooltipContent>

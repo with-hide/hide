@@ -238,22 +238,24 @@ pub const GUIDE_SKILL: Skill = Skill {
     // version 7 sends an alias or a new account to the guide's profiles
     // (PRD agent-profiles D-33, D-34). Version 8 routes complex work,
     // planning and review requests to missions (PRD hide-task-skill-merge B7, B8).
+    // Version 9 proposes a mission before starting complex work.
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 8,
+    version: 9,
 };
 
 /// Routes work that needs a Conductor to `hide mission help`, leaving
 /// small work with the current agent. Version 2 folds in the retired `hide-task`
 /// stub; earlier builds also wrote `hide-conductor` (versions 1 to 3),
-/// which [`RETIRED_SKILLS`] takes out.
+/// which [`RETIRED_SKILLS`] takes out. Version 3 asks before using a mission
+/// for complex work unless the operator already requested one.
 pub const MISSION_SKILL: Skill = Skill {
     name: "hide-mission",
     description: "Conduct a mission of agents in Hide. Use when a task in a Hide pane takes more than a few steps, the operator asks you to plan first or have the work reviewed, or asks for a mission or several PRs carried as a group.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting when any of these signals applies:\n\n- The operator asks for planning first, review or a mission.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf none applies, do the work directly without a mission. If it is unclear, ask the operator in one line before starting: Shall I do it directly, or delegate it as a mission?",
-    version: 2,
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. If the operator explicitly asks for a mission or invokes `/hide-mission`, do not ask which way to work again. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting. Otherwise, look for these signals:\n\n- The operator asks for planning first or review.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf any signal applies, first ask the operator in one line: Shall I run this as a mission, or do it directly? Wait for their answer and follow it: if they choose a mission, run `hide mission help` and follow it; if they choose direct work, do it directly. If none applies, do the work directly without asking.",
+    version: 3,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them. A new stub

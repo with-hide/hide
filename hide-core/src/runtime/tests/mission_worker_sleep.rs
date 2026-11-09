@@ -784,6 +784,8 @@ fn a_child_still_ending_its_sleep_holds_its_place_against_a_waking_letter() {
 /// `hide ps` alike; while its end still runs, and again once the engine lists an
 /// agent in its pane, it reads `running`; an ended registration reads
 /// `ended`, not asleep, even while its pane keeps the sleep record.
+/// `hide agent list --live` lists it while asleep or running and not once
+/// ended (with-hide/hide#2303).
 #[test]
 fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
     use crate::delivery::answer::PsState;
@@ -822,7 +824,7 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
         let shown = ask(crate::coordination::Command::Show {
             id: "agent-2".into(),
         });
-        let list = ask(crate::coordination::Command::List);
+        let list = ask(crate::coordination::Command::List { live: false });
         let listed = list["items"]
             .as_array()
             .unwrap()
@@ -832,6 +834,15 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
         assert_eq!(
             (&shown["runtime"], &shown["connection"]),
             (&listed["runtime"], &listed["connection"])
+        );
+        // `hide agent list --live` lists it while it sleeps or runs and
+        // leaves it out once it ended, and lists no ended agent.
+        let live = ask(crate::coordination::Command::List { live: true });
+        let live = live["items"].as_array().unwrap();
+        assert!(live.iter().all(|item| item["runtime"] != "ended"));
+        assert_eq!(
+            live.iter().any(|item| item["id"] == "agent-2"),
+            listed["runtime"] != "ended"
         );
         let ps = runtime
             .lock()

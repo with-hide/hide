@@ -45,5 +45,6 @@ copyTree(path.join(root, "static"), path.join(dist, "static"));
 // JSON is embedded in the local script: file: needs neither fetch nor a relaxed CSP.
 await build({ entryPoints: [path.join(root, "static/status.js")], outfile: path.join(dist, "static/status.js"), bundle: true, platform: "browser", format: "iife", target: "chrome144", minify: true, legalComments: "eof" });
 fs.rmSync(path.join(dist, "static/owl-motion.js"));
-fs.rmSync(path.join(dist, "static/owl-roam.json"));
+// The startup owl is the site's canonical pose, copied rather than kept twice.
+for (const file of ["owl-blink.svg", "owl-blink-still.svg"]) fs.copyFileSync(path.join(root, "../site/assets/owls", file), path.join(dist, "static", file));
 fs.writeFileSync(path.join(dist, "static", "tokens.css"), tokenCss.replace(themeBlocks, ":root {"));

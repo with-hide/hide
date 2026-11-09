@@ -213,6 +213,11 @@ enum Command {
         pane_id: String,
         reply: Sender<hide_core::LookViews>,
     },
+    /// The account a pane's agent runs in, for a phone's conversation.
+    PaneAccount {
+        pane_id: String,
+        reply: Sender<Option<hide_agent_adapter::AccountKey>>,
+    },
     /// A checkout's change-list read, prepared under the lock; the Git read
     /// runs where the caller runs it, never on the owner thread.
     CheckoutChanges {
@@ -1030,6 +1035,20 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the looks reply".to_owned())
     }
 
+    /// The account the agent in this machine's pane `pane_id` runs in;
+    /// see `Core::pane_account`. `None` while no row shows an agent there,
+    /// or when the owner thread is gone.
+    pub fn pane_account(&self, pane_id: &str) -> Option<hide_agent_adapter::AccountKey> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::PaneAccount {
+                pane_id: pane_id.to_owned(),
+                reply,
+            })
+            .ok()?;
+        rx.recv().ok().flatten()
+    }
+
     /// The prepared change-list read of a checkout; see
     /// `Core::prepare_checkout_changes`.
     pub fn prepare_checkout_changes(
@@ -1721,6 +1740,9 @@ fn owner_loop(
             }
             Command::AgentLooks { pane_id, reply } => {
                 let _ = reply.send(core.agent_looks(&pane_id));
+            }
+            Command::PaneAccount { pane_id, reply } => {
+                let _ = reply.send(core.pane_account(&pane_id));
             }
             Command::CheckoutChanges {
                 device_id,

@@ -105,12 +105,11 @@ The logo signals this approach, while the interface continues to use its establi
 
 ## Product decoration
 
-The connecting desktop status page uses the original `desktop/static/owl-roam.json` with one locally bundled, pinned Lottie light player and a static SVG fallback.
-Its lowercase hide wordmark and brand line sit inside the flight path, above a thin indeterminate bar and the host's localized connecting sentence.
-Ready navigation never waits for a loop, and failure hides the decoration and preserves the existing recovery actions.
-The player and bar pause for reduced motion, a hidden document or an offscreen scene, and the document destroys its player and listeners on exit.
-The reduced-motion and failure still rests beside the brand so it cannot cover the words indefinitely.
-The player is MIT licensed; `desktop/static/owl-motion-LICENSE.md` ships beside the status page.
+The connecting desktop status page and the phone start page, while a chosen device opens, show `owl-blink`: the app icon's owl, which blinks, glances, turns and slips out of its tile and back in a three-second loop.
+It is a self-animating SVG with no player, converted from its Lottie source frame by frame, so a jump in the source stays a jump and never a slide across the tile.
+On the desktop it sits above the lowercase hide wordmark and brand line, which sit above a thin indeterminate bar and the host's localized connecting sentence; `build.mjs` copies the two files from `site/assets/owls/` beside the status page.
+Ready navigation never waits for a loop, and failure hides the connecting scene and preserves the existing recovery actions.
+The owl shows its still, and the bar pauses, under reduced motion, in a hidden document or an offscreen scene; a missing moving drawing falls back to the still, a missing still hides the owl, and either records `brand_owl.unavailable` once (the host's log on the desktop, the console on the phone's start page, which has no log).
 
 The wizard uses `owl-agents`, `owl-devices` and `owl-ai` for its existing three steps.
 The ready Home without projects uses `owl-ai`; Factory uses one `owl-factory` in its first-visit line or empty state, without opening the unreleased Factory.
@@ -119,5 +118,5 @@ A failed decoration records a structured diagnostic and leaves the screen's acti
 No decoration represents an agent's live state.
 
 `design/assets/owls/*.png` are transparent raster derivatives of those vector stills for Pen's image fills, with the same colors and proportions.
-Regenerate them with `rsvg-convert` at 288 square for the four web poses and 960 by 540 for the startup still.
+Regenerate them with `rsvg-convert` at 288 square, the four web poses and `owl-blink`.
 These are design artwork, not verification captures.

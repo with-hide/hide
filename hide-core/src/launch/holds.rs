@@ -9,22 +9,13 @@
 //! around I/O, a node call or the runtime's lock, so a start's worker can
 //! end a hold without the runtime.
 //!
-//! A start's hold lives through two stages:
-//!
-//! - **Resolving**, from the plan until the start is typed into its pane:
-//!   the last clone of its [`Hold`] going ends it, since nothing ran. A
-//!   start refused before typing, or whose attempt failed, ends so.
-//! - **Typed** ([`Hold::typed`], by `agent_start::start_within` once the
-//!   engine answered a start that may have run): it no longer ends with the
-//!   start's values. It ends when the runtime sees the agent row the start
-//!   made, described by a launch record naming the profile, which carries
-//!   the use from then on, or when the pane is gone from the topology a pass
-//!   owns (`Runtime::settle_profile_holds`). A start nothing confirmed keeps
-//!   it, as one that may run.
-//!
-//! Through both it keeps a slot of the launch records: a start counts
-//! against `PANE_LAUNCH_LIMIT` from its plan until its record is written, so
-//! starts planned together never take more records than there are.
+//! The worker ends a hold with its attempt's result, never by reading a
+//! projected agent row. A definite non-start releases it immediately. A
+//! start that ran or may have run hands its launch record to the runtime
+//! through this same bounded table. The runtime writes the record before
+//! releasing the reserved slot, under its own lock. Completion wakes the
+//! existing session coordinator; every admission also takes pending results.
+//! A guard hands off an unknown result on unwind after submitting a start.
 //!
 //! A removal marks its profile `removing` with the list version its change
 //! names, and a start of a marked profile is refused. The mark goes when the
@@ -43,9 +34,18 @@ use hide_agent_adapter::ProfileId;
 
 /// The starts and removals of every machine's profiles, which the runtime
 /// owns and shares with the starts it plans.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct ProfileHolds {
     table: Mutex<Table>,
+    wake: Mutex<Option<crate::session_sync::RepublishWaker>>,
+}
+
+impl std::fmt::Debug for ProfileHolds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfileHolds")
+            .field("table", &self.lock())
+            .finish()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -66,8 +66,10 @@ pub(crate) struct Start {
     pub(crate) kind: String,
     /// The pane the start was typed into, once it was.
     pub(crate) pane: Option<String>,
-    /// Its launch record was written, so it holds no slot of its own.
-    pub(crate) recorded: bool,
+    choice: hide_agent_adapter::LaunchChoice,
+    /// Submitted to the engine, and handed off once the attempt ends.
+    pub(crate) record: Option<crate::model::PaneLaunch>,
+    finished: bool,
 }
 
 /// One start's hold: its clones are the same start, and the last one going
@@ -95,18 +97,74 @@ impl Drop for Held {
         if table
             .starts
             .get(&self.id)
-            .is_some_and(|start| start.pane.is_none())
+            .is_some_and(|start| start.record.is_none())
         {
             table.starts.remove(&self.id);
         }
     }
 }
 
-impl Hold {
-    /// The start was typed into `pane`: it may run from now.
-    pub(crate) fn typed(&self, pane: &str) {
-        if let Some(start) = self.0.holds.lock().starts.get_mut(&self.0.id) {
-            start.pane = Some(pane.to_owned());
+/// Owns the handoff on every return and unwind of one start call.
+pub(crate) struct Finish {
+    hold: Option<Hold>,
+}
+
+impl Finish {
+    pub(crate) fn new(hold: Option<Hold>) -> Self {
+        Self { hold }
+    }
+
+    pub(crate) fn submitted(&self, launch: &crate::engine::AgentLaunch) {
+        if let Some(hold) = &self.hold {
+            let mut table = hold.0.holds.lock();
+            if let Some(start) = table.starts.get_mut(&hold.0.id) {
+                start.pane = Some(launch.pane_id.clone());
+                start.record = Some(crate::model::PaneLaunch {
+                    kind: hide_agent_adapter::canonical_kind(launch.launch.kind()).into(),
+                    name: launch.name.clone(),
+                    choice: start.choice.clone(),
+                    session: None,
+                    profile: launch.launch.record(),
+                    pending: true,
+                    start: hold.0.id,
+                });
+            }
+        }
+    }
+
+    /// The engine definitely admitted no execution. A retry may submit
+    /// again; leaving now releases the hold even if another clone survives.
+    pub(crate) fn not_started(&self) {
+        if let Some(hold) = &self.hold
+            && let Some(start) = hold.0.holds.lock().starts.get_mut(&hold.0.id)
+        {
+            start.record = None;
+            start.pane = None;
+        }
+    }
+}
+
+impl Drop for Finish {
+    fn drop(&mut self) {
+        let Some(hold) = &self.hold else { return };
+        {
+            let mut table = hold.0.holds.lock();
+            if let Some(start) = table.starts.get_mut(&hold.0.id) {
+                if start.record.is_some() {
+                    start.finished = true;
+                } else {
+                    table.starts.remove(&hold.0.id);
+                }
+            }
+        }
+        if let Some(wake) = &*hold
+            .0
+            .holds
+            .wake
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            wake.wake();
         }
     }
 }
@@ -139,6 +197,7 @@ impl ProfileHolds {
         kind: &str,
         records: usize,
         limit: usize,
+        choice: &hide_agent_adapter::LaunchChoice,
     ) -> Result<Hold, Refused> {
         let mut table = self.lock();
         if table
@@ -150,7 +209,7 @@ impl ProfileHolds {
         if records + table.unrecorded() >= limit {
             return Err(Refused::RecordsFull);
         }
-        table.next += 1;
+        table.next = table.next.checked_add(1).ok_or(Refused::RecordsFull)?;
         let id = table.next;
         table.starts.insert(
             id,
@@ -159,7 +218,9 @@ impl ProfileHolds {
                 profile: profile.clone(),
                 kind: kind.to_owned(),
                 pane: None,
-                recorded: false,
+                choice: choice.clone(),
+                record: None,
+                finished: false,
             },
         );
         Ok(Hold(Arc::new(Held {
@@ -173,18 +234,40 @@ impl ProfileHolds {
         self.lock().unrecorded()
     }
 
-    /// The start typed into `pane` of `machine` with `profile` has its
-    /// record now.
-    pub(crate) fn recorded(&self, machine: &str, pane: &str, profile: &ProfileId) {
+    pub(crate) fn set_waker(&self, wake: crate::session_sync::RepublishWaker) {
+        *self
+            .wake
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(wake);
+    }
+
+    /// Orders an ordinary launch record after every start already planned.
+    /// The same clock orders profiled and built-in-default starts.
+    pub(crate) fn record_order(&self) -> Option<u64> {
         let mut table = self.lock();
-        for start in table.starts.values_mut() {
-            if start.machine == machine
-                && start.pane.as_deref() == Some(pane)
-                && start.profile == *profile
-            {
-                start.recorded = true;
-            }
-        }
+        table.next = table.next.checked_add(1)?;
+        Some(table.next)
+    }
+
+    /// Reading a result does not release its slot. The runtime releases it
+    /// only after writing its record, while it still owns admission.
+    pub(crate) fn completed(&self) -> Vec<(u64, Start)> {
+        self.lock()
+            .starts
+            .iter()
+            .filter(|(_, start)| start.finished)
+            .map(|(id, start)| (*id, start.clone()))
+            .collect()
+    }
+
+    pub(crate) fn release(&self, id: u64) {
+        self.lock().starts.remove(&id);
+    }
+
+    pub(crate) fn forget(&self, machine: &str) {
+        let mut table = self.lock();
+        table.starts.retain(|_, start| start.machine != machine);
+        table.removing.retain(|(on, _), _| on != machine);
     }
 
     /// The starts of `profile` on `machine` held now.
@@ -195,18 +278,6 @@ impl ProfileHolds {
             .filter(|start| start.machine == machine && start.profile == *profile)
             .cloned()
             .collect()
-    }
-
-    /// Ends the typed starts `ended` says are over; called under the
-    /// runtime lock with what it knows of their panes.
-    pub(crate) fn settle(&self, ended: impl Fn(&Start, &str) -> bool) -> usize {
-        let mut table = self.lock();
-        let before = table.starts.len();
-        table.starts.retain(|_, start| match start.pane.as_deref() {
-            Some(pane) => !ended(start, pane),
-            None => true,
-        });
-        before - table.starts.len()
     }
 
     /// Marks `profile` on `machine` as being removed by a change that names
@@ -267,66 +338,33 @@ impl ProfileHolds {
 
 impl Table {
     fn unrecorded(&self) -> usize {
-        self.starts.values().filter(|start| !start.recorded).count()
+        self.starts.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn id(name: &str) -> ProfileId {
-        ProfileId(name.to_owned())
+        ProfileId(name.into())
     }
-
-    #[test]
-    fn a_start_never_typed_ends_with_its_last_clone_and_a_typed_one_stays() {
-        let holds = Arc::new(ProfileHolds::default());
-        let hold = holds.hold("m", &id("p"), "claude", 0, 8).unwrap();
-        let clone = hold.clone();
-        drop(hold);
-        assert_eq!(holds.starting("m", &id("p")).len(), 1);
-        drop(clone);
-        assert!(holds.starting("m", &id("p")).is_empty());
-
-        let typed = holds.hold("m", &id("p"), "claude", 0, 8).unwrap();
-        typed.typed("m:p1");
-        drop(typed);
-        assert_eq!(holds.starting("m", &id("p")).len(), 1);
-    }
-
     #[test]
     fn a_removal_and_a_start_of_one_profile_refuse_each_other() {
         let holds = Arc::new(ProfileHolds::default());
-        let hold = holds.hold("m", &id("p"), "claude", 0, 8).unwrap();
+        let hold = holds
+            .hold("m", &id("p"), "claude", 0, 8, &Default::default())
+            .unwrap();
         assert_eq!(holds.remove("m", &id("p"), 3).unwrap_err().len(), 1);
         // Another machine's profile of the same id is another profile.
         assert!(holds.remove("n", &id("p"), 3).is_ok());
         drop(hold);
         assert!(holds.remove("m", &id("p"), 3).is_ok());
         assert_eq!(
-            holds.hold("m", &id("p"), "claude", 0, 8).unwrap_err(),
+            holds
+                .hold("m", &id("p"), "claude", 0, 8, &Default::default())
+                .unwrap_err(),
             Refused::Removing
         );
-    }
-
-    #[test]
-    fn starts_planned_together_never_take_more_records_than_there_are() {
-        let holds = Arc::new(ProfileHolds::default());
-        // Two records kept of four: two more starts fit, a third does not.
-        let first = holds.hold("m", &id("a"), "claude", 2, 4).unwrap();
-        let second = holds.hold("m", &id("b"), "claude", 2, 4).unwrap();
-        assert_eq!(
-            holds.hold("m", &id("c"), "claude", 2, 4).unwrap_err(),
-            Refused::RecordsFull
-        );
-        // A start whose record is written is counted among the records.
-        first.typed("m:p1");
-        holds.recorded("m", "m:p1", &id("a"));
-        assert_eq!(holds.unrecorded(), 1);
-        assert!(holds.hold("m", &id("c"), "claude", 3, 4).is_err());
-        drop(second);
-        assert!(holds.hold("m", &id("c"), "claude", 3, 4).is_ok());
     }
 
     #[test]

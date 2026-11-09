@@ -261,7 +261,7 @@ impl Runtime {
     }
 
     /// Every pane on screen whose agent runs a session, by session.
-    fn live_sessions(&self) -> Vec<(String, SessionIdentity)> {
+    pub(super) fn live_sessions(&self) -> Vec<(String, SessionIdentity)> {
         let local = self.snapshot.navigator.agents.iter().filter_map(|agent| {
             Some((
                 agent.pane_id.clone(),

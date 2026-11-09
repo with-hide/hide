@@ -60,6 +60,14 @@ pub(super) struct PracticeProgressPayload {
 #[serde(deny_unknown_fields)]
 pub(super) struct DetailOpenPayload {
     pub(super) item: DetailItem,
+    /// Opened where the item's own agent works (operator decision
+    /// 2026-11-09): a session's record or plan in that session's tab, a
+    /// mission's map in its Conductor's, the agent's pane taking the
+    /// keyboard. An item whose agent has no pane on this machine opens in the
+    /// tab in front. Unset for what a card opens inside the slot, such as a
+    /// child's record, which stays in the slot it was pressed in.
+    #[serde(default)]
+    pub(super) in_owner_tab: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,6 +254,70 @@ impl Runtime {
         }
         self.call_front_lane();
         true
+    }
+
+    /// `detail_open` with `in_owner_tab`: the item's own agent comes
+    /// forward first, so the slot it opens in is that agent's tab's (operator
+    /// decision 2026-11-09), in one event.
+    pub(super) fn open_detail_in_owner_tab(&mut self, item: DetailItem) -> bool {
+        if let Some(pane) = self.detail_owner_pane(&item) {
+            self.focus_pane(pane, PaneFocusOrigin::Operator, None);
+        }
+        self.open_detail(item)
+    }
+
+    /// The pane on this machine whose agent owns `item`: the session's own
+    /// pane for its record or plan, the Conductor's for a mission while it
+    /// holds the mission, the agent that made a pull request for its card. A device's pane is focused on that device and its
+    /// tab comes forward only when the device answers, so an item owned
+    /// there opens in the tab in front (`docs/INSTALL.md`, What each system
+    /// supports).
+    fn detail_owner_pane(&self, item: &DetailItem) -> Option<String> {
+        match item {
+            DetailItem::Record { session } | DetailItem::Plan { session } => {
+                if session.device_id != self.node.as_str() {
+                    return None;
+                }
+                self.live_sessions()
+                    .into_iter()
+                    .find(|(_, live)| live == session)
+                    .map(|(pane, _)| pane)
+            }
+            DetailItem::Mission { mission } => {
+                let mission = self
+                    .snapshot
+                    .missions
+                    .items
+                    .iter()
+                    .find(|row| row.id == *mission)?;
+                let conductor = &mission.conductor;
+                (mission.device_id == self.node.as_str()
+                    && conductor.present
+                    && self.local_tab_pane(&conductor.pane_id))
+                .then(|| conductor.pane_id.clone())
+            }
+            DetailItem::PullRequest {
+                workspace_id,
+                number,
+            } => {
+                let (_, project) = self.issue_project(workspace_id)?;
+                super::pull_requests::pull_request_lead(&project, *number)
+                    .filter(|pane| self.local_tab_pane(pane))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a tab of this machine holds `pane`, the place `focus_pane`
+    /// brings forward.
+    pub(super) fn local_tab_pane(&self, pane: &str) -> bool {
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .any(|tab| tab.panes.iter().any(|row| row.id == pane))
     }
 
     /// ←: the item opened before the one shown, or the slot empties as ✕
