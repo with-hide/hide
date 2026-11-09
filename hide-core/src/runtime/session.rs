@@ -5264,6 +5264,7 @@ impl Runtime {
         // worker names it from the engine's own id for the pane.
         if let (crate::worktree_control::TaskAgentOutcome::Started(profile), Some(launch)) =
             (&outcome, &launch)
+            && profile.is_none()
             && let Some((pane_id, kind, name)) =
                 self.snapshot.task_operation.as_ref().and_then(|operation| {
                     let pane_id = operation.pane_id.clone()?;
@@ -5276,9 +5277,7 @@ impl Runtime {
                     Some((pane_id, kind, name))
                 })
         {
-            if profile.is_none() {
-                self.record_pane_launch(&pane_id, &kind, &name, launch, None, None);
-            }
+            self.record_pane_launch(&pane_id, &kind, &name, launch, None, None);
         }
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;

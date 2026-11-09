@@ -234,7 +234,7 @@ pub(super) fn observe_launch(
     if !describes(launch, agent) {
         return false;
     }
-    let mut changed = std::mem::replace(&mut launch.pending, false);
+    let mut changed = std::mem::take(&mut launch.pending);
     if agent.session_id.is_some() && agent.session_id != launch.session {
         launch.session = agent.session_id.clone();
         changed = true;
@@ -318,8 +318,7 @@ impl Runtime {
                 session: session.map(str::to_owned),
                 profile: profile.cloned(),
             };
-            let moved = launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch);
-            moved
+            launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch)
         }
     }
 
