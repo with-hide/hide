@@ -111,6 +111,9 @@ export type PhoneMissionNode = MissionNodeBrief & {
   escalation: WorkerEscalation | null;
 };
 
+/** A View linked to a mission's open decision (`PhoneDecisionView`). */
+export type PhoneDecisionView = { device_id: string; display_id: string; kind: string; label: string; unseen?: boolean; by: "conductor" | "worker"; pane_id?: string };
+
 /** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
 export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   title: string;
@@ -120,6 +123,8 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   question: MissionQuestion | null;
   answer: MissionAnswer | null;
   answer_failed: MissionAnswerFailure | null;
+  /** The Views linked to the open decision; absent when none. Each opens the 볼 것 of the agent that opened it. */
+  decision_views?: PhoneDecisionView[];
   conductor: { present: boolean; takes_answers: boolean; name: string; agent_kind: string; agent: AgentKey | null };
   started_at_unix_ms: number | null;
   stale: boolean;

@@ -26,7 +26,7 @@ import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
 import type { PrState } from "../snapshot";
-import { noticeText, type PhoneMission, type PhoneMissionNode } from "./protocol";
+import { noticeText, type PhoneDecisionView, type PhoneMission, type PhoneMissionNode } from "./protocol";
 import { agentOf, answerSentFor, closeMission, missionOf, setMissionDraft, setMissionFold, usePhone } from "./store";
 
 export function MissionDetail() {
@@ -152,6 +152,7 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
       </p>
       <p className="break-keep text-title leading-normal text-foreground wrap-anywhere" data-phone-question="true">{mission.decision}</p>
       {question?.why ? <p className="break-keep text-body text-muted-foreground wrap-anywhere">{question.why}</p> : null}
+      {mission.decision_views?.length ? <DecisionViews views={mission.decision_views} /> : null}
       {view.sent?.line === "unconfirmed" ? (
         <div className="flex min-w-0 flex-col gap-xs" data-phone-answer-sent="unconfirmed">
           <p className="flex min-w-0 items-start gap-xs text-body">
@@ -319,4 +320,41 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
   }
   if (kind === "done") return node.pr_state ? t(`agentSessions.pr.${node.pr_state}`) : t(kindWord(node.kind));
   return node.base_pr != null ? t("mobile.mission.after", { pr: String(node.base_pr) }) : t(stageWord(node));
+}
+
+/**
+ * The Views linked to the decision, seen or not: a row opens the 볼 것 of
+ * the agent that opened it, where the View opens full screen; one whose
+ * agent is closed is listed without a press.
+ */
+function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="flex min-w-0 flex-col" data-phone-decision-views={views.length}>
+      <span className="text-body text-muted-foreground">{t("mission.banner.looks", { count: views.length })}</span>
+      <ul className="flex min-w-0 flex-col divide-y divide-border">
+        {views.map((view) => {
+          const pane = view.pane_id;
+          const words = (
+            <>
+              <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">{view.label}</span>
+              {view.unseen ? <StatusMark mark="look" label={t("agents.mark.look")} /> : null}
+              <span className="shrink-0 text-body text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
+            </>
+          );
+          return (
+            <li key={`${view.device_id}:${view.display_id}`} className="min-w-0">
+              {pane ? (
+                <RowButton className="min-h-(--size-touch-target) gap-sm px-0" data-phone-decision-view={view.display_id} onClick={() => openDetail({ device_id: view.device_id, pane_id: pane }, "looks")}>
+                  {words}
+                </RowButton>
+              ) : (
+                <span className="flex min-h-(--size-touch-target) min-w-0 items-center gap-sm opacity-(--opacity-dimmed)" data-phone-decision-view={view.display_id}>{words}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }

@@ -52,6 +52,10 @@ pub struct DecisionView {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unseen: bool,
     pub by: DecisionViewBy,
+    /// The pane the agent that opened it is in now, whose 볼 것 the phone
+    /// opens it from; absent while that agent is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
 }
 
 impl Runtime {
@@ -254,6 +258,10 @@ impl Runtime {
                 label: super::view_areas::display_label(display),
                 unseen: display.unseen.is_some(),
                 by,
+                pane_id: display
+                    .opener
+                    .as_ref()
+                    .and_then(|opener| self.view_opener_snapshot(opener).pane_id),
             });
         }
         views
