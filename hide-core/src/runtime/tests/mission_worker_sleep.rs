@@ -1223,3 +1223,12 @@ fn a_finished_node_keeps_its_workers_plan_after_the_pane_closes() {
     show(&mut runtime, session("w-order:t1", None));
     assert_eq!(shown(&mut runtime), Some((WORKER.into(), 2, 2)));
 }
+
+/// with-hide/hide-private#675: the note that a letter's wake failed for good
+/// reaches a sender that works at its next tool call, not after five minutes
+/// of its work, since the sender may wait on that letter's answer. Hide's
+/// other notes keep their own timing.
+#[test]
+fn a_failed_wake_s_note_reaches_a_working_sender_at_its_next_tool_call() {
+    const { assert!(crate::runtime::agent_sleep::letters::WAKE_FAILED_NOTE.now) };
+}

@@ -578,7 +578,7 @@ jobs:
         # (with-hide/hide-private#660, #675).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(/^runtime::tests::mission_worker_sleep::a_letter_wake_/) | test(=agent_sleep_engine::tests::a_wake_whose_renewal_left_no_known_holder_fails_and_types_nothing))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(/^runtime::tests::mission_worker_sleep::a_letter_wake_/) | test(=agent_sleep_engine::tests::a_wake_whose_renewal_left_no_known_holder_fails_and_types_nothing) | test(=agent_sleep_engine::tests::only_a_refusal_that_passes_on_its_own_lets_a_wake_be_asked_again))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.

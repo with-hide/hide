@@ -404,10 +404,10 @@ pub(crate) const WAKE_LAUNCH_CHOICE: &str = "agent_wake.launch_choice_refused";
 /// How a wake ended. `reason` is the code the pane words (B14); `detail` is
 /// what only the diagnostic carries, the engine's own code and message among it
 /// (B19). `passing` says the wake typed nothing and failed for a cause that
-/// can pass (the engine refused the start's input, the holder could not be
-/// renewed, the shell had not started), so the same wake may be asked again
-/// (`LetterWakes`); a wake that typed its start, or failed for a cause that
-/// stays (a folder, a profile, a launch choice), is not.
+/// passes on its own ([`passes`]), so the same wake may be asked again
+/// (`LetterWakes`); a wake that may have typed its start, or was refused for
+/// a cause the same wake meets again (a folder, a profile, a launch choice,
+/// a name another agent holds, a shell that waits for a key), is not.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WakeOutcome {
     Started,
@@ -416,6 +416,28 @@ pub(crate) enum WakeOutcome {
         detail: String,
         passing: bool,
     },
+}
+
+/// Whether a refusal a wake met before typing anything passes on its own,
+/// so the same wake asked again a few seconds later may start: the pane's
+/// node could not take the input now (a pane it did not list yet, input it
+/// could not hold, as for a device pane no screen attached,
+/// with-hide/hide-private#660, or a node busy with other calls), a program
+/// still held the pane's terminal past the start's wait, or another change
+/// of the pane's holder held its turn. Every other refusal is answered the
+/// same way when asked again, or came after the start was typed (a profile
+/// the engine refused or could not confirm, `launch::ends_a_start`), so it
+/// is never asked again.
+pub(crate) fn passes(code: &str) -> bool {
+    matches!(
+        code,
+        "pane_input_unavailable"
+            | "pane_input_limit"
+            | "pane_input_cancelled"
+            | "node_busy"
+            | crate::agent_start::PANE_BUSY
+            | hide_node_link::holders::RENEWAL_BUSY
+    )
 }
 
 /// Starts the agent again in the same pane, through the engine's `agent.start`
@@ -509,12 +531,16 @@ pub(crate) fn start_launched(
         Ok(HolderRenewal::Current | HolderRenewal::Kept { .. }) => {
             crate::agent_start::ShellStart::Plain
         }
-        // Nothing was typed: the pane's holder is not known to run it.
+        // Nothing was typed: the pane's holder is not known to run it. A
+        // renewal whose answer was lost passes with the link that lost it.
         Err(error) => {
             return WakeOutcome::Failed {
                 reason: refused_reason(request.mode).to_owned(),
+                passing: match &error {
+                    EngineError::Refused { code, .. } => passes(code),
+                    _ => true,
+                },
                 detail: error.to_string(),
-                passing: true,
             };
         }
     };
@@ -555,18 +581,18 @@ pub(crate) fn start_launched(
             detail,
             passing: true,
         },
+        // A shell that stopped in its startup files waits for a key.
         Err(StartError::ShellStarting { waited, screen }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
             detail: crate::agent_start::shell_starting_message(waited, screen.as_deref()),
-            passing: true,
+            passing: false,
         },
-        // The engine refused before typing anything, a device pane's node
-        // that could not hold the input among it (`pane_input_cancelled`,
-        // with-hide/hide-private#660); a profile it could not confirm may
-        // have started (`agent_start::start_within`).
+        // Only a refusal before typing that passes on its own is worth the
+        // same start again; a profile refused or not confirmed came after
+        // its start line was typed (`launch::ends_a_start`).
         Err(StartError::Engine(EngineError::Refused { code, message })) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
-            passing: code != crate::launch::PROFILE_UNCONFIRMED,
+            passing: passes(&code),
             detail: format!("{code}: {message}"),
         },
         // No answer: the start may have been typed.
@@ -1284,9 +1310,86 @@ mod tests {
             WakeOutcome::Failed {
                 reason: WAKE_NOT_RESUMED.into(),
                 detail: "agent_name_taken: agent name one is already used".into(),
-                passing: true,
+                passing: false,
             }
         );
+    }
+
+    /// with-hide/hide-private#660, #675: of the refusals an engine or a
+    /// pane's node gives a start before typing anything, only those that
+    /// pass on their own are worth the same wake again. A device pane's node
+    /// that could not hold the resume line is one; a name another agent
+    /// holds, a profile not confirmed, a blocked agent or an unknown code is
+    /// answered the same way when asked again.
+    #[test]
+    fn only_a_refusal_that_passes_on_its_own_lets_a_wake_be_asked_again() {
+        for (code, passing) in [
+            ("pane_input_unavailable", true),
+            ("pane_input_limit", true),
+            ("pane_input_cancelled", true),
+            ("node_busy", true),
+            ("agent_pane_busy", true),
+            ("holder_renewal_busy", true),
+            ("agent_name_taken", false),
+            ("profile_unconfirmed", false),
+            ("profile_refused", false),
+            ("agent_blocked", false),
+            ("holder_renewal_lost", false),
+            ("holder_renewal_pane_closed", false),
+            ("unknown_refusal", false),
+        ] {
+            assert_eq!(passes(code), passing, "{code}");
+        }
+        // Through the start itself: a refusal it does not wait out inside
+        // its own deadline ends the wake with the list's answer, after one
+        // start. A profile the engine refused or could not confirm comes
+        // after its start line was typed (`launch::ends_a_start`), so a
+        // second wake would type it again.
+        for (code, passing) in [
+            ("pane_input_cancelled", true),
+            ("pane_input_unavailable", true),
+            ("node_busy", true),
+            ("profile_refused", false),
+            ("profile_unconfirmed", false),
+            ("agent_blocked", false),
+        ] {
+            let fake = FakeEngine::start(move |method, _| match method {
+                "renew_holder" => reply(HolderRenewal::Current),
+                "pane_processes" => process_info(42, 42),
+                "start_agent" => refused(code, "refused"),
+                other => panic!("unexpected {other}"),
+            });
+            let outcome = start_agent(
+                fake.engine().as_ref(),
+                &hide_node::Local::of_process(),
+                &WakeRequest {
+                    codex_daemon: Default::default(),
+                    profile: None,
+                    pane_id: "w1:p1".into(),
+                    kind: "claude".into(),
+                    name: "one".into(),
+                    mode: WakeMode::Resume,
+                    args: vec!["--resume".into(), "abc".into()],
+                    cwd: None,
+                    session_id: None,
+                },
+            );
+            assert_eq!(
+                outcome,
+                WakeOutcome::Failed {
+                    reason: WAKE_NOT_RESUMED.into(),
+                    detail: format!("{code}: refused"),
+                    passing,
+                },
+                "{code}"
+            );
+            let starts = fake
+                .calls()
+                .iter()
+                .filter(|(method, _)| *method == "start_agent")
+                .count();
+            assert_eq!(starts, 1, "{code}");
+        }
     }
 
     /// A Wake names the file the pane's node says its start runs, as a
@@ -1427,17 +1530,19 @@ mod tests {
     /// A renewal after which no holder is known to run the pane leaves no
     /// shell to type into: its new holder did not start, its earlier one
     /// was asked to end and may still be ending, or its node's answer never
-    /// came. The wake fails with the engine's words and types nothing, so
-    /// a letter's wake may ask it again.
+    /// came. The wake fails with the engine's words and types nothing; only
+    /// the answer the link lost is asked again by a letter's wake, since a
+    /// pane with no holder stays so until a restore.
     #[test]
     fn a_wake_whose_renewal_left_no_known_holder_fails_and_types_nothing() {
-        for (error, detail) in [
+        for (error, detail, passing) in [
             (
                 EngineError::Refused {
                     code: hide_node_link::holders::RENEWAL_LOST.into(),
                     message: "the holder did not start".into(),
                 },
                 "holder_renewal_lost: the holder did not start",
+                false,
             ),
             (
                 EngineError::Refused {
@@ -1445,10 +1550,20 @@ mod tests {
                     message: "the close did not finish".into(),
                 },
                 "holder_renewal_unsettled: the close did not finish",
+                false,
+            ),
+            (
+                EngineError::Refused {
+                    code: hide_node_link::holders::RENEWAL_BUSY.into(),
+                    message: "another change held the turn".into(),
+                },
+                "holder_renewal_busy: another change held the turn",
+                true,
             ),
             (
                 EngineError::Unanswered("the device's answer never came".into()),
                 "the device's answer never came",
+                true,
             ),
         ] {
             let error = std::sync::Mutex::new(Some(error));
@@ -1466,7 +1581,7 @@ mod tests {
                 WakeOutcome::Failed {
                     reason: WAKE_NOT_RESUMED.into(),
                     detail: detail.into(),
-                    passing: true,
+                    passing,
                 },
                 "{detail}"
             );

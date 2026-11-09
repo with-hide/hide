@@ -27,6 +27,19 @@ pub(in crate::runtime) const MAX_LETTER_WAKES: usize = 4;
 /// woken (D-16).
 pub(crate) const WAKE_ROLE: &str = "wake";
 
+/// The note that tells a sender its letter's wake failed for good. The
+/// sender may be waiting on that letter while it works, and would otherwise
+/// read the note only after five minutes of its work, so it goes `--now`, read
+/// at the sender's next tool call (with-hide/hide-private#675).
+pub(in crate::runtime) const WAKE_FAILED_NOTE: NoteKind = NoteKind {
+    role: WAKE_ROLE,
+    thread: "hide-wake-notes",
+    intent: "wake-failed",
+    component: "agent_sleep",
+    unsent: "agent_sleep.wake_note_unsent",
+    now: true,
+};
+
 /// The letter wakes a sleeper gets in a row while each fails for a cause
 /// that can pass: a letter has as many tries to reach its agent by a wake
 /// as by a bell. The wait before the second is a refused bell's, doubled
@@ -697,15 +710,7 @@ impl Runtime {
         if notes.is_empty() {
             return;
         }
-        let kind = NoteKind {
-            role: WAKE_ROLE,
-            thread: "hide-wake-notes",
-            intent: "wake-failed",
-            component: "agent_sleep",
-            unsent: "agent_sleep.wake_note_unsent",
-            now: false,
-        };
-        self.letter_wakes.noting = self.send_hide_notes(kind, notes, |runtime| {
+        self.letter_wakes.noting = self.send_hide_notes(WAKE_FAILED_NOTE, notes, |runtime| {
             runtime.letter_wakes.noting = false;
             runtime.letter_wakes.dirty = true;
         });
