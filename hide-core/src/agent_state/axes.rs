@@ -335,9 +335,13 @@ pub fn apply_lineage(
         agent.lineage_collapsed = !expanded.contains(&agent.pane_id);
         agent.descendant_counts = descendant_counts[index];
         agent.direct_child_counts = direct_child_counts[index];
-        agent.wait = (depth == 0 && quiet_itself(agent) && progress_below[index])
-            .then_some(AgentWait::Children)
-            .or(own_waits[index]);
+        // Whether the row waits on its children also depends on whether the
+        // operator read its own finished turn, which the read pass after this
+        // one decides, so the lineage keeps both inputs and `settle_wait`
+        // decides from them each time the row is derived.
+        agent.children_moving = depth == 0 && quiet_itself(agent) && progress_below[index];
+        agent.own_wait = own_waits[index];
+        agent.wait = own_waits[index];
         agent.descendant_signals = std::mem::take(&mut descendant_signals[index]);
     }
     // Ownership was unknown when the rows were first derived, because it is
@@ -398,6 +402,26 @@ pub(crate) fn background_left(agent: &SidebarAgentSnapshot) -> u32 {
         .map_or(0, |facts| facts.wake_devices)
 }
 
+/// What a row the lineage found quiet over moving work waits on: its
+/// children, unless its own turn completed, the label read it as finished
+/// and the operator has not read that turn yet, which they do not hide, as background tasks do
+/// not (`background_wait`). Once read, the row waits on them again until they
+/// end. A child finishing turns the root unread through its descendant
+/// signals, not its own turn (`own_unread`), so it never brings an old result
+/// back. Its own wait, a reply or running checks, still holds whatever the
+/// verdict. Called first by `derive_from_axes`, the one place derived again
+/// whenever the read axis moves, so every reader of `wait` sees one answer.
+pub(crate) fn settle_wait(agent: &mut SidebarAgentSnapshot) {
+    if !agent.children_moving {
+        return;
+    }
+    agent.wait = if agent.own_unread && agent.completed && turn_read_finished(agent) {
+        agent.own_wait
+    } else {
+        Some(AgentWait::Children)
+    };
+}
+
 /// Whether the label read the turn's end as finished, before any wait is
 /// laid: the same reading `stop_verdict` makes once the row is known to wait
 /// on nothing.
@@ -435,7 +459,7 @@ fn answer_in_progress(
 /// What a quiet row waits for on its own account, whatever its depth: a
 /// background task its session proves will wake it, else a reply someone is
 /// still making for it. Waiting on its children outranks both and is decided
-/// by the lineage.
+/// with the read axis (`settle_wait`).
 fn own_wait(agent: &SidebarAgentSnapshot, answering: bool) -> Option<AgentWait> {
     if background_wait(agent) {
         Some(AgentWait::Background)
@@ -796,6 +820,7 @@ fn read_fingerprint(agent: &SidebarAgentSnapshot) -> PaneReadRecord {
             .declared_human_turn
             .as_ref()
             .map(|declared| declared.id.clone()),
+        read_asks: Some(agent.laid_asks.clone()),
     }
 }
 
@@ -845,6 +870,42 @@ fn completion_is_news(record_completed: bool, current_completed: bool) -> bool {
 /// operator (PRD B5, B6). How the checks it waited on ended is news when the
 /// record has not seen that end (status-marks D-08).
 fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
+    record_covers_turn(record, current)
+        && current
+            .descendant_signals
+            .is_subset(&record.descendant_signals)
+        && (current.checks_ended.is_none() || current.checks_ended == record.checks_ended)
+        && (current.human_turn.is_none() || current.human_turn == record.human_turn)
+}
+
+/// Whether a record covers the row's own turn: its state, session, demand
+/// and completion, with nothing its descendants, its checks or a person's
+/// turn sent (`SidebarAgentSnapshot::own_unread`). The one comparison both
+/// `record_covers` and the children wait read.
+///
+/// A question the core laid on the row is judged apart from the agent's
+/// turn: one the record has not read is news, and while every one laid was
+/// read, the agent working and resting under it is not, since the row still
+/// asks what the operator read (docs/status-model.md, A question the core
+/// lays stays read).
+fn record_covers_turn(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
+    let asks = asks_read(record, current);
+    asks != Some(false) && (asks == Some(true) || turn_covered(record, current))
+}
+
+/// Whether the record read the core's questions laid on the row now: Some
+/// (true) when one is laid and the record read them all, Some(false) when
+/// one is laid that it did not read, and None when none is laid or the
+/// record was written before it kept them.
+fn asks_read(record: &PaneReadRecord, current: &PaneReadRecord) -> Option<bool> {
+    let read = record.read_asks.as_ref()?;
+    let laid = current.read_asks.as_ref().filter(|laid| !laid.is_empty())?;
+    Some(laid.is_subset(read))
+}
+
+/// Whether a record covers the agent's own turn itself: its sequence,
+/// session, demand, activity and completion.
+fn turn_covered(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
     record.state_change_seq == current.state_change_seq
         && (record.session_id.is_none()
             || current.session_id.is_none()
@@ -852,11 +913,6 @@ fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
         && (current.demand == AgentDemand::None.name() || record.demand == current.demand)
         && record.activity == current.activity
         && !completion_is_news(record.completed, current.completed)
-        && current
-            .descendant_signals
-            .is_subset(&record.descendant_signals)
-        && (current.checks_ended.is_none() || current.checks_ended == record.checks_ended)
-        && (current.human_turn.is_none() || current.human_turn == record.human_turn)
 }
 
 /// Shows each finished pane's completion through an engine that no
@@ -1021,6 +1077,7 @@ pub fn apply_read_state(
             record.demand = agent.demand.clone();
             record.activity = agent.activity.clone();
             record.completed = agent.completed;
+            record.read_asks = Some(agent.laid_asks.clone());
             moved = true;
         } else if settled_here && !record.unread && from_another_server {
             // Only this server's numbering is taken; what the operator read
@@ -1044,6 +1101,16 @@ pub fn apply_read_state(
                 .is_none_or(|now| now.contains(signal))
         });
         moved |= record.descendant_signals.len() != before;
+        // A question the record read that is not laid beside those the row
+        // carries now is gone: the core lays all of a row's questions at
+        // once. Dropping it never changes the read axis, as above.
+        if let Some(read) = record.read_asks.as_mut()
+            && !agent.laid_asks.is_empty()
+            && !read.is_subset(&agent.laid_asks)
+        {
+            read.retain(|ask| agent.laid_asks.contains(ask));
+            moved = true;
+        }
         if moved {
             changes.push(ReadRecordChange {
                 pane_id: agent.pane_id.clone(),
@@ -1090,15 +1157,30 @@ pub(crate) fn derive_read_state(
         // the ledger has caught up in this dispatch, so the two projections
         // agree regardless of which one the runtime builds first. A record
         // saved on another server keeps the verdict it was saved with.
-        let read = looked_at.contains(&agent.pane_id.as_str())
-            || records.get(&agent.pane_id).is_some_and(|record| {
-                if !agent.telemetry_stale && connection.judges_by_sequence(record, agent) {
-                    record_covers(record, &read_fingerprint(agent))
-                } else {
-                    !record.unread
+        // Whether the whole row is read, and whether its own turn is. A
+        // record that cannot be compared keeps only the whole row's verdict,
+        // which may be a descendant's news alone, so it never says the own
+        // turn is unread: the children wait stays rather than bringing back
+        // an answer already read.
+        let (read, own_read) = if looked_at.contains(&agent.pane_id.as_str()) {
+            (true, true)
+        } else {
+            match records.get(&agent.pane_id) {
+                None => (false, false),
+                Some(record)
+                    if !agent.telemetry_stale && connection.judges_by_sequence(record, agent) =>
+                {
+                    let current = read_fingerprint(agent);
+                    (
+                        record_covers(record, &current),
+                        record_covers_turn(record, &current),
+                    )
                 }
-            });
+                Some(record) => (!record.unread, true),
+            }
+        };
         agent.unread = !read;
+        agent.own_unread = !own_read;
         derive_from_axes(agent);
     }
     sort_agents(agents);

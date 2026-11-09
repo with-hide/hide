@@ -1525,7 +1525,10 @@ fn a_blocked_grandchild_raises_its_lineage_root_once_and_never_itself() {
 // descendant works is waiting on it: a Working row with the dashed ring,
 // never Done and never Needs You, until no descendant works. A descendant
 // that asks waits on the root, so the root does not wait on it. Its own
-// question or its own work outranks the waiting state.
+// question or its own work outranks the waiting state. The root's turn here
+// has no label verdict: one read as finished and not read yet is not hidden
+// by the working child (B28 as changed 2026-11-09, status-model.md, A quiet
+// row that waits; `a_finished_turn_is_not_hidden_by_the_children_still_working`).
 #[test]
 fn a_quiet_root_waits_in_working_while_a_descendant_works_and_not_on_one_that_asks() {
     let mut runtime = runtime();

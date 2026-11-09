@@ -208,6 +208,12 @@ pub struct Plan {
     pub ask: Option<String>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
+    /// When the agent last put the plan up for review (`set --ask`), which
+    /// names that ask: the operator's read of it holds while the plan waits,
+    /// whatever else the agent changes, and putting it up again is news.
+    /// None for a plan never put up, or put up before this was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_at_unix_ms: Option<u64>,
 }
 
 impl Plan {
@@ -544,6 +550,11 @@ pub(crate) fn apply_set(
             |plan| plan.created_at_unix_ms,
         ),
         updated_at_unix_ms: now,
+        asked_at_unix_ms: if ask {
+            Some(now)
+        } else {
+            previous.and_then(|plan| plan.asked_at_unix_ms)
+        },
     })
 }
 

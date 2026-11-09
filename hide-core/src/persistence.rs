@@ -1334,6 +1334,11 @@ mod tests {
                 unread: true,
                 checks_ended: None,
                 human_turn: None,
+                read_asks: Some(
+                    ["attention:mission-1/fix#3".to_owned()]
+                        .into_iter()
+                        .collect(),
+                ),
             },
         );
         state.pane_completions.insert(
@@ -1375,6 +1380,8 @@ mod tests {
 
         let state: UiStateSnapshot = serde_json::from_value(persisted).unwrap();
         assert_eq!(state.pane_read_records["w1:p1"].session_id, None);
+        // Nor the core's questions it read, which is judged as before.
+        assert_eq!(state.pane_read_records["w1:p1"].read_asks, None);
     }
 
     /// AC4. A store written before Hide owned the read axis still loads. Its
