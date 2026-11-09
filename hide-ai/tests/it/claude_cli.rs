@@ -866,3 +866,44 @@ fn real_claude_lists_its_models_and_answers_one_request() {
     .unwrap();
     assert_eq!(class, "ok", "{outcome:?}");
 }
+
+/// Inventory I-4.2: a backend holds the list it read for ten minutes, so a
+/// menu opening again starts no second child; another item's backend reads
+/// its own.
+#[test]
+fn a_read_list_is_held_and_a_second_ask_starts_no_child() {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let backend = |run: hide_ai::ItemRun| {
+        ClaudeCliBackend::new(ClaudeConfig {
+            binary: fixture(),
+            model: "haiku".to_owned(),
+            cwd: std::env::temp_dir(),
+            search_path: std::env::var_os("PATH"),
+            run,
+        })
+    };
+    let default = backend(hide_ai::ItemRun::default());
+    let first = default.models();
+    assert!(env_file.exists(), "the first ask starts the CLI");
+    std::fs::remove_file(&env_file).unwrap();
+    assert_eq!(default.models(), first);
+    assert!(!env_file.exists(), "the held list answers the second ask");
+
+    let gateway = backend(hide_ai::ItemRun {
+        env: vec![(
+            "ANTHROPIC_BASE_URL".to_owned(),
+            "https://gw.example".to_owned(),
+        )],
+        program: None,
+    });
+    gateway.models();
+    assert!(
+        env_file.exists(),
+        "another item's backend reads its own list"
+    );
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+}
