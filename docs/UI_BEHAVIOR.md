@@ -2311,18 +2311,22 @@ The mission card alone has a button, `미션 해 보기`, the same as the first 
 Esc closes either dialog.
 Its words are the product's own (`agentPresentation.ts`, `taskLens.ts`, `commands.ts`), and it says only what [the status model](status-model.md) and [the sidebar sections](#sidebar-hierarchy) say: the 프로젝트 보기 reads project › branch or worktree › tab › agent; the 태스크 보기 groups by state, 내 차례 / 읽을 것 / 작업 중 / 확인함; a working row's ring is whole while the agent works and dashed while it waits, and a waiting row's second line says for what (`자식 기다림 · 자식 N개 작업 중`, `백그라운드 기다림`, `CI 기다림`, `답장 기다림`); a sleeping agent shows `재움 · 열면 깨어남`.
 
-The first run is seven cards on the practice window of the introduction site's hero (`data/tour.json`), each one screen, ⏎ once, with no task list, no wait and no step the learner has to do:
+The first run is eleven cards on the practice window of the introduction site's hero (`data/tour.json`), each one screen, ⏎ once, with no task list, no wait and no step the learner has to do:
 
 1. 세 칸: the three parts drawn as zones, the left to choose, the middle to work, the right to look.
 2. 왼쪽 목록: the sidebar, with the 프로젝트 보기 and 태스크 보기 and the switch above the list.
-3. 상태: the task list ringed: 내 차례 holds only what waits for the learner (a question, an approval, a 볼 것), finished work goes quietly to 읽을 것, and a 작업 중 row that waits says what for on its second line.
-4. 에이전트 더 띄우기: a lead with its children listed under it, and ⌘D with its words: ask an agent in words to open another beside it, or split a pane yourself; one a lead starts for part of its job is its child.
-5. 볼 것: the row whose mark is the eye, which shows what the agent opened on the right, in Documents.
-6. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
-7. 미션 해 보기: the button.
+3. 내 차례, 읽을 것: those two groups ringed: 내 차례 holds only what waits for the learner (a question, an approval, a 볼 것), and finished work goes quietly to 읽을 것.
+4. 작업 중은 두 가지: the 작업 중 group ringed, with a session working by itself (the ring, no second line) beside one that waits, whose second line says for what (`자식 기다림 · 자식 N개 작업 중`; `백그라운드 기다림` and `CI 기다림` are named in the words only).
+5. 에이전트 더 띄우기: the agents' terminals in the middle, where a pane splits, and ⌘D with its words: ask an agent in words to open another beside it, or split a pane yourself; one a lead starts for part of its job is its child, listed under it.
+6. 볼 것: the row whose mark is the eye, which shows what the agent opened on the right, in Documents.
+7. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
+8. 오른쪽 도구 줄: the tool rail, what its icons open (문서, 프로젝트, Hide AI, 탐색기, 변경, by their own labels) and the pin in a column's head that keeps it beside the agents.
+9. 여러 컴퓨터: the device rail; a tile is a computer, pressing it switches the screen to that computer, and agents can work there too; connecting one is not taught.
+10. 미션이란: the agents' area, with no zones; a big job handed over, the lead (Conductor) plans and hands parts to several agents, only decisions come to 내 차례, results arrive as PRs and what was decided stays in Memory.
+11. 미션 해 보기: the button.
 
 The window is static: it opens on the 태스크 list with the lane closed and nothing a learner presses changes it, though the shell's own keyboard and clicks still run on it and its world answers them with nothing.
-Its rows cover every state the cards name: a row in each group, a waiting row with its second line, a lead with children, and a row marked 볼 것.
+Its rows cover every state the cards name: a row in each group, a row working by itself beside a waiting row with its second line, a lead with children, and a row marked 볼 것.
 The card is a band under the whole screen (`pc-dock`), so it never covers the part it explains, which is ringed above it (or all three parts, zoned, on the first card); the keyboard rests on its button, so ⏎ is always the card's, → goes on and ← goes back, and every other key reaches the shell untouched.
 The card names its command's chord as keycaps where this host has one, and says nothing about a chord where it does not.
 Nothing waits and nothing is typed or pressed in the learner's place, so a card shows the moment it is reached.

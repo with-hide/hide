@@ -71,7 +71,7 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
 }
 
 /** The first-run cards, in order: one screen each, the real part they point at on screen. */
-const FIRST_RUN = ["parts", "left", "states", "spawn", "look", "find", "mission"];
+const FIRST_RUN = ["parts", "left", "turn", "work", "spawn", "look", "find", "tools", "devices", "aboutMission", "mission"];
 
 test("the first-run cards play with Enter alone, each pointing at a part of the screen, with the card clear of it", async ({ page }) => {
   await withPractice(page, async (practice) => {
