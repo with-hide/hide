@@ -81,6 +81,64 @@ fn a_session_file_belongs_to_the_innermost_registered_account_that_holds_it() {
     );
 }
 
+/// An agent whose accounts are named (omp's profiles) keeps a profile's
+/// sessions in the folder its name gives under the home, which is read in
+/// that account and in no other (journey run 42586901056: an omp profile's
+/// session on Windows was refused as outside every account).
+#[test]
+fn a_named_accounts_session_belongs_to_that_account() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().canonicalize().unwrap().join("home");
+    let journey = Profile {
+        account: Some(AccountRef::Name("journey".to_owned())),
+        ..Profile::builtin_default("omp")
+    };
+    let accounts = Accounts::new(&home).with_profiles([&journey]);
+    let workspace = "--w--";
+    let in_profile = file(
+        &home
+            .join(".omp")
+            .join("profiles")
+            .join("journey")
+            .join("agent")
+            .join("sessions")
+            .join(workspace)
+            .join("s.jsonl"),
+    );
+    let in_default = file(
+        &home
+            .join(".omp")
+            .join("agent")
+            .join("sessions")
+            .join(workspace)
+            .join("s.jsonl"),
+    );
+    let in_other = file(
+        &home
+            .join(".omp")
+            .join("profiles")
+            .join("other")
+            .join("agent")
+            .join("sessions")
+            .join(workspace)
+            .join("s.jsonl"),
+    );
+
+    assert_eq!(
+        of(&accounts, Agent::Omp, &in_profile),
+        Ok(AccountKey::Name("journey".to_owned()))
+    );
+    assert_eq!(
+        of(&accounts, Agent::Omp, &in_default),
+        Ok(AccountKey::Default)
+    );
+    assert!(hide_session::inside_session_root(&accounts, &[Agent::Omp], &in_profile).is_ok());
+    assert_eq!(
+        hide_session::inside_session_root(&accounts, &[Agent::Omp], &in_other),
+        Err(RootRefusal::Outside)
+    );
+}
+
 /// A link below a profile's folder never makes a session of an account the
 /// node did not register readable or listed, nor does `..` in a path; the
 /// default account's own link is followed as before profiles.
