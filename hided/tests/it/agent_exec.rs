@@ -452,6 +452,26 @@ mod windows {
         });
     }
 
+    /// The variable that tells [`sleeper`] where to say it runs.
+    const SLEEPER: &str = "AGENT_EXEC_SLEEPER";
+
+    /// The interrupt test's program: this test binary, run for this test
+    /// alone, says it runs (in the file the profile's variable names) and
+    /// then waits a minute before ending with 3. It installs no console
+    /// handler, so Ctrl-Break ends it as it ends any console program that
+    /// keeps the default; PowerShell would break into its debugger instead.
+    #[test]
+    #[ignore = "the program a_windows_interrupt_reaches_the_program_and_the_start_ends_with_it starts"]
+    #[allow(clippy::disallowed_methods)] // the program waits for an interrupt it never answers
+    fn sleeper() {
+        let Some(running) = std::env::var_os(SLEEPER) else {
+            return;
+        };
+        std::fs::write(running, "1").unwrap();
+        std::thread::sleep(Duration::from_secs(60));
+        std::process::exit(3);
+    }
+
     /// Ctrl-Break in the start's console group reaches its program, which
     /// ends long before it would have, and the start ends with it.
     #[test]
@@ -459,13 +479,18 @@ mod windows {
         let node = Node::taking();
         let folder = tempfile::tempdir().unwrap();
         let running = folder.path().join("running");
-        // The program says it runs only once PowerShell runs its script, so
-        // the interrupt cannot reach `hide` before its program exists.
-        let script = format!(
-            "Set-Content -Path '{}' -Value 1; Start-Sleep 60; exit 3",
-            running.display()
-        );
-        let mut command = exec(&node, "Claude · work", &[], &powershell(&script));
+        // The program says it runs once it does, so the interrupt cannot
+        // reach `hide` before its program exists.
+        let program = std::env::current_exe().unwrap();
+        let argv = [
+            program.display().to_string(),
+            "--exact".to_owned(),
+            "agent_exec::windows::sleeper".to_owned(),
+            "--ignored".to_owned(),
+            "--nocapture".to_owned(),
+        ];
+        let variable = format!("{SLEEPER}={}", running.display());
+        let mut command = exec(&node, "Claude · work", &[variable.as_str()], &argv);
         command.creation_flags(CREATE_NEW_PROCESS_GROUP);
         let child = command
             .stdin(Stdio::null())
