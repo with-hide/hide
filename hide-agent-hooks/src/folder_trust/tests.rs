@@ -953,7 +953,10 @@ fn a_profile_account_s_trust_is_its_own_and_leaves_with_that_account_alone() {
     );
     assert!(read_json(&profile_file)["projects"].get(&key).is_none());
     assert_eq!(read_json(&default_file)["projects"][&key], flag);
-    assert_eq!(recorded(Agent::ClaudeCode, home), std::slice::from_ref(&key));
+    assert_eq!(
+        recorded(Agent::ClaudeCode, home),
+        std::slice::from_ref(&key)
+    );
 
     // Removing the worktree takes it out of every account it was trusted in.
     trust(Agent::ClaudeCode, at, &tree, none()).unwrap();
