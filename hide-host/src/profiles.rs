@@ -1233,13 +1233,14 @@ mod tests {
             "{listed:?}"
         );
         assert!(account.is_dir());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for made in [node.home().join("accounts"), account.clone()] {
-                let mode = std::fs::metadata(&made).unwrap().permissions().mode() & 0o777;
-                assert_eq!(mode, 0o700, "{}", made.display());
-            }
+        // Private on every system: mode 0700 on Unix, an access list that
+        // names only this account on Windows.
+        for made in [node.home().join("accounts"), account.clone()] {
+            assert!(
+                hide_platform::fs::private::is_private(&made).unwrap(),
+                "{}",
+                made.display()
+            );
         }
         let read = node.list(true);
         assert_eq!(read.version, applied.list.version);
@@ -1274,11 +1275,7 @@ mod tests {
         node.apply(add("claude-code", "work", None));
         let shared = node.root.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
-        }
+        crate::widen::widen(&shared, true);
         let reserved = add_with(
             "claude-code",
             "reserved",
