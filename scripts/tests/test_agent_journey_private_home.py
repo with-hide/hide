@@ -419,3 +419,29 @@ class OpenCodeWatch(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipIf(os.name == "nt", "the Windows form is tested in test_agent_live_windows.py")
+class AccountVariables(unittest.TestCase):
+    def test_a_wrapper_keeps_an_account_a_start_named_under_the_run_s_home_and_no_other(self):
+        import subprocess
+        from agent_live_check.protection import private_directory
+        from agent_live_check.system import launcher
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder).resolve()
+            within = folder / "home"
+            private_directory(folder / "bin")
+            program = launcher(folder / "bin/agent", [sys.executable, "-c",
+                                                      "import os; print(os.environ.get('ACCOUNT'))"],
+                               environment={"ACCOUNT": str(within / "default")}, unset=["GONE"],
+                               keep=["ACCOUNT", "GONE"], within=within)
+            env = {key: value for key, value in os.environ.items() if key not in ("ACCOUNT", "GONE")}
+            for given, expected in ((str(within / "profile"), str(within / "profile")),
+                                    (str(folder / "elsewhere"), str(within / "default")),
+                                    (str(folder / "home-other"), str(within / "default")),
+                                    (None, str(within / "default"))):
+                with self.subTest(given=given):
+                    ran = subprocess.run([str(program)], capture_output=True, timeout=60,
+                                         env={**env, **({"ACCOUNT": given} if given else {})})
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    self.assertEqual(ran.stdout.decode().strip(), expected)

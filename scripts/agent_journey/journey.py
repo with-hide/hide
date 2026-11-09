@@ -146,7 +146,7 @@ def at_brief(value):
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
                  branch, created, sessions, route, composer_judge, failure_logs, model=None,
-                 brief_start=True):
+                 brief_start=True, profile=None):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         # The real CLIs start on Hide's brief, which their own record has to
         # confirm; the stand-ins imitate only the agent's prompt argument.
@@ -169,6 +169,12 @@ class Journey:
         # run keeps what it created there for the cleanup (PRD D-22).
         self.branch, self.created = branch, created
         self.id, self.kind = contract_row["id"], contract_row["herdr_kind"]
+        # The profile this journey starts its agent with and the account it
+        # runs in (profiles.prepare), for the `profile` cell; None for the
+        # agent's default account. Its spawns, letters and evidence carry
+        # their own names, so they never meet the default journey's.
+        self.profile = profile
+        self.name = self.id + "-profile" if profile else self.id
         self.run = runtime.run
         self.pane = self.agent = self.session = self.reference = self.checkout = None
         # Every pane this journey's spawns and fork opened, which close() ends.
@@ -184,12 +190,13 @@ class Journey:
         self.failure_logs = failure_logs
         self.running = None
         observer_path = contract_row.get("stop_observer")
-        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path) if observer_path else None)
+        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path)
+                              if observer_path and not profile else None)
 
     # Evidence -----------------------------------------------------------
 
     def evidence(self, name, value):
-        path = self.run / f"{self.id}-{name}.json"
+        path = self.run / f"{self.name}-{name}.json"
         path.unlink(missing_ok=True)
         write_private(path, (json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n").encode())
         return path.name
@@ -204,7 +211,7 @@ class Journey:
             text = self.controller.read_pane(pane, lines=200)
         except ProcessError:
             return None
-        path = self.run / f"{self.id}-{name}-pane.txt"
+        path = self.run / f"{self.name}-{name}-pane.txt"
         path.unlink(missing_ok=True)
         write_private(path, failure.scrub(text).encode())
         return path.name
@@ -215,7 +222,7 @@ class Journey:
         if not self.running:
             return None
         step, mark = self.running
-        kept, limit = self.failure_logs.keep(self.run / f"{self.id}-{name}-hided.log", mark, step, name)
+        kept, limit = self.failure_logs.keep(self.run / f"{self.name}-{name}-hided.log", mark, step, name)
         if limit:
             self.record.setdefault("hided_logs_cut", []).append({"cell": name, "file": kept, "limit": limit})
         return kept
@@ -294,8 +301,9 @@ class Journey:
         value = reference.get("value")
         if not value:
             return {"error": "Herdr reported no native session reference"}
+        account = [self.profile["reader"]] if self.profile else []
         code, out, err = self.runtime.owner.run(
-            [str(self.reader), str(self.sessions), self.kind, kind, value, str(self.checkout)],
+            [str(self.reader), str(self.sessions), self.kind, kind, value, str(self.checkout), *account],
             env={**self.runtime.env}, check=False, seconds=15)
         if code:
             return {"error": err.strip()[:300] or f"reader exit {code}"}
@@ -344,7 +352,7 @@ class Journey:
     # Cells ----------------------------------------------------------------
 
     STEP_CELLS = {"start": ("start", "reply"), "letter": ("letter",), "sleep_wake": ("sleep_wake",),
-                  "resume": ("resume",), "untrusted": ("start_untrusted",)}
+                  "resume": ("resume",), "untrusted": ("start_untrusted",), "profile_cell": ("profile",)}
     # A step whose cell is named by the step, as `launch_brief`'s, needs no entry.
 
     def step(self, name, *args):
@@ -382,6 +390,8 @@ class Journey:
         # native arguments after -- reach only this first start.
         if self.model:
             args.extend(["--model", self.model])
+        if self.profile:
+            args.extend(["--profile", self.profile["name"]])
         if brief:
             args.extend(["--brief", prompt_text])
         else:
@@ -402,7 +412,7 @@ class Journey:
     def start(self):
         """start, then reply: the spawn, the turn its first prompt opened, the emitter, the reply."""
         first = token()
-        worktree = self.runtime.probe / "worktrees" / self.id
+        worktree = self.runtime.probe / "worktrees" / self.name
         # Named before the spawn, so a spawn that raises or is stopped still leaves its branch to the cleanup.
         entry = {"branch": self.branch, "start": None, "worktree": str(worktree)}
         self.created.append(entry)
@@ -412,7 +422,7 @@ class Journey:
         # otherwise; the untrusted start keeps the agent's prompt argument.
         launched = self.own_rungs and self.launches()
         sent = long_brief(first) if launched else brief(first)
-        args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
+        args, answer, attempts = self.spawn("journey-" + self.name, self.repository, self.branch, worktree,
                                             sent if self.brief_start else prompt(first),
                                             brief=self.brief_start)
         entry.update(created_branch(self.runtime, self.repository, self.branch, worktree))
@@ -439,7 +449,7 @@ class Journey:
                                 "row": self.daemon.row(self.pane)}
         checks = [spawned, turn, cells.emitter_verdict(self.reference)]
         if self.brief_start:
-            spawn_record = self.spawn_record("journey-" + self.id)
+            spawn_record = self.spawn_record("journey-" + self.name)
             self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
             checks.append(cells.brief_verdict(spawn_record, launched))
             if launched:
@@ -525,7 +535,7 @@ class Journey:
         value = token()
         since = self.daemon.mark(self.pane)
         log = self.log_mark()
-        sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.id,
+        sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.name,
                                      "--kind", "report", "--body", LETTER_BODY + value])
         record = {"form": form, "token": value, "sent": sent, "shown": []}
         self.record["letter"] = record
@@ -810,7 +820,7 @@ class Journey:
         which the operator's Wake opens in a new pane
         (`wake_sleeping_session`); the registration moves to that pane, which
         the resume then types into."""
-        checkouts = [path for path in (self.checkout, self.runtime.probe / "worktrees" / self.id) if path]
+        checkouts = [path for path in (self.checkout, self.runtime.probe / "worktrees" / self.name) if path]
 
         def sleeping(rest):
             return (rest.get("navigator") or {}).get("sleeping_sessions") or []
@@ -934,6 +944,33 @@ class Journey:
         record["read"] = read
         reply = cells.with_turn(cells.reply_verdict(read, self.session, value, events), turn)
         self.settle("resume", cells.resume_verdict(before, after, reply), self.evidence("resume", record))
+
+    def profile_cell(self, account):
+        """profile: the agent started with the profile `account` names
+        (profiles.prepare), its first reply, a letter and Sleep, Wake and the
+        turn after it, run as the default account's cells run in a journey of
+        their own, each read from that account alone
+        (cells.profile_verdict)."""
+        if not cells.measurable(self.table, self.id, "profile"):
+            return
+        if account is None:
+            self.settle("profile", (cells.FAIL, "the run made no profile for this agent"))
+            return
+        table = cells.plan([self.row], [self.id], fake_model=True)
+        record = self.record["profile"] = {"account": account, "cells": table[self.id]}
+        journey = Journey(self.runtime, self.daemon, self.controller, table, self.row, self.repository, record,
+                          self.reader, branch=self.branch + "-profile", created=self.created, sessions=self.sessions,
+                          route=self.route, composer_judge=self.composer_judge, failure_logs=self.failure_logs,
+                          model=self.model, brief_start=self.brief_start, profile=account)
+        try:
+            for step in ("start", "letter", "sleep_wake", "resume"):
+                journey.step(step)
+        finally:
+            journey.close()
+            self.paths.extend(path for path in journey.paths if path not in self.paths)
+        record["paths"] = journey.paths
+        self.settle("profile", cells.profile_verdict(table[self.id], journey.paths, account["folder"]),
+                    self.evidence("profile", record), pane=journey.pane)
 
     def take_keys(self, record):
         """Opens the agent as the operator does: opening it puts its tab on

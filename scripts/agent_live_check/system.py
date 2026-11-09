@@ -204,24 +204,35 @@ def remove_pane_files(*paths):
         raise failures[0]
 
 
-def launcher(path, argv, *, environment=(), unset=()):
+def launcher(path, argv, *, environment=(), unset=(), keep=(), within=None):
     """Writes the program `path` names, which runs `argv` with the caller's
     arguments after it in `environment` and without the variables `unset`:
-    a `/bin/sh` script on Unix, a `.cmd` file beside it on Windows. Returns
-    the program's path."""
+    a `/bin/sh` script on Unix, a `.cmd` file beside it on Windows. A
+    variable of `keep` its caller set to a path in the folder `within` is
+    kept as set, whatever `environment` and `unset` say: a start with a
+    profile names the account it runs in so. Returns the program's path."""
     from .protection import write_private
     environment = dict(environment)
+    keep = list(keep) if within is not None else []
     if not WINDOWS:
-        lines = ["#!/bin/sh", *("unset " + name for name in unset)]
+        prefix = shlex.quote(str(within).rstrip("/") + "/") if keep else ""
+        lines = ["#!/bin/sh", *(f'hide_kept_{name}="${{{name}-}}"' for name in keep),
+                 *("unset " + name for name in unset)]
         if environment:
             lines.append("export " + " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items()))
+        lines.extend(f'case "$hide_kept_{name}" in {prefix}*) {name}="$hide_kept_{name}"; export {name};; esac'
+                     for name in keep)
         lines.append("exec " + " ".join(shlex.quote(str(value)) for value in argv) + ' "$@"')
         write_private(path, ("\n".join(lines) + "\n").encode())
         path.chmod(0o700)
         return path
     target = path.with_name(path.name + ".cmd")
-    lines = ["@echo off", *(f"set {cmd_quote(name + '=')}" for name in unset),
+    prefix = str(within).rstrip("\\") + "\\" if keep else ""
+    lines = ["@echo off", *(f'set "hide_kept_{name}=%{name}%"' for name in keep),
+             *(f"set {cmd_quote(name + '=')}" for name in unset),
              *(f"set {cmd_quote(f'{key}={value}')}" for key, value in environment.items()),
+             *(f'if defined hide_kept_{name} if /i "%hide_kept_{name}:~0,{len(prefix)}%"=={cmd_quote(prefix)} '
+               f'set "{name}=%hide_kept_{name}%"' for name in keep),
              # The last line: its exit status is the file's, and a program
              # that is itself a .cmd (an npm install's) takes over the run.
              " ".join(cmd_quote(value) for value in argv) + " %*"]

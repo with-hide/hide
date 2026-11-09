@@ -137,6 +137,24 @@ class ExitCodes(unittest.TestCase):
 
 
 class Verdicts(unittest.TestCase):
+    def test_a_profile_passes_only_when_its_cells_pass_and_its_sessions_lie_in_its_account(self):
+        passed = {name: cells.cell(cells.PASS, "") for name in cells.CELLS}
+        folder = "/run/home/.journey-profile/claude"
+        session = folder + "/projects/x/s.jsonl"
+        self.assertEqual(cells.profile_verdict(passed, [session], folder)[0], cells.PASS)
+        self.assertEqual(cells.profile_verdict({**passed, "letter": cells.cell(cells.NA, "")}, [session], folder)[0],
+                         cells.PASS)
+        failed = {**passed, "resume": cells.cell(cells.FAIL, "native session changed")}
+        self.assertEqual(cells.profile_verdict(failed, [session], folder),
+                         (cells.FAIL, "the profile's resume: fail: native session changed"))
+        status, reason = cells.profile_verdict(passed, ["/run/home/.claude/projects/x/s.jsonl"], folder)
+        self.assertEqual(status, cells.FAIL)
+        self.assertIn("outside its account", reason)
+        self.assertEqual(cells.profile_verdict(passed, [folder + "-other/s.jsonl"], folder)[0], cells.FAIL)
+        self.assertEqual(cells.profile_verdict(passed, [], folder)[0], cells.FAIL)
+        # OpenCode's session is a row of the account's database, read in that account alone.
+        self.assertEqual(cells.profile_verdict(passed, ["opencode/ses_1"], folder)[0], cells.PASS)
+
     def test_spawn_needs_registered_running_connected_and_a_native_session(self):
         self.assertEqual(cells.spawn_verdict(spawned())[0], cells.PASS)
         status, reason = cells.spawn_verdict(spawned(session=None, connection="pending"))
