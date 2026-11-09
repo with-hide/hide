@@ -227,19 +227,21 @@ pub struct Skill {
 /// routes browser and mission work to their own guides.
 pub const GUIDE_SKILL: Skill = Skill {
     name: "hide",
-    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
+    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, read or add Project Memory, and keep an agent's accounts apart as profiles. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, Project Memory, or another account of an agent (a shell alias that starts one, or a new account to connect), or when you need to know what Hide offers here.",
     // The intent table is the session-start note's own (PRD
     // agent-beside-and-session-guide D-14); version 1 had none, and version
     // 2 opened files and pages with the --beside open no longer takes (PRD
     // unseen-agent-views D-24); version 4 drops the Herdr commands the
     // table named for Hide's own (PRD engine-bundle-1 D-6), and version 5
     // adds the row for splitting the work across agents (PRD
-    // hide-plan-delegate D-11), and version 6 names `hide task` for it.
+    // hide-plan-delegate D-11), version 6 names `hide task` for it, and
+    // version 7 sends an alias or a new account to the guide's profiles
+    // (PRD agent-profiles D-33, D-34).
     body: concat!(
-        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff and how to use Project Memory, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
+        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 6,
+    version: 7,
 };
 
 /// The Conductor's stub: a mission of agents, which `hide mission help`
