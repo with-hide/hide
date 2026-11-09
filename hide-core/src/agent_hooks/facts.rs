@@ -82,6 +82,16 @@ struct SessionFact {
     /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     account: Option<Vec<(String, String)>>,
+    /// Where the start that reported `account` falls among this machine's
+    /// reported starts, later ones higher, so the last start of a profile
+    /// is known whatever its pane is called (D-35, B25); 0 for one saved
+    /// before it was kept, older than any.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    account_start: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// The engine state a running turn or an open approval was first laid
@@ -146,6 +156,8 @@ pub(crate) struct Reported<'a> {
     pub session: Option<&'a str>,
     /// Empty for the agent's default account.
     pub variables: &'a [(String, String)],
+    /// The start's place among the machine's reported starts, later higher.
+    pub start: u64,
 }
 
 /// What recording a report did.
@@ -255,6 +267,16 @@ impl HookFacts {
         }) {
             return Err("hook_account_invalid");
         }
+        // A start's place among the reported ones: one past the last.
+        let start = report.account.as_ref().map(|_| {
+            self.panes
+                .values()
+                .flat_map(|facts| &facts.sessions)
+                .map(|fact| fact.account_start)
+                .max()
+                .unwrap_or(0)
+                + 1
+        });
         let facts = self.panes.entry(pane.to_owned()).or_default();
         let before = facts.clone();
         let same = |fact: &SessionFact| {
@@ -279,6 +301,7 @@ impl HookFacts {
                 waiting: Vec::new(),
                 waiting_seq: None,
                 account: None,
+                account_start: 0,
             },
         };
         facts.reported_since_engine = true;
@@ -290,8 +313,9 @@ impl HookFacts {
         if report.counts.is_some() {
             fact.counts = report.counts;
         }
-        if report.account.is_some() {
+        if let Some(start) = start {
             fact.account.clone_from(&report.account);
+            fact.account_start = start;
         }
         if report.session_start {
             // A resumed or compacted session has no turn running yet.
@@ -349,6 +373,7 @@ impl HookFacts {
                 runtime: &fact.runtime,
                 session: fact.session.as_deref(),
                 variables: fact.account.as_deref()?,
+                start: fact.account_start,
             })
         })
     }
@@ -573,6 +598,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             waiting: Vec::new(),
             waiting_seq: None,
             account: None,
+            account_start: 0,
         })
         .collect();
     PaneFacts {
@@ -596,12 +622,14 @@ fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
                     &left.session,
                     left.counts,
                     &left.account,
+                    left.account_start,
                 ) != (
                     &right.runtime,
                     right.version,
                     &right.session,
                     right.counts,
                     &right.account,
+                    right.account_start,
                 )
             })
 }

@@ -598,9 +598,9 @@ fn kit_profiles(file: &File) -> KitProfiles {
 /// What a list says of a profile's account beside its pieces: whether it
 /// is signed in (`crate::login`), for a profile in an account of its own
 /// that runs the agent's own program (a program of its own signs in its own
-/// way, D-16), and the account variables a start of it sets, compared as
-/// a hook reports them (`hide_agent_hooks::account::compared_folder`), by
-/// which the core knows a pane the operator started by hand (D-03). A
+/// way, D-16), and the account variables a start of it sets, exactly as it
+/// sets them and a hook reports them (D-15), by which the core knows a pane
+/// the operator started by hand (D-03). A
 /// profile this node cannot resolve has neither; its add was refused for
 /// that reason already.
 fn account_facts(
@@ -620,25 +620,16 @@ fn account_facts(
     let Ok(account) = adapter.resolve(profile, &NodeEnv::new(Some(home.to_path_buf()))) else {
         return (None, Vec::new());
     };
-    let rule = adapter.account_rule();
-    let by_folder = rule.is_some_and(|rule| rule.by == By::Folder);
-    let variables = rule
+    let variables = adapter
+        .account_rule()
         .into_iter()
         .flat_map(|rule| &rule.vars)
         .filter_map(|var| {
-            let value = account
+            account
                 .env
                 .iter()
                 .find(|(name, _)| *name == var.name)
-                .map(|(_, value)| value)?;
-            Some((
-                var.name.clone(),
-                if by_folder {
-                    hide_agent_hooks::account::compared_folder(value)
-                } else {
-                    value.clone()
-                },
-            ))
+                .map(|(name, value)| (name.clone(), value.clone()))
         })
         .collect();
     let login = profile

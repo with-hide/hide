@@ -79,42 +79,15 @@ pub const REPORTED_VARIABLES: usize = 8;
 /// the folder a definition puts below it.
 pub const REPORTED_VALUE_BYTES: usize = hide_agent_adapter::account::MAX_ACCOUNT_BYTES + 256;
 
-/// How a folder a variable names is compared, the same on the node that
-/// lists a profile's variables and in the hook that reports them (PRD
-/// agent-profiles D-03): the folder as the file system resolves it, links
-/// followed, when it is there, else as written; without a final separator,
-/// and on Windows in one case. Two spellings of one folder compare equal;
-/// the stored spelling, which Claude keys its login by, is never changed by
-/// this.
-pub fn compared_folder(value: &str) -> String {
-    let resolved = std::fs::canonicalize(value)
-        .ok()
-        .and_then(|path| path.into_os_string().into_string().ok())
-        .unwrap_or_else(|| value.to_owned());
-    let resolved = if cfg!(windows) {
-        resolved
-            .strip_prefix(r"\\?\")
-            .unwrap_or(&resolved)
-            .replace('/', "\\")
-            .to_lowercase()
-    } else {
-        resolved
-    };
-    let trimmed = resolved.trim_end_matches(['/', '\\']);
-    if trimmed.is_empty() {
-        resolved
-    } else {
-        trimmed.to_owned()
-    }
-}
-
 /// The account variables of the `kind` agent's `[account]` that are set in
-/// its process, as `variable` reads them, each compared as
-/// [`compared_folder`] does for a folder account and as written for a named
-/// one: what a hook reports at a session's start, so the core reads the
-/// pane in the account the agent runs in when the operator started it by
-/// hand (PRD agent-profiles D-03, B24, B25). An empty list is the agent's
-/// default account; `None` for an agent Hide keeps no accounts of.
+/// its process, as `variable` reads them, each exactly as set: what a hook
+/// reports at a session's start, so the core reads the pane in the account
+/// the agent runs in when the operator started it by hand (PRD
+/// agent-profiles D-03, B24, B25). An account is the value as set (D-15):
+/// Claude Code keys its login by the string, so `/a` and `/a/` are two
+/// accounts, and nothing here resolves or respells a folder. An empty list
+/// is the agent's default account; `None` for an agent Hide keeps no
+/// accounts of.
 ///
 /// Claude Code drops its variables from a hook's environment when
 /// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`; its folder is then read from the
@@ -145,10 +118,6 @@ pub fn reported_variables(
             .and_then(|file| claude_env_file_folder(&file))
         });
         if let Some(value) = value {
-            let value = match rule.by {
-                By::Folder => compared_folder(&value),
-                _ => value,
-            };
             reported.push((var.name.clone(), value));
         }
     }
@@ -183,17 +152,14 @@ mod tests {
 
     #[test]
     fn a_hook_reports_the_account_variables_its_agent_runs_with() {
-        let folder = tempfile::tempdir().unwrap();
-        let spelled = format!("{}/", folder.path().display());
-        let reported =
-            reported_variables("claude-code", read(&[("CLAUDE_CONFIG_DIR", &spelled)])).unwrap();
-        assert_eq!(
-            reported,
-            vec![(
-                "CLAUDE_CONFIG_DIR".to_owned(),
-                compared_folder(&folder.path().display().to_string())
-            )]
-        );
+        // Exactly as set, the final separator kept: Claude Code's login is
+        // keyed by the string (D-15).
+        for spelled in ["/accounts/claude-a/", "/accounts/claude-a"] {
+            assert_eq!(
+                reported_variables("claude-code", read(&[("CLAUDE_CONFIG_DIR", spelled)])),
+                Some(vec![("CLAUDE_CONFIG_DIR".to_owned(), spelled.to_owned())])
+            );
+        }
         // The default account sets none; agy keeps no accounts apart.
         assert_eq!(
             reported_variables("claude-code", read(&[])),
@@ -218,7 +184,7 @@ mod tests {
             reported_variables("claude-code", scrubbed),
             Some(vec![(
                 "CLAUDE_CONFIG_DIR".to_owned(),
-                compared_folder("/accounts/claude-a")
+                "/accounts/claude-a".to_owned()
             )])
         );
         // Without the scrub the file says nothing: the variable is absent

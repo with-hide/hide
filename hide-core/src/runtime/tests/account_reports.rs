@@ -208,3 +208,109 @@ fn a_wrapper_that_runs_another_account_is_read_there_and_warns_on_its_profile() 
     started(&mut runtime, "p1", "s-2", Some("/accounts/claude-gate"));
     assert!(warned(&runtime).is_empty());
 }
+
+/// The label reads take the reported account with the launch records, and
+/// again whenever a report moves it (B24, B25).
+#[test]
+fn the_label_reads_take_each_reported_account_and_its_moves() {
+    let mut runtime = listed(vec![profile("p-a", "a", "/accounts/claude-a")]);
+    started(&mut runtime, "p1", "s-1", Some("/accounts/claude-a"));
+    let (edit, reads) = runtime.account_launches(None, None).unwrap();
+    assert_eq!(
+        reads.reported.get("p1"),
+        Some(&(
+            "claude-code".to_owned(),
+            AccountKey::Folder("/accounts/claude-a".into())
+        ))
+    );
+    assert!(
+        runtime.account_launches(None, Some(edit)).is_none(),
+        "nothing moved"
+    );
+    started(&mut runtime, "p1", "s-2", None);
+    let (_, reads) = runtime
+        .account_launches(None, Some(edit))
+        .expect("the report moved");
+    assert_eq!(
+        reads.reported.get("p1").map(|(_, key)| key),
+        Some(&AccountKey::Default)
+    );
+}
+
+/// D-15: an account is its value as set. `/a` and `/a/` are two accounts
+/// (Claude Code keys its login by the string), each its own profile's; a
+/// spelling no profile sets reads as before.
+#[test]
+fn an_account_is_matched_by_its_value_as_set() {
+    let mut runtime = listed(vec![
+        profile("p-a", "a", "/accounts/claude-a"),
+        profile("p-slash", "slash", "/accounts/claude-a/"),
+    ]);
+    started(&mut runtime, "p1", "s-1", Some("/accounts/claude-a/"));
+    started(&mut runtime, "p2", "s-2", Some("/accounts/claude-a"));
+    started(&mut runtime, "p3", "s-3", Some("/links/claude-a"));
+    assert_eq!(shown(&runtime, "p1").as_deref(), Some("slash"));
+    assert_eq!(
+        account(&runtime, "p1"),
+        AccountKey::Folder("/accounts/claude-a/".into())
+    );
+    assert_eq!(shown(&runtime, "p2").as_deref(), Some("a"));
+    assert_eq!(account(&runtime, "p3"), AccountKey::Default);
+    assert_eq!(shown(&runtime, "p3"), None);
+}
+
+/// D-35: the profile's last start decides the warning, whatever its panes
+/// are called; here the later start is in the pane whose id sorts first.
+#[test]
+fn a_wrapper_warning_follows_the_profiles_last_start() {
+    let gate = || LaunchProfile {
+        id: ProfileId("p-gate".into()),
+        name: "gate".into(),
+        account: AccountKey::Folder("/accounts/claude-gate".into()),
+    };
+    let launched = |runtime: &mut Runtime, pane: &str| {
+        runtime.snapshot.ui_state.pane_launches.insert(
+            pane.to_owned(),
+            crate::model::PaneLaunch {
+                kind: "claude".to_owned(),
+                name: format!("{pane}-agent"),
+                choice: Default::default(),
+                session: None,
+                profile: Some(gate()),
+            },
+        );
+    };
+    let warned = |runtime: &Runtime| {
+        runtime
+            .machine_profiles(crate::node::TEST_NODE)
+            .unwrap()
+            .profiles
+            .iter()
+            .any(|profile| profile.id == "p-gate" && profile.wrapper_folder)
+    };
+    for elsewhere_last in [true, false] {
+        let mut runtime = listed(vec![
+            profile("p-gate", "gate", "/accounts/claude-gate"),
+            profile("p-a", "a", "/accounts/claude-a"),
+        ]);
+        launched(&mut runtime, "p1");
+        launched(&mut runtime, "p2");
+        let (own, elsewhere) = (Some("/accounts/claude-gate"), Some("/accounts/claude-a"));
+        let (first, last) = if elsewhere_last {
+            (own, elsewhere)
+        } else {
+            (elsewhere, own)
+        };
+        // p2 starts first, then p1.
+        started(&mut runtime, "p2", "s-2", first);
+        started(&mut runtime, "p1", "s-1", last);
+        assert_eq!(
+            warned(&runtime),
+            elsewhere_last,
+            "elsewhere last: {elsewhere_last}"
+        );
+        // Worked out again, it decides the same.
+        runtime.refresh_reported_accounts();
+        assert_eq!(warned(&runtime), elsewhere_last);
+    }
+}

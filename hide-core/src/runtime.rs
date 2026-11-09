@@ -1661,6 +1661,9 @@ pub struct Runtime {
     /// The account each pane's agent runs in as its hook reported it, by
     /// the pane's id (`runtime/account_reports.rs`).
     reported_accounts: BTreeMap<String, account_reports::ReportedAccount>,
+    /// Raised each time `reported_accounts` moves, so the label reads take
+    /// them again (`account_launches`).
+    reported_edit: u64,
     /// The profiles whose last start ran in another account than their own,
     /// by machine and id (`runtime/account_reports.rs`, D-35).
     wrapper_folders: std::collections::BTreeSet<(String, String)>,
@@ -2553,6 +2556,7 @@ impl Runtime {
             agent_profile_busy: false,
             profile_holds: Arc::default(),
             reported_accounts: BTreeMap::new(),
+            reported_edit: 0,
             wrapper_folders: std::collections::BTreeSet::new(),
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),

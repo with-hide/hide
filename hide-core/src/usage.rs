@@ -31,7 +31,12 @@ const RETRY_BACKOFF: [Duration; 3] = [
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct UsageActivity {
+    /// The agents' own figures are wanted now: a window shows them, or
+    /// Memory or the usage limit reads the weekly figure.
     pub window_visible: bool,
+    /// A window shows the usage, which alone makes a profile account's read
+    /// (B23): Memory and the limit ask for the default account only.
+    pub shown: bool,
     pub popover_open_generation: u64,
     pub hidden: Vec<String>,
     pub required: Vec<String>,
@@ -450,15 +455,16 @@ impl UsageDriver {
             );
         }
         self.follow_profiles(&activity.profiles);
-        // A profile's account is read when its agent's row is: no one else
-        // reads it (Memory and the limit ask for the default account).
+        // A profile's account is read only while a window shows its agent's
+        // row, its first read included: no one else reads it (Memory and the
+        // limit ask for the default account).
         for read in self.accounts.values_mut() {
-            let visible = !activity.hidden.iter().any(|agent| agent == read.agent);
+            let shown = activity.shown && !activity.hidden.iter().any(|agent| agent == read.agent);
             read.poll(
                 now,
-                visible && now.duration_since(self.started_at) >= INITIAL_DELAY,
-                visible && activity.window_visible,
-                opened && visible,
+                shown && now.duration_since(self.started_at) >= INITIAL_DELAY,
+                shown,
+                opened && shown,
             );
         }
         let now_ms = unix_ms();
@@ -726,6 +732,68 @@ mod tests {
         driver.follow_profiles(&[]);
         assert!(driver.accounts.is_empty());
         assert!(driver.profile_rows(&[], "claude", 0).is_empty());
+    }
+
+    /// A node that answers no read, keeping the profile each read named.
+    #[derive(Default)]
+    struct Reads(std::sync::Mutex<Vec<Option<hide_agent_adapter::ProfileId>>>);
+    impl NodeLink for Reads {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<hide_node_link::LinkAnswer, crate::node_access::LinkError> {
+            if let Call::UsageLimitFetch { profile, .. } = call {
+                self.0.lock().unwrap().push(profile);
+            }
+            Err(crate::node_access::LinkError::Busy)
+        }
+    }
+
+    /// Memory or the usage limit with no window reads the default account
+    /// alone; a profile account is read only while a window shows its row,
+    /// its first read included (B23).
+    #[test]
+    fn a_profile_account_is_read_only_while_a_window_shows_its_row() {
+        use hide_agent_adapter::{AccountKey, ProfileId};
+        let reads = Arc::new(Reads::default());
+        let mut driver = UsageDriver::new(
+            UsagePaths {
+                home: None,
+                claude_cwd: Some("/hide".into()),
+                codex_home: Some("/codex".into()),
+            },
+            reads.clone(),
+        );
+        driver.started_at = Instant::now() - INITIAL_DELAY;
+        let activity = |shown: bool| UsageActivity {
+            window_visible: true,
+            shown,
+            required: vec!["claude".into()],
+            profiles: vec![UsageProfile {
+                agent: "claude".into(),
+                id: ProfileId("work".into()),
+                account: AccountKey::Folder("/accounts/work".into()),
+            }],
+            ..Default::default()
+        };
+        let settle = |driver: &mut UsageDriver| {
+            for read in driver.reads.iter_mut().chain(driver.accounts.values_mut()) {
+                read.worker.join_pending();
+            }
+        };
+        driver.read_if_due(activity(false));
+        settle(&mut driver);
+        let read = |reads: &Reads| reads.0.lock().unwrap().clone();
+        assert!(!read(&reads).is_empty(), "the default account is read");
+        assert!(
+            read(&reads).iter().all(Option::is_none),
+            "{:?}",
+            read(&reads)
+        );
+        driver.read_if_due(activity(true));
+        settle(&mut driver);
+        assert!(read(&reads).contains(&Some(ProfileId("work".into()))));
     }
 
     /// With no profile, an agent's usage row is on the wire as it was

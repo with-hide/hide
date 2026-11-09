@@ -431,21 +431,29 @@ impl Runtime {
             .unwrap_or_default()
     }
 
-    /// The launch records of the panes on `device` (`None` for this
-    /// machine) whose agent runs in an account other than the default, by
-    /// that machine's own pane ids, with the edit they were taken at; `None`
-    /// while the records have not moved since `edit`. The label reads of
-    /// one machine's coordinator name their accounts by them, and take them
-    /// again only when a record moved.
+    /// What the label reads of the panes on `device` (`None` for this
+    /// machine) need to name each one's account, by that machine's own pane
+    /// ids: the launch records whose agent runs in an account other than
+    /// the default, and the account each pane's hook reported (B24, B25),
+    /// with the edits they were taken at; `None` while neither moved since
+    /// `edit`. The reads of one machine's coordinator name their accounts by
+    /// them, and take them again only when one moved.
     pub(crate) fn account_launches(
         &self,
         device: Option<&str>,
-        edit: Option<u64>,
-    ) -> Option<(u64, BTreeMap<String, crate::model::PaneLaunch>)> {
-        let current = self.missions.launches_edit;
+        edit: Option<(u64, u64)>,
+    ) -> Option<((u64, u64), AccountReads)> {
+        let current = (self.missions.launches_edit, self.reported_edit);
         if edit == Some(current) {
             return None;
         }
+        let own = |pane: &str| -> Option<String> {
+            match device {
+                Some(device) => crate::address::pane_of(pane, device).map(str::to_owned),
+                None if crate::address::is_device_scoped(pane) => None,
+                None => Some(pane.to_owned()),
+            }
+        };
         let launches = self
             .snapshot
             .ui_state
@@ -457,16 +465,16 @@ impl Runtime {
                     .as_ref()
                     .is_some_and(|profile| !profile.account.is_default())
             })
-            .filter_map(|(pane, launch)| {
-                let pane = match device {
-                    Some(device) => crate::address::pane_of(pane, device)?,
-                    None if crate::address::is_device_scoped(pane) => return None,
-                    None => pane.as_str(),
-                };
-                Some((pane.to_owned(), launch.clone()))
+            .filter_map(|(pane, launch)| Some((own(pane)?, launch.clone())))
+            .collect();
+        let reported = self
+            .reported_accounts
+            .iter()
+            .filter_map(|(pane, account)| {
+                Some((own(pane)?, (account.kind.clone(), account.key.clone())))
             })
             .collect();
-        Some((current, launches))
+        Some((current, AccountReads { launches, reported }))
     }
 
     /// What the agent `actor` hands a child of `kind` it starts on its own
@@ -634,4 +642,16 @@ impl Runtime {
             self.persist_ui_state();
         }
     }
+}
+
+/// What one machine's label reads name each pane's account by
+/// (`Runtime::account_launches`, `LabelWorker::account_of`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AccountReads {
+    /// The launch records whose agent runs in an account other than the
+    /// default.
+    pub launches: BTreeMap<String, crate::model::PaneLaunch>,
+    /// The account each pane's hook reported, with the agent's adapter id:
+    /// the one it runs in, whatever started it.
+    pub reported: BTreeMap<String, (String, AccountKey)>,
 }

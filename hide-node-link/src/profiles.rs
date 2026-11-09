@@ -88,8 +88,7 @@ pub struct ListedProfile {
     /// the node has no way to look at. A node that predates it sends none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<ProfileLogin>,
-    /// The account variables a start of it sets, each folder compared as a
-    /// hook reports it (`hide_agent_hooks::account::compared_folder`): the
+    /// The account variables a start of it sets, exactly as set (D-15): the
     /// core reads a pane whose hook reported these in this account (D-03).
     /// Empty for a profile in the agent's default account.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

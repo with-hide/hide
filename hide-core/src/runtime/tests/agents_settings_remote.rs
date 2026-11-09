@@ -1126,6 +1126,7 @@ fn usage_activity_hints_are_accepted_without_persisting_ui_state() {
         runtime.usage_activity(),
         crate::usage::UsageActivity {
             window_visible: true,
+            shown: true,
             popover_open_generation: 1,
             ..Default::default()
         }

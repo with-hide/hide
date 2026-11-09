@@ -6,9 +6,10 @@
 //! account variable runs in that account; so does one whose program (a
 //! wrapper) sets another account than its profile's. The hook in that
 //! account reports the variables it runs with, and the machine's node lists
-//! the variables each of its profiles sets, both compared as the same
-//! function spells them (`hide_agent_hooks::account::compared_folder`). The
-//! core only compares the two: it never looks at a path, which may be a
+//! the variables each of its profiles sets, both exactly as set: an account
+//! is its variables' values as set (D-15), and Claude Code keys its login by
+//! the string, so another spelling of a folder is another account. The core
+//! only compares the two: it never looks at a path, which may be a
 //! connected device's.
 //!
 //! The answer is kept per pane and worked out again only when a report
@@ -57,6 +58,7 @@ impl Runtime {
     /// account (D-35); lays the warnings on the lists. Whether anything a
     /// row or a list shows moved.
     pub(crate) fn refresh_reported_accounts(&mut self) -> bool {
+        let mut starts: BTreeMap<String, u64> = BTreeMap::new();
         let reported: Vec<(String, ReportedAccount)> = {
             let facts = self
                 .hook_facts
@@ -69,6 +71,7 @@ impl Runtime {
                     let device =
                         crate::address::pane_device(report.pane).unwrap_or(self.node.as_str());
                     let account = self.account_reported(device, kind, report.variables)?;
+                    starts.insert(report.pane.to_owned(), report.start);
                     Some((
                         report.pane.to_owned(),
                         ReportedAccount {
@@ -82,9 +85,10 @@ impl Runtime {
         };
         let reported: BTreeMap<String, ReportedAccount> = reported.into_iter().collect();
         // A start Hide made with a profile whose hook reports another
-        // account: its program set a folder of its own. A start that reports
-        // its own account again lifts the warning.
-        let mut wrapper = self.wrapper_folders.clone();
+        // account: its program set a folder of its own. The profile's last
+        // start decides, whatever its pane is called: one that reports its
+        // own account again lifts the warning.
+        let mut last: BTreeMap<(String, String), (u64, bool)> = BTreeMap::new();
         for (pane, account) in &reported {
             let Some(profile) = self
                 .snapshot
@@ -102,15 +106,27 @@ impl Runtime {
                 continue;
             };
             let device = crate::address::pane_device(pane).unwrap_or(self.node.as_str());
-            let at = (device.to_owned(), profile.id.0.clone());
-            if profile.account == account.key {
-                wrapper.remove(&at);
-            } else {
+            let start = starts.get(pane).copied().unwrap_or(0);
+            let elsewhere = profile.account != account.key;
+            last.entry((device.to_owned(), profile.id.0.clone()))
+                .and_modify(|kept| {
+                    if start > kept.0 {
+                        *kept = (start, elsewhere);
+                    }
+                })
+                .or_insert((start, elsewhere));
+        }
+        let mut wrapper = self.wrapper_folders.clone();
+        for (at, (_, elsewhere)) in last {
+            if elsewhere {
                 wrapper.insert(at);
+            } else {
+                wrapper.remove(&at);
             }
         }
         let rows_moved = reported != self.reported_accounts;
         if rows_moved {
+            self.reported_edit = self.reported_edit.wrapping_add(1);
             // The rows of each machine whose panes moved are laid again.
             let machines: BTreeSet<Option<String>> = reported
                 .iter()

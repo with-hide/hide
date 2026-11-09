@@ -1175,6 +1175,7 @@ impl Runtime {
             window_visible: self.usage_window_visible
                 || self.memory_reads_usage()
                 || self.limit_reads_usage(),
+            shown: self.usage_window_visible,
             popover_open_generation: self.usage_popover_open_generation,
             hidden: self.snapshot.ui_state.usage.hidden.clone(),
             required: if self.memory_reads_usage() || self.limit_reads_usage() {
