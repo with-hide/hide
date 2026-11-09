@@ -25,7 +25,8 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     const [parent, child] = fixture.panes;
     // A relationship holds only on the session it was spawned on, so each agent is labelled by a turn appended to its own session.
     const childSession = "fixture-two";
-    continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE });
+    // Its label reads the turn as waiting on the children: a turn read as finished and not read yet would stand in Done instead (status-model.md, A quiet row that waits).
+    continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE, end: "waiting" });
     await finishUnseenTurn(fixture, daemon, parent, await elsewhereTab(fixture, daemon));
     continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, progress: "계보 투영 구현 중" });
     await setAgentState(daemon, child, "working");

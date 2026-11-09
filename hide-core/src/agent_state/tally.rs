@@ -399,6 +399,10 @@ pub mod phone {
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub children_left: u64,
+        /// Whether the operator has not read the row since it last changed,
+        /// which tells the notices a read from a verdict judged again.
+        #[serde(skip)]
+        pub unread: bool,
         pub agent_kind: String,
         pub title: String,
         /// `project · branch`, or the project alone for a plain folder.
@@ -1015,6 +1019,10 @@ pub mod phone {
                     .get("children_left")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
+                unread: agent
+                    .get("unread")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 emphasized: matches!(str_of(agent, "group"), "needs_you" | "done"),
                 holds_notification: matches!(str_of(agent, "group"), "needs_you" | "done")
                     || matches!(str_of(agent, "demand"), "question" | "approval" | "error"),

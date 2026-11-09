@@ -514,8 +514,10 @@ pub(crate) fn is_running(agent: &SidebarAgentSnapshot) -> bool {
     agent.activity == "working"
 }
 
+/// A root shown Done for a finished turn not read yet still has children at
+/// work (`children_moving`), which the shown group no longer says.
 pub(crate) fn has_work_in_progress(agent: &SidebarAgentSnapshot) -> bool {
-    is_running(agent) || agent.group == "working"
+    is_running(agent) || agent.group == "working" || agent.children_moving
 }
 
 pub(crate) fn is_waiting_for_operator(agent: &SidebarAgentSnapshot) -> bool {
@@ -1345,13 +1347,16 @@ pub mod push {
                 } else if (*state == Effective::Seen
                     && matches!(before, Effective::NeedsYou | Effective::Done))
                     || (before == Effective::Look && *state != Effective::NeedsYou)
-                    || (before == Effective::Done && agent.wait.as_deref() == Some("children"))
+                    || (before == Effective::Done
+                        && agent.wait.as_deref() == Some("children")
+                        && !agent.unread)
                 {
                     // A View looked at takes its notice back, whatever the
                     // row's own group is then, and so does a finished turn
-                    // read while its children still work: the row waits on
-                    // them again rather than resting (status-model.md, A
-                    // quiet row that waits).
+                    // the operator read while its children still work: the
+                    // row waits on them again rather than resting
+                    // (status-model.md, A quiet row that waits). A verdict
+                    // judged again is no read and keeps the notice.
                     seen.insert(key.clone());
                 }
             }

@@ -2125,9 +2125,10 @@ pub struct SidebarAgentSnapshot {
     /// wait whenever it does not wait on its children.
     #[serde(skip_serializing)]
     pub own_wait: Option<AgentWait>,
-    /// Whether the operator has not read the row's own state, its
-    /// descendants' signals left out (`derive_read_state`): a child finishing
-    /// turns the row unread and leaves this alone.
+    /// Whether the operator has not read the row's own turn, compared on its
+    /// own fields only (`axes.rs::record_covers_turn`): a child finishing, a
+    /// check ending or a person's turn turns the row unread and leaves this
+    /// alone, and a record that cannot be compared leaves it false.
     #[serde(skip_serializing)]
     pub own_unread: bool,
     /// The demands and completions of this row's live descendants, keyed by
