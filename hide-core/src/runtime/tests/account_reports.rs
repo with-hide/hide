@@ -24,7 +24,8 @@ fn profile(id: &str, name: &str, folder: &str) -> ProfileSnapshot {
         skill: None,
         login: None,
         wrapper_folder: false,
-        account_key: AccountKey::Folder(folder.to_owned()),
+        startable: true,
+        account_key: Some(AccountKey::Folder(folder.to_owned())),
         account_variables: vec![("CLAUDE_CONFIG_DIR".to_owned(), folder.to_owned())],
     }
 }
@@ -143,6 +144,8 @@ fn a_wrapper_that_runs_another_account_is_read_there_and_warns_on_its_profile() 
     runtime.snapshot.ui_state.pane_launches.insert(
         "p1".to_owned(),
         crate::model::PaneLaunch {
+            pending: false,
+            start: 0,
             kind: "claude".to_owned(),
             name: "p1-agent".to_owned(),
             choice: Default::default(),
@@ -196,6 +199,7 @@ fn a_wrapper_that_runs_another_account_is_read_there_and_warns_on_its_profile() 
                     place: None,
                     login: None,
                     account_variables: vec![("CLAUDE_CONFIG_DIR".into(), folder.into())],
+                    account_key: Some(AccountKey::Folder(folder.into())),
                 }
             })
             .collect(),
@@ -272,6 +276,8 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
         runtime.snapshot.ui_state.pane_launches.insert(
             pane.to_owned(),
             crate::model::PaneLaunch {
+                pending: false,
+                start: 0,
                 kind: "claude".to_owned(),
                 name: format!("{pane}-agent"),
                 choice: Default::default(),
@@ -333,5 +339,93 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
             elsewhere_last,
             "p2 again: {elsewhere_last}"
         );
+        // The newest pane closes. Its older sibling must not restore the
+        // warning that the newest start just cleared (or clear its warning).
+        let mut payload = serde_json::from_value(serde_json::json!({"agents": []})).unwrap();
+        runtime
+            .hook_facts
+            .lock()
+            .unwrap()
+            .lay(&mut payload, str::to_owned, |pane| pane == "p1");
+        runtime.snapshot.ui_state.pane_launches.remove("p1");
+        runtime.refresh_reported_accounts();
+        assert_eq!(warned(&runtime), elsewhere_last, "latest pane closed");
+        // A new start is newer even after the pane that held the highest
+        // sequence was removed. It may change the warning again.
+        launched(&mut runtime, "p3");
+        started(&mut runtime, "p3", "s-3", first);
+        assert_eq!(warned(&runtime), !elsewhere_last, "next start after close");
+        // Authoritative removal owns the warning's lifetime. A surviving
+        // old pane's report must not recreate the removed profile's entry.
+        runtime.ingest_profiles(
+            crate::node::TEST_NODE,
+            crate::runtime::kit::ProfilesRead::Listed(hide_node_link::profiles::ProfileList {
+                version: 2,
+                profiles: Vec::new(),
+                defaults: Default::default(),
+                unjudged: None,
+            }),
+        );
+        runtime.refresh_reported_accounts();
+        assert!(runtime.wrapper_folders.is_empty());
     }
+}
+
+/// D-03, D-32, B16, B24: a parent the operator started by hand with an
+/// alias runs in the profile account its hook reported, and a child of the
+/// same agent it starts with no `--profile` starts there too, not in the
+/// agent's default on the machine. One started by hand in the default
+/// account hands down the built-in default; one with neither a record nor
+/// a report is still unknown.
+#[test]
+fn a_child_of_a_parent_started_with_an_alias_starts_in_the_parents_account() {
+    let mut runtime = listed(vec![
+        profile("p-a", "a", "/accounts/claude-a"),
+        profile("p-b", "b", "/accounts/claude-b"),
+    ]);
+    let node = runtime.node.to_string();
+    let mut kit = runtime.kit_states[&node].clone();
+    if let Some(profiles) = kit.profiles.as_mut() {
+        profiles
+            .defaults
+            .insert("claude-code".to_owned(), "p-b".to_owned());
+    }
+    runtime.set_kit_state(&node, kit);
+    let parent = |pane: &str, session: &str| crate::delivery::Actor {
+        pane_id: pane.into(),
+        name: "by-hand".into(),
+        kind: "claude".into(),
+        device_id: node.clone(),
+        session: Some(session.into()),
+    };
+    let child = |runtime: &Runtime, parent: &crate::delivery::Actor| {
+        crate::launch::pick(
+            "claude",
+            None,
+            &runtime.caller_launch_profile(parent, "claude"),
+            None,
+            runtime.machine_profiles(&node),
+        )
+        .profile()
+        .map(|(id, _)| id.0)
+    };
+    started(&mut runtime, "p1", "s-1", Some("/accounts/claude-a"));
+    assert_eq!(
+        child(&runtime, &parent("p1", "s-1")).as_deref(),
+        Some("p-a")
+    );
+    started(&mut runtime, "p2", "s-2", None);
+    assert_eq!(
+        runtime.caller_launch_profile(&parent("p2", "s-2"), "claude"),
+        crate::launch::Parent::Default
+    );
+    assert_eq!(child(&runtime, &parent("p2", "s-2")), None);
+    assert_eq!(
+        runtime.caller_launch_profile(&parent("p3", "s-3"), "claude"),
+        crate::launch::Parent::Unknown
+    );
+    assert_eq!(
+        child(&runtime, &parent("p3", "s-3")).as_deref(),
+        Some("p-b")
+    );
 }

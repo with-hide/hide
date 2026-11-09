@@ -504,11 +504,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (view.tool !== tool || !view.open) setWorkspaceView({ tool });
   };
 
-  /** Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15; lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay. */
-  const openDetail = (item: import("./snapshot").DetailItem) => {
+  /**
+   * Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15;
+   * lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay.
+   * With `inOwnerTab` the core first brings forward the agent that owns the
+   * item, a record's or plan's session or a mission's Conductor, so the card
+   * belongs to that agent's tab (operator decision 2026-11-09).
+   */
+  const openDetail = (item: import("./snapshot").DetailItem, inOwnerTab = false) => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
     ui().setStackFront("view");
-    dispatch({ schema_version: 2, kind: "detail_open", payload: { item } });
+    dispatch({ schema_version: 2, kind: "detail_open", payload: { item, ...(inOwnerTab ? { in_owner_tab: true } : {}) } });
   };
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
@@ -1928,7 +1934,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
      * mission-screen D-09, B12): a pane's mission chip, a Conductor row's
      * mark, a 내 차례 or Needs You row and the Overview open it here, in the
-     * Agent tab in front, and the pane stays beside it. Away from a
+     * Conductor's Agent tab, which the core brings forward with its pane
+     * (operator decision 2026-11-09), or in the tab in front while no
+     * Conductor of this machine holds the mission. Away from a
      * Workspace (Home, the Overview, the mission screen with no checkout in
      * front) the mission's checkout comes to the front first, as a card's
      * project does; a mission whose checkout no list holds opens on the
@@ -1952,7 +1960,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         state.setScreen({ kind: "workspace" });
       }
       ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId }, in_owner_tab: true } });
     },
 
     /**
@@ -3232,18 +3240,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
-     * lane's 보기 slot, where the core starts its read, or in the Overview's
-     * panel when no Workspace is in front. The keyboard stays where it is.
+     * lane's 보기 slot of the session's own tab, which the core brings
+     * forward with the session's pane (operator decision 2026-11-09), where
+     * it starts its read, or in the Overview's panel when no Workspace is in
+     * front. A session with no pane on this machine opens in the tab in front.
      */
     openSessionRecord(session: import("./snapshot").WorkSession) {
-      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session });
+      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, true);
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
-    /** A session's plan, large in the lane's 보기 slot (PRD hide-plan B11); the keyboard stays in the terminal. */
-    openPlan(session: import("./snapshot").WorkSession) {
+    /**
+     * A session's plan, large in the lane's 보기 slot (PRD hide-plan B11), in
+     * the session's own tab as its record opens (operator decision
+     * 2026-11-09); a mission node's `크게 ›` passes `inOwnerTab: false`, so
+     * the plan stays in the slot the map was pressed in, as a worker's record
+     * does.
+     */
+    openPlan(session: import("./snapshot").WorkSession, inOwnerTab = true) {
       leaveMissionsForSlot();
       if (ui().screen?.kind === "missions") return diagnostic("plan_open: no Workspace in front to draw the slot");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session } } });
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session }, ...(inOwnerTab ? { in_owner_tab: true } : {}) } });
     },
     /**
      * ⇧⌘U: pins the focused pane's plan chip open, or a Conductor pane's

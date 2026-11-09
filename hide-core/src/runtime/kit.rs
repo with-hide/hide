@@ -569,6 +569,9 @@ impl Runtime {
         let mut state = self.kit_state(device_id);
         let profiles = match read {
             ProfilesRead::Listed(list) => {
+                self.wrapper_folders.retain(|(machine, id), _| {
+                    machine != device_id || list.profiles.iter().any(|profile| profile.id.0 == *id)
+                });
                 if let Some(reason) = &list.unjudged {
                     crate::diagnostic!(serde_json::json!({
                         "component": "kit",
@@ -1761,6 +1764,7 @@ impl Runtime {
         let judged_before = self.kit_states.get(device_id).map(pane_judgement_inputs);
         let judged_now = pane_judgement_inputs(&snapshot);
         self.kit_states.insert(device_id.to_owned(), snapshot);
+        self.refresh_start_profiles();
         self.refresh_device_snapshots();
         // A device's agent panes are judged against its kit.
         if device_id != self.node.as_str() {

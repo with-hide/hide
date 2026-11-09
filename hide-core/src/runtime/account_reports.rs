@@ -88,7 +88,7 @@ impl Runtime {
         // account: its program set a folder of its own. The profile's last
         // start decides, whatever its pane is called: one that reports its
         // own account again lifts the warning.
-        let mut last: BTreeMap<(String, String), (u64, bool)> = BTreeMap::new();
+        let mut wrapper = self.wrapper_folders.clone();
         for (pane, account) in &reported {
             let Some(profile) = self
                 .snapshot
@@ -106,23 +106,24 @@ impl Runtime {
                 continue;
             };
             let device = crate::address::pane_device(pane).unwrap_or(self.node.as_str());
+            // A removed profile keeps no warning, even while an old pane
+            // still reports the account it was started with.
+            if !self
+                .machine_profiles(device)
+                .is_some_and(|list| list.profiles.iter().any(|listed| listed.id == profile.id.0))
+            {
+                continue;
+            }
             let start = starts.get(pane).copied().unwrap_or(0);
             let elsewhere = profile.account != account.key;
-            last.entry((device.to_owned(), profile.id.0.clone()))
+            wrapper
+                .entry((device.to_owned(), profile.id.0.clone()))
                 .and_modify(|kept| {
                     if start > kept.0 {
                         *kept = (start, elsewhere);
                     }
                 })
                 .or_insert((start, elsewhere));
-        }
-        let mut wrapper = self.wrapper_folders.clone();
-        for (at, (_, elsewhere)) in last {
-            if elsewhere {
-                wrapper.insert(at);
-            } else {
-                wrapper.remove(&at);
-            }
         }
         let rows_moved = reported != self.reported_accounts;
         if rows_moved {
@@ -172,8 +173,8 @@ impl Runtime {
         let warned: BTreeSet<&str> = self
             .wrapper_folders
             .iter()
-            .filter(|(machine, _)| machine == device)
-            .map(|(_, id)| id.as_str())
+            .filter(|((machine, _), (_, warning))| machine == device && *warning)
+            .map(|((_, id), _)| id.as_str())
             .collect();
         let Some(mut state) = self.kit_states.get(device).cloned() else {
             return false;
@@ -214,28 +215,23 @@ impl Runtime {
         let profiles = self.machine_profiles(device)?;
         let mut wanted = variables.to_vec();
         wanted.sort();
-        let default = profiles.defaults.get(kind);
-        let mut matches: Vec<&crate::model::ProfileSnapshot> = profiles
+        // The account those variables name, as its node keyed it.
+        let key = profiles
             .profiles
             .iter()
-            .filter(|profile| {
+            .find(|profile| {
                 agent_id(&profile.kind) == Some(kind)
-                    && !matches!(
-                        profile.install,
-                        Some(
-                            crate::model::ProfileInstall::Removing
-                                | crate::model::ProfileInstall::RemoveFailed
-                        )
-                    )
+                    && profile.startable
                     && !profile.account_variables.is_empty()
                     && {
                         let mut listed = profile.account_variables.clone();
                         listed.sort();
                         listed == wanted
                     }
-            })
-            .collect();
-        matches.sort_by_key(|profile| Some(&profile.id) != default);
+            })?
+            .account_key
+            .clone()?;
+        let matches = profiles.in_account(kind, &key);
         let first = matches.first()?;
         let pair = |profile: &crate::model::ProfileSnapshot| {
             (ProfileId(profile.id.clone()), profile.name.clone())
@@ -243,7 +239,7 @@ impl Runtime {
         Some(ReportedAccount {
             named: (matches.len() == 1).then(|| pair(first)),
             start: Some(pair(first)),
-            ..blank(first.account_key.clone())
+            ..blank(key)
         })
     }
 }

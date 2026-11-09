@@ -1666,7 +1666,7 @@ pub struct Runtime {
     reported_edit: u64,
     /// The profiles whose last start ran in another account than their own,
     /// by machine and id (`runtime/account_reports.rs`, D-35).
-    wrapper_folders: std::collections::BTreeSet<(String, String)>,
+    wrapper_folders: BTreeMap<(String, String), (u64, bool)>,
     /// When an agent last worked or waited on the operator; 0 until one has.
     agent_worked_at_unix_ms: u64,
     /// What the operator looks at: this machine's chosen pane, the device in
@@ -2557,7 +2557,7 @@ impl Runtime {
             profile_holds: Arc::default(),
             reported_accounts: BTreeMap::new(),
             reported_edit: 0,
-            wrapper_folders: std::collections::BTreeSet::new(),
+            wrapper_folders: BTreeMap::new(),
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),
@@ -2717,6 +2717,7 @@ impl Runtime {
             #[cfg(test)]
             test_dirs: Vec::new(),
         };
+        runtime.refresh_start_profiles();
         runtime.resync_navigator_focus();
         runtime.refresh_agent_scopes();
         // A sleep saved before this start is as closed as it was.

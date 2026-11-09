@@ -292,7 +292,7 @@ describe("the Project tool", () => {
     expect(container.querySelectorAll("[data-task-row]")).toHaveLength(1);
     expect(container.querySelector('[data-task-row="b"]')?.textContent).toContain("Gave up on the flaky test");
     await press('[data-task-conversation="s-b"]');
-    expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-b" } } });
+    expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-b" } }, in_owner_tab: true });
     await act(async () => useUiStore.getState().showTaskTable("mission", null));
     expect(container.querySelector('[data-task-table-empty="mission"]')).not.toBeNull();
   });

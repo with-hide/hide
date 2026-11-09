@@ -14,7 +14,6 @@ use serde_json::{Value, json};
 
 const CODEX_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 const BODY_LIMIT: u64 = 256 * 1024;
-const AUTH_LIMIT: u64 = 64 * 1024;
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_BINARY: &str = hide_agent_adapter::AgentId::ClaudeCode
@@ -97,40 +96,27 @@ struct CodexCredentials {
     account_id: String,
 }
 
-/// A login file of at most [`AUTH_LIMIT`]; a missing or larger one is a
-/// login this node cannot read.
+/// A login file of at most `credentials::LIMIT`; a missing or larger one is
+/// a login this node cannot read.
 fn read_credentials(path: &Path) -> Result<Vec<u8>, LimitFailure> {
-    let failure =
-        || LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable");
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .map_err(|_| failure())?
-        .take(AUTH_LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| failure())?;
-    if bytes.len() as u64 > AUTH_LIMIT {
-        return Err(failure());
-    }
-    Ok(bytes)
+    crate::credentials::read(path)
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable")
+        })
 }
 
 fn codex_credentials(home: &Path) -> Result<CodexCredentials, LimitFailure> {
     let failure =
         || LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable");
     let bytes = read_credentials(&home.join("auth.json"))?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| failure())?;
-    let token = |name: &str| {
-        value
-            .get("tokens")
-            .and_then(|v| v.get(name))
-            .and_then(Value::as_str)
-            .filter(|v| !v.trim().is_empty())
-            .map(str::to_owned)
-            .ok_or_else(failure)
-    };
+    let auth = crate::credentials::object(&bytes).map_err(|_| failure())?;
+    let (access_token, account_id) =
+        crate::credentials::codex::usage_login(&auth).ok_or_else(failure)?;
     Ok(CodexCredentials {
-        access_token: token("access_token")?,
-        account_id: token("account_id")?,
+        access_token: access_token.to_owned(),
+        account_id: account_id.to_owned(),
     })
 }
 
@@ -408,21 +394,10 @@ pub(crate) fn claude_keychain_item(
 fn claude_token(bytes: &[u8], now_ms: u64) -> Result<ClaudeToken, LimitFailure> {
     let unreadable =
         || LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable");
-    if bytes.len() as u64 > AUTH_LIMIT {
-        return Err(unreadable());
-    }
-    let value: Value = serde_json::from_slice(bytes).map_err(|_| unreadable())?;
-    let login = value.get("claudeAiOauth").ok_or_else(unreadable)?;
-    let token = login
-        .get("accessToken")
-        .and_then(Value::as_str)
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(unreadable)?;
-    if login
-        .get("expiresAt")
-        .and_then(Value::as_u64)
-        .is_some_and(|expires_at| expires_at <= now_ms)
-    {
+    let login = crate::credentials::object(bytes).map_err(|_| unreadable())?;
+    let (token, expires_at) =
+        crate::credentials::claude::access_token(&login).ok_or_else(unreadable)?;
+    if expires_at.is_some_and(|expires_at| expires_at <= now_ms) {
         return Err(LimitFailure::new(
             FailureDisposition::Offline,
             "token_expired",

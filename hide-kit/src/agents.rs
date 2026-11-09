@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-mission` and `hide-task`;
+//! - Hide's skill stubs ([`SKILLS`]: `hide` and `hide-mission`;
 //!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stubs stay while any of them is on;
@@ -236,38 +236,32 @@ pub const GUIDE_SKILL: Skill = Skill {
     // adds the row for splitting the work across agents (PRD
     // hide-plan-delegate D-11), version 6 names `hide task` for it, and
     // version 7 sends an alias or a new account to the guide's profiles
-    // (PRD agent-profiles D-33, D-34).
+    // (PRD agent-profiles D-33, D-34). Version 8 routes complex work,
+    // planning and review requests to missions (PRD hide-task-skill-merge B7, B8).
+    // Version 9 proposes a mission before starting complex work.
     body: concat!(
         "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 7,
+    version: 9,
 };
 
-/// The Conductor's stub: a mission of agents, which `hide mission help`
-/// owns, named after that command. Builds up to 1.1 wrote it as
-/// `hide-conductor` (versions 1 to 3), which [`RETIRED_SKILLS`] takes out.
+/// Routes work that needs a Conductor to `hide mission help`, leaving
+/// small work with the current agent. Version 2 folds in the retired `hide-task`
+/// stub; earlier builds also wrote `hide-conductor` (versions 1 to 3),
+/// which [`RETIRED_SKILLS`] takes out. Version 3 asks before using a mission
+/// for complex work unless the operator already requested one.
 pub const MISSION_SKILL: Skill = Skill {
     name: "hide-mission",
-    description: "Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, asking the operator a decision with choices they can answer from the map, whose answer arrives in your conversation as their own message, recording a direct change's commit and a verify node's verdict, merging, the report and taking a mission over.",
-    version: 1,
-};
-
-/// The task an agent carries itself and its steps (PRD hide-plan D-16), which
-/// `hide task help` owns. Earlier builds wrote it as `hide-plan`, which
-/// [`RETIRED_SKILLS`] takes out.
-pub const TASK_SKILL: Skill = Skill {
-    name: "hide-task",
-    description: "Carry a task yourself in Hide and keep its steps: what each delivers, what it waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the steps reviewed. To conduct several agents carrying PRs as a group, use hide-mission instead.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the task's contract, with the commands, the steps' shape, when to put the steps up for review with `--ask`, how to approve or drop them on the operator's words, and how to keep them current.",
-    version: 1,
+    description: "Conduct a mission of agents in Hide. Use when a task in a Hide pane takes more than a few steps, the operator asks you to plan first or have the work reviewed, or asks for a mission or several PRs carried as a group.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. If the operator explicitly asks for a mission or invokes `/hide-mission`, do not ask which way to work again. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting. Otherwise, look for these signals:\n\n- The operator asks for planning first or review.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf any signal applies, first ask the operator in one line: Shall I run this as a mission, or do it directly? Wait for their answer and follow it: if they choose a mission, run `hide mission help` and follow it; if they choose direct work, do it directly. If none applies, do the work directly without asking.",
+    version: 3,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them. A new stub
 /// is one more entry here and nothing else: the observe, write and remove
 /// passes read the array.
-pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, MISSION_SKILL, TASK_SKILL];
+pub const SKILLS: [Skill; 2] = [GUIDE_SKILL, MISSION_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.
@@ -293,13 +287,15 @@ macro_rules! conductor_head {
 }
 
 /// `hide-browser` version 1, whose guide `hide guide` now routes to,
-/// `hide-conductor` versions 1 to 3, renamed `hide-mission` (2026-11-02), and
-/// `hide-plan` version 1, renamed `hide-task` (2026-11-04).
+/// `hide-conductor` versions 1 to 3, renamed `hide-mission` (2026-11-02),
+/// `hide-plan` version 1, renamed `hide-task` (2026-11-04), and
+/// `hide-task` version 1, folded into `hide-mission` (2026-11-09).
 /// The `hide-conductor` entries can go once no supported install can still
 /// hold one: when the oldest build that may update in place writes
 /// `hide-mission`; the `hide-plan` entry likewise once the oldest such build
-/// writes `hide-task`.
-pub const RETIRED_SKILLS: [RetiredSkill; 3] = [
+/// writes `hide-task`, whose entry must stay until the oldest such build
+/// writes only `hide` and `hide-mission`.
+pub const RETIRED_SKILLS: [RetiredSkill; 4] = [
     RetiredSkill {
         name: "hide-browser",
         texts: &[concat!(
@@ -342,6 +338,19 @@ pub const RETIRED_SKILLS: [RetiredSkill; 3] = [
             "description: \"Keep your own plan of the task in Hide: its steps, what each waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the plan reviewed.\"\n",
             "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
             "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the plan's contract, with the commands, the steps' shape, when to put the plan up for review with `--ask`, how to approve or drop it on the operator's words, and how to keep its steps current.\n",
+        )],
+    },
+    RetiredSkill {
+        name: "hide-task",
+        texts: &[concat!(
+            "---\n",
+            "name: hide-task\n",
+            "description: \"Carry a task yourself in Hide and keep its steps: what each delivers, what it waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the steps reviewed. To conduct several agents carrying PRs as a group, use hide-mission instead.\"\n",
+            "---\n",
+            "\n",
+            "<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n",
+            "\n",
+            "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the task's contract, with the commands, the steps' shape, when to put the steps up for review with `--ask`, how to approve or drop them on the operator's words, and how to keep them current.\n",
         )],
     },
 ];

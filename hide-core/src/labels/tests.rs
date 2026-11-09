@@ -6437,6 +6437,8 @@ fn a_profile_agents_session_is_read_in_the_account_its_launch_record_names() {
             launches: std::collections::BTreeMap::from([(
                 "w1:p1".to_owned(),
                 crate::model::PaneLaunch {
+                    pending: false,
+                    start: 0,
                     kind: "claude".to_owned(),
                     name: "work".to_owned(),
                     choice: Default::default(),
@@ -6533,6 +6535,8 @@ fn an_agents_session_is_read_in_the_account_its_hook_reported() {
     let node: Arc<dyn crate::node_access::NodeLink> = helper.clone();
     let (mut worker, woken) = harness.device_worker(Box::new(move || Ok(Arc::clone(&node))));
     let started_elsewhere = crate::model::PaneLaunch {
+        pending: false,
+        start: 0,
         kind: "claude".to_owned(),
         name: "gate".to_owned(),
         choice: Default::default(),

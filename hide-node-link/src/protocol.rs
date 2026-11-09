@@ -398,7 +398,12 @@ use crate::error::HostError;
 /// profile's sign-in and account variables (`profiles::ListedProfile`) and
 /// lets a usage read name a profile (`Call::UsageLimitFetch`), both optional
 /// fields an older side leaves out.
-/// 93 (92 is held by the profile launch refactor): holder renewal carries
+/// 92: each listed profile carries the account its node's `resolve` keyed
+/// it by (`profiles::ListedProfile::account_key`, PRD agent-profiles D-12),
+/// which the core compares accounts by instead of keying one itself; a
+/// helper on 91 lists none, so it is not admitted and upgrades with its
+/// core.
+/// 93: holder renewal carries
 /// the connection's numbered creation request,
 /// just like reserve/start/cancel. An earlier node issues a separate number
 /// during replacement and could retire the next tab's request, so it must

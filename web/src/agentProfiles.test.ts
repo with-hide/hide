@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { agentProfilesView, signInStart } from "./agentProfiles";
+import { agentProfilesView, startProfiles, signInStart } from "./agentProfiles";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
-import type { AgentProfileWire, MachineAgentProfiles } from "./snapshot";
+import type { AgentProfileWire, MachineAgentProfiles, SnapshotRest } from "./snapshot";
 import type { StartTarget, StartTargets } from "./startTargets";
 
 const NOW = 1_800_000_000_000;
 
 function wire(id: string, fields: Partial<AgentProfileWire> = {}): AgentProfileWire {
-  return { id, kind: "claude-code", name: id, account: `/accounts/${id}`, program: null, env_keys: [], version: 1, install: "own", folder: `/accounts/${id}`, hook: null, skill: null, ...fields };
+  return { id, kind: "claude-code", name: id, account: `/accounts/${id}`, program: null, env_keys: [], version: 1, install: "own", folder: `/accounts/${id}`, hook: null, skill: null, startable: true, ...fields };
 }
 
 function weekly(used: number): LimitCell {
@@ -69,5 +69,15 @@ describe("signInStart", () => {
   it("leaves it to the start panel where the machine has no checkout to start in", () => {
     expect(signInStart(targets(null, checkout("box", "/srv", true, "not_connected")), "box", "claude-code")).toBeNull();
     expect(signInStart(targets(null), "mac", "claude-code")).toBeNull();
+  });
+});
+
+describe("startProfiles", () => {
+  it("shows the core's final automatic selection without repeating its priority", () => {
+    const rest = {
+      navigator: { devices: [{ id: "mac", kit: { profiles: { ...machine([wire("p-side"), wire("p-new")]), defaults: { "claude-code": "p-side" } } } }] },
+      status: { start_profiles: { project: { device_id: "mac", root: "/project", profiles: { "claude-code": "p-new" } } } },
+    } as unknown as SnapshotRest;
+    expect(startProfiles(rest, "mac", "project", "claude-code")?.picked).toBe("p-new");
   });
 });

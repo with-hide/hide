@@ -45,7 +45,7 @@ import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
 import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, elsewhereTasks, RAISED_TASK_GROUPS, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import type { TaskState } from "./agentScope";
 
@@ -262,22 +262,16 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
     </section>
   );
-  // 상태별 holds 내 차례 and 읽을 것 still above the rest, like the projects
-  // tree's raised Needs You and Done: reading one row after another never
-  // scrolls them away. Up to half the height, past which they scroll on their
-  // own; with nothing under them they are the whole list.
-  const raised = view === "status" ? sections.filter(({ group }) => group.state !== null && RAISED_TASK_GROUPS.has(group.state)) : [];
-  const below = sections.filter((section) => !raised.includes(section));
-  const held = raised.length > 0 && (below.length > 0 || list.resting.length + list.cleanup.length + list.archived.length > 0);
-  const listed = held ? below : sections;
+  // One list scrolls everything: 내 차례 and 읽을 것 are its first sections, like the
+  // projects tree's Needs You and Done, and scroll away with the rest. Their heads
+  // stay, stacked under the ones already passed, so a scrolled list still says what
+  // is above it and pressing a head goes back to its rows.
   const statusFolds = view === "status" ? [list.resting, list.cleanup, list.archived].filter((entries) => entries.length > 0).length : 0;
-  // The arrow keys move through both parts as one.
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
-      {held ? <div className="max-h-1/2 shrink-0 overflow-y-auto border-b border-border px-sm pb-xs" style={stackPadding(raised.length)} data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
-      <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(listed.length + statusFolds) : undefined} data-task-scroll="list">
-        {listed.map(drawSection)}
-        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={listed.length} /> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(sections.length + statusFolds) : undefined} data-task-scroll="list">
+        {sections.map(drawSection)}
+        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={sections.length} /> : null}
       </div>
     </div>
   );

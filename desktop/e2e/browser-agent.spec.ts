@@ -291,7 +291,7 @@ test("hide browser: a selected View of a Workspace behind another answers input 
   // selected View, and the host hides it behind the front one once the core's
   // snapshot names that Workspace, which is after the click returns.
   const checkoutRow = (name: string) => shell!.locator("[data-project]", { hasText: name }).locator("[data-checkout]").first();
-  await (await showProjectRow(shell!, checkoutRow("second-checkout"))).click();
+  await (await showProjectRow(shell!, checkoutRow("second-checkout"))).click({ position: { x: 12, y: 8 } });
   const viewVisible = () => app!.evaluate(({ BrowserWindow }, address) => BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) => {
     const contents = (view as { webContents?: Electron.WebContents }).webContents;
     return contents && !contents.isDestroyed() && contents.getURL() === address ? [(view as Electron.View).getVisible()] : [];
@@ -311,7 +311,7 @@ test("hide browser: a selected View of a Workspace behind another answers input 
   expect(JSON.parse(behind)).toEqual([{ clicks: 1, inputs: 1 }, "applied: from behind"]);
 
   // No agent can bring it forward; the operator coming back does.
-  await (await showProjectRow(shell!, checkoutRow("fixture"))).click();
+  await (await showProjectRow(shell!, checkoutRow("fixture"))).click({ position: { x: 12, y: 8 } });
   await expect.poll(viewVisible).toEqual([true]);
   await snapshot(display);
   await inDisplay(url, "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");

@@ -74,31 +74,24 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
   // A machine that cannot answer keeps its profiles read-only (B30).
   const profiles = useMachineProfiles(device, machine.blocked === null, actions, name);
 
-  // B11: a device still connecting or switched off in Devices says so and offers no retry there does not;
-  // one that cannot be reached shows one line and a way to try again, not its last list.
-  if (machine.blocked === "connecting" || machine.blocked === "disabled") {
-    return (
-      <Group>
-        <Row label={<Note data-agents-blocked={`${machine.blocked}:${device.id}`}>{t(machine.blocked === "connecting" ? "agents.connecting" : "agents.disabled", { device: name })}</Note>} />
-      </Group>
-    );
-  }
-  if (machine.blocked === "unreachable") {
-    return (
-      <Group>
-        <Row label={<Note data-agents-unreachable={device.id}>{t("agents.unreachable", { device: name })}</Note>}>
-          <Button variant="secondary" size="sm" onClick={() => actions.retryDevice(device.id)} data-agents-retry={device.id}>
-            {t("agents.retry")}
-          </Button>
-        </Row>
-      </Group>
-    );
-  }
+  // Keep the last list when the connection goes away, with no controls (B30).
+  const readOnly = machine.blocked === "connecting" || machine.blocked === "disabled" || machine.blocked === "unreachable";
   // The core says when a read is under way and when the last one failed (B10); nothing here keeps time.
   const reading = device.kit?.busy === true || device.kit?.checking === true;
   const checkFailed = device.kit?.check_failed ?? null;
   return (
     <div className="@container/agents" data-agents-machine-list={device.id}>
+      {readOnly ? (
+        <Group>
+          {machine.blocked === "unreachable" ? (
+            <Row label={<Note data-agents-unreachable={device.id}>{t("agents.unreachable", { device: name })}</Note>}>
+              <Button variant="secondary" size="sm" onClick={() => actions.retryDevice(device.id)} data-agents-retry={device.id}>
+                {t("agents.retry")}
+              </Button>
+            </Row>
+          ) : <Row label={<Note data-agents-blocked={`${machine.blocked}:${device.id}`}>{t(machine.blocked === "connecting" ? "agents.connecting" : "agents.disabled", { device: name })}</Note>} />}
+        </Group>
+      ) : null}
       {machine.blocked === "unavailable" && device.kit?.unavailable ? <Note data-agents-unavailable={device.id} data-kit-unavailable={device.kit.unavailable}>{kitUnavailableText(device.kit.unavailable, t)}</Note> : null}
       {machine.unread && machine.blocked === null ? <Note data-agents-unread={device.id}>{t("agents.reading")}</Note> : null}
       {machine.unlisted && machine.blocked === null ? (
@@ -114,9 +107,9 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
         <>
           <Group
             title={t("agents.installedCount", { count: machine.installed.length })}
-            columns={machine.installed.length > 0 ? <ColumnHeads /> : undefined}
-            note={machine.installed.length > 0 ? <PermissionScope /> : undefined}
-            action={
+            columns={!readOnly && machine.installed.length > 0 ? <ColumnHeads /> : undefined}
+            note={!readOnly && machine.installed.length > 0 ? <PermissionScope /> : undefined}
+            action={readOnly ? undefined :
               <Button
                 variant="ghost"
                 size="sm"
@@ -134,24 +127,24 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
             {machine.installed.length === 0 ? <Row label={<Note>{t("agents.noneInstalled")}</Note>} /> : null}
             {machine.installed.map((agent) => (
               <div key={agent.id} data-agent-with-profiles={agent.id}>
-                <AgentRow device={device} agent={agent} actions={actions} onAct={act} />
+                <AgentRow device={device} agent={agent} actions={actions} onAct={act} readOnly={readOnly} />
                 {profiles.inline(agent)}
               </div>
             ))}
           </Group>
           {profiles.note}
-          {profiles.overlay}
-          {checkFailed ? (
+          {readOnly ? null : profiles.overlay}
+          {!readOnly && checkFailed ? (
             <Note tone="error" data-agents-check-failed={checkFailed}>
               {t("agents.checkFailed", { reason: t(checkFailedReason(checkFailed)) })}
             </Note>
           ) : null}
-          {failure ? (
+          {!readOnly && failure ? (
             <Note tone="error" data-agents-error="true" data-core-error={failure.kind}>
               {coreErrorText(failure, t, "coreError.kit.unavailable")}
             </Note>
           ) : null}
-          {machine.notInstalled.length > 0 ? (
+          {!readOnly && machine.notInstalled.length > 0 ? (
             <Group>
               <Disclosure title={t("agents.notInstalledCount", { count: machine.notInstalled.length })} data-agents-not-installed={device.id}>
                 {machine.notInstalled.map((agent) => (

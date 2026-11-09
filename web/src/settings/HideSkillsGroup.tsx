@@ -1,4 +1,4 @@
-import { BookOpenTextIcon, ListChecksIcon, WaypointsIcon } from "lucide-react";
+import { BookOpenTextIcon, WaypointsIcon } from "lucide-react";
 import { Group, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 
@@ -11,7 +11,6 @@ import { useInterfaceTranslation } from "../i18n/client";
 const SKILLS = [
   { name: "hide", icon: BookOpenTextIcon, help: "hide guide", what: "agents.skills.hide" },
   { name: "hide-mission", icon: WaypointsIcon, help: "hide mission help", what: "agents.skills.conductor" },
-  { name: "hide-task", icon: ListChecksIcon, help: "hide task help", what: "agents.skills.plan" },
 ] as const;
 
 export function HideSkillsGroup() {

@@ -124,7 +124,7 @@ export function everyStateJobs(now: number): { label: string; job: DeskJob }[] {
     { label: "끝남 · PR", job: job("c-done", "pane header @ hover", { state: "done", location: { kind: "worktree", label: "desk/pane-mention" }, summary: "PR을 열었고 CI 통과", pull_requests: [{ number: 1910, state: "mergeable" }] }) },
     { label: "미션 (Conductor)", job: job("c-conductor", "Desk 1차", { now: "Conductor · 지금 ui 다듬기 외 1", mission: MISSION }) },
     { label: "미션 판단", job: job("c-decision", "Desk 1차", { state: "asking", ask: "decision", question: "1b를 공용 부품 머지 전에 시작할까요?", mission: { ...MISSION, deciding: true } }) },
-    { label: "작업 단계 검토 (hide-task)", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5 }, agent_kind: "codex" }) },
+    { label: "작업 단계 검토", job: job("c-review", "문서 정리", { state: "asking", ask: "plan_review", question: "5단계", plan: { done: 0, total: 5 }, agent_kind: "codex" }) },
     { label: "다른 기기", job: job("c-mini", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", now: "자막 타이밍 맞추는 중", agent_kind: "codex" }) },
     { label: "다른 기기, 연결 끊김 (흐림)", job: job("c-mini-off", "reel 자막 수정", { project: { workspace_id: "creator", label: "creator" }, machine: "mini", disconnected: true, now: "12분 전까지의 기록", agent_kind: "codex" }) },
     { label: "나도 참여 중", job: job("c-joined", "mention 버튼 정리", { location: MENTION_BRANCH, joined: true, now: "아이콘 14로 줄이는 중" }) },
@@ -391,7 +391,7 @@ export function enteredSessions(now: number): MentionSession[] {
     menuSession(now, "agent-record-now", "record-now", "codex", "going", ["herdr-ide", "record-now", "작업 중"], 2),
     menuSession(now, "agent-mention", "mention 버튼 정리", "claude", "going", ["herdr-ide", "mention-button", "작업 단계 6/14"], 4),
     menuSession(now, "agent-gallery", "갤러리 캡처 비교", "claude", "turn", ["herdr-ide", "gallery-capture", "질문"], 7),
-    menuSession(now, "agent-plan", "hide-task 위임", "codex", "waiting", ["herdr-ide", "main", "대기 · 미션 1/3"], 15),
+    menuSession(now, "agent-plan", "단계별 위임", "codex", "waiting", ["herdr-ide", "main", "대기 · 미션 1/3"], 15),
     menuSession(now, "agent-release", "release 노트 초안", "claude", "done", ["herdr-ide", "main", "끝남"], 30),
   ];
 }

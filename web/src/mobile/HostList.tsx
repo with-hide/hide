@@ -6,6 +6,9 @@ import { readHosts, hostLink, removeHost, revokeHost, dropHostPush, type PairedH
 import { watchHost, type Presence } from "./presence";
 import { Landing, DeviceIdentity } from "./Landing";
 import { PHONE_PROTOCOL } from "./phoneVersion";
+import { MovingOwl } from "../components/moving-owl";
+import blink from "../../../site/assets/owls/owl-blink.svg";
+import blinkStill from "../../../site/assets/owls/owl-blink-still.svg";
 import type { PhoneDevice } from "./protocol";
 
 /** Observe lists only while the picker is open. Never opens a detail or sends an action. */
@@ -117,6 +120,18 @@ function ReachedDevices({ t, devices }: { t: TFunction; devices: readonly PhoneD
     </div>)}
     <p className="whitespace-normal break-keep text-body text-muted-foreground wrap-anywhere">{t("mobile.devices.mixed", { names })}</p>
   </div>;
+}
+
+/** A chosen device while its bundle opens: the blinking owl holds the wait (the start page has no log, so a failed drawing goes to the console). */
+export function DeviceConnecting({ t, name, error, onChoose }: { t: TFunction; name: string; error: "qrError" | "storage" | "loadError" | "limit" | null; onChoose: () => void }) {
+  return <Landing>
+    <MovingOwl motion={blink} still={blinkStill} scene="phone_connecting" className="size-(--size-brand-owl)"
+      onUnavailable={(asset) => console.error(JSON.stringify({ event: "brand_owl.unavailable", scene: "phone_connecting", asset }))} />
+    <DeviceIdentity name={name} />
+    <p role="status" className="text-body text-muted-foreground">{t("mobile.relay.connecting")}</p>
+    <Button variant="ghost" className="min-h-(--size-touch-target) text-body" onClick={onChoose}>{t("mobile.relay.choose")}</Button>
+    {error ? <p role="alert" className="max-w-(--size-mobile-copy) text-body text-warning">{t(`mobile.relay.${error}`)}</p> : null}
+  </Landing>;
 }
 
 export function VersionScreen({ t, name, protocol, app }: { t: TFunction; name: string; protocol: number | null; app: string }) {

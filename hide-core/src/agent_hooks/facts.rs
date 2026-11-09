@@ -170,6 +170,8 @@ pub(crate) struct Recorded {
 #[derive(Default)]
 pub(crate) struct HookFacts {
     panes: BTreeMap<String, PaneFacts>,
+    /// High water mark, retained when the pane with the latest start closes.
+    account_start: u64,
     file: Option<LatestFile<BTreeMap<String, PaneFacts>>>,
 }
 
@@ -217,7 +219,14 @@ impl HookFacts {
                 BTreeMap::new()
             }
         };
+        let account_start = panes
+            .values()
+            .flat_map(|facts| &facts.sessions)
+            .map(|fact| fact.account_start)
+            .max()
+            .unwrap_or(0);
         let facts = Self {
+            account_start,
             panes: panes
                 .into_iter()
                 .filter(|(_, facts)| {
@@ -267,28 +276,37 @@ impl HookFacts {
         }) {
             return Err("hook_account_invalid");
         }
-        // A start's place among the reported ones: one past the last.
-        let start = report.account.as_ref().map(|_| {
-            self.panes
-                .values()
-                .flat_map(|facts| &facts.sessions)
-                .map(|fact| fact.account_start)
-                .max()
-                .unwrap_or(0)
-                + 1
-        });
-        let facts = self.panes.entry(pane.to_owned()).or_default();
-        let before = facts.clone();
         let same = |fact: &SessionFact| {
             fact.runtime == report.runtime
                 && match (&report.session, &fact.session) {
                     (Some(reported), Some(kept)) => reported == kept,
-                    // An event whose input named no session is the one the
-                    // runtime last reported, as the hook's own record reads it.
-                    (None, _) => true,
-                    (Some(_), None) => true,
+                    (None, _) | (Some(_), None) => true,
                 }
         };
+        // A repeated report keeps its place. Only a new start advances the
+        // high water mark, independently of the panes still alive.
+        let previous = self
+            .panes
+            .get(pane)
+            .and_then(|facts| facts.sessions.iter().rfind(|fact| same(fact)));
+        let new_start = report.account.is_some()
+            && previous.is_none_or(|fact| {
+                fact.account_start == 0
+                    || fact.account != report.account
+                    || (report.session.is_some() && fact.session != report.session)
+            });
+        let start = if new_start {
+            let next = self
+                .account_start
+                .checked_add(1)
+                .ok_or("hook_account_starts_full")?;
+            self.account_start = next;
+            Some(next)
+        } else {
+            None
+        };
+        let facts = self.panes.entry(pane.to_owned()).or_default();
+        let before = facts.clone();
         let mut fact = match facts.sessions.iter().rposition(same) {
             Some(at) => facts.sessions.remove(at),
             None => SessionFact {
@@ -306,13 +324,6 @@ impl HookFacts {
         };
         facts.reported_since_engine = true;
         let turn_before = fact.turn;
-        // The same start delivered again (its session and account already
-        // kept) keeps its place: only a start not seen yet is the latest.
-        let start = start.filter(|_| {
-            fact.account_start == 0
-                || fact.account != report.account
-                || (report.session.is_some() && fact.session != report.session)
-        });
         fact.version = report.version;
         if report.session.is_some() {
             fact.session.clone_from(&report.session);
@@ -749,6 +760,7 @@ mod tests {
         let stored: Stored = serde_json::from_slice(&saved).unwrap();
         let restored = HookFacts {
             panes: stored.panes,
+            account_start: 1,
             file: None,
         };
         let reported: Vec<_> = restored
@@ -776,6 +788,7 @@ mod tests {
         .unwrap();
         let older = HookFacts {
             panes: older.panes,
+            account_start: 0,
             file: None,
         };
         assert_eq!(older.reported_accounts().count(), 0);

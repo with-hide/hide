@@ -2427,7 +2427,6 @@ impl Runtime {
             permissions: self.agent_permissions_of(device),
             on_node,
             node,
-            profiles: self.machine_profiles(device).cloned(),
         })
     }
 }
@@ -2505,10 +2504,6 @@ pub(crate) struct CoordinationContext {
     /// pane's shell is reading; none for a device whose helper is not
     /// connected now, since a spawn starts no helper.
     pub(crate) node: Option<Arc<dyn crate::node_access::NodeLink>>,
-    /// The machine's agent profiles as its node last listed them, which a
-    /// spawn's profile is picked from (PRD agent-profiles D-32); `None` until
-    /// they were read.
-    pub(crate) profiles: Option<crate::model::ProfilesSnapshot>,
 }
 
 #[cfg(test)]
