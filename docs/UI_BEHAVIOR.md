@@ -1774,6 +1774,7 @@ A project or folder whose agents all sleep is drawn folded (D-03); it shows no m
 While a folded project hides the checkout in front, its row carries the selection fill.
 
 The Needs You and Done heads stick to the list's top while it scrolls, each stacking under the one above; a row brought into view by the keyboard lands fully under the stacked heads, never behind them (D-05).
+The 태스크 list in 상태별 draws the same way: 내 차례 and 읽을 것 are the first sections of its one scrolling list, with no area of their own that stays above the rest, and every group's and fold's head stacks under the ones passed, so a scrolled list shows only the heads where the rows have gone by.
 Search continues to index the complete project tree; choosing a folded result brings the focused row back into the active list without opening the fold.
 
 ### Tools and Overview

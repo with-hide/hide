@@ -21,8 +21,6 @@ import type { AgentRow, ArchivedSession, Device, TaskView, Workspace } from "./s
  */
 export type TaskGroupState = "needs_you" | "done" | "revisit" | "working";
 export const TASK_GROUPS: readonly TaskGroupState[] = ["needs_you", "done", "revisit", "working"];
-/** The 상태별 groups held still above the rest of the list, the projects tree's raised Needs You and Done. */
-export const RAISED_TASK_GROUPS: ReadonlySet<TaskGroupState> = new Set(["needs_you", "done"]);
 
 /** `device` and `deviceId`: the name and id of another device than the one in front, whose 내 차례 task this is (`elsewhereTasks`); null for the device's own. */
 export type TaskEntry = { card: TaskCardScope; agent: AgentRow; project: Workspace | null; device: string | null; deviceId: string | null };
