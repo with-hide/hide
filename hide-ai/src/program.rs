@@ -130,12 +130,20 @@ impl ItemRun {
             Some(search) => search.to_owned(),
             None => programs::account_path()?,
         };
-        Some(Program {
-            path: wrapper.file.clone(),
-            start: programs::Start::Direct {
+        // npm's Windows launcher was already read as the program it runs;
+        // any other file starts as a found program of its kind would, a
+        // Windows batch file through `cmd.exe`.
+        let start = if wrapper.leading.is_empty() {
+            programs::start(&wrapper.file, &search)
+        } else {
+            programs::Start::Direct {
                 program: wrapper.file.clone(),
                 leading: wrapper.leading.iter().map(OsString::from).collect(),
-            },
+            }
+        };
+        Some(Program {
+            path: wrapper.file.clone(),
+            start,
             search: Some(search),
         })
     }

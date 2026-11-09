@@ -630,8 +630,11 @@ fn an_items_model_list_is_read_with_its_accounts_login_and_through_its_wrapper()
             ),
         ],
         program: Some(hide_ai::Wrapper {
-            file: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/wrap-app-server.sh"),
+            file: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+                "tests/fixtures/wrap-app-server.cmd"
+            } else {
+                "tests/fixtures/wrap-app-server.sh"
+            }),
             leading: Vec::new(),
         }),
     });
