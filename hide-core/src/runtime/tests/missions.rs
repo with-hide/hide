@@ -772,9 +772,9 @@ fn checked(number: u32, head: &str, checks: PullRequestChecks, failed: &[&str]) 
 }
 
 /// A node's pull request tells its Conductor when its CI ends on a commit,
-/// not when the commit arrives, and one result on one commit is one letter
-/// the Conductor gets: a read that cannot say sends nothing new, and a
-/// rerun withdraws a letter still waiting, so its end is told once.
+/// not when the commit arrives, and one result on one commit is one
+/// letter: a rerun that fails again, or a read that cannot say, sends
+/// nothing new.
 #[test]
 fn a_missions_pull_request_tells_its_conductor_each_ci_result_once_per_commit() {
     let fixture = conducting();
@@ -812,19 +812,15 @@ fn a_missions_pull_request_tells_its_conductor_each_ci_result_once_per_commit() 
         vec!["mission:mission-1:ci:fix:7:b2:failed:sender"]
     );
     assert!(read(failed.clone()).is_empty(), "the same read again");
-    // The rerun takes back the letter still waiting for the Conductor
-    // (with-hide/hide#2304), so its end is told once, in a letter of its own.
     assert!(read(checked(7, "b2", PullRequestChecks::Pending, &[])).is_empty());
     assert!(read(checked(7, "b2", PullRequestChecks::Unknown, &[])).is_empty());
-    assert_eq!(
-        read(failed.clone()),
-        vec!["mission:mission-1:ci:fix:7:b2:failed:1:sender"],
+    assert!(
+        read(failed).is_empty(),
         "a rerun failing again on the same commit"
     );
-    assert!(read(failed).is_empty(), "the same read again");
     assert_eq!(
         read(checked(7, "b2", PullRequestChecks::Passing, &[])),
-        vec!["mission:mission-1:ci:fix:7:b2:passed:1:sender"]
+        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"]
     );
     // A commit whose CI ended between two reads is still told.
     assert_eq!(
@@ -5389,7 +5385,6 @@ fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
         closed,
         changes_requested: false,
         ci_told: Vec::new(),
-        ci_round: 0,
     });
 }
 
@@ -8698,123 +8693,90 @@ fn a_nodes_worker_and_checker_use_the_mission_commands_of_their_own_node() {
     assert_eq!(fix.status, NodeStatus::Working);
 }
 
-/// with-hide/hide#2304: a CI letter that has not reached its Conductor is
-/// withdrawn once a check runs again on its head, as a body edit's policy
-/// check does, and the head's CI is told once more when it ends; a letter
-/// already handed over stays told, so a later rerun on the head sends
-/// nothing new.
+/// A command that names no mission means the open mission the caller
+/// conducts, else the one open mission whose node it works or checks: a
+/// worker of two open missions is told to name one, and a Conductor whose
+/// own mission ended reads the open mission it now works in.
 #[test]
-fn a_ci_letter_still_waiting_is_withdrawn_when_a_check_runs_again_on_its_head() {
+fn a_caller_in_two_open_missions_names_the_one_it_means() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    fixing_seven(&mut runtime);
     with_worker_and_reviewer(&mut runtime);
-    let node = crate::node::TEST_NODE;
-    let ci_told = |runtime: &Runtime| {
-        let seen = runtime
-            .missions
-            .book
-            .get("mission-1")
-            .unwrap()
-            .node("fix")
-            .unwrap()
-            .seen(7)
-            .unwrap()
-            .clone();
-        (seen.ci_told, seen.ci_round)
-    };
-    let ci_wakes = |runtime: &Runtime| {
-        runtime
-            .missions
-            .book
-            .get("mission-1")
-            .unwrap()
-            .wakes
-            .iter()
-            .filter(|wake| wake.ci.is_some())
-            .count()
-    };
-    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
-    let first =
-        runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
-    assert_eq!(first, ["mission:mission-1:ci:fix:7:b2:passed:sender"]);
-    assert_eq!(ci_wakes(&runtime), 1);
-
-    // A wake still recorded is taken back; reads while the check runs take
-    // nothing more.
-    for _ in 0..2 {
-        assert!(
-            runtime
-                .note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]))
-                .is_empty()
-        );
-        assert_eq!(ci_wakes(&runtime), 0);
-        assert_eq!(ci_told(&runtime), (Vec::new(), 1));
-    }
-    let again =
-        runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
-    assert_eq!(again, ["mission:mission-1:ci:fix:7:b2:passed:1:sender"]);
-    assert!(
-        runtime
-            .note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]))
-            .is_empty()
-    );
-
-    // Its letter in the mailbox, not handed over yet, is withdrawn there.
-    let mailed = |runtime: &mut Runtime, intent: &str, handed: bool| {
-        let seq = runtime
-            .missions
-            .book
-            .get("mission-1")
-            .unwrap()
-            .wakes
-            .last()
-            .unwrap()
-            .seq;
-        runtime.mission_wakes_sent(&[("mission-1".to_owned(), seq)]);
-        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-        let conductor = runtime.delivery_observations["sender"].actor.clone();
-        let mut letter = crate::delivery::mailbox::send(
-            &mut ledger,
-            &conductor,
-            &conductor,
-            intent,
-            "PR #7: CI passed",
-            "progress",
-            None,
-            1,
+    for (conductor, worker) in [("sender", "agent-2"), ("reviewer", "agent-2")] {
+        command(
+            &mut runtime,
+            conductor,
+            json!({"op": "create", "title": "Fix the bug"}),
         )
         .unwrap();
-        letter.handed = handed;
-        *ledger
-            .letters
-            .iter_mut()
-            .find(|held| held.id == letter.id)
-            .unwrap() = letter.clone();
-        runtime.delivery_ledger = Ok(Arc::new(ledger));
-        letter.id
-    };
-    let waiting = mailed(&mut runtime, &again[0], false);
-    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
-    assert_eq!(runtime.missions.withdraw, std::slice::from_ref(&waiting));
-    assert_eq!(ci_told(&runtime), (Vec::new(), 2));
-    let third =
-        runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
-    assert_eq!(third, ["mission:mission-1:ci:fix:7:b2:passed:2:sender"]);
+        command(&mut runtime, conductor, criteria_plan()).unwrap();
+        command(&mut runtime, conductor, json!({"op": "start"})).unwrap();
+        command(
+            &mut runtime,
+            conductor,
+            json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": worker}}),
+        )
+        .unwrap();
+    }
 
-    // One handed over is the Conductor's: nothing is withdrawn or told again.
-    mailed(&mut runtime, &third[0], true);
-    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
-    assert_eq!(runtime.missions.withdraw, [waiting]);
-    assert_eq!(
-        ci_told(&runtime),
-        (vec![crate::missions::CiResult::Passed], 2)
-    );
-    assert!(
-        runtime
-            .note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]))
-            .is_empty()
-    );
+    for unnamed in [
+        json!({"op": "show"}),
+        json!({"op": "show", "node": "fix"}),
+        json!({"op": "node", "node": "fix", "patch": {"pr": 9}}),
+        record_of("fix", "c1", json!({})),
+    ] {
+        assert_eq!(
+            command(&mut runtime, "recipient", unnamed.clone()).unwrap_err(),
+            "mission_ambiguous",
+            "{unnamed}"
+        );
+    }
+    let (named, _) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "node", "mission": "mission-2", "node": "fix", "patch": {"pr": 9}}),
+    )
+    .unwrap();
+    assert_eq!(named["mission"]["id"], "mission-2");
+    assert_eq!(named["mission"]["nodes"][0]["prs"][0]["number"], 9);
+    let (shown, _) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "show", "mission": "mission-1"}),
+    )
+    .unwrap();
+    assert_eq!(shown["mission"]["id"], "mission-1");
+    let (lettered, _) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "show", "node": "mission-2"}),
+    )
+    .unwrap();
+    assert_eq!(lettered["mission"]["id"], "mission-2");
+
+    command(
+        &mut runtime,
+        "reviewer",
+        json!({"op": "node", "node": "docs", "patch": {"status": "working", "agent_id": "agent-1"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    let (taken, _) = command(&mut runtime, "sender", json!({"op": "show"})).unwrap();
+    assert_eq!(taken["mission"]["id"], "mission-2");
+    let (docs, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"line": "가이드 작성 중"}}),
+    )
+    .unwrap();
+    assert_eq!(docs["mission"]["id"], "mission-2");
+    let (worker, _) = command(&mut runtime, "recipient", json!({"op": "show"})).unwrap();
+    assert_eq!(worker["mission"]["id"], "mission-2");
 }
 
 /// with-hide/hide#2300: a worker's watch reads it as busy while its node

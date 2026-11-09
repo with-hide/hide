@@ -507,12 +507,6 @@ pub struct PrSeen {
     /// news again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ci_told: Vec<CiResult>,
-    /// How many times a result told on `head` was withdrawn before its
-    /// letter reached the Conductor, because a check ran on the head again
-    /// (with-hide/hide#2304); it names the next telling, which is a letter
-    /// of its own.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub ci_round: u32,
 }
 
 /// What a pull request's CI ended as on one head commit: its checks as the
@@ -2582,6 +2576,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_full" => "Ask the operator to delete old Conductor sessions from the archive",
         "mission_too_many_nodes" => "Plan at most 64 nodes; merge or split the work differently",
         "mission_node_unknown" => "Run hide mission show to see the plan's node keys",
+        "mission_ambiguous" => {
+            "You work or check nodes of more than one open mission: name the one you mean with --mission <id> (hide mission list)"
+        }
         "mission_node_in_progress" => {
             "Drop the node with hide mission node <key> --status dropped before removing it from the plan"
         }

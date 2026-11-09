@@ -467,10 +467,6 @@ pub(crate) struct MissionRuntime {
     /// A wake was recorded or a Conductor arrived while it ran, so it looks
     /// again before it ends.
     rewake: bool,
-    /// The CI letters to withdraw from their Conductor's mailbox before it
-    /// hands them over (`StaleCi::Mailed`), sent by the wakes' thread.
-    /// Memory only: a restart in between hands such a letter over as it is.
-    pub(super) withdraw: Vec<String>,
     /// Counts the book's changes; every change is saved, so the save counts
     /// it.
     pub(crate) book_edit: u64,
@@ -578,7 +574,6 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
         ci_told: Vec::new(),
-        ci_round: 0,
     }
 }
 
@@ -602,81 +597,11 @@ fn keep_told(seen: &mut PrSeen, before: &PrSeen) {
     if seen.head != before.head {
         return;
     }
-    seen.ci_round = seen.ci_round.max(before.ci_round);
     for result in &before.ci_told {
         if !seen.ci_told.contains(result) {
             seen.ci_told.push(*result);
         }
     }
-}
-
-/// The wake that tells `node`'s Conductor its pull request `number`'s CI
-/// ended on `head` as `news`: the head's first telling, or its `round`th
-/// after earlier ones were withdrawn, each a letter of its own.
-fn ci_wake(node: &str, number: u32, head: Option<String>, news: CiNews, round: u32) -> PendingWake {
-    let mut wake = wake_about(node.to_owned(), Some(number), WakeEvent::Ci, head, None);
-    wake.ci = Some(news);
-    let key = wake_key(&wake);
-    wake.key = Some(if round > 0 {
-        format!("{key}:{round}")
-    } else {
-        key
-    });
-    wake
-}
-
-/// Where a CI letter that has not reached its Conductor waits.
-enum StaleCi {
-    /// Still a recorded wake, by its number.
-    Queued(u64),
-    /// In the Conductor's mailbox, not handed over yet, by its letter id.
-    Mailed(String),
-}
-
-/// The CI results told on `before`'s head, of `node`'s pull request, whose
-/// letters have not reached the Conductor: a wake still recorded, or a
-/// letter its mailbox has not handed over. A letter handed over stays told.
-fn stale_ci(
-    mission: &Mission,
-    node: &str,
-    before: &PrSeen,
-    ledger: Option<&crate::delivery::ledger::Ledger>,
-) -> Vec<(CiResult, StaleCi)> {
-    before
-        .ci_told
-        .iter()
-        .filter_map(|&result| {
-            let news = CiNews {
-                result,
-                failed: Vec::new(),
-                more: 0,
-            };
-            let told = ci_wake(
-                node,
-                before.number,
-                before.head.clone(),
-                news,
-                before.ci_round,
-            );
-            let intent = wake_intent(mission, &told);
-            if let Some(wake) = mission
-                .wakes
-                .iter()
-                .find(|wake| wake_intent(mission, wake) == intent)
-            {
-                return Some((result, StaleCi::Queued(wake.seq)));
-            }
-            ledger?
-                .letters
-                .iter()
-                .find(|letter| {
-                    letter.intent == intent
-                        && letter.state == crate::delivery::ledger::State::Pending
-                        && !letter.handed
-                })
-                .map(|letter| (result, StaleCi::Mailed(letter.id.clone())))
-        })
-        .collect()
 }
 
 /// The CI letter of `pull` ending as `result`: a failure names the checks
@@ -1924,16 +1849,27 @@ impl Runtime {
                 let Some(key) = node else {
                     return Ok((json!({"mission": self.mission_view_of(&id)}), false));
                 };
+                // One read of the mission's workers and checkers serves the
+                // view and both letter lists.
+                let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+                let ledger = self.delivery_state().ok();
+                let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
+                let sleeping = self.sleeping_registrations(agents.values().copied());
                 let shown = self
-                    .mission_view_of(&id)
-                    .and_then(|view| view.nodes.into_iter().find(|node| node.key == key))
+                    .view_mission(mission, &agents, &sleeping, ledger.as_deref())
+                    .nodes
+                    .into_iter()
+                    .find(|node| node.key == key)
                     .ok_or("mission_node_unknown")?;
+                let node = mission.node(&key).ok_or("mission_node_unknown")?;
                 Ok((
                     json!({
                         "mission_id": id,
                         "node": shown,
-                        "letters": self.node_letters(&id, &key),
-                        "checker_letters": self.node_checker_letters(&id, &key),
+                        "letters": ledger.as_deref().map(|ledger| node_letters(ledger, &agents, node)),
+                        "checker_letters": ledger
+                            .as_deref()
+                            .map(|ledger| node_checker_letters(ledger, &agents, mission, node)),
                     }),
                     false,
                 ))
@@ -1985,30 +1921,26 @@ impl Runtime {
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))
     }
 
-    /// What `hide mission show` from `actor` names no mission for: the one
-    /// it conducts, else the open one whose node it works or checks
-    /// (with-hide/hide#2302), and `node` read in it. A key that is no node
-    /// of that mission but names a mission is that whole mission, as Hide's
-    /// own letters write `hide mission show <mission id>`
-    /// (with-hide/hide#2301).
+    /// What `hide mission show` from `actor` names no mission for: the
+    /// mission it means (`mission_meant`, with-hide/hide#2302), and `node`
+    /// read in it. A key that is no node of that mission but names a
+    /// mission is that whole mission, as Hide's own letters write
+    /// `hide mission show <mission id>` (with-hide/hide#2301), even for a
+    /// caller whose mission is ambiguous.
     fn shown_mission(
         &self,
         actor: &Actor,
         node: Option<String>,
     ) -> Result<(String, Option<String>), String> {
         let caller = super::mission_criteria::Caller::of(self, actor);
-        let taken = self
-            .missions
-            .book
-            .conducted(actor)
-            .or_else(|| self.mission_taken_part(&caller, None));
+        let taken = self.mission_meant(&caller);
         if let Some(key) = &node
-            && taken.is_none_or(|mission| mission.node(key).is_none())
+            && !matches!(&taken, Ok(Some(mission)) if mission.node(key).is_some())
             && let Some(named) = self.missions.book.get(key)
         {
             return Ok((named.id.clone(), None));
         }
-        let mission = taken.ok_or("mission_none")?;
+        let mission = taken?.ok_or("mission_none")?;
         Ok((mission.id.clone(), node))
     }
 
@@ -2028,19 +1960,21 @@ impl Runtime {
         if conducted.is_ok() {
             return conducted;
         }
+        use super::mission_criteria::Part;
         let caller = super::mission_criteria::Caller::of(self, actor);
         let found = match named {
             Some(id) => self.missions.book.get(id),
-            None => self
-                .mission_taken_part(&caller, Some(node))
-                .or_else(|| self.mission_taken_part(&caller, None)),
+            None => self.mission_meant(&caller)?,
         };
         let Some(mission) = found else {
             return conducted;
         };
-        match Self::part_in(mission, &caller, Some(node)) {
-            Some(super::mission_criteria::Part::Worker) if patch.workers_own() => {}
-            _ if Self::part_in(mission, &caller, None).is_some() => {
+        match (
+            Self::part_in(mission, &caller, Some(node)),
+            Self::part_in(mission, &caller, None),
+        ) {
+            (Some(Part::Worker), _) if patch.workers_own() => {}
+            (_, Some(Part::Worker | Part::Checker)) => {
                 return Err("mission_not_conductor".into());
             }
             _ => return conducted,
@@ -2546,9 +2480,6 @@ impl Runtime {
     ) -> Vec<String> {
         self.mission_pulls_moved();
         let now = super::memory::now_ms();
-        // The letters a CI result was told in, which a check running again
-        // withdraws while they wait (with-hide/hide#2304).
-        let ledger = self.delivery_state().ok();
         let mut recorded = Vec::new();
         let mut reopened = Vec::new();
         // Missions a merge finished, with what ending their decision records.
@@ -2606,7 +2537,6 @@ impl Runtime {
             let mut events = Vec::new();
             let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
-            let mut withdrawn = Vec::new();
             for (node_index, node) in mission.nodes.iter().enumerate() {
                 for &number in &node.prs {
                     let Some(pull) = project
@@ -2673,28 +2603,15 @@ impl Runtime {
                     if let Some(result) = ci_of(pull)
                         && !now_seen.ci_told.contains(&result)
                     {
-                        events.push(ci_wake(
-                            &node.key,
-                            number,
+                        let mut wake = wake_about(
+                            node.key.clone(),
+                            Some(number),
+                            WakeEvent::Ci,
                             now_seen.head.clone(),
-                            ci_news(pull, result),
-                            now_seen.ci_round,
-                        ));
-                    }
-                    // A result told on this head whose letter has not
-                    // reached the Conductor yet no longer holds once a
-                    // check runs on the head again, as after a body edit:
-                    // its letter is withdrawn, and the head's CI is told
-                    // again when it ends (with-hide/hide#2304).
-                    if pull.checks_unfinished()
-                        && let Some(before) = node.seen(number)
-                        && before.head.is_some()
-                        && before.head == now_seen.head
-                    {
-                        let stale = stale_ci(mission, &node.key, before, ledger.as_deref());
-                        if !stale.is_empty() {
-                            withdrawn.push((node_index, number, stale));
-                        }
+                            None,
+                        );
+                        wake.ci = Some(ci_news(pull, result));
+                        events.push(wake);
                     }
                     // A node a book from before push times kept starts its
                     // push clock on this read.
@@ -2712,11 +2629,7 @@ impl Runtime {
                     && stack_settled(mission)
                     && runtime.close_held(mission, Some(project)).is_none()
             };
-            if seen_updates.is_empty()
-                && events.is_empty()
-                && withdrawn.is_empty()
-                && !closes(self, mission)
-            {
+            if seen_updates.is_empty() && events.is_empty() && !closes(self, mission) {
                 continue;
             }
             changed = true;
@@ -2742,26 +2655,6 @@ impl Runtime {
             let mission = &mut self.missions.book.missions[index];
             for (node_index, seen) in seen_updates {
                 note_seen(&mut mission.nodes[node_index], seen, now);
-            }
-            for (node_index, number, stale) in withdrawn {
-                let node = &mut mission.nodes[node_index];
-                let Some(seen) = node.pr_seen.iter_mut().find(|seen| seen.number == number) else {
-                    continue;
-                };
-                seen.ci_told
-                    .retain(|told| !stale.iter().any(|(result, _)| result == told));
-                seen.ci_round += 1;
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.ci_letter_withdrawn",
-                    "mission": mission.id, "node": node.key, "pull_request": number,
-                    "head": seen.head, "results": stale.iter().map(|(result, _)| result.as_str()).collect::<Vec<_>>(),
-                }));
-                for (_, letter) in stale {
-                    match letter {
-                        StaleCi::Queued(seq) => mission.wakes.retain(|wake| wake.seq != seq),
-                        StaleCi::Mailed(id) => self.missions.withdraw.push(id),
-                    }
-                }
             }
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
@@ -2914,7 +2807,7 @@ impl Runtime {
             return;
         };
         let batch = self.ready_wakes(&[]);
-        if batch.is_empty() && self.missions.withdraw.is_empty() {
+        if batch.is_empty() {
             return;
         }
         let (client, authority, actor) = match self.hide_delivery(CONDUCTOR_ROLE) {
@@ -2922,12 +2815,11 @@ impl Runtime {
             Err(code) => {
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.wake_failed",
-                    "count": batch.len(), "withdraw": self.missions.withdraw.len(), "code": code,
+                    "count": batch.len(), "code": code,
                 }));
                 return;
             }
         };
-        let withdraw = std::mem::take(&mut self.missions.withdraw);
         self.missions.waking = true;
         self.missions.rewake = false;
         let spawned = std::thread::Builder::new()
@@ -2949,30 +2841,8 @@ impl Runtime {
                 }
                 let _ending = Ending(context.runtime.clone());
                 let mut batch = batch;
-                let mut withdraw = withdraw;
                 let mut tried = Vec::new();
                 loop {
-                    for id in withdraw.drain(..) {
-                        let prepared = crate::delivery::worker::Prepared::new(
-                            client.clone(),
-                            crate::delivery::worker::Authority {
-                                caller: authority.caller.clone(),
-                                context: authority.context.clone(),
-                                also_reads: Vec::new(),
-                            },
-                            actor.clone(),
-                            None,
-                            crate::delivery::Command::Cancel { id: id.clone() },
-                        );
-                        // A letter handed over in between is the
-                        // Conductor's already: the cancel only ends it.
-                        if let Err(code) = prepared.run(WAKE_CALL) {
-                            crate::diagnostic!(json!({
-                                "component": "missions", "kind": "mission.withdraw_failed",
-                                "letter": id, "code": code,
-                            }));
-                        }
-                    }
                     let mut sent = Vec::new();
                     let mut refused = Vec::new();
                     for wake in batch.drain(..) {
@@ -3020,9 +2890,8 @@ impl Runtime {
                     if guard.missions.rewake {
                         guard.missions.rewake = false;
                         batch = guard.ready_wakes(&tried);
-                        withdraw = std::mem::take(&mut guard.missions.withdraw);
                     }
-                    if batch.is_empty() && withdraw.is_empty() {
+                    if batch.is_empty() {
                         guard.missions.waking = false;
                         return;
                     }
@@ -3070,58 +2939,6 @@ impl Runtime {
         self.snapshot.ui_state.conductor_settings = settings;
         self.persist_ui_state();
         true
-    }
-
-    /// The newest letters node `key`'s worker sent or got, newest first, at
-    /// most `NODE_LETTER_LIMIT` (with-hide/hide-private#552): none for a
-    /// node with no worker, and null while the ledger cannot be read.
-    fn node_letters(&self, id: &str, key: &str) -> Option<Vec<NodeLetter>> {
-        let ledger = self.delivery_state().ok()?;
-        let agent = self
-            .missions
-            .book
-            .get(id)
-            .and_then(|mission| mission.node(key))
-            .and_then(|node| node.agent_id.as_deref());
-        let Some(worker) =
-            agent.and_then(|agent| ledger.agents.iter().find(|record| record.id == agent))
-        else {
-            return Some(Vec::new());
-        };
-        Some(newest_letters(&ledger, |letter| {
-            letter.sender.same_identity(&worker.actor)
-                || letter.recipient.same_identity(&worker.actor)
-        }))
-    }
-
-    /// The newest letters node `key`'s checkers wrote to its Conductor,
-    /// newest first, at most `NODE_LETTER_LIMIT`: the letters its worker may
-    /// read (`Mission::checker_letters`), listed with their ids so the
-    /// worker finds them without being told (with-hide/hide-private#668).
-    /// None for a node with no checker bound, and null while the ledger
-    /// cannot be read.
-    fn node_checker_letters(&self, id: &str, key: &str) -> Option<Vec<NodeLetter>> {
-        let ledger = self.delivery_state().ok()?;
-        let Some((mission, node)) = self
-            .missions
-            .book
-            .get(id)
-            .and_then(|mission| Some((mission, mission.node(key)?)))
-        else {
-            return Some(Vec::new());
-        };
-        let pairs: Vec<(&crate::delivery::Actor, &crate::delivery::Actor)> = mission
-            .checker_letters(node)
-            .filter_map(|(checker, conductor)| {
-                let record = ledger.agents.iter().find(|record| record.id == checker)?;
-                Some((&record.actor, conductor))
-            })
-            .collect();
-        Some(newest_letters(&ledger, |letter| {
-            pairs.iter().any(|(checker, conductor)| {
-                letter.sender.same_identity(checker) && letter.recipient.same_identity(conductor)
-            })
-        }))
     }
 
     /// The view of one mission as the map draws it.
@@ -3649,6 +3466,45 @@ fn operator_waits(mission: &Mission) -> bool {
         node.attention
             .as_ref()
             .is_some_and(|attention| attention.operator_at_unix_ms.is_some())
+    })
+}
+
+/// The newest letters `node`'s worker sent or got, newest first, at most
+/// `NODE_LETTER_LIMIT` (with-hide/hide-private#552), its registration read
+/// from the mission's `agents` (`worker_records`): none for a node with no
+/// worker.
+fn node_letters(
+    ledger: &crate::delivery::ledger::Ledger,
+    agents: &HashMap<&str, &crate::coordination::AgentRecord>,
+    node: &MissionNode,
+) -> Vec<NodeLetter> {
+    let Some(worker) = node.agent_id.as_deref().and_then(|agent| agents.get(agent)) else {
+        return Vec::new();
+    };
+    newest_letters(ledger, |letter| {
+        letter.sender.same_identity(&worker.actor) || letter.recipient.same_identity(&worker.actor)
+    })
+}
+
+/// The newest letters `node`'s checkers wrote to its Conductor, newest
+/// first, at most `NODE_LETTER_LIMIT`: the letters its worker may read
+/// (`Mission::checker_letters`), listed with their ids so the worker finds
+/// them without being told (with-hide/hide-private#668), each checker's
+/// registration read from the mission's `agents`.
+fn node_checker_letters(
+    ledger: &crate::delivery::ledger::Ledger,
+    agents: &HashMap<&str, &crate::coordination::AgentRecord>,
+    mission: &Mission,
+    node: &MissionNode,
+) -> Vec<NodeLetter> {
+    let pairs: Vec<(&crate::delivery::Actor, &crate::delivery::Actor)> = mission
+        .checker_letters(node)
+        .filter_map(|(checker, conductor)| Some((&agents.get(checker)?.actor, conductor)))
+        .collect();
+    newest_letters(ledger, |letter| {
+        pairs.iter().any(|(checker, conductor)| {
+            letter.sender.same_identity(checker) && letter.recipient.same_identity(conductor)
+        })
     })
 }
 

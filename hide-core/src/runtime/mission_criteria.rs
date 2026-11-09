@@ -43,6 +43,11 @@ impl<'a> Caller<'a> {
             registrations: runtime.registrations_of(actor),
         }
     }
+
+    /// Whether registration `id` is the caller's.
+    pub(super) fn owns(&self, id: Option<&str>) -> bool {
+        id.is_some_and(|id| self.registrations.iter().any(|own| own == id))
+    }
 }
 
 /// Whether `pull` is merged, so its head is the work that reached main.
@@ -328,17 +333,6 @@ impl Runtime {
         Ok(next)
     }
 
-    /// Whether registration `id` is `actor`'s.
-    fn registration_is(&self, id: Option<&str>, actor: &Actor) -> bool {
-        let Some(id) = id else { return false };
-        self.delivery_state().is_ok_and(|ledger| {
-            ledger
-                .agents
-                .iter()
-                .any(|record| record.id == id && record.actor.same_identity(actor))
-        })
-    }
-
     /// The registrations that are `actor`'s, ended ones too: read once per
     /// command, since the ledger keeps every agent there ever was.
     pub(super) fn registrations_of(&self, actor: &Actor) -> Vec<String> {
@@ -367,9 +361,7 @@ impl Runtime {
         if mission.conductor.actor.same_identity(caller.actor) {
             return Some(Part::Conductor);
         }
-        let mine = |id: Option<&str>| {
-            id.is_some_and(|id| caller.registrations.iter().any(|own| own == id))
-        };
+        let mine = |id: Option<&str>| caller.owns(id);
         let rows = || {
             mission
                 .nodes
@@ -390,32 +382,38 @@ impl Runtime {
             .then_some(Part::Checker)
     }
 
-    /// The open mission `caller` takes part in (`part_in`) when a command
-    /// names none: the one it conducts first, then one whose node `node`
-    /// (any node with none) it works or checks.
-    pub(super) fn mission_taken_part(
-        &self,
-        caller: &Caller<'_>,
-        node: Option<&str>,
-    ) -> Option<&Mission> {
-        self.missions.book.conducted_open(caller.actor).or_else(|| {
-            self.missions.book.missions.iter().find(|mission| {
-                mission.status.open() && Self::part_in(mission, caller, node).is_some()
-            })
-        })
+    /// The mission a command from `caller` that names none means, by one
+    /// rule for every such command (B5, with-hide/hide#2302): the open
+    /// mission it conducts; else the one open mission whose node it works
+    /// or checks (`part_in`), two of them being ambiguous
+    /// (`mission_ambiguous`); else the newest done mission it conducts,
+    /// which a change refuses as closed. None when it takes part in none.
+    pub(super) fn mission_meant(&self, caller: &Caller<'_>) -> Result<Option<&Mission>, String> {
+        if let Some(mission) = self.missions.book.conducted_open(caller.actor) {
+            return Ok(Some(mission));
+        }
+        let mut taken = self.missions.book.missions.iter().filter(|mission| {
+            mission.status.open() && Self::part_in(mission, caller, None).is_some()
+        });
+        if let Some(mission) = taken.next() {
+            if taken.next().is_some() {
+                return Err("mission_ambiguous".into());
+            }
+            return Ok(Some(mission));
+        }
+        Ok(self.missions.book.conducted(caller.actor))
     }
 
-    /// The mission a line command from `actor` acts on (B5): the one it
-    /// names, or the open mission it conducts or whose node `node` it works
-    /// or checks.
+    /// The mission a line command from `caller` acts on (B5): the one it
+    /// names, or the one it means (`mission_meant`), where it conducts the
+    /// mission or works or checks its node `node`.
     fn line_mission(
         &self,
-        actor: &Actor,
+        caller: &Caller<'_>,
         named: Option<&str>,
         node: &str,
     ) -> Result<String, String> {
-        let caller = Caller::of(self, actor);
-        let concerns = |mission: &Mission| Self::part_in(mission, &caller, Some(node)).is_some();
+        let concerns = |mission: &Mission| Self::part_in(mission, caller, Some(node)).is_some();
         let open = || {
             self.missions
                 .book
@@ -425,7 +423,7 @@ impl Runtime {
         };
         let mission = match named {
             Some(id) => self.missions.book.get(id).ok_or("mission_unknown")?,
-            None => match self.mission_taken_part(&caller, Some(node)) {
+            None => match self.mission_meant(caller)? {
                 Some(mission) => mission,
                 // A node another agent owns is someone else's line.
                 None if open().any(|mission| mission.node(node).is_some()) => {
@@ -463,7 +461,8 @@ impl Runtime {
         }
         let evidence = Some(evidence);
         let summary = crate::missions::summary_line(summary)?;
-        let id = self.line_mission(actor, named, node)?;
+        let caller = Caller::of(self, actor);
+        let id = self.line_mission(&caller, named, node)?;
         let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         let index = mission
             .nodes
@@ -478,7 +477,7 @@ impl Runtime {
             .ok_or("mission_criterion_unknown")?;
         let line = &row.criteria[at];
         let conductor = mission.conductor.actor.same_identity(actor);
-        let worker = self.registration_is(row.agent_id.as_deref(), actor);
+        let worker = caller.owns(row.agent_id.as_deref());
         // The Conductor certifies a node it works itself: one that never
         // had a worker (D-23 as the mission's Conductor read it).
         let never_worked = row.agent_id.is_none()
@@ -498,7 +497,7 @@ impl Runtime {
                 let slot = line
                     .checkers
                     .iter()
-                    .position(|checker| self.registration_is(checker.agent_id.as_deref(), actor))
+                    .position(|checker| caller.owns(checker.agent_id.as_deref()))
                     .ok_or("mission_criterion_not_yours")?;
                 let agent_id = line.checkers[slot].agent_id.clone();
                 // The head an answer is for is the one the checker names: a
@@ -602,7 +601,7 @@ impl Runtime {
         (reason, decision): (String, Option<u64>),
         now: u64,
     ) -> Result<(Value, bool), String> {
-        let id = self.line_mission(actor, named, node)?;
+        let id = self.line_mission(&Caller::of(self, actor), named, node)?;
         let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         if !mission.conductor.actor.same_identity(actor) {
             return Err("mission_not_conductor".into());

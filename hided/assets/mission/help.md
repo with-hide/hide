@@ -30,8 +30,9 @@ hide agent catalog [--machine <device id>]
 ```
 
 Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"reason":…,"next_action":…}`; `hide mission show` without `--json` is the one that prints text, and a refusal is still that JSON line.
-A command that names no `--mission` acts on the mission you conduct; a node's worker or checker means the open mission whose node it works or checks (section 9).
-`hide mission show <mission id>`, the command Hide's letters name, reads that whole mission.
+A command that names no `--mission` acts on the open mission you conduct, else the one open mission whose node you work or check (section 9), else the mission you conducted that was last closed as done.
+Working or checking nodes of two open missions, such a command is refused as `mission_ambiguous`: name the one you mean with `--mission <id>`.
+`hide mission show <mission id>`, the command Hide's letters name, reads that whole mission; a key that is also a node of the mission you mean reads that node.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
 
 `hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
@@ -207,7 +208,6 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Hide refuses them on any other kind of node, and the map shows them as the node's result.
 - Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, and when an outside node is in main.
   The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI passed, was cancelled with no run replacing it, or failed, with the jobs that failed.
-  When a check starts again on that commit before the letter reached you, as a body edit's `policy checks` does, Hide withdraws the letter and tells the commit's CI again once it ends; a letter you already got stays as it was.
   Each result is told once per commit for good, the one a pull request already has when Hide first reads it included, so a rerun that fails again sends none, even after a pass between.
   A new commit alone sends no letter: wait for its CI letter rather than watching the checks in a shell.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
@@ -338,7 +338,7 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
 - Recording the same result on the same commit again changes nothing.
-- `hide mission show` and `hide mission show <node>` read your mission without `--mission`, as they do for its Conductor.
+- `hide mission show` and `hide mission show <node>` read your mission without `--mission`, as they do for its Conductor; while you work or check nodes of two open missions, every such command names one with `--mission <id>` (`mission_ambiguous` otherwise).
 - A worker attaches its own node's pull request, branch and one line itself: `hide mission node <its node> --pr <n> | --no-pr`, `--branch <name>` and `--line <text>`.
   Anything else on a node (its status, stack base, agents, checkers and verdicts), and any other node, is refused as the Conductor's (`mission_not_conductor`).
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.
