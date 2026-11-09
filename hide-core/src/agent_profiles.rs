@@ -916,6 +916,9 @@ fn listed(profile: &ListedProfile, default: bool) -> Value {
         "env_keys": profile.env_keys,
         "removing": profile.removing,
         "install": profile.place,
+        // Null where nothing is shown: a program of its own, the default
+        // account, an agent whose sign-in Hide cannot look at (B10, B11).
+        "login": profile.login,
     })
 }
 
