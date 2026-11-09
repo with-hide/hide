@@ -301,7 +301,12 @@ it("names profile items, says which answers while Runs on steps aside, and dims 
   next.rest.navigator.devices[0] = { id: "local", machine_name: "Mac mini", kit: { agents: [], profiles } };
   const view = await mount(next);
   try {
-    expect(view.q("[data-ai-provider]")?.textContent).toBe("Claude Code · work");
+    expect(view.q("[data-ai-provider]")?.textContent).toContain("Claude Code · work");
+    // The item mark is the start menu's: the agent's mark wearing the profile's badge; a gone profile has none to wear.
+    expect(view.q("[data-ai-provider] [data-profile-badge='work']")?.textContent).toBe("W");
+    expect(view.q("[data-ai-fallback='claude#p-gw'] [data-profile-badge='opengateway']")?.textContent).toBe("O");
+    expect(view.q("[data-ai-fallback='claude#p-old'] [data-agent-mark]")).not.toBeNull();
+    expect(view.q("[data-ai-fallback='claude#p-old'] [data-profile-badge]")).toBeNull();
     expect(view.q("[data-ai-using='claude#p-gw']")?.textContent).toContain("Using Claude Code · opengateway · Claude Code · work is signed out");
     expect(view.q("[data-ai-fallback='claude#p-gw']")?.textContent).toContain("Claude Code · opengateway");
     // The gateway's own list, by the names it gives.

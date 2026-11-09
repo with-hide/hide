@@ -1,6 +1,6 @@
 import { PlusIcon, XIcon } from "lucide-react";
 import type { Actions } from "../actions";
-import { AgentLogo } from "../components/agent-logo";
+import { AgentMark } from "../AgentMark";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -54,7 +54,7 @@ function FallbackRow({ index, item, model, actions, onChange }: { index: number;
           <span aria-hidden="true" className="w-md shrink-0 text-center font-mono text-body text-muted-foreground" data-ai-fallback-order="true">
             {index + 1}
           </span>
-          <AgentLogo agent={item.agent} label={item.label} />
+          <AgentMark kind={item.agent} profile={item.profileName} />
           <span className="min-w-0 break-words">{name(item)}</span>
         </span>
       }
@@ -124,7 +124,7 @@ function AddAgent({ ai, lists, actions, onChange }: { ai: BackgroundAi; lists: P
                 actions.addAiFallback(itemRef(provider));
               }}
             >
-              <AgentLogo agent={provider.agent} label={provider.label} />
+              <AgentMark kind={provider.agent} profile={provider.profileName} />
               <span className="min-w-0 flex-1">{name(provider)}</span>
               <span className="text-caption text-muted-foreground">{state(provider).text}</span>
             </DropdownMenuItem>
@@ -133,7 +133,7 @@ function AddAgent({ ai, lists, actions, onChange }: { ai: BackgroundAi; lists: P
           {unusable.length > 0 ? <DropdownMenuLabel>{t("hideAi.cantUse")}</DropdownMenuLabel> : null}
           {unusable.map((provider) => (
             <DropdownMenuItem key={itemKey(provider)} disabled data-ai-unusable-item={itemKey(provider)}>
-              <AgentLogo agent={provider.agent} label={provider.label} />
+              <AgentMark kind={provider.agent} profile={provider.profileName} />
               <span className="min-w-0 flex-1">{name(provider)}</span>
               <span className="text-caption text-muted-foreground">{state(provider).text}</span>
             </DropdownMenuItem>

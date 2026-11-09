@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Actions } from "../actions";
-import { AgentLogo } from "../components/agent-logo";
+import { AgentMark } from "../AgentMark";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { Group, Note, Row, Status } from "../components/settings-rows";
@@ -132,7 +132,7 @@ export function HideAiTab({ actions }: { actions: Actions }) {
                 {choices.map((item) => (
                   // A missing profile stays shown as the choice it was, and cannot be chosen again (B21).
                   <SelectItem key={itemKey(item)} value={itemKey(item)} disabled={item.missing} data-ai-item={itemKey(item)}>
-                    <AgentLogo agent={item.agent} label={item.label} />
+                    <AgentMark kind={item.agent} profile={item.profileName} />
                     {name(item)}
                   </SelectItem>
                 ))}
