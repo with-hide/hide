@@ -8,7 +8,7 @@ import { itemName, profileItem, type StartItem } from "../agentProfiles";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { cn } from "../lib/utils";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "./ui/select";
 import { Hint } from "./ui/tooltip";
 
 // The one kind and model control every start surface shares (PRD
@@ -26,7 +26,7 @@ const DEFAULT_ITEM = "__cli_default";
  * its machine's profiles, `profile` the chosen item's profile id for the
  * chosen kind, `showLeft` whether each item shows its account's percent left.
  */
-export type ItemMenu = { list: readonly StartItem[]; profile: string; showLeft: boolean; onItem: (item: StartItem) => void; defaultOpen?: boolean };
+export type ItemMenu = { list: readonly StartItem[]; profile: string; showLeft: boolean; onItem: (item: StartItem) => void; defaultOpen?: boolean; /** Why the list is the built-in items alone, worded; drawn under the items as the menu's quiet description. */ note?: string | null };
 
 const itemKey = (kind: ProviderKind | "terminal", profile: string) => `${kind}/${profile}`;
 
@@ -142,6 +142,11 @@ export function AgentPickerView({
                 </SelectItem>
               );
             })}
+            {items.note ? (
+              <SelectGroup>
+                <SelectLabel data-agent-item-note="true" className="max-w-(--size-picker-popover) whitespace-normal break-keep font-normal">{items.note}</SelectLabel>
+              </SelectGroup>
+            ) : null}
           </SelectContent>
         </Select>
       ) : (

@@ -272,13 +272,14 @@ function StartPanel({ actions }: { actions: Actions }) {
   // is the item started, `default` included (D-02).
   const usage = useShellStore((s) => s.usage);
   const ai = useShellStore((s) => s.rest?.status?.background_ai);
-  const menu = useMemo(() => (target ? startItems(rest, target.deviceId, usage) : null), [rest, target, usage]);
+  const menu = useMemo(() => (target ? startItems(rest, target.deviceId, usage, Date.now(), target.disabled === null) : null), [rest, target, usage]);
   const itemKey = target && selection.kind !== "terminal" ? `${target.deviceId}:${target.workspaceId}:${selection.kind}` : null;
   const [itemPick, setItemPick] = useState<{ key: string; profile: string } | null>(null);
   const picked = itemPick && itemPick.key === itemKey && menu?.items.some((item) => item.kind === selection.kind && item.profile === itemPick.profile) ? itemPick.profile : null;
   const profile = target && selection.kind !== "terminal" && menu ? picked ?? (menu.items.some((item) => item.kind === selection.kind && item.profile === preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind)) ? preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind) : BUILT_IN_PROFILE) : BUILT_IN_PROFILE;
-  // A machine that lists no profile is started as before: the core picks (B1).
-  const profileToSend = menu?.listed && menu.showLeft && selection.kind !== "terminal" ? profile : null;
+  // A machine that keeps profiles starts the item shown, the built-in one included, even with no profile listed: the core would
+  // pick again when it starts (D-02, B1). A device whose Hide predates profiles is sent none.
+  const profileToSend = menu?.listed && selection.kind !== "terminal" ? profile : null;
   // A model remembered for the agent that the chosen item's list does not have opens on the item's own default (B5); only the
   // core machine's list is read, so a device's choice is never swapped.
   const catalog = selection.kind !== "terminal" && takesModel(selection.kind) ? catalogFor(ai, selection.kind, menu ? profileItem(menu.items, selection.kind, profile) : null) : null;
@@ -417,6 +418,7 @@ function StartPanel({ actions }: { actions: Actions }) {
                   list: menu.items,
                   profile,
                   showLeft: menu.showLeft,
+                  note: menu.note === "offline" ? t("startPanel.deviceOffline", { device: targets.groups.find((group) => group.deviceId === target?.deviceId)?.deviceLabel ?? "" }) : menu.note === "unsupported" ? t("agentProfiles.unsupported") : null,
                   onItem: (item) => {
                     setSelection(selectKind(item.kind, useShellStore.getState().rest?.ui_state?.agent_start));
                     if (target) setItemPick({ key: `${target.deviceId}:${target.workspaceId}:${item.kind}`, profile: item.profile });

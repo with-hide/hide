@@ -9,7 +9,7 @@ import { PROVIDER_KINDS, type ProfileItem, type ProviderKind } from "./agentPick
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
 import { kitPartNeedsReinstall } from "./settings";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
-import { type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
+import { localDeviceId, type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
 import type { StartTarget, StartTargets } from "./startTargets";
 import { limitWindow, windowPercent } from "./usage";
 
@@ -282,15 +282,26 @@ export type StartItem = {
   left: number | null;
 };
 
+/** Why a machine's menu lists the built-in items alone, in the words of the panel's existing lines: it is not connected (B6), or its Hide does not keep profiles. */
+export type StartItemsNote = "offline" | "unsupported";
+
 /**
- * The start panel's agent menu on a machine (D-01, B2, B3): each agent with
- * its built-in item first, then the profiles the machine lists for it, in its
- * order. `showLeft` is false while the machine lists no profile of any agent,
- * when the menu is the agent names alone as before (B1). `listed` says the
- * machine's profiles were read, so a start may name the item it shows.
+ * The start panel's agent menu on a machine (D-01, B2, B3, B6): each agent
+ * with its built-in item first, then the profiles the machine lists for it,
+ * in its order. `showLeft` is false while the menu lists no profile of any
+ * agent, when it is the agent names alone as before (B1). `listed` says the
+ * machine keeps profiles (its list was read, or kept from an earlier read),
+ * so a start names the item it shows, the built-in one too, whatever the
+ * menu draws (D-02). A machine that is not `connected` lists the built-in
+ * items alone and says so; a device whose Hide predates profiles does too,
+ * which is not a machine whose list could not be read.
  */
-export function startItems(rest: SnapshotRest | null, deviceId: string, usage: { nodes: { node: string; agents: AgentUsage[] }[] } | null = null, now = Date.now()): { items: StartItem[]; showLeft: boolean; listed: boolean } {
-  const listed = listedProfiles(rest?.navigator?.devices?.find((row) => row.id === deviceId));
+export function startItems(rest: SnapshotRest | null, deviceId: string, usage: { nodes: { node: string; agents: AgentUsage[] }[] } | null = null, now = Date.now(), connected = true): { items: StartItem[]; showLeft: boolean; listed: boolean; note: StartItemsNote | null } {
+  const device = rest?.navigator?.devices?.find((row) => row.id === deviceId);
+  const kept = listedProfiles(device);
+  const listed = connected ? kept : null;
+  const remote = deviceId !== localDeviceId(rest);
+  const note: StartItemsNote | null = !connected ? "offline" : remote && kept === null ? "unsupported" : null;
   // The usage read is this machine's alone: a device's items have no figure.
   const own = usage?.nodes[0]?.node === deviceId ? usage : null;
   const items = PROVIDER_KINDS.flatMap((kind): StartItem[] => {
@@ -300,7 +311,7 @@ export function startItems(rest: SnapshotRest | null, deviceId: string, usage: {
     if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null, version: null, left: row ? weeklyLeft(row.limits, now) : null }];
     return view.profiles.map((profile) => ({ kind, profile: profile.id, name: profile.builtIn ? null : profile.name, version: listed?.profiles.find((row) => row.id === profile.id)?.version ?? null, left: itemLeft(row, profile.id, now) }));
   });
-  return { items, showLeft: items.some((item) => item.name !== null), listed: listed !== null };
+  return { items, showLeft: items.some((item) => item.name !== null), listed: listed !== null, note };
 }
 
 /** The profile of the item `profile` of `kind` as `catalogFor` asks for it: its id and version now; null for the built-in item. */

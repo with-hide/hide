@@ -255,8 +255,9 @@ it("lists each agent with its profiles as items, shows the core's choice chosen 
     await openItems();
     expect(document.querySelectorAll("[data-slot=select-item-trailing]")).toHaveLength(0);
     expect(q('[data-agent-kind-option="claude"]')?.textContent).toBe("Claude");
+    // The screen is as before, but a machine that keeps profiles is started on the item shown: the core would pick again at start (D-02).
     await act(async () => q("[data-start-submit]")!.click());
-    expect(started().at(-1)).not.toHaveProperty("profile");
+    expect(started().at(-1)).toMatchObject({ provider: "claude", profile: "default" });
     await act(async () => root.render(<></>));
 
     // Profiles on the machine: one item each, the project's work chosen, no profile menu beside the agent (B2).
@@ -357,4 +358,111 @@ it("opens a profile item on its own default model when the remembered model is n
     await act(async () => q("[data-start-submit]")!.click());
     expect(started().at(-1)).toMatchObject({ profile: "default", model: "opus" });
   });
+});
+
+
+it("keeps a picked item through a project preselection that moves, and starts the built-in item on a machine whose profile list could not be read but is kept (agent-profiles-phase2 D-02, I-1.20)", async () => {
+  await withPanel(async ({ render, events, q, openItems, pickItem, root }) => {
+    const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+    const work = { state: "listed", version: 2, profiles: [profileFixture.listed("p-work", "work")], defaults: {} };
+    await render(profileSnapshot(work, { blog: "default" }));
+    await openItems();
+    await pickItem("claude/default");
+    // Another window preselects work for the project after the operator picked `Claude Code`.
+    await render(profileSnapshot(work, { blog: "p-work" }, "p-work"));
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "p-work" });
+    await act(async () => root.render(<></>));
+    // A list that could not be read now is the last one kept: its item is named too, the built-in one included.
+    await render(profileSnapshot({ ...work, state: "unreadable" }, { blog: "default" }));
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ profile: "default" });
+    expect(q("[data-agent-item-note]")).toBeNull();
+  });
+});
+
+it("lists a device's items by whether it is connected and whether its Hide keeps profiles (agent-profiles-phase2 B6)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const events: { kind: string; payload: Record<string, unknown> }[] = [];
+  const remote = "mini";
+  const project = { id: "remote-project", label: "app", path: "/remote/app", device_id: remote, remote_target_id: remote, registered: true, temporary: false, is_git: false, checkouts: [{ id: "remote-main", workspace_id: "remote-project", label: "main", path: "/remote/app", exists: true, is_primary: true }] };
+  const snapshot = (profiles: unknown, connected: boolean) => ({
+    navigator: {
+      focused_device_id: remote,
+      workspaces: [],
+      devices: [
+        { id: "core-machine", kind: "local", label: "Core machine", state: "local" },
+        { id: remote, kind: "remote", label: "Mac mini", state: "ready", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], ...(profiles ? { profiles } : {}) } },
+      ],
+    },
+    ui_state: { agent_start: { kind: "claude", models: {} } },
+    status: { remote: [{ target_id: remote, state: connected ? "connected" : "disconnected", session: connected ? { workspaces: [project] } : null }] },
+  }) as unknown as SnapshotRest;
+  const listed = { state: "listed", version: 1, profiles: [profileFixture.listed("p-work", "work")], defaults: {} };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const q = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+  const options = () => [...document.querySelectorAll("[data-agent-item-option^='claude/']")].map((option) => option.getAttribute("data-agent-item-option"));
+  const show = async (rest: SnapshotRest) => {
+    await act(async () => {
+      useShellStore.setState({ rest, connection: "live" });
+      useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null });
+    });
+  };
+  const open = async () => {
+    const trigger = q("[data-agent-item]");
+    if (!trigger) throw new Error(`no item menu: ${document.body.querySelector("[data-start-panel]")?.textContent ?? "no panel"}`);
+    trigger.focus();
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  };
+  try {
+    await show(snapshot(listed, true));
+    await act(async () => {
+      useStartPanel.setState(panel, true);
+      useStartPanel.getState().open(false, { projectId: project.id, kind: "claude" });
+      root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+    });
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey(remote, "/remote/app")));
+    // Connected: its profiles, with no figure, since a device's usage is not read here.
+    await open();
+    expect(options()).toEqual(["claude/default", "claude/p-work"]);
+    expect(q('[data-agent-item-option="claude/p-work"]')?.textContent).toContain("—");
+    expect(q("[data-agent-item-note]")).toBeNull();
+    await act(async () => { q('[data-agent-item-option="claude/default"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    // Connected, then it stops answering: the panel holds the target, the menu goes back to the built-in items and says why.
+    await show(snapshot(listed, false));
+    await open();
+    expect(options()).toEqual(["claude/default"]);
+    expect(q("[data-agent-item-note]")?.textContent).toContain("Mac mini");
+    expect(q("[data-agent-item-note]")?.textContent).toContain("not connected");
+    await act(async () => root.render(<></>));
+    // A device whose Hide predates profiles: the built-in items, the reason, and a start that names no profile.
+    for (const profiles of [{ state: "unsupported", version: 0, profiles: [], defaults: {} }, null]) {
+      await show(snapshot(profiles, true));
+      await act(async () => {
+        useStartPanel.setState(panel, true);
+        useStartPanel.getState().open(false, { projectId: project.id, kind: "claude" });
+        root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+      });
+      await open();
+      expect(options()).toEqual(["claude/default"]);
+      expect(q("[data-agent-item-note]")?.textContent).toContain("does not support profiles");
+      await act(async () => q("[data-start-submit]")!.click());
+      expect(events.filter((event) => event.kind === "agent_start_in_checkout").at(-1)?.payload).not.toHaveProperty("profile");
+      await act(async () => root.render(<></>));
+    }
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
 });
