@@ -246,10 +246,13 @@ export async function sidebarRowsFit(page) {
     // overlap. In the flow a head sits above its rows, so a row meets one only
     // while it is stuck. A head's own text spilling is the spill check's above.
     const inHeader = (part) => part.closest("[data-section-sticky]") !== null;
+    const inActions = (part) => part.closest("[data-row-actions]") !== null;
     for (const [i, [a, ra]] of boxes.entries()) {
       for (const [b, rb] of boxes.slice(i + 1)) {
         if (a.contains(b) || b.contains(a)) continue;
         if (inHeader(a) !== inHeader(b)) continue;
+        // A project row's buttons stand over the end of its name by design; the name fades under them.
+        if (inActions(a) !== inActions(b) && (a.closest("[data-row-name]") !== null || b.closest("[data-row-name]") !== null)) continue;
         const across = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
         const down = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
         if (across > 1 && down > 1) problems.push(`${name(a)} overlaps ${name(b)}`);

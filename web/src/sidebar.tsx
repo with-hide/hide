@@ -806,7 +806,7 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
   const more = useRef<HTMLButtonElement>(null);
   return (
     <span className="pointer-events-none absolute inset-y-0 right-full flex items-center justify-end">
-      <span className={cn("pointer-events-auto relative h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md hoverless:flex", fill, menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex")} data-row-actions={workspace.id}>
+      <span className={cn("pointer-events-none relative h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md hoverless:flex [&_button]:pointer-events-auto", fill, menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex")} data-row-actions={workspace.id}>
         <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
           <Button
             variant="row-action"
