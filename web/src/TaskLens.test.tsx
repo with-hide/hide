@@ -318,7 +318,7 @@ it("opens a task's pane on a press, its record on Space, and resolves it from th
   sent.length = 0;
   await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true })));
   expect(sent.map((event) => event.kind)).toEqual(["detail_open"]);
-  expect(sent[0]!.payload).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-a" } } });
+  expect(sent[0]!.payload).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-a" } }, in_owner_tab: true });
 });
 
 it("selects the row of the pane with the keyboard, and its nearest drawn ancestor while it is folded away (B13)", async () => {

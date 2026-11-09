@@ -312,7 +312,7 @@ function PlanPart({ plan, planned, folded, actions }: { plan: PlanView; planned:
             <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
           </Button>
         ) : null}
-        <Button variant="text" size="inline" className="ml-auto shrink-0 text-caption" onClick={() => actions.openPlan(plan.session)} data-panel-plan-large="true">
+        <Button variant="text" size="inline" className="ml-auto shrink-0 text-caption" onClick={() => actions.openPlan(plan.session, false)} data-panel-plan-large="true">
           {t("plan.large")}
           <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </Button>

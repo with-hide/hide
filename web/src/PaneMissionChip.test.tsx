@@ -158,7 +158,7 @@ it("shows its popover on focus or pointing without taking the keyboard, and a pr
     expect(view.popover()).not.toBeNull();
     await act(async () => view.chip()!.click());
     expect(useUiStore.getState().screen).not.toEqual({ kind: "missions" });
-    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" } }]);
+    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, in_owner_tab: true }]);
     expect([useUiStore.getState().planPane, view.popover()]).toEqual([null, null]);
     expect(view.chip()!.hasAttribute("aria-pressed")).toBe(false);
   } finally { await view.unmount(); }
@@ -205,7 +205,7 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
     expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Open the map");
     // Pressing it opens the mission's card in the 보기 slot and closes the popover, as the chip's own press does.
     await view.press("[data-mission-mini-open]");
-    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" } }]);
+    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, in_owner_tab: true }]);
     expect(view.popover()).toBeNull();
   } finally { await view.unmount(); }
 });

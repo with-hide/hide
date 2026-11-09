@@ -4388,6 +4388,9 @@ impl Runtime {
             Event::PracticeInviteClose => self.close_practice_invite(),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
+            Event::DetailOpen(payload) if payload.in_owner_tab => {
+                self.open_detail_in_owner_tab(payload.item)
+            }
             Event::DetailOpen(payload) => self.open_detail(payload.item),
             Event::DetailBack => self.detail_back(),
             Event::DetailClose => self.close_detail(),
