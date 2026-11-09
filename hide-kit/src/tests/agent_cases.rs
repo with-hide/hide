@@ -268,7 +268,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@8:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@9:"));
     assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
@@ -283,8 +283,21 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .contains("description: \"Conduct a mission of agents in Hide")
     );
     assert!(MISSION_SKILL.text().contains("Run `hide mission help`"));
+    for rule in [
+        "explicitly asks for a mission or invokes `/hide-mission`",
+        "do not ask which way to work again",
+        "The operator asks for planning first or review",
+        "two or more PRs or work in parallel",
+        "Another agent needs to review or check",
+        "long enough to fill the conversation context",
+        "first ask the operator in one line: Shall I run this as a mission, or do it directly?",
+        "Wait for their answer and follow it",
+        "If none applies, do the work directly without asking",
+    ] {
+        assert!(MISSION_SKILL.text().contains(rule), "{rule}");
+    }
     assert!(!MISSION_SKILL.text().contains("hide task help"));
-    assert!(MISSION_SKILL.text().contains("<!-- hide-skill@2:"));
+    assert!(MISSION_SKILL.text().contains("<!-- hide-skill@3:"));
 }
 
 /// The retired entry must match the file shipped before the merge exactly.

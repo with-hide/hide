@@ -29,6 +29,15 @@ mod tests {
         assert!(!guide.contains("hide task help"));
         assert!(guide.contains("run `hide mission help`"));
         assert!(guide.contains("A worker or reviewer of a mission node"));
+        for rule in [
+            "explicitly asks for, invokes with `/hide-mission`",
+            "without asking which way to work again",
+            "first ask in one line: Shall I run this as a mission, or do it directly?",
+            "Wait for the operator's answer and follow it",
+            "With none of these signals, work directly without asking",
+        ] {
+            assert!(guide.contains(rule), "{rule}");
+        }
     }
 
     #[test]
