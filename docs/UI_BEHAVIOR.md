@@ -151,20 +151,20 @@ A buffer opened through another path before the read answers retains its draft a
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
 Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
 A new checkout in front changes the documents and the Explorer to that checkout's.
-The 보기 slot belongs to the agent, by its session, that it was opened for: each agent has its own slot, which stays while that agent's pane has the keyboard, and another agent pressed, in the same tab or another, in this checkout or another, shows its own slot or none, so the lane is the checkout's documents or Explorer as it stands, the rail's 보기 button brings back only that agent's own slot, and ⌘E opens the lane with that slot when the agent has one (operator decision 2026-11-09, replacing the slot one Agent tab's agents shared).
-A pane that runs no agent session (a shell, or an agent that has not named its session yet) shows an empty slot; what is opened while it has the keyboard is not kept once another pane takes it.
+The 보기 slot belongs to the pane it was opened for: each pane has its own slot, which stays while that pane has the keyboard, and another pane pressed, in the same tab or another, in this checkout or another, shows its own slot or an empty one, so the lane is the checkout's documents or Explorer as it stands, the rail's 보기 button brings back only that pane's own slot, and ⌘E opens the lane with that slot when the pane has one (operator decision 2026-11-09, replacing the slot the panes of one Agent tab shared).
+A pane that runs no agent (a shell) has its own slot like any other.
 A card opens where it was pressed (operator decision 2026-11-09):
 
 | Pressed on | Opens in |
 | --- | --- |
-| An agent's row (a parent's or a child's, in the 태스크 list or the 프로젝트 tree) or its pane's head: its PR mark, its record, its mission mark | That agent's slot, its pane taking the keyboard, whoever made the pull request |
+| An agent's row (a parent's or a child's, in the 태스크 list or the 프로젝트 tree) or its pane's head: its PR mark, its record, its mission mark | The slot of that agent's pane, which takes the keyboard, whoever made the pull request |
 | A card in the slot (a session's record, a mission node's panel): a pull request, a child's record, a node's plan | The same slot, over the card, the tab and the keyboard staying; `←` comes back to the card |
-| A place with no agent (the PR list, Memory, the 제안 tab, ⌘K, the Project tool) | The slot of the agent that owns it: the pull request's maker, the session's own agent, which comes forward with its pane |
-| A mission's row (내 차례, Needs You, the Overview) or a pane's mission chip | Its Conductor's slot, the Conductor's pane coming forward |
+| A place with no agent (the PR list, Memory, the 제안 tab, ⌘K, the Project tool) | The slot of the pane of the agent that owns it, the pull request's maker or the session's own agent, which comes forward |
+| A mission's row (내 차례, Needs You, the Overview) or a pane's mission chip | The slot of its Conductor's pane, which comes forward |
 
 With no such agent on this machine (it ended or sleeps, a person made the pull request, the mission has no Conductor, or the owner runs on a connected device) the card opens in the slot in front; an agent's row whose pane has closed (its agent sleeps) does the same.
-A row of an agent on a connected device opens the card in that agent's slot and asks the device to bring the pane forward; the card shows when the device answers.
-Back on the agent its card is there as it was, with its ← history; a sleeping agent keeps its slot and finds it in the pane it wakes in, an agent that ends or is archived takes its slot with it, at most 64 agents' slots are kept with the one seen longest ago going first, and a slot saved by an older build for its front tab attaches to the agent in front on the first event after the launch.
+A row of an agent on a connected device opens the card in that pane's slot and asks the device to bring the pane forward; the card shows when the device answers.
+Back on the pane its card is there as it was, with its ← history; a closed pane takes its slot with it, so an agent that sleeps and wakes in a new pane finds an empty slot, at most 64 panes' slots are kept with the one seen longest ago going first, and a slot saved by an older build for its front tab attaches to the pane in front on the first event after the launch.
 With no Workspace in front the Overview's own panel opens the items as before (B22).
 
 ⌘⇧P shows and focuses the sidebar.
@@ -1006,7 +1006,7 @@ Moved to a private document: `docs/hide-ai-tool.md` in with-hide/hide-private.
 
 Web owner: `web/src/MissionScreen.tsx`, `web/src/missionList.ts`, `web/src/components/sidebar-header.tsx`; core owner for which mission's events are sent: `hide-core/src/runtime/mission_events.rs` (`mission_shown`).
 Every mission is listed on a screen of the page's own beside the Overview and Desk, which lists the missions of the device in front on the rail, every project of it, and opens one's map beside the list; it edits no mission (PRD mission-screen D-01, D-02).
-A mission pressed anywhere else opens its map as a card in the 보기 slot of its Conductor, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19).
+A mission pressed anywhere else opens its map as a card in the 보기 slot of its Conductor's pane, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19).
 There is no Mission tool in the right lane (B18).
 
 The sidebar's `미션` row sits on its own line under the Overview row and above `Add project`, the waypoints mark before it and, on its right, the warning-coloured count of the device's open missions with anything in their 내 차례 (a decision, letters the Conductor has not got, a worker the core raised, a merge or join order, an outside pull request closed unmerged, no Conductor), none at 0, its hint `미션 · 내 차례 N`; the tabs below stay 프로젝트, 태스크 and PR (B1).
@@ -1028,7 +1028,7 @@ A node's `크게 ›`, a worker's or checker's record and a pull request's card,
 ↑ and ↓ in the list show the previous or next mission's detail; `✕` returns to the table with the same scroll and project chip (B11).
 A mission removed or no longer held while its detail shows returns the screen to its table with no message (B22).
 The page tells the core which mission the detail shows, or none, with one event (`mission_shown`), which the core holds unsaved, only for a mission its book holds, and uses to send that one mission's event record (`mission_events`); leaving the screen says none, the page names it again whenever its connection comes back, and with two windows on missions the last one to name a mission wins (D-16).
-While the page names none, the core sends the events of the mission whose card is on top of the front agent's 보기 slot while the slot is drawn; the slot is the core's, so the card needs no event of its own.
+While the page names none, the core sends the events of the mission whose card is on top of the front pane's 보기 slot while the slot is drawn; the slot is the core's, so the card needs no event of its own.
 In a window too narrow for the list beside the detail the list stacks above it and the table leaves out its project column, which the chips still name (`missions-split`, 760 px of the screen's width); a long title truncates with its full text on hover (B23).
 On the screen, a mission of another device than the one in front brings that device's rail tile forward first, then opens on the mission (B13).
 ⌃Tab (⌥` in a browser tab) goes to the most recent agent pane, the first stop of the recent cycle, as from the Overview or Desk; Esc closes an open menu or popover and nothing else, neither leaving the screen nor closing the detail; choosing a task, a project or a pane in the sidebar leaves the screen for it (B15, B16, B17).
@@ -1037,13 +1037,13 @@ Which mission is selected, the chip and the scroll are the page's own and are no
 ### A mission's card in the 보기 slot
 
 Web owner: `web/src/DetailPanel.tsx`, `actions.openMission` in `web/src/actions.ts`; core owner: `hide-core/src/runtime/detail.rs` (`DetailItem::Mission`).
-Every other place a mission is pressed opens its map as a card in the 보기 slot: a mission row in the 태스크 list's 내 차례 or the 프로젝트 list's Needs You, a mission in the Overview and the Conductor pane's mission chip in the Conductor's slot, and an agent row's mission mark in that row's agent's slot (operator decision 2026-11-09, replacing B12 and B14).
+Every other place a mission is pressed opens its map as a card in the 보기 slot: a mission row in the 태스크 list's 내 차례 or the 프로젝트 list's Needs You, a mission in the Overview and the Conductor pane's mission chip in the slot of the Conductor's pane, and an agent row's mission mark in the slot of that row's pane (operator decision 2026-11-09, replacing B12 and B14).
 The popover a pane head chip opens ends in one row, above a line, that says what to press to open the whole thing: `지도 열기 ›` under a mission and under a plan's steps alike (operator decision 2026-11-09).
 A mission's popover is headed by its number and title, then one line of its state (the cells and `n/m` while it runs, `✓ 끝남 · <걸린 시간>` once it ends) and the tally, with the decision, the nodes a worker is at, or the Conductor's report and what it left below; a plan's popover keeps its state pill, cells and `n/m` in the head, since a plan has no title.
-The card follows the pull request card's rules and adds none ([The right lane](#the-right-lane)): it opens in the Conductor's slot, which comes forward with the Conductor's pane, or in the slot in front while no Conductor of this machine holds the mission, is not shown while another agent has the keyboard, the Conductor's own workers in the same tab included, comes back as it was with the Conductor, `←` steps back through what the slot opened before, `✕` closes it, a closed lane opens on it alone, and in a narrow window the lane stacks as it does for any card; a pull request pressed in it stacks in the same slot.
+The card follows the pull request card's rules and adds none ([The right lane](#the-right-lane)): it opens in the slot of the Conductor's pane, which comes forward, or in the slot in front while no Conductor of this machine holds the mission, is not shown while another pane has the keyboard, the panes of the Conductor's own workers in the same tab included, comes back as it was with the Conductor's pane, `←` steps back through what the slot opened before, `✕` closes it, a closed lane opens on it alone, and in a narrow window the lane stacks as it does for any card; a pull request pressed in it stacks in the same slot.
 Away from a Workspace (Home, the Overview, or this screen with no checkout in front) the mission's checkout comes to the front first, as a card's project does, and a mission whose checkout no list holds opens on this screen instead.
 Its head holds the mission's kind mark with its `?`, the title, a small `모든 미션` that opens this screen's table, ⚙ (Settings › Mission), the pin and `✕`; under it is the same map the screen's detail draws, its 내 차례, a missing Conductor's `이어받기` and a mission no longer held.
-A mission deleted with its Conductor's session leaves every agent's slot.
+A mission deleted with its Conductor's session leaves every pane's slot.
 
 ## Terminal image attachment boundary
 
