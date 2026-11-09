@@ -697,6 +697,17 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
         let start = hold(&runtime, "p-work").unwrap();
         running(&mut runtime, "w1:p1", "p-work", "fix-bell");
         drop(start);
+        assert!(
+            !runtime
+                .profile_holds
+                .is_removing(&node, &ProfileId("p-work".into()))
+        );
+        assert!(
+            runtime
+                .profile_holds
+                .starting(&node, &ProfileId("p-work".into()))
+                .is_empty()
+        );
         profiles::Prepared {
             machine: node.clone(),
             link: Arc::clone(&link) as Arc<dyn crate::node_access::NodeLink>,
@@ -706,7 +717,7 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
             },
             version: 3,
             kind: None,
-            request: None,
+            request: Some("delete".into()),
             runtime: shared.weak(),
             notifier: crate::handle::ChangeNotifier::noop(),
             settled: false,
@@ -727,7 +738,19 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
         hide_node_link::protocol::Call::ProfileList { .. }
     ));
     drop(asked);
-    // The agent keeps its profile, and the runtime is free for the next change.
+    // The screen's answer lists the agent the delete would pull the account
+    // from; the agent keeps its profile, and the runtime is free for the
+    // next change.
     let runtime = shared.lock().unwrap();
+    let answered = answer(&runtime);
+    assert_eq!(answered.code.as_deref(), Some(profiles::IN_USE));
+    assert_eq!(
+        answered
+            .in_use
+            .iter()
+            .map(|agent| (agent.pane_id.as_str(), agent.starting))
+            .collect::<Vec<_>>(),
+        [("w1:p1", false)]
+    );
     assert!(hold(&runtime, "p-work").is_ok());
 }
