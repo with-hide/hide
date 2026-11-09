@@ -3066,27 +3066,19 @@ impl Runtime {
                     .iter()
                     .filter_map(|status| status.session.as_ref())
                     .flat_map(|session| &session.workspaces);
-                let folds: Vec<bool> = self
+                // The Checkouts fold holds every checkout but the main one, so
+                // a project's fold opens whether or not any of them is idle.
+                let known = self
                     .snapshot
                     .navigator
                     .workspaces
                     .iter()
                     .chain(devices)
-                    .filter(|workspace| workspace.path == payload.project_path)
-                    .map(|workspace| !workspace.inactive_checkouts.checkout_ids.is_empty())
-                    .collect();
-                if folds.is_empty() {
+                    .any(|workspace| workspace.path == payload.project_path);
+                if !known {
                     self.set_error(
                         "inactive_checkouts.unknown_project",
                         format!("Project {} is not available", payload.project_path),
-                        false,
-                    );
-                    return true;
-                }
-                if !folds.contains(&true) {
-                    self.set_error(
-                        "inactive_checkouts.unavailable",
-                        format!("Project {} has no inactive checkouts", payload.project_path),
                         false,
                     );
                     return true;
