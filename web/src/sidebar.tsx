@@ -918,7 +918,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
     />
   );
   return (
-    <li data-project={workspace.id} className={cn(!first && (expanded && hasBody ? BLOCK_GAP : "mt-xs"), quiet && "opacity-(--opacity-dimmed)")}>
+    <li data-project={workspace.id} data-project-quiet={quiet ? "true" : undefined} className={cn(!first && (expanded && hasBody ? BLOCK_GAP : "mt-xs"), quiet && "opacity-(--opacity-dimmed)")}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => projectMenu(workspace, menuHost(), t, issueSource)}
