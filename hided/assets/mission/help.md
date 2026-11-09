@@ -30,7 +30,8 @@ hide agent catalog [--machine <device id>]
 ```
 
 Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"reason":…,"next_action":…}`; `hide mission show` without `--json` is the one that prints text, and a refusal is still that JSON line.
-A command that names no `--mission` acts on the mission you conduct.
+A command that names no `--mission` acts on the mission you conduct; a node's worker or checker means the open mission whose node it works or checks (section 9).
+`hide mission show <mission id>`, the command Hide's letters name, reads that whole mission.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
 
 `hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
@@ -206,6 +207,7 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Hide refuses them on any other kind of node, and the map shows them as the node's result.
 - Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or ends its CI on its newest commit, and when an outside node is in main.
   The CI letter comes once nothing on the commit still runs, and names the commit and whether the CI passed, was cancelled with no run replacing it, or failed, with the jobs that failed.
+  When a check starts again on that commit before the letter reached you, as a body edit's `policy checks` does, Hide withdraws the letter and tells the commit's CI again once it ends; a letter you already got stays as it was.
   Each result is told once per commit for good, the one a pull request already has when Hide first reads it included, so a rerun that fails again sends none, even after a pass between.
   A new commit alone sends no letter: wait for its CI letter rather than watching the checks in a shell.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
@@ -247,9 +249,10 @@ What is not certain is raised on the node to you first, with a letter naming the
 Settle it by recording the line, skipping it with its reason, attaching the pull request with `--pr`, setting the node's status or dropping it; that takes the raise off the operator's turn too.
 A raise you have not settled in ten minutes, or any raise while no Conductor holds the mission, reaches the operator, who can settle it from the map; you then get a letter saying what they did.
 The same cause is raised once.
-CI, review and merge waits call no one, and a worker waiting on them is not warned for being quiet.
+CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, is not warned for being quiet, neither by the no-push warning nor by its watch's no-activity letter.
+A failed CI is its worker's to run again or fix, so it is no wait: put a wait on the operator that is not a merge on the map with `decide --node`, or the quiet worker is warned.
 
-Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge is not quiet).
+Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet).
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
 The two thresholds are fixed: two failed reviews in a row and 90 minutes with no push.
@@ -335,4 +338,7 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
 - Recording the same result on the same commit again changes nothing.
+- `hide mission show` and `hide mission show <node>` read your mission without `--mission`, as they do for its Conductor.
+- A worker attaches its own node's pull request, branch and one line itself: `hide mission node <its node> --pr <n> | --no-pr`, `--branch <name>` and `--line <text>`.
+  Anything else on a node (its status, stack base, agents, checkers and verdicts), and any other node, is refused as the Conductor's (`mission_not_conductor`).
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.

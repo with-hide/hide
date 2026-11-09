@@ -21,6 +21,30 @@ use crate::model::{
     CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestSnapshot,
 };
 
+/// How an agent takes part in a mission (`Runtime::part_in`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Part {
+    Conductor,
+    Worker,
+    Checker,
+}
+
+/// The agent a mission command came from, with its registrations read once
+/// for the whole command (`Runtime::registrations_of`).
+pub(super) struct Caller<'a> {
+    pub actor: &'a Actor,
+    pub registrations: Vec<String>,
+}
+
+impl<'a> Caller<'a> {
+    pub(super) fn of(runtime: &Runtime, actor: &'a Actor) -> Self {
+        Self {
+            actor,
+            registrations: runtime.registrations_of(actor),
+        }
+    }
+}
+
 /// Whether `pull` is merged, so its head is the work that reached main.
 fn merged(pull: &PullRequestSnapshot) -> bool {
     pull.badge == PullRequestBadge::Merged
@@ -315,6 +339,72 @@ impl Runtime {
         })
     }
 
+    /// The registrations that are `actor`'s, ended ones too: read once per
+    /// command, since the ledger keeps every agent there ever was.
+    pub(super) fn registrations_of(&self, actor: &Actor) -> Vec<String> {
+        self.delivery_state().map_or_else(
+            |_| Vec::new(),
+            |ledger| {
+                ledger
+                    .agents
+                    .iter()
+                    .filter(|record| record.actor.same_identity(actor))
+                    .map(|record| record.id.clone())
+                    .collect()
+            },
+        )
+    }
+
+    /// How `caller` takes part in `mission` at its node `node`, or at any of
+    /// its nodes with none (B5, with-hide/hide#2302): as its Conductor, as
+    /// the node's worker, or as one of its checkers. The one rule every
+    /// command that names no mission finds a worker's or a checker's by.
+    pub(super) fn part_in(
+        mission: &Mission,
+        caller: &Caller<'_>,
+        node: Option<&str>,
+    ) -> Option<Part> {
+        if mission.conductor.actor.same_identity(caller.actor) {
+            return Some(Part::Conductor);
+        }
+        let mine = |id: Option<&str>| {
+            id.is_some_and(|id| caller.registrations.iter().any(|own| own == id))
+        };
+        let rows = || {
+            mission
+                .nodes
+                .iter()
+                .filter(|row| node.is_none_or(|key| row.key == key))
+        };
+        if rows().any(|row| mine(row.agent_id.as_deref())) {
+            return Some(Part::Worker);
+        }
+        rows()
+            .any(|row| {
+                row.criteria.iter().any(|line| {
+                    line.checkers
+                        .iter()
+                        .any(|checker| mine(checker.agent_id.as_deref()))
+                })
+            })
+            .then_some(Part::Checker)
+    }
+
+    /// The open mission `caller` takes part in (`part_in`) when a command
+    /// names none: the one it conducts first, then one whose node `node`
+    /// (any node with none) it works or checks.
+    pub(super) fn mission_taken_part(
+        &self,
+        caller: &Caller<'_>,
+        node: Option<&str>,
+    ) -> Option<&Mission> {
+        self.missions.book.conducted_open(caller.actor).or_else(|| {
+            self.missions.book.missions.iter().find(|mission| {
+                mission.status.open() && Self::part_in(mission, caller, node).is_some()
+            })
+        })
+    }
+
     /// The mission a line command from `actor` acts on (B5): the one it
     /// names, or the open mission it conducts or whose node `node` it works
     /// or checks.
@@ -324,17 +414,8 @@ impl Runtime {
         named: Option<&str>,
         node: &str,
     ) -> Result<String, String> {
-        let concerns = |mission: &Mission| {
-            mission.conductor.actor.same_identity(actor)
-                || mission.node(node).is_some_and(|row| {
-                    self.registration_is(row.agent_id.as_deref(), actor)
-                        || row.criteria.iter().any(|line| {
-                            line.checkers.iter().any(|checker| {
-                                self.registration_is(checker.agent_id.as_deref(), actor)
-                            })
-                        })
-                })
-        };
+        let caller = Caller::of(self, actor);
+        let concerns = |mission: &Mission| Self::part_in(mission, &caller, Some(node)).is_some();
         let open = || {
             self.missions
                 .book
@@ -344,7 +425,7 @@ impl Runtime {
         };
         let mission = match named {
             Some(id) => self.missions.book.get(id).ok_or("mission_unknown")?,
-            None => match open().find(|mission| concerns(mission)) {
+            None => match self.mission_taken_part(&caller, Some(node)) {
                 Some(mission) => mission,
                 // A node another agent owns is someone else's line.
                 None if open().any(|mission| mission.node(node).is_some()) => {

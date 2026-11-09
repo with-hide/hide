@@ -507,6 +507,12 @@ pub struct PrSeen {
     /// news again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ci_told: Vec<CiResult>,
+    /// How many times a result told on `head` was withdrawn before its
+    /// letter reached the Conductor, because a check ran on the head again
+    /// (with-hide/hide#2304); it names the next telling, which is a letter
+    /// of its own.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ci_round: u32,
 }
 
 /// What a pull request's CI ended as on one head commit: its checks as the
@@ -1943,6 +1949,44 @@ pub struct NodePatch {
     pub verifier: Option<String>,
 }
 
+impl NodePatch {
+    /// Whether it sets only what a node's worker may set on its own node
+    /// (with-hide/hide#2302): the pull request and the branch it delivers
+    /// on, and the node's one line. Its status, stack base, agents, words
+    /// and verdicts stay its Conductor's.
+    pub fn workers_own(&self) -> bool {
+        let Self {
+            status,
+            agent_id,
+            pr: _,
+            base_pr,
+            branch: _,
+            attempts,
+            line: _,
+            change,
+            review,
+            worker,
+            commit,
+            verdict,
+            checks,
+            reviewer,
+            verifier,
+        } = self;
+        status.is_none()
+            && agent_id.is_none()
+            && base_pr.is_none()
+            && attempts.is_none()
+            && change.is_none()
+            && review.is_none()
+            && worker.is_none()
+            && commit.is_none()
+            && verdict.is_none()
+            && checks.is_none()
+            && reviewer.is_none()
+            && verifier.is_none()
+    }
+}
+
 /// A node's criteria: a list of lines, one sentence, or none.
 fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
@@ -2524,7 +2568,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Another session conducts this mission; ask the operator before taking it over"
         }
         "mission_not_conductor" => {
-            "Only the mission's Conductor can change it; take it over with hide mission take <id> once it has none"
+            "Only the mission's Conductor can change it, but a node's worker sets its own node's --pr, --branch and --line; take it over with hide mission take <id> once it has none"
         }
         "mission_already_conducting" => {
             "Close or cancel the mission you conduct before creating another"

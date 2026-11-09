@@ -772,9 +772,9 @@ fn checked(number: u32, head: &str, checks: PullRequestChecks, failed: &[&str]) 
 }
 
 /// A node's pull request tells its Conductor when its CI ends on a commit,
-/// not when the commit arrives, and one result on one commit is one
-/// letter: a rerun that fails again, or a read that cannot say, sends
-/// nothing new.
+/// not when the commit arrives, and one result on one commit is one letter
+/// the Conductor gets: a read that cannot say sends nothing new, and a
+/// rerun withdraws a letter still waiting, so its end is told once.
 #[test]
 fn a_missions_pull_request_tells_its_conductor_each_ci_result_once_per_commit() {
     let fixture = conducting();
@@ -812,15 +812,19 @@ fn a_missions_pull_request_tells_its_conductor_each_ci_result_once_per_commit() 
         vec!["mission:mission-1:ci:fix:7:b2:failed:sender"]
     );
     assert!(read(failed.clone()).is_empty(), "the same read again");
+    // The rerun takes back the letter still waiting for the Conductor
+    // (with-hide/hide#2304), so its end is told once, in a letter of its own.
     assert!(read(checked(7, "b2", PullRequestChecks::Pending, &[])).is_empty());
     assert!(read(checked(7, "b2", PullRequestChecks::Unknown, &[])).is_empty());
-    assert!(
-        read(failed).is_empty(),
+    assert_eq!(
+        read(failed.clone()),
+        vec!["mission:mission-1:ci:fix:7:b2:failed:1:sender"],
         "a rerun failing again on the same commit"
     );
+    assert!(read(failed).is_empty(), "the same read again");
     assert_eq!(
         read(checked(7, "b2", PullRequestChecks::Passing, &[])),
-        vec!["mission:mission-1:ci:fix:7:b2:passed:sender"]
+        vec!["mission:mission-1:ci:fix:7:b2:passed:1:sender"]
     );
     // A commit whose CI ended between two reads is still told.
     assert_eq!(
@@ -5385,6 +5389,7 @@ fn see(node: &mut crate::missions::MissionNode, merged: bool, closed: bool) {
         closed,
         changes_requested: false,
         ci_told: Vec::new(),
+        ci_round: 0,
     });
 }
 
@@ -8601,4 +8606,273 @@ fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
         2,
         "each question has its own entry: {raised:?}"
     );
+}
+
+/// with-hide/hide#2301, #2302: `show <mission id>` reads that mission, as
+/// Hide's own letters tell a Conductor to run it; a node's worker and its
+/// checker read their mission without naming it, and the worker sets its
+/// own node's pull request, branch and line; anything else, and any other
+/// node, stays the Conductor's.
+#[test]
+fn a_nodes_worker_and_checker_use_the_mission_commands_of_their_own_node() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-3"}}),
+    )
+    .unwrap();
+
+    for pane in ["sender", "recipient", "reviewer"] {
+        let (whole, changed) = command(
+            &mut runtime,
+            pane,
+            json!({"op": "show", "node": "mission-1"}),
+        )
+        .unwrap();
+        assert!(!changed);
+        assert_eq!(whole["mission"]["id"], "mission-1", "{pane}");
+        assert!(whole.get("node").is_none(), "{pane}");
+    }
+    for pane in ["recipient", "reviewer"] {
+        let (mission, _) = command(&mut runtime, pane, json!({"op": "show"})).unwrap();
+        assert_eq!(mission["mission"]["id"], "mission-1", "{pane}");
+        let (node, _) = command(&mut runtime, pane, json!({"op": "show", "node": "fix"})).unwrap();
+        assert_eq!(node["node"]["key"], "fix", "{pane}");
+    }
+
+    let (attached, changed) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 9, "branch": "fix/parser", "line": "PR #9 열림"}}),
+    )
+    .unwrap();
+    assert!(changed);
+    let fix = &attached["mission"]["nodes"][0];
+    assert_eq!(fix["key"], "fix");
+    assert_eq!(fix["prs"][0]["number"], 9);
+    assert_eq!(fix["branch"], "fix/parser");
+    assert_eq!(fix["line"], "PR #9 열림");
+    for (pane, node, patch) in [
+        ("recipient", "fix", json!({"status": "done"})),
+        ("recipient", "fix", json!({"base_pr": 8})),
+        ("recipient", "fix", json!({"reviewer": "agent-3"})),
+        ("recipient", "docs", json!({"pr": 10})),
+        ("reviewer", "fix", json!({"pr": 11})),
+    ] {
+        assert_eq!(
+            command(
+                &mut runtime,
+                pane,
+                json!({"op": "node", "node": node, "patch": patch})
+            )
+            .unwrap_err(),
+            "mission_not_conductor",
+            "{pane} {node} {patch}"
+        );
+    }
+    let fix = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("fix")
+        .unwrap();
+    assert_eq!(fix.prs, [9]);
+    assert_eq!(fix.status, NodeStatus::Working);
+}
+
+/// with-hide/hide#2304: a CI letter that has not reached its Conductor is
+/// withdrawn once a check runs again on its head, as a body edit's policy
+/// check does, and the head's CI is told once more when it ends; a letter
+/// already handed over stays told, so a later rerun on the head sends
+/// nothing new.
+#[test]
+fn a_ci_letter_still_waiting_is_withdrawn_when_a_check_runs_again_on_its_head() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    with_worker_and_reviewer(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    let ci_told = |runtime: &Runtime| {
+        let seen = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .node("fix")
+            .unwrap()
+            .seen(7)
+            .unwrap()
+            .clone();
+        (seen.ci_told, seen.ci_round)
+    };
+    let ci_wakes = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .iter()
+            .filter(|wake| wake.ci.is_some())
+            .count()
+    };
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    let first =
+        runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
+    assert_eq!(first, ["mission:mission-1:ci:fix:7:b2:passed:sender"]);
+    assert_eq!(ci_wakes(&runtime), 1);
+
+    // A wake still recorded is taken back; reads while the check runs take
+    // nothing more.
+    for _ in 0..2 {
+        assert!(
+            runtime
+                .note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]))
+                .is_empty()
+        );
+        assert_eq!(ci_wakes(&runtime), 0);
+        assert_eq!(ci_told(&runtime), (Vec::new(), 1));
+    }
+    let again =
+        runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
+    assert_eq!(again, ["mission:mission-1:ci:fix:7:b2:passed:1:sender"]);
+    assert!(
+        runtime
+            .note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]))
+            .is_empty()
+    );
+
+    // Its letter in the mailbox, not handed over yet, is withdrawn there.
+    let mailed = |runtime: &mut Runtime, intent: &str, handed: bool| {
+        let seq = runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .last()
+            .unwrap()
+            .seq;
+        runtime.mission_wakes_sent(&[("mission-1".to_owned(), seq)]);
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        let conductor = runtime.delivery_observations["sender"].actor.clone();
+        let mut letter = crate::delivery::mailbox::send(
+            &mut ledger,
+            &conductor,
+            &conductor,
+            intent,
+            "PR #7: CI passed",
+            "progress",
+            None,
+            1,
+        )
+        .unwrap();
+        letter.handed = handed;
+        *ledger
+            .letters
+            .iter_mut()
+            .find(|held| held.id == letter.id)
+            .unwrap() = letter.clone();
+        runtime.delivery_ledger = Ok(Arc::new(ledger));
+        letter.id
+    };
+    let waiting = mailed(&mut runtime, &again[0], false);
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    assert_eq!(runtime.missions.withdraw, [waiting.clone()]);
+    assert_eq!(ci_told(&runtime), (Vec::new(), 2));
+    let third =
+        runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
+    assert_eq!(third, ["mission:mission-1:ci:fix:7:b2:passed:2:sender"]);
+
+    // One handed over is the Conductor's: nothing is withdrawn or told again.
+    mailed(&mut runtime, &third[0], true);
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Pending, &[]));
+    assert_eq!(runtime.missions.withdraw, [waiting]);
+    assert_eq!(
+        ci_told(&runtime),
+        (vec![crate::missions::CiResult::Passed], 2)
+    );
+    assert!(
+        runtime
+            .note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]))
+            .is_empty()
+    );
+}
+
+/// with-hide/hide#2300: a worker's watch reads it as busy while its node
+/// waits on someone else, by the rule its quiet warning reads: a pull
+/// request merged or waiting on CI, a review or the merge, or the
+/// Conductor's question to the operator about the node; a failed CI is the
+/// worker's to run again.
+#[test]
+fn a_mission_workers_watch_is_quiet_while_its_node_waits_on_the_operator() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let node = crate::node::TEST_NODE;
+    let read = |runtime: &mut Runtime, answer: GithubSnapshot| {
+        runtime.note_mission_pulls(node, &answer);
+        runtime.github = answer;
+    };
+    read(
+        &mut runtime,
+        checked(7, "c3", PullRequestChecks::Pending, &[]),
+    );
+    assert!(runtime.mission_worker_waits(&worker), "CI runs");
+    read(
+        &mut runtime,
+        checked(7, "c3", PullRequestChecks::Failed, &["verify"]),
+    );
+    assert!(
+        !runtime.mission_worker_waits(&worker),
+        "a failed CI is the worker's"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "첫 줄 캡처가 괜찮나요?", "why": "화면이 바뀜", "options": ["OK", "고침"], "node": "fix"}),
+    )
+    .unwrap();
+    assert!(
+        runtime.mission_worker_waits(&worker),
+        "the operator is asked"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert!(!runtime.mission_worker_waits(&worker));
+    read(
+        &mut runtime,
+        github(vec![pull(7, "c3", PullRequestBadge::Merged, None)], false),
+    );
+    assert!(runtime.mission_worker_waits(&worker), "merged");
 }
