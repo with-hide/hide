@@ -8,7 +8,7 @@
 import tour from "../data/tour.json";
 import { missionNode as node } from "../../missionFixture";
 import type { DirectoryList } from "../../store";
-import type { AgentRow, ChangedFileSnapshot, ChangesSnapshot, EditorDocumentSnapshot, EditorTabSnapshot, Mission, ViewDisplaySnapshot } from "../../snapshot";
+import type { AgentRow, ChangedFileSnapshot, ChangesSnapshot, EditorDocumentSnapshot, EditorTabSnapshot, Mission, PlanStep, PlanView, ViewDisplaySnapshot } from "../../snapshot";
 import type { PracticeScene } from "../chapter";
 import type { PracticeWorld, WorldSnapshot } from "../world";
 
@@ -153,6 +153,30 @@ function tourMission(nowMs: number, agents: AgentRow[]): Mission {
   };
 }
 
+/** One step of a session's plan, planned until it says otherwise. */
+const planStep = (key: string, title: string, status: PlanStep["status"], rest: Partial<PlanStep> = {}): PlanStep => ({
+  key, title, depends_on: [], status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null, ...rest,
+});
+
+/** The lead's own plan (pane A): four steps, the first done, the second under way with its workers, nine minutes old. */
+function tourPlan(nowMs: number, agents: AgentRow[]): PlanView {
+  const minute = 60_000;
+  const lead = agents.find((row) => row.pane_id === "a1");
+  return {
+    pane_id: "a1",
+    session: { device_id: "local", agent: lead?.agent_kind ?? "claude", session_id: lead?.session_id ?? "session-a1" },
+    steps: [
+      planStep("split", "Split the export in three", "done"),
+      planStep("workers", "Three workers build the parts", "working", { depends_on: ["split"], line: "2 of 3 PRs open", output: "pr", delegate: true }),
+      planStep("merge", "Merge the three PRs", "planned", { depends_on: ["workers"], waiting: true, output: "pr" }),
+      planStep("report", "Report back", "planned", { depends_on: ["merge"], waiting: true }),
+    ],
+    review: "approved", ask: null,
+    progress: { current: "workers", next: "merge", done: 1, total: 4, finished: false },
+    created_at_unix_ms: nowMs - 9 * minute, updated_at_unix_ms: nowMs - 2 * minute,
+  };
+}
+
 /** The Documents the lane shows on the card that opens it: the file an agent made for the learner to look at. */
 function notes() {
   const tab: EditorTabSnapshot = { id: "t1", device_id: "local", workspace_id: "hide", checkout_id: "hide:main", path: NOTES_PATH, label: "release-notes.md", kind: "file", diff_committed: null, markdown_live: true, wrap: true, dirty: false, preview: false };
@@ -193,11 +217,21 @@ const PANES = {
 export const TOUR_WORLD: PracticeWorld<TourModel> = {
   initial: () => ({ lens: "tasks", lane: "closed", focus: null, solo: null }),
   scene: (model, scene) => ({ ...model, ...scene }),
-  // The learner's own press on the list switch turns the list, as in Hide; nothing else changes the window.
+  // The learner's own press on the list switch turns the list, and on the lane's buttons opens the Explorer or the mission's map, as in Hide; nothing else changes the window.
   apply: (model, event) => {
-    if (event.kind !== "sidebar_lens_set") return null;
-    const lens = event.payload.lens;
-    return (lens === "projects" || lens === "tasks") && lens !== model.lens ? { ...model, lens } : null;
+    if (event.kind === "sidebar_lens_set") {
+      const lens = event.payload.lens;
+      return (lens === "projects" || lens === "tasks") && lens !== model.lens ? { ...model, lens } : null;
+    }
+    if (event.kind === "workspace_view") {
+      if (event.payload.tool === "explorer" && model.lane !== "explorer") return { ...model, lane: "explorer" };
+      if ((event.payload.tool === null || event.payload.open === false) && model.lane === "explorer") return { ...model, lane: "closed" };
+    }
+    if (event.kind === "detail_show") {
+      if (event.payload.shown === true && model.lane === "slot") return { ...model, lane: "mission" };
+      if (event.payload.shown === false && model.lane === "mission") return { ...model, lane: "slot" };
+    }
+    return null;
   },
   snapshot(model, nowMs) {
     const { rest, agents: rows, usage } = dated(tour, nowMs) as Omit<WorldSnapshot, "focused">;
@@ -221,6 +255,9 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
         // Both columns side by side, as the lane's Expand draws them: at this width they would otherwise stack.
         extra.laneExpanded = true;
       }
+    } else if (model.lane === "slot") {
+      // The lane is shut, but the 보기 slot already holds the mission's map: its rail button is there to press.
+      ui_state = { ...ui_state, detail: { items: [{ kind: "mission", mission: MISSION }], shown: false } };
     } else if (model.lane === "mission") {
       Object.assign(view, { open: true, pinned: true, detail_width: 520 });
       ui_state = { ...ui_state, detail: { items: [{ kind: "mission", mission: MISSION }], shown: true } };
@@ -238,9 +275,9 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
     const quiet = rest.navigator!.workspaces![0]!.agent_scope;
     rest.navigator!.devices = [home, { ...home, id: "mini", label: "Mac mini", kind: "remote", state: "connected", agent_count: 2, agent_scope: quiet }];
     const layouts = (rest.pane_layouts ?? []).map((one) => ({ ...one, focused_pane_id: model.focus ?? one.focused_pane_id, root: model.solo ? solo(model.solo) : PANES }));
-    const headers = { a1: { working: true, notice: null, band: null }, a2: { working: true, notice: null, band: null }, e1: { working: true, notice: null, band: null } };
+    const headers = { a1: { working: true, notice: null, band: null, request: { text: "Split the invoice export in three", images: 0 } }, a2: { working: true, notice: null, band: null }, e1: { working: true, notice: null, band: null } };
     return {
-      rest: { ...rest, ui_state, workspace_view: view, pane_layouts: layouts, terminal: { ...rest.terminal, headers }, status: { ...rest.status, remote: [{ target_id: "mini", state: "connected" }] } as never, missions: { items: [tourMission(nowMs, agents)] } },
+      rest: { ...rest, ui_state, workspace_view: view, pane_layouts: layouts, terminal: { ...rest.terminal, headers }, status: { ...rest.status, remote: [{ target_id: "mini", state: "connected" }] } as never, missions: { items: [tourMission(nowMs, agents)] }, plans: { items: [tourPlan(nowMs, agents)] } },
       agents, focused: model.focus, usage, extra,
     };
   },

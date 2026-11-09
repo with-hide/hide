@@ -12,8 +12,8 @@ import type { PracticeWorld } from "./world";
  */
 export type PracticeScene = {
   lens?: "projects" | "tasks";
-  /** The lane closed, the Documents, the Documents with the Explorer beside them, or the 보기 slot holding the mission's map. */
-  lane?: "closed" | "documents" | "explorer" | "mission";
+  /** The lane closed, the Documents, the Documents with the Explorer beside them, the 보기 slot holding the mission's map (`mission`), or that slot's button alone with the lane still closed (`slot`). */
+  lane?: "closed" | "documents" | "explorer" | "slot" | "mission";
   /** The pane that holds the keyboard; null for none. */
   focus?: string | null;
   /** The one pane the tab shows alone, for a card whose lane needs the room; null for the four. */
@@ -32,8 +32,8 @@ export type PracticeStep = {
   hides?: string[];
   /** A button the card presses when it opens and again when it is left, so the popover it holds is open exactly while the card talks about it. */
   opens?: string;
-  /** The three parts of the screen, drawn as labeled zones. */
-  zones?: true;
+  /** The learner presses the target (a button or a chip): the card goes on once it is pressed, and ⏎ or the card's button presses it for them. */
+  press?: true;
   /** The commands whose chords the card names, in this host's keys and the operator's own. */
   commands?: CommandId[];
 };

@@ -1,8 +1,12 @@
 // The practice layer over the real shell: the screen dimmed but for what a card
-// points at, a ring round each target, and a card floating beside them in free
-// space (`cardPlace.ts`), never over a target. ⏎ is the card's next, and the last
-// card leaves for Hide. It reads the screen it points at every frame; the shell
-// beneath answers the learner exactly as it answers the operator.
+// points at, one ring round it, and a card floating beside it in free space
+// (`cardPlace.ts`), never over it. ⏎ is the card's next, and the last card leaves
+// for Hide. The ring and the card glide from one target to the next; a card that
+// changes what the screen shows lets the screen change first and brings the ring
+// and the card back once it has settled. A card that asks for a press waits for
+// the learner to press its target (⏎ presses it for them). It reads the screen it
+// points at every frame; the shell beneath answers the learner exactly as it
+// answers the operator.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -51,13 +55,6 @@ export function keyParts(label: string): string[] {
   }, []);
 }
 
-const ZONES = [
-  { selector: "[data-sidebar-box]", key: "view" },
-  { selector: "[data-agent-area]", key: "work" },
-  // The lane and the rail beside it that picks its tool, as one part.
-  { selector: "[data-lane-slot], [data-tool-rail]", key: "project" },
-] as const;
-
 type Props = {
   chapter: PracticeChapter;
   onStep: (step: number, finished: boolean) => void;
@@ -73,30 +70,56 @@ const boxOf = (element: Element | null): Box | null => {
   return box && box.width && box.height ? { x: box.left, y: box.top, w: box.width, h: box.height } : null;
 };
 
-/** How much the ring stands off its target, and how round it is. */
+/** How much the ring stands off its target. */
 const RING = 3;
-const ROUND = 12;
+/** How long the screen has to settle after a card changes it, before the ring and the card come back. */
+const SETTLE_MS = 600;
+/** How long after a press the card goes on, so the learner sees the press land. */
+const PRESS_BEAT_MS = 350;
+
+/** The scene a card sets, with every card before it: a card that says nothing keeps the scene before it. */
+const sceneAt = (chapter: PracticeChapter, index: number) => chapter.steps.slice(0, index + 1).reduce<PracticeScene>((scene, row) => ({ ...scene, ...row.scene }), {});
+
+/** What of a scene changes what is on screen: the list, the lane and the panes shown (the keyboard's pane draws almost nothing). */
+const looks = (scene: PracticeScene) => `${scene.lens}|${scene.lane}|${scene.solo}`;
+
+/** Whether the learner asks the system for less motion: nothing glides or fades then, and nothing waits. */
+const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
 export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
   const [rings, setRings] = useState<Rect[]>([]);
-  const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [place, setPlace] = useState<{ x: number; y: number } | null>(null);
+  /** False while a card's scene change is on screen and the ring and the card wait for it to settle. */
+  const [settled, setSettled] = useState(true);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   const go = useRef<HTMLButtonElement>(null);
   const card = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
+  const before = useRef<number | null>(null);
+  const pressed = useRef(false);
   const targets = useMemo(() => (step.target === undefined ? [] : Array.isArray(step.target) ? step.target : [step.target]), [step]);
 
   useEffect(() => onStep(index, last), [index, last, onStep]);
 
   // The card sets its own scene when it opens, and a card that says nothing keeps the one before it: the way back is the card's, not the learner's.
   useEffect(() => {
-    onScene(chapter.steps.slice(0, index + 1).reduce<PracticeScene>((scene, row) => ({ ...scene, ...row.scene }), {}));
+    onScene(sceneAt(chapter, index));
   }, [chapter, index, onScene]);
+
+  // A card that changes the list, the lane or the panes lets the screen change first: the ring and the card step aside, then come back where the screen has settled.
+  useLayoutEffect(() => {
+    const was = before.current;
+    before.current = index;
+    pressed.current = false;
+    if (was === null || was === index || calm() || looks(sceneAt(chapter, was)) === looks(sceneAt(chapter, index))) return setSettled(true);
+    setSettled(false);
+    const timer = window.setTimeout(() => setSettled(true), SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [chapter, index]);
 
   // A card that talks about a popover presses its button once the button is there, and presses it again when the card is left.
   useEffect(() => {
@@ -114,16 +137,40 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
     return () => {
       cancelAnimationFrame(frame);
       const button = document.querySelector<HTMLElement>(selector);
-      if (button?.getAttribute("aria-expanded") === "true") button.click();
+      if (button?.getAttribute("aria-expanded") !== "true") return;
+      button.click();
+      // A popover gives the keyboard back to its button as it closes, and the button's hint would open over the next card: the keyboard goes back to the card.
+      for (const wait of [80, 300]) window.setTimeout(() => go.current?.focus({ preventScroll: true }), wait);
     };
   }, [step]);
 
-  // The keyboard rests on the card's button, so ⏎ is the card's and nothing waits.
-  useEffect(() => go.current?.focus({ preventScroll: true }), [index]);
+  // A card that asks for a press goes on a beat after its target is pressed, by the learner or by ⏎.
+  useEffect(() => {
+    if (!step.press) return;
+    let timer = 0;
+    const onClick = (event: MouseEvent) => {
+      const part = document.querySelector(targets[0]!);
+      if (!part || !(event.target instanceof Node) || !part.contains(event.target)) return;
+      pressed.current = true;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setIndex((value) => value + 1), calm() ? 0 : PRESS_BEAT_MS);
+    };
+    document.addEventListener("click", onClick, true);
+    return () => {
+      document.removeEventListener("click", onClick, true);
+      window.clearTimeout(timer);
+    };
+  }, [step, targets]);
 
-  // The rings, the zones and the card follow what they mark every frame: panes resize, rows appear.
+  // The keyboard rests on the card's button, so ⏎ is the card's and nothing waits; a card whose popover is open leaves the keyboard where the popover put it, since taking it away would close the popover (⏎ is the card's wherever the keyboard is).
+  useEffect(() => {
+    if (!step.opens) go.current?.focus({ preventScroll: true });
+  }, [index, step]);
+
+  // The ring and the card follow what they mark every frame: panes resize, rows appear.
   useLayoutEffect(() => {
     let scrolled = false;
+    let aim: Rect[] = [];
     let frame = requestAnimationFrame(function follow() {
       // What the card points at may sit below the fold of its own list: bring it into view once, then ring it.
       if (!scrolled && targets.length && targets.every((selector) => document.querySelector(selector))) {
@@ -131,25 +178,34 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         scrolled = true;
       }
       const marked = targets.flatMap((selector) => rectOf(selector) ?? []);
-      setRings((before) => (before.length === marked.length && marked.every((rect, at) => same(rect, before[at] ?? null)) ? before : marked));
-      setZones((before) => {
-        const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
-        return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
-      });
-      // The card floats where nothing it talks about, nor the zone tags, nor the mode bar is.
+      // A target that is not there yet (its list is still opening) leaves the ring and the card where they were.
+      if (marked.length || !targets.length) {
+        aim = marked;
+        setRings((now) => (now.length === marked.length && marked.every((rect, at) => same(rect, now[at] ?? null)) ? now : marked));
+      }
+      // The card floats where nothing it talks about, nor the mode bar is.
       const own = boxOf(card.current);
       if (own) {
         const kept = (step.keepClear ?? []).flatMap((selector) => [...document.querySelectorAll(selector)]);
-        const avoid = [...document.querySelectorAll(".pc-tag"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
-        const at = placeCard(own, marked, avoid, { w: window.innerWidth, h: window.innerHeight });
-        setPlace((before) => (before && before.x === at.x && before.y === at.y ? before : at));
+        const avoid = [bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
+        const at = placeCard(own, aim, avoid, { w: window.innerWidth, h: window.innerHeight });
+        setPlace((now) => (now && now.x === at.x && now.y === at.y ? now : at));
       }
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
   }, [step, targets]);
 
-  const forward = useCallback(() => (last ? onLeave() : setIndex((value) => value + 1)), [last, onLeave]);
+  const forward = useCallback(() => {
+    if (last) return onLeave();
+    // The press is the learner's, or ⏎'s: it presses the target, and the card goes on a beat after.
+    if (step.press) {
+      if (pressed.current) return;
+      const part = document.querySelector<HTMLElement>(targets[0]!);
+      if (part) return part.click();
+    }
+    setIndex((value) => value + 1);
+  }, [last, onLeave, step, targets]);
   const back = index > 0 ? () => setIndex((value) => value - 1) : null;
 
   // ⏎ is the card's button and ← goes back; every other key reaches the shell untouched.
@@ -172,36 +228,21 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
 
   const words = (part: string) => say(`practice.${chapter.id}.${step.id}.${part}`);
   const title = say(`practice.${chapter.id}.title`);
+  const away = settled ? "" : " pc-away";
 
   return (
     <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} onPointerDown={(event) => event.stopPropagation()}>
       <style>{COACH_CSS}</style>
       {step.hides?.length ? <style>{step.hides.map((selector) => `${selector}{display:none !important}`).join("\n")}</style> : null}
-      {zones.length ? <div className="pc-zdim" /> : null}
-      {zones.map((rect, at) => rect ? (
-        <div key={ZONES[at]!.key} className={`pc-zone ${ZONES[at]!.key}`} style={{ left: rect.x + 6, top: rect.y + 6, width: rect.w - 12, height: rect.h - 12, animationDelay: `${150 + at * 260}ms` }}>
-          <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
-        </div>
-      ) : null)}
-      {rings.length ? (
-        <svg className="pc-scrim" aria-hidden="true">
-          <defs>
-            <mask id="pc-hole">
-              <rect width="100%" height="100%" fill="white" />
-              {rings.map((rect, at) => <rect key={at} x={rect.x - RING} y={rect.y - RING} width={rect.w + 2 * RING} height={rect.h + 2 * RING} rx={ROUND} fill="black" />)}
-            </mask>
-          </defs>
-          <rect width="100%" height="100%" mask="url(#pc-hole)" className="pc-scrim-fill" />
-        </svg>
-      ) : null}
-      {rings.map((rect, at) => <div key={at} className="pc-spot" data-practice-ring style={{ left: rect.x - RING, top: rect.y - RING, width: rect.w + 2 * RING, height: rect.h + 2 * RING }} />)}
+      {/* The one ring: the screen is dimmed everywhere but inside it, and it glides from one target to the next. */}
+      {rings.slice(0, 1).map((rect) => <div key="ring" className={`pc-spot${away}`} data-practice-ring style={{ left: rect.x - RING, top: rect.y - RING, width: rect.w + 2 * RING, height: rect.h + 2 * RING }} />)}
       <div className="pc-mode" ref={bar}>
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
         <button type="button" className="pc-leave" onClick={onLeave} data-practice-leave>{say("practice.leave")}</button>
       </div>
       {/* The card floats beside what it talks about; a press on it leaves the screen's focus alone. */}
-      <div ref={card} className="pc-card" data-practice-card style={place ? { left: place.x, top: place.y } : { visibility: "hidden" }} onMouseDown={(event) => event.preventDefault()}>
+      <div ref={card} className={`pc-card${away}`} data-practice-card data-practice-press={step.press ? "true" : undefined} style={place ? { left: place.x, top: place.y } : { visibility: "hidden" }} onMouseDown={(event) => event.preventDefault()}>
         <div key={step.id} className="pc-card-text">
           <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
           <h3>{words("title")}</h3>
@@ -213,7 +254,7 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         <div className="pc-row">
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
           {back ? <button type="button" className="pc-back" onClick={back} data-practice-back>{say("practice.back")}</button> : null}
-          <button ref={go} type="button" className="pc-go" onClick={forward} data-practice-go>{last ? t("practice.leave") : t("practice.next")} <span className="pc-kc">⏎</span></button>
+          <button ref={go} type="button" className="pc-go" onClick={forward} data-practice-go>{last ? t("practice.leave") : step.press ? say("practice.press") : t("practice.next")} <span className="pc-kc">⏎</span></button>
         </div>
       </div>
     </div>

@@ -4,31 +4,19 @@
 
 const EASE = "cubic-bezier(.2,.8,.2,1)";
 const SHADOW = `0 var(--spacing-lg) var(--spacing-xxxl) color-mix(in srgb, var(--practice-scrim) 50%, transparent)`;
-const ZONES = (["view", "work", "project"] as const)
-  .map((zone) => `.pc-zone.${zone}{border-color:var(--practice-zone-${zone});background:color-mix(in srgb,var(--practice-zone-${zone}) 6%,transparent)}
-.pc-zone.${zone} .pc-tag{background:color-mix(in srgb,var(--practice-zone-${zone}) 55%,var(--practice-keycap))}`)
-  .join("\n");
+/** How long the ring and the card glide from one target to the next. */
+const GLIDE = ".35s";
 
 export const COACH_CSS = `
 .pc-layer{position:fixed;inset:0;z-index:60;pointer-events:none}
-.pc-scrim{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.pc-scrim-fill{fill:color-mix(in srgb,var(--practice-scrim) 58%,transparent)}
-.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 calc(var(--size-tab-indicator) * 1.5) var(--practice-accent),0 0 0 var(--spacing-md) color-mix(in srgb,var(--practice-accent) 28%,transparent);
-  transition:left .5s ${EASE},top .5s ${EASE},width .5s ${EASE},height .5s ${EASE}}
+/* The ring is the hole in the dim: its own shadow dims the rest of the screen, so the dim glides with it from one target to the next. */
+.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 calc(var(--size-tab-indicator) * 1.5) var(--practice-accent),0 0 0 var(--spacing-md) color-mix(in srgb,var(--practice-accent) 28%,transparent),0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 58%,transparent);
+  transition:left ${GLIDE} ${EASE},top ${GLIDE} ${EASE},width ${GLIDE} ${EASE},height ${GLIDE} ${EASE},opacity .3s ease;animation:pc-in .4s backwards}
 .pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1.5);border-radius:var(--radius-xl);border:var(--size-tab-indicator) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
 @keyframes pc-pulse{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(1.04)}}
-.pc-zdim{position:absolute;inset:0;background:color-mix(in srgb,var(--practice-scrim) 32%,transparent);animation:pc-in .4s both}
-.pc-zone{position:absolute;border-radius:var(--radius-xl);border:var(--size-tab-indicator) dashed;animation:pc-zone .5s ${EASE} both}
-${ZONES}
-/* A zone's tag rests on the zone's bottom edge, where a list ends and a terminal is empty, so it covers no row and no terminal text. */
-.pc-tag{position:absolute;left:50%;bottom:var(--spacing-xs);transform:translateX(-50%);padding:var(--spacing-xs) var(--spacing-md);border-radius:var(--radius-xl);font-weight:700;font-size:var(--text-body);white-space:nowrap;box-shadow:${SHADOW};text-align:center;line-height:1.35;color:var(--practice-ink)}
-/* The project zone is the tool rail alone while the lane is closed, narrower than its tag, so the tag ends where the screen does. */
-.pc-zone.project .pc-tag{left:auto;right:0;transform:none}
-/* The left list fills its zone to the bottom, so its tag sits on the zone's top edge, in the title row's empty stretch. */
-.pc-zone.view .pc-tag{left:auto;right:0;bottom:auto;top:0;transform:translateY(-100%)}
-.pc-tag small{display:inline;margin-left:var(--spacing-sm);font-size:var(--text-caption);font-weight:500;opacity:.8}
-@keyframes pc-zone{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
 @keyframes pc-in{from{opacity:0}to{opacity:1}}
+/* While a card's scene change is on screen the ring and the card step aside, and come back, where they are, once it has settled. */
+.pc-away{opacity:0;pointer-events:none;transition:opacity .15s ease,left 0s,top 0s,width 0s,height 0s !important}
 .pc-kick{font-size:var(--text-caption);font-weight:600;letter-spacing:.02em;color:color-mix(in srgb,var(--practice-accent-strong) 60%,var(--practice-ink));display:flex;justify-content:space-between;gap:var(--spacing-sm)}
 .pc-kick span:last-child{flex:none;white-space:nowrap}
 .pc-via{margin-top:var(--spacing-xs);font-size:var(--text-body);color:var(--practice-mute);display:flex;gap:var(--spacing-sm);align-items:center}
@@ -48,10 +36,11 @@ ${ZONES}
 .pc-mode button{font:inherit;font-weight:500;border:0;border-radius:var(--radius-xl);padding:var(--spacing-xxs) var(--spacing-md);background:color-mix(in srgb,var(--practice-accent) 30%,transparent);color:var(--practice-ink);cursor:pointer}
 .pc-mode button.pc-leave{background:var(--practice-accent);font-weight:600}
 
-.pc-card{position:absolute;z-index:61;box-sizing:border-box;width:var(--size-practice-bubble);max-width:calc(100vw - var(--spacing-xxl));padding:var(--spacing-lg);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto;transition:left .5s ${EASE},top .5s ${EASE}}
+.pc-card{position:absolute;z-index:61;box-sizing:border-box;width:var(--size-practice-bubble);max-width:calc(100vw - var(--spacing-xxl));padding:var(--spacing-lg);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto;transition:left ${GLIDE} ${EASE},top ${GLIDE} ${EASE},opacity .3s ease}
 .pc-card:lang(ko){word-break:keep-all}
-.pc-card-text{animation:pc-card .35s ${EASE} both}
+.pc-card-text{animation:pc-card .4s ${EASE} both}
 @keyframes pc-card{from{opacity:0;transform:translateY(var(--spacing-sm))}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.pc-spot,.pc-spot::after,.pc-card,.pc-card-text,.pc-dots i{animation:none !important;transition:none !important}}
 .pc-card h3{margin:var(--spacing-xxs) 0;font-size:var(--text-headline);line-height:1.35;font-weight:600}
 .pc-body{display:flex;flex-direction:column;gap:var(--spacing-xs);margin-top:var(--spacing-xs)}
 .pc-card p{margin:0;font-size:var(--text-subhead);line-height:1.6;color:var(--practice-mute);text-wrap:pretty}

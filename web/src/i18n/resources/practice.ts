@@ -10,6 +10,7 @@ export const practiceEnglish = {
   "practice.leave": "Back to Hide",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "Next",
+  "practice.press": "Press it for me",
   "practice.back": "Back",
   "practice.hub": "← All flows",
   "practice.hubTitle": "Practice Hide",
@@ -24,12 +25,6 @@ export const practiceEnglish = {
   "practice.status.changed": "Changed since",
   "practice.start": "Start",
   "practice.replay": "See again",
-  "practice.zone.view": "① Where you look",
-  "practice.zone.viewSub": "Choose what to see",
-  "practice.zone.work": "② Where work happens",
-  "practice.zone.workSub": "Agent terminals",
-  "practice.zone.project": "③ The project and its work",
-  "practice.zone.projectSub": "Status · To do · Files",
 };
 
 const ko = {
@@ -37,6 +32,7 @@ const ko = {
   "practice.leave": "Hide로 돌아가기",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "다음",
+  "practice.press": "대신 누르기",
   "practice.back": "이전",
   "practice.hub": "← 흐름 목록",
   "practice.hubTitle": "Hide 연습",
@@ -51,12 +47,6 @@ const ko = {
   "practice.status.changed": "바뀜",
   "practice.start": "시작",
   "practice.replay": "다시 보기",
-  "practice.zone.view": "① 보는 곳",
-  "practice.zone.viewSub": "무엇을 볼지 고르기",
-  "practice.zone.work": "② 일하는 곳",
-  "practice.zone.workSub": "에이전트 터미널",
-  "practice.zone.project": "③ 프로젝트와 그 작업",
-  "practice.zone.projectSub": "현황 · 할 일 · 파일",
 } satisfies Catalog<typeof practiceEnglish>;
 
 const zhCN = {
@@ -64,6 +54,7 @@ const zhCN = {
   "practice.leave": "返回 Hide",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "下一步",
+  "practice.press": "替我点",
   "practice.back": "上一步",
   "practice.hub": "← 全部流程",
   "practice.hubTitle": "练习 Hide",
@@ -78,12 +69,6 @@ const zhCN = {
   "practice.status.changed": "已更新",
   "practice.start": "开始",
   "practice.replay": "再看一遍",
-  "practice.zone.view": "① 查看区",
-  "practice.zone.viewSub": "选择要看的内容",
-  "practice.zone.work": "② 工作区",
-  "practice.zone.workSub": "智能体终端",
-  "practice.zone.project": "③ 项目与工作",
-  "practice.zone.projectSub": "概况 · 待办 · 文件",
 } satisfies Catalog<typeof practiceEnglish>;
 
 const ja = {
@@ -91,6 +76,7 @@ const ja = {
   "practice.leave": "Hide に戻る",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "次へ",
+  "practice.press": "代わりに押す",
   "practice.back": "戻る",
   "practice.hub": "← フローの一覧",
   "practice.hubTitle": "Hide の練習",
@@ -105,12 +91,6 @@ const ja = {
   "practice.status.changed": "更新あり",
   "practice.start": "始める",
   "practice.replay": "もう一度見る",
-  "practice.zone.view": "① 見るところ",
-  "practice.zone.viewSub": "何を見るか選ぶ",
-  "practice.zone.work": "② 作業するところ",
-  "practice.zone.workSub": "エージェントのターミナル",
-  "practice.zone.project": "③ プロジェクトとその作業",
-  "practice.zone.projectSub": "状況 · やること · ファイル",
 } satisfies Catalog<typeof practiceEnglish>;
 
 export const practiceCatalogs = { en: practiceEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof practiceEnglish>;
