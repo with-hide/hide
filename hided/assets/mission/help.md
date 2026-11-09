@@ -42,7 +42,8 @@ With `--json` it prints the record itself instead, `{"mission":…}`, or for one
 ## 1. Before the plan
 
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates and the verification strength (`default_strength`).
-- Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
+- Run `hide agent catalog` for the agent items here: each agent's built-in default and each of its profiles a start can take, `profile` being the `--profile` value that starts it (`default` for the built-in), with its models, its efforts and its account's weekly usage.
+  A model is named as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
   Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
 - Git is the floor: every node's result is a git branch, and a GitHub remote with a `gh` sign-in adds pull requests and CI on top.

@@ -176,7 +176,8 @@ A request reports progress once a second while it runs, and a cancel in the core
 
   The model list is the CLI's own.
   `ClaudeCliBackend::models()` starts `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --tools '' --setting-sources '' --strict-mcp-config --disable-slash-commands` with the same neutral directory, writes one `initialize` control request to stdin, reads the `control_response`, and ends the child; no model turn is made.
-  Only `response.response.models[].value` is read, and `default` is left out because it is the empty choice every menu already has.
+  Each entry of `response.response.models[]` gives its `value`, the model a start passes, and its `displayName`, the name a menu shows where it differs from the value: a gateway's `ANTHROPIC_DEFAULT_OPUS_MODEL` leaves the value `opus` and names the gateway's model (`Model::label`).
+  Entries that show one name are one choice, so the first is kept; `default` is left out because it is the empty choice every menu already has.
   The same response carries the logged-in account, which the parser never reads and nothing logs, stores or snapshots.
   The list is held for ten minutes (a menu opening is not a child start) and the child is bounded at twenty seconds; a list the CLI could not give is `ModelCatalog::Unknown` with `claude_models_unreadable:<stage>`, never a guess.
   The shape was observed on 2026-10-06 against the installed, logged-in CLI; the observed values (`opus`, `fable`, `sonnet`, `haiku` and full names) are the account's, not a contract, which is why they are read each time.
@@ -227,7 +228,8 @@ Missing SDK/runtime, package identity, mismatched dependency versions, inaccessi
 It imports the installation's public `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-ai/auth-broker/discover`, `@oh-my-pi/pi-catalog/models` and `@oh-my-pi/pi-utils/{logger,env,dirs}` exports after checking their package identities and matching versions.
 It never imports the coding-agent harness, a user model module, settings loader or extension registry.
 `discoverAuthStorage` and `storage.keys.getWithCredential` own login discovery, refresh and authorization; Hide does not parse, export, copy or log credentials.
-The child receives the platform's restricted login environment, so this boundary supports OMP's default profile and stored login, not inherited API-key or custom-profile environment variables.
+The child receives the platform's restricted login environment and the variables of the agent item it reads for, so a profile's `OMP_PROFILE` selects that omp profile's own stored login; inherited API-key variables are not logins to it.
+The model list is omp's bundled providers that have a stored login there, never a `models.yml` provider ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 Auth config values beginning with `!` are refused rather than executed; custom credential commands, model aliases, extension providers and `models.yml` overrides are outside this contract.
 The public SDK's native addon loader remains part of the trusted user installation, not an operating-system sandbox.
 Compiled-mode and native-directory dotenv overrides are refused before the eager native root import; normal official native loading and its platform cache remain SDK-owned.
@@ -377,6 +379,20 @@ An agent that is installed and not selectable is shown with that reason, never h
 Asking costs child processes, so the probe is a capability reader like the project panel's: the session-sync coordinator drives it, the work runs on a worker thread, the runtime mutex is never held across it, and it asks nothing at all while the group is off screen.
 In the web shell the daemon holds that flag for every connected page: each page reports only its own demand, and a page that closes or disconnects releases it (`hided/src/demand.rs`).
 `scripts/check-capability-readers-off-lock.sh` asserts that structurally, by name.
+
+### A profile's model list
+
+An agent's profiles (PRD agent-profiles-phase2 D-09) each have a model list of their own, read the way a start of the profile runs, because a profile's account, variables or wrapper can point the agent at another provider: a gateway wrapper around Claude Code names the gateway's models.
+The core asks for it beside its agent's list, while a screen reads model lists, for every profile of the machine a start may take (`AiRequest::items`, `Runtime::ai_items`).
+Each profile is read on a backend of its own (`NodeBackend` with the profile's id in `BackendSpec::profile`), kept per machine and profile while the screen reads and built again when the profile's version moves, at most 16 a machine; past that a list is answered `model_reads_full`, never with another backend.
+The node resolves the profile from its own profile file as a start would (`hide_host::profiles::ai_run`): the account's variables, then the profile's own, and its wrapper, found on the account's search; the core never names an account's folder.
+A profile the node cannot run is refused before it takes a backend's place.
+Every backend reads with that `ItemRun` (`hide-ai/src/program.rs`): a child gets its variables on top of its usual environment, and a wrapper is started in the agent's program's place with the agent's own arguments, a Windows batch file through `cmd.exe` as any found batch program.
+Codex still runs under Hide's private `CODEX_HOME`, linking the `auth.json` of the profile's own account, so a profile's `config.toml` is not read there.
+A list that cannot be read is answered with its reason, which the core logs once per change (`ai.models.unavailable` with the provider, profile and machine), and the screens and `hide agent catalog` offer the agent's own list in its place (`models_from_default`); nothing is shown as a banner.
+Which agents list a custom or gateway model a profile configures is the support table's ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+The snapshot carries each list beside its agent's row (`BackgroundAiProviderSnapshot::profile_models`, with `model_labels` for the names Claude Code shows), and the web shell reads an item's list with `catalogFor(ai, kind, profile)`.
+The connection protocol moved to 94 with `BackendSpec::profile`, so a device helper that predates it never answers a profile's read as the default account: a device's helper is replaced by this build's on its next connection.
 
 ### What leaves the machine
 
