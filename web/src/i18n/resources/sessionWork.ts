@@ -54,7 +54,7 @@ const words = {
   "paneTurn.wholeReading": ["Reading…", "읽는 중…", "読み込み中…", "正在读取…"],
   "paneTurn.wholeFailed": ["Couldn't read the whole answer", "원문을 읽지 못했어요", "全文を読み込めませんでした", "无法读取完整回答"],
   "paneTurn.letters": ["{{count}} letters since", "그 사이 오간 편지 {{count}}통", "その間のレター {{count}}通", "期间往来信件 {{count}} 封"],
-  "paneTurn.lettersEarlier": ["{{count}} earlier", "앞선 {{count}}통", "それ以前 {{count}}通", "更早 {{count}} 封"],
+  "paneTurn.lettersEarlier": ["Older letters not shown: {{count}}", "이전 {{count}}통 생략", "以前の {{count}}通は省略", "省略之前的 {{count}} 封"],
   "paneTurn.progressFolded": ["{{count}} progress reports folded", "중간 보고 {{count}}통 접힘", "途中報告 {{count}}通を省略", "已折叠 {{count}} 封进度报告"],
   "paneTurn.started": ["Started", "시작", "開始", "已启动"],
   "paneTurn.direction.sent": ["Sent to {{name}}", "{{name}}에게 보냄", "{{name}} に送信", "发给 {{name}}"],

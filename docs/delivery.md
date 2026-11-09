@@ -887,7 +887,8 @@ An agent has two kinds of name, and each is made in one place.
   It is the name the agent registered under, else its registration id (`agent-12`), which is stable and which `hide request send` and `--parent` already resolve; an agent that never registered is called by the only identifier the engine gave it, its agent name there or else its pane id.
   `coordination::wire_name` makes it, the writing side (`mailbox::send`, `watch::start`) and the reading side (`link_parent_facts`) both call it, and nothing else may spell it, because the label worker accepts a parent's request as the child's work only when the two strings are equal ([status-model.md](status-model.md#task-identity)).
   It never follows a screen title, which changes every turn.
-- The screen name is what a person reads: the name it registered under, else the title Hide's screens give it while its pane hosts it, else its runtime's name (the bell line, the sidebar and Sessions rows).
+- The screen name is what a person reads: the name it registered under, else the title Hide's screens give it while its pane hosts it, else its runtime's name (the bell line, the turn card's letters, the sidebar and Sessions rows).
+  A name Hide made up for the pane (`hide-<kind>-<pane>`, a wake or a fork name, `fork::hide_made_name`) only spells a pane id, so it counts as none (`AgentRecord::screen_name`).
   It is derived when it is drawn and stored nowhere.
 
 A registration stores a name only when it has one of its own.

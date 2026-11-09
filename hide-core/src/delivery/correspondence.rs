@@ -8,7 +8,7 @@
 //! the request's time on: two binary searches and at most
 //! [`CARD_LETTERS`] lines, whatever the ledger holds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
 use serde::Serialize;
@@ -101,6 +101,20 @@ impl Correspondence {
     /// holds at most `LETTER_LIMIT` letters, and every one is visited once.
     pub fn of(ledger: &Ledger) -> Self {
         let mut panes: BTreeMap<String, PaneLetters> = BTreeMap::new();
+        // When each pane last wrote another a report or a reply: a letter
+        // still waiting for its answer reads answered on the card once its
+        // recipient wrote either back. The ledger's own wait is left as it is.
+        let mut answered: HashMap<(Who<'_>, Who<'_>), u64> = HashMap::new();
+        for letter in &ledger.letters {
+            if letter.state != State::Cancelled
+                && (letter.kind == "report" || letter.reply_to.is_some())
+            {
+                let at = answered
+                    .entry((who(&letter.sender), who(&letter.recipient)))
+                    .or_default();
+                *at = (*at).max(letter.created_at_unix_ms);
+            }
+        }
         for letter in &ledger.letters {
             if letter.state == State::Cancelled {
                 continue;
@@ -127,7 +141,7 @@ impl Correspondence {
                     direction,
                     peer,
                     titled_by,
-                    mark: mark(letter, direction),
+                    mark: mark(letter, direction, &answered),
                     line: line.clone(),
                     at_unix_ms: letter.created_at_unix_ms,
                 });
@@ -195,8 +209,9 @@ impl Correspondence {
 }
 
 /// `actor`'s screen name as the bell gives it (`doorbell::bell_sender`): the
-/// name it registered under, else its pane's title, which the row lays, else
-/// its runtime's name. The wire name (`coordination::wire_name`) is never
+/// name it registered under unless Hide made it up for its pane
+/// (`AgentRecord::screen_name`), else its pane's title, which the row lays,
+/// else its runtime's name. The wire name (`coordination::wire_name`) is never
 /// shown, since an unnamed agent's is its registration id.
 fn peer_of(ledger: &Ledger, actor: &super::Actor) -> (RequestSender, Option<String>) {
     if actor.operator_owned() {
@@ -207,7 +222,7 @@ fn peer_of(ledger: &Ledger, actor: &super::Actor) -> (RequestSender, Option<Stri
         .iter()
         .rev()
         .find(|record| record.actor.same_identity(actor))
-        .and_then(|record| record.name.as_deref());
+        .and_then(crate::coordination::AgentRecord::screen_name);
     match registered {
         Some(name) => (crate::request_view::named(name), None),
         None => (
@@ -217,8 +232,24 @@ fn peer_of(ledger: &Ledger, actor: &super::Actor) -> (RequestSender, Option<Stri
     }
 }
 
-fn mark(letter: &Letter, direction: LetterDirection) -> Option<LetterMark> {
-    if direction == LetterDirection::Sent && letter.waiting_answer {
+/// One agent as a letter names it: its device, its pane and its session, so
+/// a new session in the same pane, or another device's pane of the same id,
+/// is another agent.
+type Who<'a> = (&'a str, &'a str, Option<&'a str>);
+
+fn who(actor: &super::Actor) -> Who<'_> {
+    (&actor.device_id, &actor.pane_id, actor.session.as_deref())
+}
+
+fn mark(
+    letter: &Letter,
+    direction: LetterDirection,
+    answered: &HashMap<(Who<'_>, Who<'_>), u64>,
+) -> Option<LetterMark> {
+    let answered_since = answered
+        .get(&(who(&letter.recipient), who(&letter.sender)))
+        .is_some_and(|at| *at > letter.created_at_unix_ms);
+    if direction == LetterDirection::Sent && letter.waiting_answer && !answered_since {
         return Some(LetterMark::WaitingAnswer);
     }
     if letter.reply_to.is_some() {
@@ -364,6 +395,84 @@ mod tests {
         let device_lines = index.since("remote:mini:pane:w2:p1", 0).unwrap();
         assert_eq!(device_lines.recent[1].mark, Some(LetterMark::Question));
         assert_eq!(index.since("w1:p1", 701), None);
+    }
+
+    #[test]
+    fn a_sent_letter_stops_waiting_on_the_card_once_its_recipient_reports_or_replies() {
+        let lead = actor("w1:p1", "lead");
+        let child = actor("w1:p2", "child");
+        let other = actor("w1:p3", "other");
+        let mut reply = letter(6, &other, &lead, "request", "답장입니다", 600);
+        reply.reply_to = Some("letter-2".into());
+        let ledger = Ledger {
+            letters: vec![
+                letter(1, &lead, &child, "request", "고쳐 주세요", 100),
+                letter(2, &lead, &other, "request", "봐 주세요", 200),
+                letter(3, &lead, &other, "request", "하나 더", 700),
+                letter(4, &child, &lead, "progress", "하는 중", 300),
+                letter(5, &child, &lead, "report", "고쳤습니다", 400),
+                reply,
+            ],
+            ..Ledger::default()
+        };
+        let since = Correspondence::of(&ledger).since("w1:p1", 0).unwrap();
+        let sent: Vec<_> = since
+            .recent
+            .iter()
+            .filter(|line| line.direction == LetterDirection::Sent)
+            .map(|line| (line.line.as_deref(), line.mark))
+            .collect();
+        // A progress note is no answer; a report or a reply from the same
+        // recipient is, and only for what was sent before it.
+        assert_eq!(
+            sent,
+            vec![
+                (Some("고쳐 주세요"), None),
+                (Some("봐 주세요"), None),
+                (Some("하나 더"), Some(LetterMark::WaitingAnswer)),
+            ]
+        );
+        // The ledger still waits: only the card reads it answered.
+        assert!(ledger.letters[0].waiting_answer);
+    }
+
+    #[test]
+    fn an_unrelated_or_cancelled_answer_does_not_clear_the_card_wait() {
+        let lead = actor("w1:p1", "lead");
+        let child = actor("w1:p2", "child");
+        let mut another_session = child.clone();
+        another_session.session = Some("another-session".into());
+        let mut another_device = child.clone();
+        another_device.device_id = "another-device".into();
+        let mut another_lead = lead.clone();
+        another_lead.session = Some("another-lead-session".into());
+        let mut cancelled = letter(2, &child, &lead, "report", "취소", 200);
+        cancelled.state = State::Cancelled;
+        for answer in [
+            letter(2, &child, &lead, "progress", "중간 보고", 200),
+            letter(2, &child, &lead, "request", "새 질문", 200),
+            letter(2, &child, &lead, "report", "이전 보고", 99),
+            letter(2, &another_session, &lead, "report", "다른 세션", 200),
+            letter(2, &another_device, &lead, "report", "다른 기기", 200),
+            letter(2, &child, &another_lead, "report", "다른 수신 세션", 200),
+            cancelled,
+        ] {
+            let ledger = Ledger {
+                letters: vec![
+                    letter(1, &lead, &child, "request", "봐 주세요", 100),
+                    answer,
+                ],
+                ..Ledger::default()
+            };
+            let since = Correspondence::of(&ledger).since("w1:p1", 100).unwrap();
+            assert_eq!(
+                since.recent[0].mark,
+                Some(LetterMark::WaitingAnswer),
+                "{:?}",
+                ledger.letters[1]
+            );
+            assert!(ledger.letters[0].waiting_answer);
+        }
     }
 
     #[test]

@@ -711,7 +711,7 @@ it("draws the answer, the letters and the unanswered question since the request"
     expect(card().querySelector("[data-turn-card-answer-line]")?.textContent).toBe("Yes, rarely: a profile-only machine");
     expect(card().querySelector("[data-turn-card-answer-head]")?.textContent).toBe("Yes, it can happen.\nNot common though.");
     expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("13 letters since");
-    expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("1 earlier");
+    expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("Older letters not shown: 1");
     expect(card().querySelector("[data-turn-card-progress]")?.textContent).toBe("10 progress reports folded");
     // Letters and the question read in time order, each named for assistive technology.
     expect([...card().querySelectorAll("[data-turn-card-letter], [data-turn-card-asked]")].map((line) => line.getAttribute("aria-label"))).toEqual([

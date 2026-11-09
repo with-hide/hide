@@ -1121,8 +1121,9 @@ fn the_card_shows_the_answer_the_letters_and_the_questions_since_the_request() {
 }
 
 /// A letter's other side goes by its screen name: the name it registered
-/// under, else its pane's title on these rows, else its runtime's name; an
-/// unnamed agent's registration id, its wire name, never shows.
+/// under unless Hide made it up for its pane, else its pane's title on these
+/// rows, else its runtime's name; an unnamed agent's registration id, its wire
+/// name, never shows.
 #[test]
 fn a_letters_peer_goes_by_its_registered_name_then_its_title_then_its_runtime() {
     const LEAD: &str = "w1:p1";
@@ -1136,8 +1137,10 @@ fn a_letters_peer_goes_by_its_registered_name_then_its_title_then_its_runtime() 
         ],
         ..Default::default()
     };
+    // `w1:p2` registered under the name Hide made for its pane, which reads as none.
+    let made = crate::fork::task_agent_name("claude", "w1:p2");
     for (id, pane, name) in [
-        ("agent-2", "w1:p2", "agent-2"),
+        ("agent-2", "w1:p2", made.as_str()),
         ("agent-3", "w1:p3", "reviewer"),
     ] {
         ledger.agents.push(
