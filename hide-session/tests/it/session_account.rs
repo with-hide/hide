@@ -298,8 +298,13 @@ fn an_opencode_session_belongs_to_the_one_account_whose_database_holds_it() {
     opencode_account(&b, &["ses_in_both"]);
     std::fs::create_dir_all(c.join("data/opencode")).unwrap();
     std::fs::write(c.join("data/opencode/opencode.db"), "not a database").unwrap();
-    // `a` spelled twice is two accounts of one database, read once.
-    let a_again = PathBuf::from(format!("{}/", a.display()));
+    // `a` spelled twice is two accounts of one database, read once. A
+    // Windows extended path accepts only its native trailing separator.
+    let a_again = PathBuf::from(format!(
+        "{}{sep}",
+        a.display(),
+        sep = std::path::MAIN_SEPARATOR
+    ));
     let two = Accounts::new(&home).with_profiles([
         &profile("opencode", &a),
         &profile("opencode", &a_again),
