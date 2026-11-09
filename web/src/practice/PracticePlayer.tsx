@@ -37,14 +37,12 @@ type Props = {
   chapter: PracticeChapter;
   operator: OperatorChoices;
   onStep: (step: number, finished: boolean) => void;
-  /** The last card's button: a real mission, from the shell. */
-  onMission: () => void;
   onHub: () => void;
   /** Leaves the practice for the real Hide. */
   onLeave: () => void;
 };
 
-export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, onLeave }: Props) {
+export function PracticePlayer({ chapter, operator, onStep, onHub, onLeave }: Props) {
   const [model, setModel] = useState<unknown>(() => chapter.world.initial());
   // The sidebar's 미션 row shows the mission screen in the Workspace's place, as in the shell (PRD mission-screen B2).
   const missionsShown = useUiStore((s) => s.screen?.kind === "missions");
@@ -79,10 +77,12 @@ export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, on
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, extra } = chapter.world.snapshot(model, Date.now());
+    const { laneExpanded = false, ...held } = extra ?? {};
     // The practice screen is the practice: its sidebar never invites to practice.
     const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
     // A world with no missions holds an empty book, so the sidebar's 미션 row opens the quiet empty table, as in Hide.
-    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null, ...extra });
+    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null, ...held });
+    useUiStore.setState({ laneExpanded });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
@@ -132,7 +132,7 @@ export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, on
         <Palette actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
-        <PracticeCoach chapter={chapter} onStep={onStep} onMission={onMission} onHub={onHub} onLeave={onLeave} onScene={onScene} />
+        <PracticeCoach chapter={chapter} onStep={onStep} onHub={onHub} onLeave={onLeave} onScene={onScene} />
       </div>
     </TooltipProvider>
   );

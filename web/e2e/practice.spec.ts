@@ -71,7 +71,7 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
 }
 
 /** The first-run cards, in order: one screen each, the real part they point at on screen. */
-const FIRST_RUN = ["parts", "projects", "rows", "tasks", "work", "agents", "files", "conduct", "find", "devices", "mission"];
+const FIRST_RUN = ["parts", "projects", "rows", "tasks", "work", "agents", "files", "explorer", "conduct", "find", "devices"];
 
 test("the first-run cards play with Enter alone, each pointing at a part of the screen, with the card clear of it", async ({ page }) => {
   await withPractice(page, async (practice) => {
@@ -83,23 +83,24 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
     for (const [at, id] of FIRST_RUN.entries()) {
       await expect(layer).toHaveAttribute("data-practice-step", id);
       await drawn(practice);
-      // Every card but the three zones and the last points at a real part, and the ring is drawn on it, whole on screen and clear of the card's band under it.
-      const marks = id !== "parts" && id !== "mission";
+      // Every card but the three zones points at real parts: each is ringed on screen (a part that reaches the window's edge carries its ring's few pixels past it), and the floating card covers none of them.
+      const marks = id !== "parts";
       const ringed = async () => {
-        const dock = await practice.locator("[data-practice-dock]").boundingBox();
-        const spot = practice.locator(".pc-spot:not(.off)");
-        if (!marks) return (await spot.count()) === 0;
-        if (!dock || (await spot.count()) !== 1) return false;
-        const ring = (await spot.boundingBox())!;
+        const card = await practice.locator("[data-practice-card]").boundingBox();
+        const rings = await practice.locator("[data-practice-ring]").evaluateAll((spots) => spots.map((spot) => spot.getBoundingClientRect().toJSON() as { x: number; y: number; width: number; height: number }));
+        if (!marks) return rings.length === 0;
         const view = practice.viewportSize()!;
-        return ring.width > 24 && ring.height > 24 && ring.x >= 0 && ring.x + ring.width <= view.width && ring.y >= 0 && ring.y + ring.height <= dock.y + 8;
+        if (!card || rings.length === 0) return false;
+        return rings.every((ring) => ring.width > 24 && ring.height > 24 && ring.x >= -4 && ring.y >= -4 && ring.x + ring.width <= view.width + 4 && ring.y + ring.height <= view.height + 4
+          && (card.x + card.width <= ring.x || ring.x + ring.width <= card.x || card.y + card.height <= ring.y || ring.y + ring.height <= card.y));
       };
-      await expect.poll(ringed, { message: `${id}'s ring is not drawn on its part, clear of the card`, timeout: 5_000 }).toBe(true);
+      await expect.poll(ringed, { message: `${id}'s ring is missing, off screen, or under its card`, timeout: 5_000 }).toBe(true);
       // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
       if (id === "tasks") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
       if (id === "agents") await expect(practice.locator("[data-pane-header-band]:has([data-pane-tree=\"a1\"])")).toBeVisible();
       if (id === "files") await expect(practice.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-pressed", "true");
+      if (id === "explorer") await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");
       if (id === "conduct") await expect(practice.locator("[data-pane-mission-chip]")).toBeVisible();
       if (at === FIRST_RUN.length - 1) break;
       await practice.keyboard.press("Enter");
@@ -108,28 +109,18 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
   });
 });
 
-test("the last card opens the Start panel on the mission sentence, unsent, and closes the practice", async ({ page }) => {
+test("the last card leaves the practice for Hide", async ({ page }) => {
   await withPractice(page, async (practice) => {
-    const shell = page.context().pages().find((candidate) => candidate !== practice)!;
     await practice.locator('[data-practice-hub-chapter="overview"]').click();
     await practice.locator('[data-practice-detail="overview"] [data-practice-play]').click();
     for (let at = 0; at < FIRST_RUN.length - 1; at += 1) {
       await drawn(practice);
       await practice.keyboard.press("Enter");
     }
-    await expect(practice.locator("[data-practice-layer]")).toHaveAttribute("data-practice-step", "mission");
+    await expect(practice.locator("[data-practice-layer]")).toHaveAttribute("data-practice-step", FIRST_RUN.at(-1)!);
     await drawn(practice);
     // The page closes on this press, so the button the press stands for is clicked through the helper that waits out that close.
     await clickClosingItsPage(practice.locator("[data-practice-go]"));
-    await shell.bringToFront();
-    // Either the Start panel with the sentence waiting, or, with no project to start in, adding one first.
-    const panel = shell.locator("[data-start-text]");
-    await expect(panel).toBeVisible({ timeout: 20_000 });
-    await expect(panel).toHaveValue(/hide-mission/);
-    // The blank is selected, so the first typing fills it, and nothing was sent.
-    const selected = await panel.evaluate((box: HTMLTextAreaElement) => box.value.slice(box.selectionStart, box.selectionEnd));
-    expect(selected).toBe("___");
-    await expect(shell.locator("[data-start-failure]")).toHaveCount(0);
   });
 });
 
@@ -144,11 +135,6 @@ test("a look-up card shows its frames, one line and the chords it uses", async (
     const lit = () => detail.locator('[data-frame-active="true"]').evaluate((li) => [...li.parentElement!.children].indexOf(li));
     const first = await lit();
     await expect.poll(lit, { timeout: 10_000 }).not.toBe(first);
-    // Only the mission card offers to start one.
-    await expect(detail.locator("[data-practice-mission]")).toHaveCount(0);
-    await practice.keyboard.press("Escape");
-    await practice.locator('[data-practice-hub-chapter="mission"]').click();
-    await expect(practice.locator('[data-practice-detail="mission"] [data-practice-mission]')).toBeVisible();
   });
 });
 

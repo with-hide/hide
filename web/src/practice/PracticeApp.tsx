@@ -90,12 +90,6 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
     setPlaying((before) => ({ chapter, run: (before?.run ?? 0) + 1 }));
   }, []);
 
-  // A real mission: the shell opens its Start panel with the sentence waiting, and the practice window closes onto it.
-  const mission = useCallback(() => {
-    channel.current?.postMessage({ kind: "mission" } satisfies PracticeMessage);
-    leave();
-  }, []);
-
   useEffect(() => {
     const opened = new BroadcastChannel(PRACTICE_CHANNEL);
     channel.current = opened;
@@ -148,11 +142,11 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
     channel.current?.postMessage({ kind: "progress", chapter: chapter.id, version: chapter.version, step, finished: finished || kept } satisfies PracticeMessage);
   }, [chapter, progress]);
 
-  if (playing) return <PracticePlayer key={playing.run} chapter={playing.chapter} operator={operator} onStep={onStep} onMission={mission} onHub={() => setPlaying(null)} onLeave={leave} />;
-  return <PracticeHub progress={progress} operator={operator} unsaved={unanswered && !answer} onStart={start} onMission={mission} onLeave={leave} />;
+  if (playing) return <PracticePlayer key={playing.run} chapter={playing.chapter} operator={operator} onStep={onStep} onHub={() => setPlaying(null)} onLeave={leave} />;
+  return <PracticeHub progress={progress} operator={operator} unsaved={unanswered && !answer} onStart={start} onLeave={leave} />;
 }
 
-type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; /** The id of the card whose detail the list opens on, for a capture. */ opened?: string; onStart: (chapter: PracticeChapter) => void; onMission: () => void; onLeave: () => void };
+type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; /** The id of the card whose detail the list opens on, for a capture. */ opened?: string; onStart: (chapter: PracticeChapter) => void; onLeave: () => void };
 
 /** A card on the list: the first flow, which plays on a practice screen, or a guide, which is looked at. */
 type HubRow = { chapter: PracticeChapter; status: ChapterStatus } | { guide: PracticeGuide };
@@ -173,7 +167,7 @@ function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
  * the others are pictures to look things up in. The cards hold still while a
  * detail is open.
  */
-export function PracticeHub({ progress, operator, unsaved, opened: openedId, onStart, onMission, onLeave }: HubProps) {
+export function PracticeHub({ progress, operator, unsaved, opened: openedId, onStart, onLeave }: HubProps) {
   const { t } = useInterfaceTranslation();
   const rows: HubRow[] = [...CHAPTERS.map((chapter) => ({ chapter, status: chapterStatus(chapter, progress[chapter.id]) })), ...GUIDES.map((guide) => ({ guide }))].sort((a, b) => rowNumber(a) - rowNumber(b));
   const firstOpen = rows.findIndex((row) => "chapter" in row && row.status !== "done");
@@ -249,7 +243,7 @@ export function PracticeHub({ progress, operator, unsaved, opened: openedId, onS
       </main>
       <Dialog open={open !== null} onOpenChange={(next) => { if (!next) setOpened(null); }}>
         {open && "chapter" in open ? <ChapterDetail row={open} onPlay={() => onStart(open.chapter)} returnTo={() => cards.current[opened!] ?? null} /> : null}
-        {open && "guide" in open ? <GuideDetail guide={open.guide} operator={operator} onMission={onMission} returnTo={() => cards.current[opened!] ?? null} /> : null}
+        {open && "guide" in open ? <GuideDetail guide={open.guide} operator={operator} returnTo={() => cards.current[opened!] ?? null} /> : null}
       </Dialog>
     </div>
   );
@@ -287,9 +281,8 @@ function ChapterDetail({ row, onPlay, returnTo }: { row: { chapter: PracticeChap
 }
 
 /** A guide: its moves drawn one after another, one line of what to know, and the chords it uses. */
-function GuideDetail({ guide, operator, onMission, returnTo }: { guide: PracticeGuide; operator: OperatorChoices; onMission: () => void; returnTo: () => HTMLElement | null }) {
+function GuideDetail({ guide, operator, returnTo }: { guide: PracticeGuide; operator: OperatorChoices; returnTo: () => HTMLElement | null }) {
   const { t } = useInterfaceTranslation();
-  const go = useRef<HTMLButtonElement>(null);
   const chords = guide.chords.flatMap((id) => {
     const keys = chordParts(id, operator);
     return keys ? [{ id, keys }] : [];
@@ -299,7 +292,6 @@ function GuideDetail({ guide, operator, onMission, returnTo }: { guide: Practice
       className="ph-detail ph-guide"
       showCloseButton
       returnFocusTo={returnTo}
-      onOpenAutoFocus={(event) => { if (go.current) { event.preventDefault(); go.current.focus(); } }}
       data-practice-detail={guide.id}
     >
       <PracticeFrames guide={guide} />
@@ -318,11 +310,6 @@ function GuideDetail({ guide, operator, onMission, returnTo }: { guide: Practice
           </ul>
         ) : null}
       </div>
-      {guide.mission ? (
-        <DialogFooter className="ph-foot">
-          <Button ref={go} variant="practice" onClick={onMission} data-practice-mission>{t("practice.tryMission")}</Button>
-        </DialogFooter>
-      ) : null}
     </DialogContent>
   );
 }

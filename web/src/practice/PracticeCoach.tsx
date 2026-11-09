@@ -1,10 +1,10 @@
-// The practice layer over the real shell: a card in a strip under the screen
-// (so it never covers what it explains), a ring or the three zones on the
-// screen above it, and ⏎ for the next card. The last card hands over to a real
-// mission. It reads the screen it points at every frame; the shell beneath
-// answers the learner exactly as it answers the operator.
+// The practice layer over the real shell: the screen dimmed but for what a card
+// points at, a ring round each target, and a card floating beside them in free
+// space (`cardPlace.ts`), never over a target. ⏎ is the card's next, and the last
+// card leaves for Hide. It reads the screen it points at every frame; the shell
+// beneath answers the learner exactly as it answers the operator.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { MessageKey } from "../i18n/catalogs";
 import { composingKey } from "../keys";
@@ -13,6 +13,7 @@ import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import type { PracticeChapter, PracticeScene } from "./chapter";
+import { placeCard, type Box } from "./cardPlace";
 import { COACH_CSS } from "./coachStyle";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -59,24 +60,35 @@ const ZONES = [
 type Props = {
   chapter: PracticeChapter;
   onStep: (step: number, finished: boolean) => void;
-  /** The last card's button: leaves the practice for a real mission. */
-  onMission: () => void;
   onHub: () => void;
-  /** Leaves the practice for the real Hide. */
+  /** Leaves the practice for the real Hide: the last card's button. */
   onLeave: () => void;
   /** Sets what the window shows for the card that is up. */
   onScene: (scene: PracticeScene) => void;
 };
 
-export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave, onScene }: Props) {
+const boxOf = (element: Element | null): Box | null => {
+  const box = element?.getBoundingClientRect();
+  return box && box.width && box.height ? { x: box.left, y: box.top, w: box.width, h: box.height } : null;
+};
+
+/** How much the ring stands off its target, and how round it is. */
+const RING = 3;
+const ROUND = 12;
+
+export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
-  const [ring, setRing] = useState<Rect | null>(null);
+  const [rings, setRings] = useState<Rect[]>([]);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
+  const [place, setPlace] = useState<{ x: number; y: number } | null>(null);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   const go = useRef<HTMLButtonElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const targets = useMemo(() => (step.target === undefined ? [] : Array.isArray(step.target) ? step.target : [step.target]), [step]);
 
   useEffect(() => onStep(index, last), [index, last, onStep]);
 
@@ -88,28 +100,35 @@ export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave, onSc
   // The keyboard rests on the card's button, so ⏎ is the card's and nothing waits.
   useEffect(() => go.current?.focus({ preventScroll: true }), [index]);
 
-  // The ring and the zones follow what they mark every frame: panes resize, rows appear.
+  // The rings, the zones and the card follow what they mark every frame: panes resize, rows appear.
   useLayoutEffect(() => {
     let scrolled = false;
     let frame = requestAnimationFrame(function follow() {
       // What the card points at may sit below the fold of its own list: bring it into view once, then ring it.
-      const first = !scrolled && step.target ? document.querySelector(step.target) : null;
-      if (first) {
-        first.scrollIntoView({ block: "nearest" });
+      if (!scrolled && targets.length && targets.every((selector) => document.querySelector(selector))) {
+        for (const selector of targets) document.querySelector(selector)?.scrollIntoView({ block: "nearest" });
         scrolled = true;
       }
-      const marked = rectOf(step.target);
-      setRing((before) => (same(before, marked) ? before : marked));
+      const marked = targets.flatMap((selector) => rectOf(selector) ?? []);
+      setRings((before) => (before.length === marked.length && marked.every((rect, at) => same(rect, before[at] ?? null)) ? before : marked));
       setZones((before) => {
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
+      // The card floats where nothing it talks about, nor the zone tags, nor the mode bar is.
+      const own = boxOf(card.current);
+      if (own) {
+        const kept = (step.keepClear ?? []).flatMap((selector) => [...document.querySelectorAll(selector)]);
+        const avoid = [...document.querySelectorAll(".pc-tag"), bar.current, ...kept].flatMap((element) => boxOf(element) ?? []);
+        const at = placeCard(own, marked, avoid, { w: window.innerWidth, h: window.innerHeight });
+        setPlace((before) => (before && before.x === at.x && before.y === at.y ? before : at));
+      }
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
-  }, [step]);
+  }, [step, targets]);
 
-  const forward = useCallback(() => (last ? onMission() : setIndex((value) => value + 1)), [last, onMission]);
+  const forward = useCallback(() => (last ? onLeave() : setIndex((value) => value + 1)), [last, onLeave]);
   const back = index > 0 ? () => setIndex((value) => value - 1) : null;
 
   // ⏎ is the card's button and ← goes back; every other key reaches the shell untouched.
@@ -134,25 +153,34 @@ export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave, onSc
   const title = say(`practice.${chapter.id}.title`);
 
   return (
-    <>
-      <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} onPointerDown={(event) => event.stopPropagation()}>
-        <style>{COACH_CSS}</style>
-        {zones.length ? <div className="pc-zdim" /> : null}
-        {zones.map((rect, at) => rect ? (
-          <div key={ZONES[at]!.key} className={`pc-zone ${ZONES[at]!.key}`} style={{ left: rect.x + 6, top: rect.y + 6, width: rect.w - 12, height: rect.h - 12, animationDelay: `${150 + at * 260}ms` }}>
-            <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
-          </div>
-        ) : null)}
-        <div className={`pc-spot${ring && !step.zones ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
-        <div className="pc-mode">
-          <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
-          <span>{say("practice.mode", { number: chapter.number, title })}</span>
-          <button type="button" className="pc-leave" onClick={onLeave} data-practice-leave>{say("practice.leave")}</button>
+    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} onPointerDown={(event) => event.stopPropagation()}>
+      <style>{COACH_CSS}</style>
+      {zones.length ? <div className="pc-zdim" /> : null}
+      {zones.map((rect, at) => rect ? (
+        <div key={ZONES[at]!.key} className={`pc-zone ${ZONES[at]!.key}`} style={{ left: rect.x + 6, top: rect.y + 6, width: rect.w - 12, height: rect.h - 12, animationDelay: `${150 + at * 260}ms` }}>
+          <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
         </div>
+      ) : null)}
+      {rings.length ? (
+        <svg className="pc-scrim" aria-hidden="true">
+          <defs>
+            <mask id="pc-hole">
+              <rect width="100%" height="100%" fill="white" />
+              {rings.map((rect, at) => <rect key={at} x={rect.x - RING} y={rect.y - RING} width={rect.w + 2 * RING} height={rect.h + 2 * RING} rx={ROUND} fill="black" />)}
+            </mask>
+          </defs>
+          <rect width="100%" height="100%" mask="url(#pc-hole)" className="pc-scrim-fill" />
+        </svg>
+      ) : null}
+      {rings.map((rect, at) => <div key={at} className="pc-spot" data-practice-ring style={{ left: rect.x - RING, top: rect.y - RING, width: rect.w + 2 * RING, height: rect.h + 2 * RING }} />)}
+      <div className="pc-mode" ref={bar}>
+        <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
+        <span>{say("practice.mode", { number: chapter.number, title })}</span>
+        <button type="button" className="pc-leave" onClick={onLeave} data-practice-leave>{say("practice.leave")}</button>
       </div>
-      {/* The card is not part of the screen it teaches: it sits in its own strip, and a press on it leaves the screen's focus alone. */}
-      <div key={step.id} className="pc-dock" data-practice-dock onMouseDown={(event) => event.preventDefault()}>
-        <div className="pc-dock-text">
+      {/* The card floats beside what it talks about; a press on it leaves the screen's focus alone. */}
+      <div ref={card} className="pc-card" data-practice-card style={place ? { left: place.x, top: place.y } : { visibility: "hidden" }} onMouseDown={(event) => event.preventDefault()}>
+        <div key={step.id} className="pc-card-text">
           <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
           <h3>{words("title")}</h3>
           <p>{words("text")}</p>
@@ -161,9 +189,9 @@ export function PracticeCoach({ chapter, onStep, onMission, onHub, onLeave, onSc
         <div className="pc-row">
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
           {back ? <button type="button" className="pc-back" onClick={back} data-practice-back>{say("practice.back")}</button> : null}
-          <button ref={go} type="button" className="pc-go" onClick={forward} data-practice-go>{step.mission ? t("practice.tryMission") : t("practice.next")} <span className="pc-kc">⏎</span></button>
+          <button ref={go} type="button" className="pc-go" onClick={forward} data-practice-go>{last ? t("practice.leave") : t("practice.next")} <span className="pc-kc">⏎</span></button>
         </div>
       </div>
-    </>
+    </div>
   );
 }

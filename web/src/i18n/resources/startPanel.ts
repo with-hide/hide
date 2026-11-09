@@ -14,7 +14,6 @@ const words = {
   "startPanel.newBranch": ["Start on a new branch…", "새 브랜치에서 시작…", "新しいブランチで開始…", "在新分支上开始…"],
   "startPanel.newBranchName": ["New branch name", "새 브랜치 이름", "新しいブランチ名", "新分支名称"],
   "startPanel.from": ["from", "기준", "元", "基于"],
-  "startPanel.missionSentence": ["Use hide-mission to ___", "hide-mission으로 ___ 해 줘", "hide-mission で ___ をお願い", "用 hide-mission 来 ___"],
   "startPanel.cancelNewBranch": ["Back to the chosen branch", "고른 브랜치로 돌아가기", "選んだブランチに戻る", "返回所选分支"],
   "startPanel.newMenu": ["Choose what to open", "새 탭 고르기", "新しいタブの種類", "新标签页选项"],
   "startPanel.terminal": ["Terminal", "터미널", "ターミナル", "终端"],

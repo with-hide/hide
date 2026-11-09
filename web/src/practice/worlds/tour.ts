@@ -7,6 +7,7 @@
 
 import tour from "../data/tour.json";
 import { missionNode as node } from "../../missionFixture";
+import type { DirectoryList } from "../../store";
 import type { AgentRow, EditorDocumentSnapshot, EditorTabSnapshot, Mission, ViewDisplaySnapshot } from "../../snapshot";
 import type { PracticeScene } from "../chapter";
 import type { PracticeWorld, WorldSnapshot } from "../world";
@@ -103,7 +104,8 @@ const TERMINALS: Record<string, string> = {
 };
 
 const MISSION = "mission-release-notes";
-const NOTES_PATH = "/work/billing-app/release-notes.md";
+const ROOT = "/work/billing-app";
+const NOTES_PATH = `${ROOT}/release-notes.md`;
 const NOTES = [
   "# Release notes 1.4",
   "",
@@ -146,6 +148,15 @@ function notes() {
   return { tab, display, document };
 }
 
+/** The folders the Explorer lists for that session's checkout: the project's root, with the api folder open. */
+function listings(): Record<string, DirectoryList> {
+  const list = (folder: string, entries: [string, boolean][]): DirectoryList => ({ kind: "file_list", root_path: folder, truncated: false, entries: entries.map(([name, is_directory]) => ({ name, path: `${folder}/${name}`, is_directory })) });
+  return {
+    [ROOT]: list(ROOT, [[".github", true], ["api", true], ["docs", true], ["src", true], ["package.json", false], ["README.md", false], ["release-notes.md", false]]),
+    [`${ROOT}/api`]: list(`${ROOT}/api`, [["router.ts", false], ["tasks.ts", false]]),
+  };
+}
+
 /** One pane alone, on the cards whose lane takes the room of the other three. */
 const solo = (pane: string) => ({ type: "pane", pane_id: pane }) as const;
 
@@ -170,10 +181,17 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
     const view = { ...rest.workspace_view!, open: false, tool: null, pinned: false, documents: false };
     let ui_state = { ...rest.ui_state, sidebar_lens: model.lens } as NonNullable<typeof rest.ui_state>;
     let extra: WorldSnapshot["extra"];
-    if (model.lane === "documents") {
+    if (model.lane === "documents" || model.lane === "explorer") {
       const { tab, display, document } = notes();
       Object.assign(view, { open: true, documents: true, pinned: true, layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: 1 } });
       extra = { editor: { tabs: [tab], active_tab_id: tab.id }, documents: { [tab.id]: document } };
+      if (model.lane === "explorer") {
+        Object.assign(view, { tool: "explorer" });
+        ui_state = { ...ui_state, expanded_paths: Object.keys(listings()), selected_path: NOTES_PATH };
+        extra.listings = listings();
+        // Both columns side by side, as the lane's Expand draws them: at this width they would otherwise stack.
+        extra.laneExpanded = true;
+      }
     } else if (model.lane === "mission") {
       Object.assign(view, { open: true, pinned: true, detail_width: 520 });
       ui_state = { ...ui_state, detail: { items: [{ kind: "mission", mission: MISSION }], shown: true } };

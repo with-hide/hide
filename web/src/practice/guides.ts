@@ -18,14 +18,12 @@ export type PracticeGuide = {
   frames: PracticePreviewKind[];
   /** The commands whose chords its detail lists. */
   chords: CommandId[];
-  /** Whether its detail offers a real mission, as the first flow's last card does. */
-  mission?: true;
 };
 
 export const GUIDES: readonly PracticeGuide[] = [
   { id: "left", number: 2, preview: "tree", frames: ["tree", "rows", "waits", "asleep"], chords: ["toggle_left_sidebar", "toggle_sidebar_lens", "sidebar_projects"] },
   { id: "agents", number: 3, preview: "split", frames: ["children", "split", "rows", "switch"], chords: ["split_right", "split_down", "recent_area_tab", "close_tab", "reopen_closed_tab"] },
-  { id: "mission", number: 4, preview: "mission", frames: ["mission", "children", "rows"], chords: ["start_agent", "open_project_memory"], mission: true },
+  { id: "mission", number: 4, preview: "mission", frames: ["mission", "children", "rows"], chords: ["start_agent", "open_project_memory"] },
   { id: "devices", number: 5, preview: "devices", frames: ["devices", "rows", "split"], chords: ["toggle_device_rail", "new_tab"] },
   { id: "day", number: 6, preview: "overview", frames: ["overview", "search", "split"], chords: ["overview", "search"] },
 ];

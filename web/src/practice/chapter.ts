@@ -1,6 +1,5 @@
 // What the first-run practice is: a few cards on a window with work in it, each
-// pointing at a part of the screen, the last one handing over to the real
-// Hide. Its words live in the practice catalog under `practice.<chapter>.<step>.*`,
+// pointing at a part of the screen, the last one leaving for the real Hide. Its words live in the practice catalog under `practice.<chapter>.<step>.*`,
 // so it reads in the operator's language.
 
 import type { CommandId } from "../shortcuts";
@@ -13,8 +12,8 @@ import type { PracticeWorld } from "./world";
  */
 export type PracticeScene = {
   lens?: "projects" | "tasks";
-  /** The lane closed, open on the Documents, or the 보기 slot holding the mission's map. */
-  lane?: "closed" | "documents" | "mission";
+  /** The lane closed, the Documents, the Documents with the Explorer beside them, or the 보기 slot holding the mission's map. */
+  lane?: "closed" | "documents" | "explorer" | "mission";
   /** The pane that holds the keyboard; null for none. */
   focus?: string | null;
   /** The one pane the tab shows alone, for a card whose lane needs the room; null for the four. */
@@ -25,14 +24,14 @@ export type PracticeStep = {
   id: string;
   /** What the window shows while this card is up. */
   scene?: PracticeScene;
-  /** What the spotlight rings: a selector into the real shell; every match is ringed as one box. */
-  target?: string;
+  /** What the spotlight rings: a selector into the real shell, or several for parts that are apart; the matches of one selector are ringed as one box. */
+  target?: string | string[];
+  /** Parts of the screen the card talks about without ringing them: the card floats clear of them too. */
+  keepClear?: string[];
   /** The three parts of the screen, drawn as labeled zones. */
   zones?: true;
   /** The commands whose chords the card names, in this host's keys and the operator's own. */
   commands?: CommandId[];
-  /** The step whose button leaves the practice for a real mission: the Start panel with the sentence waiting (`channel.ts`). */
-  mission?: true;
 };
 
 /** The move a flow's card plays on the practice list (`PracticePreview.tsx`). */

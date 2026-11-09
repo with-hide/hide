@@ -54,13 +54,13 @@ export function PracticeScene({ chapter: first, hub, guide, theme, system, langu
   if (hub) {
     return (
       <div className="h-full" data-gallery-scene="practice">
-        <PracticeHub progress={sampleProgress()} operator={NO_CHOICES} unsaved={false} opened={guide ?? undefined} onStart={ignore} onMission={ignore} onLeave={ignore} />
+        <PracticeHub progress={sampleProgress()} operator={NO_CHOICES} unsaved={false} opened={guide ?? undefined} onStart={ignore} onLeave={ignore} />
       </div>
     );
   }
   return (
     <div className="h-full" data-gallery-scene="practice">
-      <PracticePlayer key={playing.run} chapter={chapter} operator={NO_CHOICES} onStep={ignore} onMission={ignore} onHub={start} onLeave={ignore} />
+      <PracticePlayer key={playing.run} chapter={chapter} operator={NO_CHOICES} onStep={ignore} onHub={start} onLeave={ignore} />
     </div>
   );
 }

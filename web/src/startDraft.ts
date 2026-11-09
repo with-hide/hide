@@ -68,8 +68,6 @@ type StartPanelState = {
   overSettings: boolean;
   /** The project and agent this open starts on; null reads what is in front and the remembered agent. */
   preset: StartPreset | null;
-  /** The part of `text` a prefilled sentence leaves blank, selected when the panel opens so the first typing fills it; null for a draft the operator wrote. */
-  blank: [number, number] | null;
   /** The id of the request whose answer the panel waits for. */
   request: string | null;
   requestKind: "agent_start" | "worktree_create";
@@ -82,10 +80,6 @@ type StartPanelState = {
   open: (overSettings: boolean, preset?: StartPreset | null) => void;
   close: () => void;
   setText: (text: string) => void;
-  /** Sets the draft to a sentence with a blank for the operator to fill (the practice's last card), replacing what was kept. */
-  prefill: (text: string, blank: [number, number] | null) => void;
-  /** The blank, once the panel has selected it. */
-  takeBlank: () => [number, number] | null;
   setTarget: (key: string) => void;
   begin: (requestId: string, kind?: "agent_start" | "worktree_create") => void;
   fail: (failure: StartFailure) => void;
@@ -97,13 +91,12 @@ type StartPanelState = {
   settle: () => void;
 };
 
-export const useStartPanel = create<StartPanelState>((set, get) => ({
+export const useStartPanel = create<StartPanelState>((set) => ({
   isOpen: false,
   text: "",
   target: null,
   overSettings: false,
   preset: null,
-  blank: null,
   request: null,
   requestKind: "agent_start",
   failure: null,
@@ -112,13 +105,7 @@ export const useStartPanel = create<StartPanelState>((set, get) => ({
   // A reason the last start did not go stays with its text until the text changes.
   open: (overSettings, preset = null) => set({ isOpen: true, target: null, overSettings, preset }),
   close: () => set({ isOpen: false }),
-  setText: (text) => set({ text, failure: null, blank: null }),
-  prefill: (text, blank) => set({ text, failure: null, blank }),
-  takeBlank: () => {
-    const { blank } = get();
-    if (blank) set({ blank: null });
-    return blank;
-  },
+  setText: (text) => set({ text, failure: null }),
   setTarget: (target) => set({ target }),
   begin: (request, requestKind = "agent_start") => set((s) => ({ request, requestKind, failure: null, sent: s.text })),
   fail: (failure) => set({ request: null, failure }),

@@ -11,12 +11,12 @@ const ZONES = (["view", "work", "project"] as const)
 
 export const COACH_CSS = `
 .pc-layer{position:fixed;inset:0;z-index:60;pointer-events:none}
-.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 var(--size-tab-indicator) var(--practice-accent),0 0 0 var(--spacing-sm) color-mix(in srgb,var(--practice-accent) 16%,transparent),0 0 0 100vmax color-mix(in srgb,var(--practice-scrim) 42%,transparent);
-  transition:left .6s ${EASE},top .6s ${EASE},width .6s ${EASE},height .6s ${EASE},box-shadow .4s}
-.pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1);border-radius:var(--radius-xl);border:var(--size-tab-indicator) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
-.pc-spot.off{box-shadow:0 0 0 0 transparent,0 0 0 0 transparent,0 0 0 100vmax transparent}
-.pc-spot.off::after{display:none}
-@keyframes pc-pulse{0%{opacity:.55;transform:scale(1)}100%{opacity:0;transform:scale(1.03)}}
+.pc-scrim{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.pc-scrim-fill{fill:color-mix(in srgb,var(--practice-scrim) 58%,transparent)}
+.pc-spot{position:absolute;border-radius:var(--radius-xl);box-shadow:0 0 0 calc(var(--size-tab-indicator) * 1.5) var(--practice-accent),0 0 0 var(--spacing-md) color-mix(in srgb,var(--practice-accent) 28%,transparent);
+  transition:left .5s ${EASE},top .5s ${EASE},width .5s ${EASE},height .5s ${EASE}}
+.pc-spot::after{content:"";position:absolute;inset:calc(var(--size-tab-indicator) * -1.5);border-radius:var(--radius-xl);border:var(--size-tab-indicator) solid var(--practice-accent);animation:pc-pulse 2.6s ease-out infinite}
+@keyframes pc-pulse{0%{opacity:.6;transform:scale(1)}100%{opacity:0;transform:scale(1.04)}}
 .pc-zdim{position:absolute;inset:0;background:color-mix(in srgb,var(--practice-scrim) 32%,transparent);animation:pc-in .4s both}
 .pc-zone{position:absolute;border-radius:var(--radius-xl);border:var(--size-tab-indicator) dashed;animation:pc-zone .5s ${EASE} both}
 ${ZONES}
@@ -48,12 +48,11 @@ ${ZONES}
 .pc-mode button{font:inherit;font-weight:500;border:0;border-radius:var(--radius-xl);padding:var(--spacing-xxs) var(--spacing-md);background:color-mix(in srgb,var(--practice-accent) 30%,transparent);color:var(--practice-ink);cursor:pointer}
 .pc-mode button.pc-leave{background:var(--practice-accent);font-weight:600}
 
-.pc-dock{position:relative;z-index:61;flex:none;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--spacing-lg);padding:var(--spacing-md) var(--spacing-xl);background:var(--practice-card);color:var(--practice-text);border-top:var(--size-hairline) solid var(--practice-line);box-shadow:inset var(--spacing-xs) 0 0 var(--practice-accent);animation:pc-dock .35s ${EASE} both}
-@keyframes pc-dock{from{opacity:0;transform:translateY(var(--spacing-sm))}to{opacity:1;transform:none}}
-.pc-dock-text{flex:1 1 var(--size-practice-bubble);min-width:0;max-width:calc(var(--size-practice-bubble) * 2)}
-.pc-dock h3{margin:var(--spacing-xxs) 0;font-size:var(--text-headline);line-height:1.35;font-weight:600}
-.pc-dock p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
-.pc-dock .pc-row{margin-top:0}
+.pc-card{position:absolute;z-index:61;box-sizing:border-box;width:var(--size-practice-bubble);max-width:calc(100vw - var(--spacing-xxl));padding:var(--spacing-lg);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto;transition:left .5s ${EASE},top .5s ${EASE}}
+.pc-card-text{animation:pc-card .35s ${EASE} both}
+@keyframes pc-card{from{opacity:0;transform:translateY(var(--spacing-sm))}to{opacity:1;transform:none}}
+.pc-card h3{margin:var(--spacing-xxs) 0;font-size:var(--text-headline);line-height:1.35;font-weight:600}
+.pc-card p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
 `;
 
 // The chapter list: cards on the shell's own background, chosen in the soft

@@ -2309,14 +2309,13 @@ The arrow keys choose a card, ⏎ opens it, and the first run is chosen at first
 Pressing the first run's card opens a dialog with its drawing, title and line and one button in the practice's amber, `시작` or `다시 보기`, which holds the keyboard, so ⏎ plays it.
 Pressing a look-up card opens a wider dialog: three or four frames drawn one after another, each a small picture of the shell (`PracticePreview.tsx`, tokens only) with one short caption, the frame the story is at lit and the others dim; the card's title and one plain line of what to know; and the chords it uses (`commandLabel`, so they are this host's and the operator's own, and a command this host has no chord for is left out).
 It has no screen and no steps and writes no progress.
-The mission card alone has a button, `미션 해 보기`, the same as the first run's last card.
 Esc closes either dialog.
 Its words are the product's own (`agentPresentation.ts`, `taskLens.ts`, `commands.ts`), and it says only what [the status model](status-model.md) and [the sidebar sections](#sidebar-hierarchy) say: the 프로젝트 보기 reads project › branch or worktree › tab › agent; the 태스크 보기 groups by state, 내 차례 / 읽을 것 / 작업 중 / 확인함; a working row's ring is whole while the agent works and dashed while it waits, and a waiting row's second line says for what (`자식 기다림 · 자식 N개 작업 중`, `백그라운드 기다림`, `CI 기다림`, `답장 기다림`); a sleeping agent shows `재움 · 열면 깨어남`.
 
 The first run is eleven cards on the practice window of the introduction site's hero (`data/tour.json`), the big picture of a working day rather than single actions: each one screen, ⏎ once, with no task list, no wait and no step the learner has to do.
 Each card sets its own scene when it opens (`scene` on its step: the list the left sidebar shows, what the right lane holds, the pane that has the keyboard, one pane shown alone), and a card that says nothing keeps the scene before it, so ← and → always land on the scene a card was written for.
 The window is one tab of four panes: a lead running children (A), another agent conducting a mission (B, its mission chip), an agent started beside to review that waits with a question (C), and one working by itself (D).
-Every card but the first and the last points at a real part of the screen with the practice amber ring over a dimmed screen, and `practice.spec.ts` fails a card whose ring is missing, off screen or under the band.
+Every card but the first points at real parts of the screen, and `practice.spec.ts` fails a card whose ring is missing, off screen or under the floating card.
 
 1. 세 칸: the three parts drawn as zones, the left to choose, the middle to work, the right to look; each zone's tag sits where it covers no row and no terminal text.
 2. 프로젝트 보기: the list turned to the 프로젝트 lens, the project's branches and worktrees, their tabs and the agents in them.
@@ -2324,21 +2323,20 @@ Every card but the first and the last points at a real part of the screen with t
 4. 태스크 보기: the list turned to the 태스크 lens, the same agents by state: 내 차례 holds only what waits for the learner (a question, an approval, a 볼 것), 읽을 것 what finished quietly, then 작업 중.
 5. 작업 중은 두 가지: the 작업 중 group, a session working by itself (the ring, no second line) beside one that waits, whose second line says for what (`자식 기다림 · 자식 N개 작업 중`; `백그라운드 기다림` is named in the words only).
 6. 여러 에이전트를 부리기: the pane head's second line of the lead (A), where its children show, and ⌘D and ⇧⌘D with their words: ask an agent in words to open another beside it, or split a pane yourself.
-7. 오른쪽에서 보기: the lane opened on the Documents, showing the file an agent opened (a 볼 것 row), pinned so it stays beside the agents; the tab shows the lead alone for room.
-8. 미션: the 보기 slot holding the mission map of the Conductor (B), beside its pane (shown alone for room): a plan, parts handed to several agents, only decisions in 내 차례, results as PRs, what was decided kept in Memory.
-9. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
-10. 여러 컴퓨터: the device rail with another computer's tile; pressing a tile switches the screen to that computer, and agents can work there too; connecting one is not taught.
-11. 미션 해 보기: the button.
+7. 오른쪽에서 보기: the 볼 것 row of the agent that opened a file and the right lane with that file in the Documents, pinned so it stays beside the agents; the tab shows the lead alone for room.
+8. 탐색기: the same lane with the Explorer (⇧⌘E, its own label) beside the file, showing the folder tree of that session's checkout, both columns drawn side by side as the lane's Expand draws them.
+9. 미션: a big job is handed over by calling the hide-mission skill (`hide-mission으로 ~ 해 줘`, localized); the 보기 slot holds the mission map of the Conductor (B), beside its pane (shown alone for room): a plan, parts handed to several agents, only decisions in 내 차례, results as PRs, what was decided kept in Memory.
+10. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
+11. 여러 컴퓨터: the device rail with another computer's tile; pressing a tile switches the screen to that computer, and agents can work there too; connecting one is not taught. Its button, `Hide로 돌아가기` (⏎), closes the practice.
 
 The window is static but for the scene: the learner's own press on the list switch still turns the list, and the shell's own keyboard and clicks still run on it with the world answering nothing else.
 Its rows cover every state the cards name: a row in each group, a row working by itself beside a waiting row with its second line, a lead with children, a row marked 볼 것, a branch whose agent wears a PR mark, and a second computer.
-The card is a band under the whole screen (`pc-dock`), so it never covers the part it explains, which is ringed above it (or all three parts, zoned, on the first card); the keyboard rests on its button, so ⏎ is always the card's, → goes on and ← goes back, and every other key reaches the shell untouched.
-The card names its command's chord as keycaps where this host has one, and says nothing about a chord where it does not.
+A card spotlights its target: the screen dims but for each target, which wears the practice amber ring (several targets, as the 볼 것 row and the lane, are each ringed), and the card floats beside them in free space, never over a target, the zone tags, the top bar or a part the card names without ringing (`keepClear`); `placeCard` in `web/src/practice/cardPlace.ts` picks the place from the boxes alone.
+The first card has no spotlight, its three zones keep their dashed outlines, and its tags sit where they cover no row and no terminal text.
+There is no band under the screen, so the shell keeps its whole height while a card is up.
+The keyboard rests on the card's button, so ⏎ is always the card's, → goes on and ← goes back, and every other key reaches the shell untouched.
+The card names its command's chords as keycaps where this host has them, and says nothing about a chord where it does not.
 Nothing waits and nothing is typed or pressed in the learner's place, so a card shows the moment it is reached.
-
-The last card's button, `미션 해 보기` (⏎), ends the practice and hands over to the real app: the window tells the shell over the channel (`mission`) and closes, and the shell opens its Start panel with `hide-mission으로 ___ 해 줘` in the text (the sentence is `startPanel.missionSentence`, in the interface language), not sent, with the blank selected so the first typing fills it; ⏎ there starts the agent as the panel always does, and nothing starts before it.
-With no project registered the shell opens adding one first, and the sentence stays as the panel's draft for when it opens.
-The panel is the shell's own start surface, the one `agent_start_in_checkout` carries; the shell has no call that types into an agent's input without sending it, so the sentence is the new agent's first prompt, which the learner sends.
 
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each card the first run reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
