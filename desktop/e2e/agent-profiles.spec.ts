@@ -145,6 +145,29 @@ test("a profile added in Settings › Agents is offered by the start panel and k
       await capture(app, page, `08-project-agent-accounts-${theme}`);
       await closeAll(page);
     }
+
+    // B4, B27 in Korean: the machine's refusal is worded by the screen, and
+    // the delete names the project that goes back to the agent's default.
+    await page.locator("[data-open-settings]").click();
+    await page.locator('[data-settings-tab="general"]').click();
+    await page.locator("[data-interface-language]").click();
+    await page.locator('[data-language-option="ko"]').click();
+    await expect(page.locator("[data-interface-language]")).toHaveAttribute("data-interface-language", "ko");
+    await page.locator('[data-settings-tab="agents"]').click();
+    await page.locator('[data-inline-profiles="claude-code"] [data-profile-add]').click();
+    await page.locator("#profile-add-name").fill("work");
+    await page.locator("#profile-add-account").fill(path.join(run.env.HOME!, "accounts", "claude-other"));
+    await page.locator("[data-profile-submit]").click();
+    await expect(page.locator("[data-profile-dialog]")).toContainText("이 에이전트에 같은 이름의 프로필이 이미 있어요.", { timeout: 60_000 });
+    await capture(app, page, "09-add-refused-ko-light");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-profile-dialog]")).toHaveCount(0);
+    await row.locator("button").first().click();
+    await expect(page.locator('[data-profile-dialog="edit"] [data-profile-env]')).toHaveAttribute("data-profile-env", "true");
+    await page.locator("[data-profile-delete]").click();
+    await expect(page.locator("[data-profile-delete-projects]")).toContainText("sample", { timeout: 60_000 });
+    await capture(app, page, "10-delete-check-ko-light");
+    await closeAll(page);
   } finally {
     if (app) await app.close();
     run.cleanup();
