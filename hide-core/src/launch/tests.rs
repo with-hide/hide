@@ -263,6 +263,8 @@ fn a_profile_named_by_a_start_must_be_one_its_machine_lists_for_that_agent() {
 /// A node that answers a profile's start one way and records each call.
 struct Node {
     answer: Result<serde_json::Value, ErrorCode>,
+    /// The reason a refusal names.
+    reason: &'static str,
     older: bool,
     calls: Mutex<Vec<Call>>,
 }
@@ -271,6 +273,7 @@ impl Node {
     fn answering(answer: Result<serde_json::Value, ErrorCode>) -> Self {
         Self {
             answer,
+            reason: "refused",
             older: false,
             calls: Mutex::new(Vec::new()),
         }
@@ -282,12 +285,24 @@ impl NodeLink for Node {
         self.calls.lock().unwrap().push(call);
         match &self.answer {
             Ok(value) => Ok(value.clone().into()),
-            Err(code) => Err(LinkError::Refused(HostError::new(*code, "refused"))),
+            Err(code) => Err(LinkError::Refused(HostError::new(*code, self.reason))),
         }
     }
 
     fn predates_current_protocol(&self) -> bool {
         self.older
+    }
+
+    fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+        static CURRENT: std::sync::OnceLock<hide_node_link::sessions::ReaderFeatures> =
+            std::sync::OnceLock::new();
+        static OLDER: std::sync::OnceLock<hide_node_link::sessions::ReaderFeatures> =
+            std::sync::OnceLock::new();
+        Some(if self.older {
+            OLDER.get_or_init(hide_node_link::sessions::ReaderFeatures::protocol24)
+        } else {
+            CURRENT.get_or_init(hide_node_link::sessions::ReaderFeatures::implemented)
+        })
     }
 }
 
@@ -379,4 +394,67 @@ fn a_profile_gone_refused_or_unsupported_starts_nothing_and_says_why() {
             PROFILE_UNANSWERED
         );
     }
+}
+
+/// A session line's resume runs in the account the session's machine says
+/// holds it; a machine on the older protocol keeps no profile, so its
+/// sessions are the default account's, while a machine that keeps profiles
+/// and does not answer, or holds the session in two accounts, starts
+/// nothing (PRD agent-profiles B19).
+#[test]
+fn a_session_line_resumes_in_the_account_its_machine_says_holds_it() {
+    let reference = crate::sidebar::SessionAgentSessionPayload {
+        kind: "id".into(),
+        value: "ses_1".into(),
+    };
+    let work = AccountKey::Folder("/accounts/work".into());
+    let node = Node::answering(Ok(serde_json::to_value(&work).unwrap()));
+    assert_eq!(session_account(&node, "opencode", &reference), Ok(work));
+    assert_eq!(
+        *node.calls.lock().unwrap(),
+        [Call::SessionAccount {
+            request: hide_session::session_account::SessionAccountRequest {
+                agent: hide_session::Agent::OpenCode,
+                reference_kind: "id".into(),
+                reference_value: "ses_1".into(),
+            },
+        }]
+    );
+
+    let older = Node {
+        older: true,
+        ..Node::answering(Err(ErrorCode::InvalidRequest))
+    };
+    let file = crate::sidebar::SessionAgentSessionPayload {
+        kind: "path".into(),
+        value: "/home/me/.claude/projects/-repo/s.jsonl".into(),
+    };
+    assert_eq!(
+        session_account(&older, "claude", &file),
+        Ok(AccountKey::Default)
+    );
+    for code in [
+        ErrorCode::InvalidRequest,
+        ErrorCode::Unsupported,
+        ErrorCode::Io,
+    ] {
+        let current = Node::answering(Err(code));
+        assert_eq!(
+            session_account(&current, "opencode", &reference)
+                .unwrap_err()
+                .code,
+            SESSION_ACCOUNT_UNANSWERED,
+            "{code:?}"
+        );
+    }
+    let ambiguous = Node {
+        reason: hide_session::session_account::AMBIGUOUS,
+        ..Node::answering(Err(ErrorCode::Io))
+    };
+    assert_eq!(
+        session_account(&ambiguous, "opencode", &reference)
+            .unwrap_err()
+            .code,
+        SESSION_ACCOUNT_AMBIGUOUS
+    );
 }

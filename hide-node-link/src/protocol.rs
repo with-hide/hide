@@ -376,7 +376,13 @@ use crate::error::HostError;
 /// process of a pane fresh (`holders::PaneCall::Process`) and carries the
 /// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
 /// `executor`), by which the core decides what came of that start.
-pub const PROTOCOL_VERSION: u32 = 88;
+/// 89: a node answers which account it registered holds a session a resume
+/// names by its file or id alone (`SessionAccount`, PRD agent-profiles
+/// B19), so a session line resumes with the profile of its own account; a
+/// helper on 88 keeps profiles but would refuse the call, so it upgrades,
+/// and a node the core still admits on an older protocol keeps no profile,
+/// which the core reads as the default account.
+pub const PROTOCOL_VERSION: u32 = 89;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1149,6 +1155,11 @@ pub enum Call {
     SessionActivity {
         request: hide_session::session_activity::SessionActivityRequest,
     },
+    /// The account the node registered that holds the session a resume
+    /// names by its file or id alone (`hide_session::session_account::read`).
+    SessionAccount {
+        request: hide_session::session_account::SessionAccountRequest,
+    },
     /// The device's session files changed since a time and, for a later
     /// page, up to one, newest first and capped
     /// (`hide_session::links::candidates`).
@@ -1459,6 +1470,7 @@ impl Call {
             | Self::LabelTranscript { .. }
             | Self::SessionWorkTurn { .. }
             | Self::SessionActivity { .. }
+            | Self::SessionAccount { .. }
             | Self::LinkFiles { .. }
             | Self::LinkRead { .. }
             | Self::UsageFiles { .. }

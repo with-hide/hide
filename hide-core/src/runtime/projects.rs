@@ -4583,21 +4583,20 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
-        self.start_in_checkout(payload, true, None, None)
+        self.start_in_checkout(payload, true, None, StartProfile::Unrecorded)
     }
 
     /// A start in a checkout's new tab; `remember` false keeps the start out
     /// of the remembered agent choice (an archive resume). `cwd` is a folder
     /// inside the checkout the resumed conversation ran in; one outside it is
-    /// ignored and the tab starts at the checkout. `recorded` is the profile
-    /// an archive's resume ran with; a resume that names none resumes with
-    /// the built-in default, and a new start picks its profile (D-32).
+    /// ignored and the tab starts at the checkout. `recorded` says what the
+    /// caller knows of the profile ([`StartProfile`]).
     pub(super) fn start_in_checkout(
         &mut self,
         mut payload: AgentStartInCheckoutPayload,
         remember: bool,
         cwd: Option<String>,
-        recorded: Option<&crate::launch::LaunchProfile>,
+        recorded: StartProfile<'_>,
     ) -> bool {
         let request_id = payload.request_id.clone();
         if payload.confirm_only {
@@ -4796,14 +4795,35 @@ impl Runtime {
         if remember && !payload.confirm_only {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         }
+        // A resume that names no account asks the session's machine which
+        // account holds the session its proof or its line names: the file
+        // for Claude Code and Codex, whose resume is proven by no reader. A
+        // resume that names neither (a mission's take-over names its id
+        // alone) keeps the built-in default it always ran with.
+        let from_session = (matches!(recorded, StartProfile::Unrecorded) && resume.is_some())
+            .then(|| {
+                resume_reference.clone().or_else(|| {
+                    payload
+                        .resume_session_path
+                        .as_ref()
+                        .filter(|path| {
+                            !path.is_empty()
+                                && path.len() <= 4096
+                                && !path.chars().any(char::is_control)
+                        })
+                        .map(|path| crate::sidebar::SessionAgentSessionPayload {
+                            kind: "path".into(),
+                            value: path.clone(),
+                        })
+                })
+            })
+            .flatten();
         let profile = match (&resume, recorded) {
-            (_, Some(recorded)) => Some((recorded.id.clone(), recorded.name.clone())),
-            (Some(_), None) => self.resume_profile(
-                &device,
-                agent_kind.as_deref(),
-                payload.resume_session_path.as_deref(),
-            ),
-            (None, None) => self.new_start_profile(&device, agent_kind.as_deref()),
+            (_, StartProfile::Recorded(Some(recorded))) => {
+                Some((recorded.id.clone(), recorded.name.clone()))
+            }
+            (Some(_), _) => None,
+            (None, _) => self.new_start_profile(&device, agent_kind.as_deref()),
         };
         let mut arguments = resume.unwrap_or_default();
         let permission = agent_kind.as_deref().map_or_else(Default::default, |kind| {
@@ -4826,6 +4846,7 @@ impl Runtime {
         );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
+            launch.profile_from_session = from_session;
         }
         if retry.is_some() {
             return self.retry_task_agent(id);
@@ -5729,4 +5750,18 @@ pub(super) fn with_review_proofs(
             Some(listed.into_iter().chain(proved.iter().cloned()).collect())
         }
     }
+}
+
+/// What a start in a checkout knows of the profile it runs with.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum StartProfile<'a> {
+    /// The record of the resumed session's start kept it: its profile, or
+    /// `None` for one that ran with the built-in default, as every record
+    /// made before profiles did (D-27).
+    Recorded(Option<&'a crate::launch::LaunchProfile>),
+    /// No record says: a new start picks its profile (D-32), and a resume of
+    /// a session line or record runs with the profile of the account the
+    /// session's machine says holds it (B19,
+    /// `TaskAgentLaunch::profile_from_session`).
+    Unrecorded,
 }

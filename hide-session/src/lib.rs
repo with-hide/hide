@@ -49,6 +49,7 @@ mod native_file;
 pub mod opencode;
 pub mod pasted;
 mod refusal;
+pub mod session_account;
 pub mod session_activity;
 mod sightings;
 mod source;
@@ -165,12 +166,32 @@ pub fn session_root(accounts: &Accounts, agent: Agent) -> Option<PathBuf> {
 
 /// Every folder `agent` keeps its session files in, one per account the node
 /// registered, the default first; a path a caller names is read only inside
-/// one of them.
+/// one of them. A profile's folder is listed only once it is proven down
+/// from the account's folder with no link on the way (D-36); the default
+/// account's is listed as it is, a link followed (B29).
 pub(crate) fn session_roots(accounts: &Accounts, agent: Agent) -> Vec<PathBuf> {
     match agent {
         Agent::Cursor | Agent::OpenCode => session_root(accounts, agent).into_iter().collect(),
         _ => accounts
             .roots(agent)
+            .filter(|(key, root)| {
+                key.is_default()
+                    || native_file::checked_path_under(&root.anchor, root.suffix(), &root.place)
+                        .is_ok()
+            })
+            .map(|(_, root)| root.place.clone())
+            .collect(),
+    }
+}
+
+/// The default account's folders of `agent` that [`inside_session_root`]
+/// resolves a path against, every link followed.
+fn default_session_roots(accounts: &Accounts, agent: Agent) -> Vec<PathBuf> {
+    match agent {
+        Agent::Cursor | Agent::OpenCode => session_root(accounts, agent).into_iter().collect(),
+        _ => accounts
+            .roots(agent)
+            .filter(|(key, _)| key.is_default())
             .map(|(_, root)| root.place.clone())
             .collect(),
     }
@@ -207,7 +228,12 @@ impl RootRefusal {
 /// `path` with every link resolved, refused unless it lies under one of
 /// `agents`' session folders in an account the node registered: a path a
 /// caller names, or a link planted inside a folder, never makes a reader
-/// open a file elsewhere.
+/// open a file elsewhere. A path in a profile's account is proven down from
+/// the account's folder, the innermost account that holds it
+/// ([`Accounts::account_of`]), with no link and no `..` on the way (D-36),
+/// as the readers of Pi, omp and Grok prove every account's. Claude Code's
+/// and Codex's default account keeps following every link, as before
+/// profiles (B29): an operator's `~/.claude/projects` may be a link.
 pub fn inside_session_root(
     accounts: &Accounts,
     agents: &[Agent],
@@ -222,11 +248,19 @@ pub fn inside_session_root(
             return checked;
         }
     }
-    let roots = agents
+    let mut roots = Vec::new();
+    for &agent in agents
         .iter()
         .filter(|agent| !agent.requires_native_file_proof())
-        .flat_map(|agent| session_roots(accounts, *agent))
-        .collect::<Vec<_>>();
+    {
+        if let Some((_, root)) = accounts
+            .innermost(agent, path)
+            .filter(|(key, _)| !key.is_default())
+        {
+            return native_file::checked_path_under(&root.anchor, root.suffix(), path);
+        }
+        roots.extend(default_session_roots(accounts, agent));
+    }
     if roots.is_empty() {
         return Err(
             if agents

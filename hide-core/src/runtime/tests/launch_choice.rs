@@ -826,12 +826,15 @@ fn a_profile_agent_is_called_by_its_agent_and_profile_until_a_title_names_it() {
     );
 }
 
-/// A session picked from the session list that recorded no profile resumes
-/// with the profile whose account folder holds its file, the agent's
-/// default among two first, and with the built-in default when none holds
-/// it (PRD agent-profiles B19).
+/// A session line's resume runs with the profile of the account its machine
+/// says holds the session: the built-in default for the default account, as
+/// for a session recorded before profiles; that agent's profile of the
+/// account, the agent's default among two first; and none for an account
+/// whose profile is gone or going, rather than another account (PRD
+/// agent-profiles B19).
 #[test]
-fn a_listed_session_resumes_with_the_profile_whose_account_holds_its_file() {
+fn a_session_line_resumes_with_the_profile_of_the_account_that_holds_it() {
+    use hide_agent_adapter::AccountKey;
     let (mut runtime, _) = live_tab_order_runtime("/repo");
     let profile = |id: &str, kind: &str, account: &str| crate::model::ProfileSnapshot {
         id: id.to_owned(),
@@ -846,37 +849,54 @@ fn a_listed_session_resumes_with_the_profile_whose_account_holds_its_file() {
         hook: None,
         skill: None,
     };
+    let going = crate::model::ProfileSnapshot {
+        install: Some(crate::model::ProfileInstall::Removing),
+        ..profile("going", "claude-code", "/accounts/going")
+    };
     let mut kit = runtime.kit_state(crate::node::TEST_NODE);
     kit.profiles = Some(crate::model::ProfilesSnapshot {
         state: crate::model::ProfilesState::Listed,
         version: 1,
         profiles: vec![
-            profile("work", "claude-code", "/accounts/work/"),
+            profile("work", "claude-code", "/accounts/work"),
             profile("shared", "claude-code", "/accounts/shared"),
             profile("shared-default", "claude-code", "/accounts/shared"),
             profile("codex-work", "codex", "/accounts/work"),
+            profile("opencode-work", "opencode", "/accounts/opencode-work"),
+            going,
         ],
         defaults: [("claude-code".to_owned(), "shared-default".to_owned())].into(),
     });
     runtime.set_kit_state(crate::node::TEST_NODE, kit);
-    let resumed = |path: &str| {
+    let folder = |path: &str| AccountKey::Folder(path.to_owned());
+    let resumed = |kind: &str, account: &AccountKey| {
         runtime
-            .resume_profile(crate::node::TEST_NODE, Some("claude"), Some(path))
-            .map(|(id, _)| id.0)
+            .session_profile(crate::node::TEST_NODE, kind, account)
+            .map(|profile| profile.map(|(id, _)| id.0))
     };
 
+    assert_eq!(resumed("claude", &AccountKey::Default), Ok(None));
     assert_eq!(
-        resumed("/accounts/work/projects/-repo/s.jsonl").as_deref(),
-        Some("work")
+        resumed("claude", &folder("/accounts/work")),
+        Ok(Some("work".to_owned()))
     );
     assert_eq!(
-        resumed("/accounts/shared/projects/-repo/s.jsonl").as_deref(),
-        Some("shared-default")
+        resumed("claude", &folder("/accounts/shared")),
+        Ok(Some("shared-default".to_owned()))
     );
-    assert_eq!(resumed("/home/me/.claude/projects/-repo/s.jsonl"), None);
     assert_eq!(
-        resumed("/accounts/workshop/projects/-repo/s.jsonl"),
-        None,
-        "a folder is matched whole"
+        resumed("opencode", &folder("/accounts/opencode-work")),
+        Ok(Some("opencode-work".to_owned()))
     );
+    for gone in [
+        "/accounts/removed",
+        "/accounts/going",
+        "/accounts/opencode-work",
+    ] {
+        assert_eq!(
+            resumed("claude", &folder(gone)),
+            Err(crate::launch::PROFILE_GONE),
+            "{gone}"
+        );
+    }
 }

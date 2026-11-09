@@ -244,11 +244,40 @@ impl Accounts {
             .filter_map(move |known| known.places.as_ref()?.path(path))
     }
 
-    /// The account whose sessions place of `agent` holds `path`, as spelled.
+    /// The account whose sessions place of `agent` holds `path`, spelled
+    /// from the account's folder as given or as resolved: the innermost
+    /// when one account's folder lies inside another's place, the first
+    /// registered of two with the same place.
     pub fn account_of(&self, agent: Agent, path: &Path) -> Option<&AccountKey> {
-        self.roots(agent)
-            .find(|(_, root)| path.starts_with(&root.place))
-            .map(|(key, _)| key)
+        self.innermost(agent, path).map(|(key, _)| key)
+    }
+
+    /// [`Self::account_of`] with the account's place.
+    pub(crate) fn innermost(&self, agent: Agent, path: &Path) -> Option<(&AccountKey, &Root)> {
+        let mut found: Option<(&AccountKey, &Root)> = None;
+        for (key, root) in self.roots(agent).filter(|(_, root)| root.holds(path)) {
+            let depth = root.place.components().count();
+            if found.is_none_or(|(_, kept)| kept.place.components().count() < depth) {
+                found = Some((key, root));
+            }
+        }
+        found
+    }
+}
+
+impl Root {
+    /// Whether `path` names an entry strictly below the place, spelled from
+    /// the anchor as given or as resolved; what is on the way is not looked
+    /// at here.
+    pub(crate) fn holds(&self, path: &Path) -> bool {
+        let suffix = self.suffix();
+        let below = |anchor: &Path| {
+            path.strip_prefix(anchor)
+                .is_ok_and(|rest| rest.starts_with(suffix) && rest != suffix)
+        };
+        below(&self.anchor)
+            || hide_platform::fs::identity::canonical(&self.anchor)
+                .is_ok_and(|anchor| below(&anchor))
     }
 }
 
@@ -330,5 +359,44 @@ mod tests {
             accounts.account_of(Agent::Claude, &other.join("projects/x/s.jsonl")),
             Some(&key)
         );
+    }
+
+    /// An account whose folder lies inside another's sessions place holds
+    /// the sessions below its own place, whichever was registered first.
+    #[test]
+    fn a_path_belongs_to_the_innermost_account_that_holds_it() {
+        let home = std::env::temp_dir().join("hide-accounts-home");
+        let outer = std::env::temp_dir().join("hide-accounts-outer");
+        let inner = outer.join("projects/inner");
+        let folder = |path: &Path| AccountRef::Folder(path.to_string_lossy().into_owned());
+        let key = |path: &Path| AccountKey::Folder(path.to_string_lossy().into_owned());
+        let accounts = Accounts::new(&home).with_profiles([
+            &profile("claude-code", folder(&outer)),
+            &profile("claude-code", folder(&inner)),
+        ]);
+        let reversed = Accounts::new(&home).with_profiles([
+            &profile("claude-code", folder(&inner)),
+            &profile("claude-code", folder(&outer)),
+        ]);
+
+        for accounts in [&accounts, &reversed] {
+            assert_eq!(
+                accounts.account_of(Agent::Claude, &inner.join("projects/-w/s.jsonl")),
+                Some(&key(&inner))
+            );
+            assert_eq!(
+                accounts.account_of(Agent::Claude, &outer.join("projects/-w/s.jsonl")),
+                Some(&key(&outer))
+            );
+            assert_eq!(
+                accounts.account_of(Agent::Claude, &home.join(".claude/projects/-w/s.jsonl")),
+                Some(&AccountKey::Default)
+            );
+            assert_eq!(
+                accounts.account_of(Agent::Claude, &outer.join("projects")),
+                None,
+                "the place itself is no session"
+            );
+        }
     }
 }

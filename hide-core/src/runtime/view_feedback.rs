@@ -964,7 +964,7 @@ impl Runtime {
             },
             true,
             None,
-            opener.profile.as_ref(),
+            super::projects::StartProfile::Recorded(opener.profile.as_ref()),
         );
         let refused = self.snapshot.status.last_error != before
             && self

@@ -462,6 +462,7 @@ fn reader_requirements(call: &Call) -> Vec<(hide_session::Agent, ReaderFeature)>
         Call::LabelTranscript { request } => vec![(request.agent, ReaderFeature::Labels)],
         Call::SessionWorkTurn { request } => vec![(request.agent, ReaderFeature::Labels)],
         Call::SessionActivity { request } => vec![(request.agent, ReaderFeature::Activity)],
+        Call::SessionAccount { request } => vec![(request.agent, ReaderFeature::Identity)],
         Call::SessionConversation { agent, .. } => vec![(*agent, ReaderFeature::Conversation)],
         Call::SessionThread { request } => vec![(request.agent, ReaderFeature::Thread)],
         Call::UsageFiles { agent, .. } | Call::UsageRead { agent, .. } => {

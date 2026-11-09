@@ -1861,6 +1861,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         if let Some(node) = node.as_deref() {
             folder_present(node, request)?;
         }
+        settle_task_session_profile(target, request)?;
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
             let runtime = target
@@ -2078,6 +2079,48 @@ fn task_session_node(
         return Err("session_resume_intent_changed".into());
     }
     task_node(&mut runtime, id)
+}
+
+/// Gives task `id`, a resume that names no account
+/// (`TaskAgentLaunch::profile_from_session`), the profile of the account
+/// the machine that holds its session says holds it
+/// ([`crate::launch::session_account`], [`Runtime::settle_session_profile`]),
+/// before its tab is made; the machine's answer is waited for with the
+/// runtime lock released, and the task is checked current after it.
+fn settle_task_session_profile(
+    target: &TabTarget,
+    request: &CheckoutTabRequest,
+) -> Result<(), ControlFailure> {
+    let runtime = target
+        .runtime
+        .upgrade()
+        .ok_or_else(|| "runtime stopped".to_owned())?;
+    let Some(reference) = runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .task_profile_from_session(request.id)
+    else {
+        return Ok(());
+    };
+    let kind = request
+        .agent_kind
+        .as_deref()
+        .ok_or_else(|| "session_resume_agent_required".to_owned())?;
+    let node = task_session_node(&runtime, request.id, kind)?;
+    let account = crate::launch::session_account(node.as_ref(), kind, &reference)
+        .map_err(|refusal| ControlFailure::Definite(refusal.code.to_owned()))?;
+    target.check_current(request.id)?;
+    if !Arc::ptr_eq(&node, &task_session_node(&runtime, request.id, kind)?) {
+        return Err(ControlFailure::Definite(
+            "session_resume_reader_changed".into(),
+        ));
+    }
+    runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .settle_session_profile(request.id, kind, &account)
+        .map_err(|code| ControlFailure::Definite(code.to_owned()))?;
+    Ok(())
 }
 
 /// The account task `id`'s resumed conversation lies in: its profile's,

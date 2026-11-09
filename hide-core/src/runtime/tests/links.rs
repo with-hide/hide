@@ -1682,6 +1682,21 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
         )),
         "OpenCode's proof reads the id the resume names"
     );
+    // A session line names no account: the session's machine says which
+    // holds it before the start takes that account's profile (B19).
+    assert_eq!(
+        runtime
+            .task_agent_launch
+            .as_ref()
+            .map(|launch| (launch.profile.clone(), launch.profile_from_session.clone())),
+        Some((
+            None,
+            Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "id".into(),
+                value: "ses_native1".into(),
+            })
+        ))
+    );
 
     // Starts do not grant resume support before each complete reader
     // slice lands; an id that is not one token never reaches a command line.

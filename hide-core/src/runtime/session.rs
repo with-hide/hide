@@ -4948,7 +4948,53 @@ impl Runtime {
             launch,
             profile,
             resume_reference: None,
+            profile_from_session: None,
         });
+    }
+
+    /// The session task `id` resumes when it names no account
+    /// (`TaskAgentLaunch::profile_from_session`), until its profile is
+    /// settled.
+    pub(crate) fn task_profile_from_session(
+        &self,
+        id: u64,
+    ) -> Option<crate::sidebar::SessionAgentSessionPayload> {
+        self.task_agent_launch
+            .as_ref()
+            .filter(|launch| launch.task == id)
+            .and_then(|launch| launch.profile_from_session.clone())
+    }
+
+    /// Gives task `id` the profile of `account` on the task's machine
+    /// ([`Self::session_profile`]) and answers it, or why no profile of
+    /// that account can resume the session.
+    pub(crate) fn settle_session_profile(
+        &mut self,
+        id: u64,
+        kind: &str,
+        account: &hide_agent_adapter::AccountKey,
+    ) -> Result<Option<(hide_agent_adapter::ProfileId, String)>, &'static str> {
+        let device = self
+            .snapshot
+            .task_operation
+            .as_ref()
+            .filter(|operation| operation.id == id)
+            .map(|operation| {
+                operation
+                    .device_id
+                    .clone()
+                    .unwrap_or_else(|| self.node.as_str().to_owned())
+            })
+            .ok_or("agent_start.failed")?;
+        let profile = self.session_profile(&device, kind, account)?;
+        let launch = self
+            .task_agent_launch
+            .as_mut()
+            .filter(|launch| launch.task == id)
+            .ok_or("agent_start.failed")?;
+        launch.profile = profile.clone();
+        launch.profile_from_session = None;
+        Ok(profile)
     }
 
     /// The profile task `id`'s agent starts with, `None` for the built-in

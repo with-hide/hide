@@ -273,42 +273,48 @@ impl Runtime {
         .profile()
     }
 
-    /// The profile a resume of the `kind` conversation whose file is `path`
-    /// on `device` runs with when it recorded none (a session picked from
-    /// the session list): a profile of that agent whose own account folder
-    /// holds the file, the agent's default among them first; the built-in
-    /// default when none does, as for every session recorded before
-    /// profiles (PRD agent-profiles B19). OpenCode's sessions name no file,
-    /// so they resume with the built-in default.
-    pub(crate) fn resume_profile(
+    /// The profile a resume of a `kind` session on `device` runs with when
+    /// the session's start recorded none (a session line or record): the
+    /// built-in default for a session in the agent's default account, as for
+    /// every session recorded before profiles; else the profile of that agent
+    /// there whose account is `account`, the agent's default among several
+    /// first, then the list's order (PRD agent-profiles B19). An account no
+    /// profile names now (its profile was removed) starts nothing, so a
+    /// session is never resumed in an account other than its own.
+    pub(crate) fn session_profile(
         &self,
         device: &str,
-        kind: Option<&str>,
-        path: Option<&str>,
-    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
-        let path = std::path::Path::new(path?);
-        let profiles = self.machine_profiles(device)?;
-        let agent = hide_agent_adapter::adapter(kind?)?.id;
+        kind: &str,
+        account: &hide_agent_adapter::AccountKey,
+    ) -> Result<Option<(hide_agent_adapter::ProfileId, String)>, &'static str> {
+        let spelled = match account {
+            hide_agent_adapter::AccountKey::Default => return Ok(None),
+            hide_agent_adapter::AccountKey::Folder(spelled)
+            | hide_agent_adapter::AccountKey::Name(spelled) => spelled,
+        };
+        let agent = hide_agent_adapter::adapter(kind)
+            .ok_or(crate::launch::PROFILE_GONE)?
+            .id;
+        let profiles = self
+            .machine_profiles(device)
+            .ok_or(crate::launch::PROFILE_GONE)?;
         let default = profiles.defaults.get(agent);
         profiles
             .profiles
             .iter()
             .filter(|profile| {
-                // The account folder the kit judged, else the one the
-                // profile names, until the kit has judged it.
-                let folder = profile.folder.as_deref().or(profile
-                    .account
-                    .as_deref()
-                    .filter(|account| std::path::Path::new(account).is_absolute()));
-                profile.kind == agent && folder.is_some_and(|folder| path.starts_with(folder))
+                profile.kind == agent
+                    && profile.install != Some(crate::model::ProfileInstall::Removing)
+                    && profile.account.as_deref() == Some(spelled.as_str())
             })
             .min_by_key(|profile| Some(&profile.id) != default)
             .map(|profile| {
-                (
+                Some((
                     hide_agent_adapter::ProfileId(profile.id.clone()),
                     profile.name.clone(),
-                )
+                ))
             })
+            .ok_or(crate::launch::PROFILE_GONE)
     }
 
     /// The profile `agent` runs with, when its pane's record describes it;
