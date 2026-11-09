@@ -1922,9 +1922,9 @@ Nothing is shown while this runs: a failure keeps the project and goes to the di
 
 ## First run
 
-The startup's real connecting state draws one flying owl around the lowercase hide mark and brand line, then a thin indeterminate bar with the host's localized preparing sentence.
+The startup's real connecting state draws the blinking owl above the lowercase hide mark and brand line, then a thin indeterminate bar with the host's localized preparing sentence.
 It shows no progress percentage and never delays the shell; failure stops and hides the loading scene so the existing Retry and Copy diagnostics remain primary.
-Reduced motion keeps a static owl and bar; hidden or offscreen decoration pauses, and leaving its screen releases its animation resources.
+Reduced motion keeps the owl's still and a static bar; hidden or offscreen decoration pauses, and leaving its screen releases its listeners.
 The wizard's existing agents, notifications and project steps carry their matching brand owl without changing their actions or platform policies.
 The ready Home with no projects carries the ai owl.
 
@@ -2884,7 +2884,7 @@ The phone and the computer are the only endpoints that can read their messages; 
 No Hide account, login, payment or Tailscale setup appears in this connection flow.
 
 The hosted phone app at `app.withhide.dev` and the advanced Tailscale app at `/m/` share every list, detail and command screen.
-The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`.
+The hosted start page shows the paired-device list; choosing a device opens the bundle matching its phone protocol at `/p/<n>/`, and until it opens the page shows the blinking owl over the device name, `연결 중…` and 다른 기기 고르기 (`DeviceConnecting`, `web/src/mobile/HostList.tsx`).
 A QR opens the shared device-first page described below, with an escaped, wrapping device name, a short line about viewing and replying to agents, 연결, the encryption assurance and five-minute expiry guidance.
 Its code leaves the address before connection and is never stored.
 Expired and already-used codes retain the device's existing `code_expired` wording, and four paired phones retain the existing limit guidance.

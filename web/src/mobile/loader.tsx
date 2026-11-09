@@ -5,7 +5,7 @@ import "../index.css";
 import "./mobile.css";
 import { useLoaderTranslation } from "./loaderTranslation";
 import { Button } from "../components/ui/button";
-import { HostList, VersionScreen } from "./HostList";
+import { DeviceConnecting, HostList, VersionScreen } from "./HostList";
 import { Landing, DeviceIdentity } from "./Landing";
 import { ScanQr } from "./ScanQr";
 import { bundlePath, readHosts, MAX_HOSTS, type PairedHost } from "./hosts";
@@ -113,14 +113,14 @@ function Loader() {
     {target ? <Button variant="ghost" className="min-h-(--size-touch-target) text-body" onClick={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
     {error ? <p role="alert" className="max-w-(--size-mobile-copy) text-body text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </Landing>;
+  if (target) return <DeviceConnecting t={t} name={target.name} error={error}
+    onChoose={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }} />;
   return <main className="phone-safe-top phone-safe-bottom flex min-h-full flex-col gap-lg px-xl">
     <h1 className="pt-lg text-headline font-semibold">hide</h1>
     {adding ? <ScanQr t={t} onPair={(qr) => { setPair(qr); setAdding(false); }} /> : <>
       <h2 className="text-title">{t("mobile.relay.devices")}</h2>
-      {!target ? <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} /> : null}
+      <HostList t={t} choose={(host) => { setError(null); setTarget(host); }} />
     </>}
-    {target ? <p role="status">{t("mobile.relay.connecting")}</p> : null}
-    {target ? <Button variant="ghost" onClick={() => { setTarget(null); setPair(null); setAdding(false); setError(null); }}>{t("mobile.relay.choose")}</Button> : null}
     {error ? <p role="alert" className="text-subhead text-warning">{t(`mobile.relay.${error}`)}</p> : null}
   </main>;
 }
