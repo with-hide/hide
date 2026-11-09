@@ -104,6 +104,22 @@ fn alone(folder: &Folder) -> bool {
     .unwrap()
 }
 
+/// Uses the same connection request sequence as pane creation, as a wake
+/// does; an unsettled renewal keeps its request until the connection ends.
+fn renew_pane(
+    holders: &dyn PaneHolders,
+    start: &HolderStart,
+) -> Result<HolderRenewal, HolderError> {
+    let request = holders.request()?;
+    let result = holders.renew(start, request);
+    if !matches!(&result, Err(HolderError::Unreachable { .. }))
+        && !matches!(&result, Err(HolderError::Refused { code, .. }) if code == RENEWAL_UNSETTLED)
+    {
+        holders.retire(request)?;
+    }
+    result
+}
+
 #[test]
 fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one_is_left() {
     let folder = Folder::new();
@@ -118,7 +134,7 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
     answers(&next, "the earlier holder's shell answers");
 
     // A pane whose agent is awake takes input, so it is never renewed.
-    let awake = next.linked.renew(&shell_start(&folder));
+    let awake = renew_pane(&next.linked, &shell_start(&folder));
     assert!(
         matches!(&awake, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_awake"),
         "{awake:?}"
@@ -140,7 +156,7 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
                 service.key(KeyTarget::Pane(PANE.to_owned()), b"x".to_vec(), 0);
             }
         });
-        let renewed = next.linked.renew(&shell_start(&folder));
+        let renewed = renew_pane(&next.linked, &shell_start(&folder));
         done.send(()).unwrap();
         renewed
     })
@@ -193,20 +209,37 @@ fn a_shell_on_an_earlier_builds_holder_is_renewed_under_its_id_and_a_current_one
             .is_some_and(|title| title.ends_with("renewed"))
     });
 
+    // A wake that needs a new tab after renewing another sleeping pane
+    // can still start it: renewal must not consume a node-only number that
+    // this connection's next creation would reuse.
+    let mut new_tab = shell_start(&folder);
+    new_tab.pane = "w2:p1".to_owned();
+    start_pane(&next.linked, &new_tab).expect("a new tab starts after renewal");
+    next.linked
+        .input(&new_tab.pane, PaneInput::Bytes(print_ok().to_vec()))
+        .unwrap();
+    wait_until("the tab created after renewal answers", || {
+        next.linked
+            .read(&new_tab.pane, 200)
+            .is_ok_and(|(text, _)| text.contains("hide-ok"))
+    });
+
     // Asked again, a pane on this build is left as it runs.
     assert_eq!(
-        next.linked.renew(&shell_start(&folder)).unwrap(),
+        renew_pane(&next.linked, &shell_start(&folder)).unwrap(),
         HolderRenewal::Current
     );
     assert_eq!(pane_record(&folder), after);
     assert!(holder.runs());
 
-    // The next node finds the one pane running, never closed or to be
+    // The next node finds both panes running, never closed or to be
     // started again.
     drop(next);
     let last = Connection::open(folder.home.path(), &folder.state);
     let found = last.linked.recovered(HANG_LIMIT).unwrap();
-    assert_eq!(found.present, vec![PANE.to_owned()], "{found:?}");
+    let mut present = found.present.clone();
+    present.sort();
+    assert_eq!(present, vec![PANE.to_owned(), new_tab.pane], "{found:?}");
     assert!(
         found.closed.is_empty() && found.ended.is_empty(),
         "{found:?}"
@@ -234,7 +267,7 @@ fn a_renewal_that_cannot_happen_leaves_the_earlier_holder_running() {
     {
         let broken = Connection::of_build(folder.home.path(), &folder.state, missing);
         broken.linked.recovered(HANG_LIMIT).unwrap();
-        let kept = broken.linked.renew(&shell_start(&folder));
+        let kept = renew_pane(&broken.linked, &shell_start(&folder));
         assert!(
             matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "holder_folder_unread"),
             "{kept:?}"
@@ -263,7 +296,7 @@ fn a_renewal_that_cannot_happen_leaves_the_earlier_holder_running() {
             })
     });
     asleep(&next, true);
-    let kept = next.linked.renew(&shell_start(&folder));
+    let kept = renew_pane(&next.linked, &shell_start(&folder));
     asleep(&next, false);
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_busy"),
@@ -310,7 +343,7 @@ fn a_shell_with_a_background_job_is_kept_until_a_later_renewal_finds_it_alone() 
     assert!(!jobs.is_empty());
 
     asleep(&next, true);
-    let kept = next.linked.renew(&shell_start(&folder));
+    let kept = renew_pane(&next.linked, &shell_start(&folder));
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_busy"),
         "{kept:?}"
@@ -329,7 +362,7 @@ fn a_shell_with_a_background_job_is_kept_until_a_later_renewal_finds_it_alone() 
         hide_platform::process::kill_tree(pid).unwrap();
     }
     wait_until("the shell runs alone again", || alone(&folder));
-    let renewed = next.linked.renew(&shell_start(&folder));
+    let renewed = renew_pane(&next.linked, &shell_start(&folder));
     asleep(&next, false);
     assert!(
         matches!(&renewed, Ok(HolderRenewal::Renewed { from, .. }) if *from == before.version_folder),
@@ -356,7 +389,7 @@ fn a_renewal_whose_new_holder_does_not_start_says_no_holder_runs_the_pane() {
     answers(&broken, "the earlier holder's shell answers");
 
     asleep(&broken, true);
-    let lost = broken.linked.renew(&shell_start(&folder));
+    let lost = renew_pane(&broken.linked, &shell_start(&folder));
     assert!(
         matches!(&lost, Err(HolderError::Refused { code, .. })
             if code == RENEWAL_LOST || code == RENEWAL_UNSETTLED),
@@ -419,7 +452,7 @@ fn a_close_during_a_renewal_ends_the_holder_the_renewal_leaves() {
     asleep(&next, true);
 
     let renewed = thread::scope(|scope| {
-        let renewal = scope.spawn(|| next.linked.renew(&shell_start(&folder)));
+        let renewal = scope.spawn(|| renew_pane(&next.linked, &shell_start(&folder)));
         wait_until("the renewal has the pane's turn", || {
             next.holders.changing(PANE) || renewal.is_finished()
         });
@@ -438,7 +471,7 @@ fn a_close_during_a_renewal_ends_the_holder_the_renewal_leaves() {
             .is_none_or(|record| record.holder.is_none_or(|holder| !holder.runs())),
         "no holder runs the closed pane: {closed:?}"
     );
-    let after = next.linked.renew(&shell_start(&folder));
+    let after = renew_pane(&next.linked, &shell_start(&folder));
     assert!(
         matches!(&after, Err(HolderError::Refused { code, .. }) if code == RENEWAL_PANE_CLOSED),
         "{after:?}"
@@ -498,7 +531,7 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
         });
     }
     let started = Instant::now();
-    let kept = next.linked.renew(&shell_start(&folder));
+    let kept = renew_pane(&next.linked, &shell_start(&folder));
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_input_unsettled"),
         "{kept:?}"
