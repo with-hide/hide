@@ -2745,7 +2745,9 @@ Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.
 This Mac comes first, as in Devices, and each machine is listed once.
 `Checking this machine's agents…` shows only while a read runs or before the machine's first answer; a machine whose kit answered without listing an agent (another Hide held its account, a retirement it refused) says `Hide couldn't read this machine's agents.` with Check again.
-A device that cannot be reached shows one line and Try again in place of its list; a machine whose kit cannot run says why above a list it may still have.
+A device that cannot be reached shows one line and Try again above its last installed-agent and profile list, dimmed and read-only; no permission, switch, add or edit control is offered until it reconnects.
+A device connecting or switched off keeps the same read-only list below its connection state.
+A machine whose kit cannot run says why above a list it may still have.
 `Installed N` lists the agents whose program is found on the machine ([agent-hooks.md: Installed means the program is found](agent-hooks.md#installed-means-the-program-is-found)), or that are on and whose program went away, so they can still be switched off; a folder an agent creates does not count.
 An agent installed where Hide has nothing to attach to on that machine's system yet is listed here too, with `Not on Windows yet` (that system's name) in place of its switch (PRD first-run-onboarding D-25, B49).
 `↻ Check again` at its right asks the kit to read the machines again, reads `Checking…` while it runs and rests again after a moment, since a read that changes nothing sends no frame; a failed read leaves the list as it was and shows its reason in one line.

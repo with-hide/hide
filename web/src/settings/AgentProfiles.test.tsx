@@ -241,3 +241,19 @@ it("starts the profile's agent in a new tab to sign in, with the start the start
   useStartPanel.getState().close();
   await none.unmount();
 });
+
+it("keeps the last device profiles dimmed without add or edit when its connection goes away (B30)", async () => {
+  const tab = await mount(listed([work], { "claude-code": "p-work" }));
+  const before = tab.all('[data-inline-profiles="claude-code"] [data-profile-row]').map((row) => row.dataset.profileRow);
+  expect(before).toEqual(["default", "p-work"]);
+  await act(async () => {
+    const rest = useShellStore.getState().rest!;
+    useShellStore.setState({ rest: { ...rest, navigator: { ...rest.navigator, devices: rest.navigator.devices.map((row) => ({ ...row, kind: "remote", state: "unavailable" })) } } } as never);
+  });
+  expect(tab.all('[data-inline-profiles="claude-code"] [data-profile-row]').map((row) => row.dataset.profileRow)).toEqual(before);
+  expect(tab.q('[data-inline-profiles="claude-code"]')?.className).toContain("opacity-(--opacity-dimmed)");
+  expect(tab.all("[data-profile-add], [data-profile-row] button, [data-agent-switch], [data-agent-permission-select]")).toHaveLength(0);
+  expect(tab.q("[data-agents-retry]")).not.toBeNull();
+  expect(tab.changes()).toEqual([]);
+  await tab.unmount();
+});
