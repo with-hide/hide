@@ -1,9 +1,10 @@
 //! Who may read a letter through `hide request show`: its sender and its
-//! recipient, and, beyond them, the worker of a mission node reading a letter
-//! one of that node's checkers wrote to the Conductor (docs/delivery.md, Who
-//! may read a letter), and which sends under one intent are a retry of a
-//! letter (docs/delivery.md, Commands and caller identity). The commands run through the
-//! store, as a pane's command does.
+//! recipient, and, beyond them, an agent bound to a mission node (its worker,
+//! reviewer or verifier) reading a letter between the Conductor and another
+//! agent of that node (docs/delivery.md, Who may read a letter), and which
+//! sends under one intent are a retry of a letter (docs/delivery.md, Commands
+//! and caller identity). The commands run through the store, as a pane's
+//! command does.
 
 use super::*;
 use crate::delivery::worker::Worker;
@@ -12,10 +13,18 @@ use crate::handle::ChangeNotifier;
 use crate::runtime::delivery::tests::{authority, fixture, set_live};
 use serde_json::{Value, json};
 
-/// One agent per pane: the Conductor, the worker of node `fix` and its
-/// reviewer, the worker of another node of the same mission, and the worker
-/// of a node of another mission.
-const PANES: [&str; 5] = ["conductor", "worker", "reviewer", "neighbor", "outsider"];
+/// One agent per pane: the Conductor, the worker of node `fix` with its
+/// reviewer and verifier, the worker of another node of the same mission,
+/// the worker of a node of another mission, and an agent in no mission.
+const PANES: [&str; 7] = [
+    "conductor",
+    "worker",
+    "reviewer",
+    "verifier",
+    "neighbor",
+    "outsider",
+    "stranger",
+];
 
 struct Fixture {
     runtime: Arc<Mutex<Runtime>>,
@@ -105,21 +114,24 @@ impl Fixture {
     }
 
     /// The Conductor conducts two missions. Mission 1 has node `fix`, worked
-    /// by the worker and checked by the reviewer, and node `docs`, worked by
-    /// the neighbor; mission 2 has a node `fix` of its own for the outsider.
+    /// by the worker, reviewed by the reviewer and run by the verifier, and
+    /// node `docs`, worked by the neighbor; mission 2 has a node `fix` of its
+    /// own for the outsider. The stranger is bound to nothing.
     fn book(&self) {
         let conductor = {
             let guard = self.runtime.lock().unwrap();
             crate::runtime::delivery::tests::observed(&guard, "conductor").actor
         };
-        let node = |key: &str, worker: &str, checker: Option<&str>| {
-            let checkers: Vec<Value> = checker
-                .map(|id| json!({"worker": {"agent": "codex"}, "agent_id": id}))
-                .into_iter()
+        let node = |key: &str, worker: &str, checkers: &[(&str, &str)]| {
+            let criteria: Vec<Value> = checkers
+                .iter()
+                .map(|(line, id)| {
+                    json!({"key": line, "kind": line, "checkers": [
+                        {"worker": {"agent": "codex"}, "agent_id": id}]})
+                })
                 .collect();
             json!({"key": key, "title": key, "kind": "change", "status": "working",
-                "agent_id": worker,
-                "criteria": [{"key": "review", "kind": "review", "checkers": checkers}]})
+                "agent_id": worker, "criteria": criteria})
         };
         let mission = |id: &str, nodes: Vec<Value>| {
             serde_json::from_value::<crate::missions::Mission>(json!({
@@ -137,11 +149,18 @@ impl Fixture {
             mission(
                 "mission-1",
                 vec![
-                    node("fix", &self.ids["worker"], Some(&self.ids["reviewer"])),
-                    node("docs", &self.ids["neighbor"], None),
+                    node(
+                        "fix",
+                        &self.ids["worker"],
+                        &[
+                            ("review", &self.ids["reviewer"]),
+                            ("verify", &self.ids["verifier"]),
+                        ],
+                    ),
+                    node("docs", &self.ids["neighbor"], &[]),
                 ],
             ),
-            mission("mission-2", vec![node("fix", &self.ids["outsider"], None)]),
+            mission("mission-2", vec![node("fix", &self.ids["outsider"], &[])]),
         ];
     }
 
@@ -171,7 +190,7 @@ impl Fixture {
                 pane,
                 Command::Send {
                     target: target.into(),
-                    intent: format!("{pane}-{kind}"),
+                    intent: format!("{pane}-{target}-{kind}"),
                     body: format!("{pane} says so"),
                     kind: kind.into(),
                     now: false,
@@ -188,27 +207,31 @@ impl Fixture {
 }
 
 /// A reviewer writes its verdict to the Conductor, as a mission asks. Its
-/// node's worker reads it with `hide request show`; no other agent does,
-/// whether it works another node of the same mission, a node of another
-/// mission, or is the node's own checker reading the worker's letter.
+/// node's worker and verifier read it with `hide request show`; no other
+/// agent does, whether it works another node of the same mission, a node of
+/// another mission, or no mission at all.
 #[test]
-fn a_node_worker_reads_its_nodes_checker_letter_and_no_other_agent_does() {
+fn a_nodes_agents_read_a_checkers_letter_to_the_conductor_and_no_other_agent_does() {
     let mission = Fixture::start();
     let verdict = mission.write("reviewer", "conductor", "report");
 
-    let read = mission.show("worker", &verdict).unwrap();
-    assert_eq!(read["id"], verdict.as_str());
-    assert_eq!(read["body"], "reviewer says so");
-    // A letter names its writer and reader by the wire name, the registration.
-    assert_eq!(read["sender"]["name"], mission.ids["reviewer"].as_str());
-    assert_eq!(read["recipient"]["name"], mission.ids["conductor"].as_str());
+    for pane in ["worker", "verifier"] {
+        let read = mission.show(pane, &verdict).unwrap();
+        assert_eq!(read["id"], verdict.as_str(), "{pane}");
+        assert_eq!(read["body"], "reviewer says so", "{pane}");
+        // A letter names its writer and reader by the wire name, the
+        // registration.
+        assert_eq!(read["sender"]["name"], mission.ids["reviewer"].as_str());
+        assert_eq!(read["recipient"]["name"], mission.ids["conductor"].as_str());
+    }
 
     // The letter's own two parties still read it.
     assert!(mission.show("reviewer", &verdict).is_ok());
     assert!(mission.show("conductor", &verdict).is_ok());
 
-    // Another node of the same mission, and a node of another mission.
-    for pane in ["neighbor", "outsider"] {
+    // Another node of the same mission, a node of another mission, and an
+    // agent in no mission.
+    for pane in ["neighbor", "outsider", "stranger"] {
         assert_eq!(
             mission.show(pane, &verdict).unwrap_err(),
             "letter_unavailable",
@@ -220,64 +243,112 @@ fn a_node_worker_reads_its_nodes_checker_letter_and_no_other_agent_does() {
     // another agent stays between the two.
     let aside = mission.write("reviewer", "neighbor", "request");
     assert!(mission.show("neighbor", &aside).is_ok());
-    assert_eq!(
-        mission.show("worker", &aside).unwrap_err(),
-        "letter_unavailable"
-    );
+    for pane in ["worker", "verifier"] {
+        assert_eq!(
+            mission.show(pane, &aside).unwrap_err(),
+            "letter_unavailable",
+            "{pane}"
+        );
+    }
+}
 
-    // The grant runs one way: the checker does not read the worker's letters.
-    let progress = mission.write("worker", "conductor", "progress");
-    assert!(mission.show("conductor", &progress).is_ok());
+/// with-hide/hide#2298: a Conductor points a node's reviewer at the
+/// worker's design, and its verifier at the review, by the letter's id. Each
+/// agent of the node reads the letters between the Conductor and the
+/// others of its node, either way, and nobody outside the node does.
+#[test]
+fn a_nodes_checkers_read_the_letters_the_conductor_exchanged_with_its_other_agents() {
+    let mission = Fixture::start();
+    let design = mission.write("worker", "conductor", "progress");
+    let review = mission.write("reviewer", "conductor", "report");
+    let brief = mission.write("conductor", "worker", "request");
+    let ask = mission.write("conductor", "reviewer", "request");
+
+    for (pane, letters) in [
+        ("reviewer", [&design, &brief].as_slice()),
+        ("verifier", [&design, &review, &brief, &ask].as_slice()),
+        ("worker", [&review, &ask].as_slice()),
+    ] {
+        for id in letters {
+            assert_eq!(
+                mission.show(pane, id).map(|read| read["id"].clone()),
+                Ok(json!(id)),
+                "{pane} reads {id}"
+            );
+        }
+    }
+    for pane in ["neighbor", "outsider", "stranger"] {
+        for id in [&design, &review, &brief, &ask] {
+            assert_eq!(
+                mission.show(pane, id).unwrap_err(),
+                "letter_unavailable",
+                "{pane} reads {id}"
+            );
+        }
+    }
+
+    // A letter between two agents of the node without the Conductor stays
+    // between the two.
+    let between = mission.write("worker", "reviewer", "request");
+    assert!(mission.show("reviewer", &between).is_ok());
     assert_eq!(
-        mission.show("reviewer", &progress).unwrap_err(),
+        mission.show("verifier", &between).unwrap_err(),
         "letter_unavailable"
     );
 }
 
 /// Reading is all the grant is: the worker neither takes the checker's
-/// letter in, nor cancels it, nor answers it.
+/// letter in, nor cancels it, nor answers it, and the checker neither of
+/// the worker's.
 #[test]
-fn reading_a_checkers_letter_does_not_let_the_worker_act_on_it() {
+fn reading_a_node_letter_does_not_let_another_agent_of_the_node_act_on_it() {
     let mission = Fixture::start();
     let verdict = mission.write("reviewer", "conductor", "request");
+    let design = mission.write("worker", "conductor", "request");
 
     assert!(mission.show("worker", &verdict).is_ok());
-    for command in [
-        Command::Ack {
-            id: verdict.clone(),
-        },
-        Command::Cancel {
-            id: verdict.clone(),
-        },
-        Command::Reply {
-            id: verdict.clone(),
-            intent: "worker-answer".into(),
-            body: "answered by the wrong agent".into(),
-        },
-    ] {
-        assert_eq!(
-            mission.run("worker", command).unwrap_err(),
-            "letter_unavailable"
-        );
+    assert!(mission.show("reviewer", &design).is_ok());
+    for (pane, id) in [("worker", &verdict), ("reviewer", &design)] {
+        for command in [
+            Command::Ack { id: id.clone() },
+            Command::Cancel { id: id.clone() },
+            Command::Reply {
+                id: id.clone(),
+                intent: format!("{pane}-answer"),
+                body: "answered by the wrong agent".into(),
+            },
+        ] {
+            assert_eq!(
+                mission.run(pane, command).unwrap_err(),
+                "letter_unavailable",
+                "{pane} {id}"
+            );
+        }
+        let kept = mission.show("conductor", id).unwrap();
+        assert_eq!(kept["state"], "pending");
+        assert_eq!(kept["waiting_answer"], true);
     }
-    let kept = mission.show("conductor", &verdict).unwrap();
-    assert_eq!(kept["state"], "pending");
-    assert_eq!(kept["waiting_answer"], true);
 }
 
-/// The grant follows the book: a node that no longer binds the checker, or
-/// whose worker is another agent now, grants nothing.
+/// The grant follows the book: a node that no longer binds the checkers, or
+/// whose worker is another agent now, grants nothing to the agent it let go.
 #[test]
 fn the_grant_ends_with_the_nodes_binding() {
     let mission = Fixture::start();
     let verdict = mission.write("reviewer", "conductor", "report");
+    let design = mission.write("worker", "conductor", "progress");
     assert!(mission.show("worker", &verdict).is_ok());
+    assert!(mission.show("reviewer", &design).is_ok());
 
     mission.runtime.lock().unwrap().missions.book.missions[0].nodes[0].criteria[0]
         .checkers
         .clear();
     assert_eq!(
         mission.show("worker", &verdict).unwrap_err(),
+        "letter_unavailable"
+    );
+    assert_eq!(
+        mission.show("reviewer", &design).unwrap_err(),
         "letter_unavailable"
     );
 

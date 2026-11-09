@@ -79,13 +79,13 @@ The current first-line format is `Hide letter <id> from <name> (<agent>) [<kind>
 
 ### Who may read a letter
 
-`hide request show <id>` answers a letter's sender and its recipient, and every other caller is refused `letter_unavailable`, as for a letter that does not exist.
-The one other reader is the worker of a mission node, who may read a letter written by a checker bound to a line of that same node (its reviewer or verifier) to the mission's Conductor.
-Without it a review written to the Conductor reached the worker only as the Conductor's copy of it (with-hide/hide-private#656).
-The core works the pairs out under its lock from the mission book at each call (`MissionBook::checkers_read_by`, `Runtime::node_checker_exchanges`): the reader is the node's own `agent_id`, the writer a checker of one of that node's lines, the recipient the Conductor of the same mission.
+`hide request show <id>` answers a letter's sender and its recipient, and every other caller is refused `letter_unavailable`, as for a letter that does not exist; its `next_action` says to ask the agent that named the letter for its body.
+The other readers are the agents bound to a mission node, its worker (`agent_id`) and the checkers bound to its lines (its reviewer and verifier): each may read a letter between the mission's Conductor and another agent bound to that same node, either way.
+A Conductor hands a node's work around by a letter's id, the worker's design to the reviewer and the review to the verifier, so without it the checker was refused the letter it was pointed at and asked for the text again (with-hide/hide#2298), as the worker once was for its reviewer's verdict (with-hide/hide-private#656).
+The core works the pairs out under its lock from the mission book at each call (`MissionBook::node_letters_read_by`, `Runtime::node_exchanges`): the reader is bound to the node, the other party of the letter is the Conductor of the same mission, and its writer or recipient is another agent bound to that node.
 It hands them to the store as data (`Authority::also_reads`), and the store alone decides the read (`mailbox::show`), so what a read answers is the same for every reader.
-A worker of another node, a worker of another mission, a worker its node no longer binds, a checker reading the worker's letters, a checker reading another checker's, a checker's letter to anyone but the Conductor, and an agent in no mission read nothing they did not read before.
-The grant is a read and nothing else: taking the letter in, cancelling it and answering it stay with its sender and recipient (`mailbox::authorized`), and a worker that tries is refused `letter_unavailable` as before.
+An agent of another node, of another mission or of no mission, an agent its node no longer binds, and a letter of the node's agents to anyone but the Conductor, such as the worker's letter to its reviewer, are read by nobody beyond the letter's own two parties.
+The grant is a read and nothing else: taking the letter in, cancelling it and answering it stay with its sender and recipient (`mailbox::authorized`), and an agent of the node that tries is refused `letter_unavailable` as before.
 `hide-core/src/runtime/tests/mission_letters.rs` holds the boundary.
 `<name>` is the sender's [wire name](#names-on-the-wire-and-on-screen), and so are the names of a letter's and a watch's endpoints in every answer.
 A batch keeps the first letter's sender attribution in the request view; neither later headers nor older delivery formats select a sender.
