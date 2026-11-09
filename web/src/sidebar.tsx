@@ -645,6 +645,16 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
   );
 }
 
+/**
+ * A PR pressed in a 프로젝트 row's card or list: its card in the slot of that
+ * row's pane, which takes the keyboard, as on the 태스크 row (operator
+ * decision 2026-11-09); the browser modifier still opens it on GitHub.
+ */
+function openRowPullRequest(actions: Actions, pane: string, pull: SessionPull, external: boolean) {
+  if (external) actions.openLink(pull.url, true);
+  else actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, { pane });
+}
+
 function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: ListedAgent; context: ListContext }) {
   return (
     <SidebarAgentRow
@@ -657,7 +667,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       ask={agent.state.needs_you}
       selected={agent.pane_id === context.focusRowPane}
       onOpen={(id) => context.actions.openListedAgent(id)}
-      onOpenPullRequest={(url, external) => context.actions.openLink(url, external)}
+      onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
       menu={context.agentRowMenu}
@@ -1608,7 +1618,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
             remote={remote}
             selected={agent.pane_id === context.focusRowPane}
             onOpen={depth === 0 || !parent ? (id) => context.actions.openListedAgent(id) : (id) => context.actions.followRelation(parent.pane_id, id, agent.identity_label)}
-            onOpenPullRequest={(url, external) => context.actions.openLink(url, external)}
+            onOpenPullRequest={(pull, external) => openRowPullRequest(context.actions, agent.pane_id, pull, external)}
             inset={inset}
             // A tree row is one line with no branch (B14); the popover names a differing branch.
             branchShown={false}
