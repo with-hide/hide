@@ -17,6 +17,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { HideAnswer } from "./agent-pane";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
+import { chord } from "./chords";
 import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
@@ -142,6 +143,17 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
     await expect(map.locator("[data-mission-panel]")).toHaveCount(0);
     await expect(map).toBeVisible();
     await screenshot(page, "mission-map-running");
+
+    // The card belongs to the Agent tab it opened in: another tab in front shows none, and back in that tab it is as it was (operator decision 2026-11-09).
+    const home = (await page.locator("[data-tab][aria-selected=true]").getAttribute("data-tab"))!;
+    await page.keyboard.press(chord("new_tab"));
+    await expect(page.locator("[data-tab][aria-selected=true]")).not.toHaveAttribute("data-tab", home);
+    await expect(map).toHaveCount(0);
+    await screenshot(page, "mission-card-other-tab");
+    await page.locator(`[data-tab="${home}"]`).click();
+    await expect(map).toBeVisible();
+    await expect(map.locator('[data-mission-node="api"]')).toHaveAttribute("data-node-status", "working");
+    await screenshot(page, "mission-card-back");
   } finally {
     daemon?.stop();
     fixture.stop();
