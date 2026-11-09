@@ -830,6 +830,80 @@ fn a_child_of_the_same_agent_takes_its_parents_account_only_from_a_record_that_d
     );
 }
 
+#[test]
+fn a_project_that_preselects_work_starts_the_default_account_when_the_default_is_named_and_work_when_nothing_is()
+ {
+    let mut runtime = listed();
+    let node = runtime.node.to_string();
+    project_default(&mut runtime, "p-work");
+    let profiles = runtime.machine_profiles(&node).cloned();
+    let project = runtime.project_agent_profile(&node, ROOT, "claude");
+    let pick = |chosen: Option<&str>, parent: crate::launch::Parent| {
+        let chosen = chosen
+            .map(|id| crate::launch::chosen_id("claude", id, profiles.as_ref()))
+            .transpose()
+            .unwrap();
+        crate::launch::pick(
+            "claude",
+            chosen,
+            &parent,
+            project.as_ref(),
+            profiles.as_ref(),
+        )
+        .profile()
+        .map(|(id, _)| id.0)
+    };
+    // The start panel's `Claude Code` names the built-in default: the account
+    // the project preselected for an unchosen start does not take its place.
+    assert_eq!(pick(Some("default"), crate::launch::Parent::None), None);
+    // `hide agent spawn` with no `--profile` and no same-kind parent takes the
+    // project's preselection.
+    assert_eq!(
+        pick(None, crate::launch::Parent::None).as_deref(),
+        Some("p-work")
+    );
+    // A same-kind child takes its parent's item, whatever the project chose.
+    assert_eq!(pick(None, crate::launch::Parent::Default), None);
+    let side = crate::launch::LaunchProfile {
+        id: ProfileId("p-side".into()),
+        name: "side".into(),
+        account: AccountKey::Folder("/home/me/accounts/side".into()),
+    };
+    assert_eq!(
+        pick(None, crate::launch::Parent::Profile(side)).as_deref(),
+        Some("p-side")
+    );
+}
+
+#[test]
+fn the_panel_shows_the_choice_it_was_sent_while_a_start_naming_nothing_picks_again_when_it_starts()
+{
+    let mut runtime = listed();
+    let node = runtime.node.to_string();
+    let mut project = workspace("project", "blog", ROOT, Vec::new());
+    project.device_id = node.clone();
+    project.path = ROOT.to_owned();
+    runtime.snapshot.navigator.workspaces = vec![project];
+    project_default(&mut runtime, "p-work");
+    runtime.refresh_start_profile_catalog();
+    let shown = |runtime: &Runtime| {
+        runtime.snapshot.status.start_profiles["project"].profiles["claude-code"].clone()
+    };
+    assert_eq!(shown(&runtime), "p-work");
+    // The project's choice moves in another window before the panel's start
+    // reaches the core, and the panel has not yet read it: a start that names
+    // nothing takes the new choice, one that names the shown item the shown one.
+    project_default(&mut runtime, "p-side");
+    assert_eq!(shown(&runtime), "p-work");
+    let start = |chosen: Option<&str>| {
+        runtime
+            .new_start_profile(&node, Some("claude"), Some(ROOT), chosen)
+            .map(|profile| profile.map(|(id, _)| id.0))
+    };
+    assert_eq!(start(None), Ok(Some("p-side".into())));
+    assert_eq!(start(Some("p-work")), Ok(Some("p-work".into())));
+}
+
 /// A node that answers each call from a script, in order, and keeps what it
 /// was asked.
 struct Scripted {

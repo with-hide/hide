@@ -257,3 +257,65 @@ it("shows the profile the core would pick, the project's first, and sends a prof
     vi.unstubAllGlobals();
   }
 });
+
+it("shows the core's choice for another project, and opens again on the core's choice rather than the last pick (agent-profiles I-1.8)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null, startable: true });
+  const project = (id: string) => ({ id, label: id, path: `/local/${id}`, device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: `${id}-main`, workspace_id: id, label: "main", path: `/local/${id}`, exists: true, is_primary: true }] });
+  const rest = {
+    navigator: {
+      focused_device_id: "core-machine",
+      workspaces: [project("blog"), project("docs")],
+      devices: [{ id: "core-machine", kind: "local", label: "Core machine", state: "local", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], profiles: { state: "listed", version: 2, profiles: [listed("p-work", "work"), listed("p-side", "side")], defaults: {} } } }],
+    },
+    ui_state: { agent_start: { kind: "claude", models: {} } },
+    status: {
+      start_profiles: {
+        blog: { device_id: "core-machine", root: "/local/blog", profiles: { "claude-code": "p-side" } },
+        docs: { device_id: "core-machine", root: "/local/docs", profiles: { "claude-code": "default" } },
+      },
+    },
+  } as unknown as SnapshotRest;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const q = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+  const open = async () => {
+    await act(async () => {
+      useShellStore.setState({ rest, connection: "live" });
+      useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null });
+      useStartPanel.setState(panel, true);
+      useStartPanel.getState().open(false, { projectId: "blog", kind: "claude" });
+      root.render(<TooltipProvider><StartPanelHost actions={createActions(() => true)} /></TooltipProvider>);
+    });
+  };
+  try {
+    await open();
+    const trigger = q("[data-profile-pick]")!;
+    trigger.focus();
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    const option = q('[data-profile-pick-option="p-work"]')!;
+    option.focus();
+    await act(async () => { option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
+    // Another project shows what the core would pick there, not the earlier pick.
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/docs")));
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("default");
+    // A panel opened again starts from the core's choice, not the last pick.
+    await act(async () => root.render(<></>));
+    await open();
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-side");
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
+});
