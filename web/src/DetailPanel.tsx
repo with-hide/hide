@@ -140,7 +140,9 @@ export function DetailPanel({ actions }: { actions: Actions }) {
         </span>
         {item.kind === "mission" ? (
           <>
-            <Button variant="text" size="inline" className="shrink-0 px-xxs text-caption font-normal text-muted-foreground" onClick={() => actions.openMissions()} data-detail-all-missions="true">
+            {/* The sidebar's 미션 row's own mark, so the button reads as the way to the same screen. */}
+            <Button variant="secondary" size="sm" className="mr-xxs" onClick={() => actions.openMissions()} data-detail-all-missions="true">
+              <WaypointsIcon aria-hidden="true" />
               {t("missionScreen.allMissions")}
             </Button>
             <Hint label={t("missionScreen.settings")}>
