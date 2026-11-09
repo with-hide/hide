@@ -216,7 +216,7 @@ impl Fixture {
         // spelling. TempDir owns this unique private short-root fixture.
         let dir = crate::short_tempdir();
         // Resolved, so paths compare equal to what the stand-in programs record.
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let root = hide_platform::fs::identity::canonical(dir.path()).unwrap();
         let home = root.join("home");
         let kit = root.join("kit");
         std::fs::create_dir_all(home.join(".claude")).unwrap();

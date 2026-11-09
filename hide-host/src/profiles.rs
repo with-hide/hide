@@ -1428,7 +1428,9 @@ mod tests {
             .unwrap();
         let tree = node.root.join("repo-task");
         std::fs::create_dir_all(tree.join(".git")).unwrap();
-        let tree = std::fs::canonicalize(&tree).unwrap();
+        let tree = hide_platform::fs::identity::canonical(&tree).unwrap();
+        // Claude Code reads resolved folder keys with forward slashes on Windows too.
+        let key = hide_platform::path::to_wire(&tree).unwrap();
         let trust = |profile: Option<ProfileId>| {
             node.call(Call::AgentTrust {
                 agent: "claude".to_owned(),
@@ -1440,7 +1442,7 @@ mod tests {
         let trusted = |file: &Path| {
             std::fs::read(file).ok().is_some_and(|bytes| {
                 serde_json::from_slice::<Value>(&bytes).unwrap()["projects"]
-                    .get(tree.to_str().unwrap())
+                    .get(&key)
                     .is_some()
             })
         };

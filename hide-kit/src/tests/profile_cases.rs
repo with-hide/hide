@@ -292,9 +292,9 @@ fn written(paths: &[PathBuf]) -> Vec<(PathBuf, Seen)> {
         .collect()
 }
 
-/// An account a released build's device helper set up, upgraded by a pass
-/// that knows profiles: its pieces stay the agent's default account's, and
-/// the pass after the upgrade writes nothing.
+/// An account a released build's device helper set up, relocated to this
+/// machine before a pass that knows profiles: its pieces stay the agent's
+/// default account's, and the following pass writes nothing.
 #[test]
 fn a_released_account_keeps_its_pieces_in_the_default_account_and_a_second_pass_writes_nothing() {
     for released in crate::upgrade_tests::homes() {
@@ -312,6 +312,12 @@ fn a_released_account_keeps_its_pieces_in_the_default_account_and_a_second_pass_
             .next()
             .unwrap();
         fixture.target.install = install.clone();
+        // The released home came from another machine. Bind only its state
+        // route to this native private home before the full kit pass; the
+        // raw released records are checked separately in upgrade_tests.
+        let mut copied = record::load(fixture.home(), &fixture.target.install).unwrap();
+        copied.remember_state_route(layout::state_dir_from_process(fixture.home()));
+        record::save(fixture.home(), &copied).unwrap();
         let default = Profile::builtin_default("claude-code");
         with_profiles(&mut fixture, &[&default], &[]);
 
@@ -841,7 +847,7 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
 fn made_worktree(root: &Path) -> PathBuf {
     let tree = root.join("repo-task");
     std::fs::create_dir_all(tree.join(".git")).unwrap();
-    std::fs::canonicalize(&tree).unwrap()
+    hide_platform::fs::identity::canonical(&tree).unwrap()
 }
 
 #[test]
@@ -869,8 +875,8 @@ fn the_folder_trust_hide_wrote_in_a_profile_account_leaves_with_its_last_profile
         account: &account,
     };
     let tree = made_worktree(&fixture.root);
-    // Claude Code keys a folder by its path as written.
-    let key = tree.to_str().unwrap().to_owned();
+    // Claude Code reads resolved folder keys with forward slashes on Windows too.
+    let key = hide_platform::path::to_wire(&tree).unwrap();
     folder_trust::trust_worktree(Agent::ClaudeCode, at, &tree, Tools::none()).unwrap();
     folder_trust::trust_worktree(Agent::ClaudeCode, &home, &tree, Tools::none()).unwrap();
     let in_account = Agent::ClaudeCode.settings_path(at);
