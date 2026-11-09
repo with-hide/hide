@@ -5,6 +5,7 @@ import { askWhat } from "./components/agent-tree";
 import { Button } from "./components/ui/button";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { statusText } from "./agentStatus";
+import { waitWord } from "./agentRow";
 import { formatDateTime } from "./i18n/format";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -31,12 +32,12 @@ export type TurnCardTrigger = {
 /**
  * The pane's turn card (PRD pane-last-request D-05, B6-B9): what the
  * operator asked, what the agent is doing about it and the turns before,
- * under the request on the pane's second row, its only trigger. A press or
- * the keyboard's focus on the request opens it, never the pointer passing
+ * under the pane's second row, whose `<request> → <answer>` is its trigger. A press or
+ * the keyboard's focus on the turn opens it, never the pointer passing
  * over, which kept raising it in the way of the terminal; a second press or
  * Esc closes it. Opening never takes the keyboard from the terminal.
  */
-export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; actions: Actions; trigger: (state: TurnCardTrigger) => ReactNode }) {
+export function PaneTurnCard({ paneId, actions, trigger, anchorClassName = "flex min-w-0 items-center" }: { paneId: string; actions: Actions; trigger: (state: TurnCardTrigger) => ReactNode; /** Where the trigger sits; the card opens under it. */ anchorClassName?: string }) {
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(false);
   // Closed from inside with the keyboard sent back to the trigger: the
@@ -92,7 +93,7 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
   return (
     <Popover open={open && agent !== undefined} onOpenChange={(next) => (next ? undefined : dismiss())} modal={false}>
       <PopoverAnchor asChild>
-        <span ref={anchor} className="flex min-w-0 items-center">{trigger(state)}</span>
+        <span ref={anchor} className={anchorClassName}>{trigger(state)}</span>
       </PopoverAnchor>
       {agent ? (
         <PopoverContent
@@ -167,7 +168,9 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
   if (header?.working) return { verb: statusText(t, "working"), asks: false, text: header.progress ?? null };
   const end = agent.request?.end;
   if (!end) return null;
-  return { verb: t(`requests.end.${end}`), asks: end === "question" || end === "blocked", text: agent.request?.line ?? null };
+  // A turn that ended waiting says what it waits for when the row knows, as the sidebar's line does.
+  const verb = end === "waiting" ? waitWord(t, agent.wait) : t(`requests.end.${end}`);
+  return { verb, asks: end === "question" || end === "blocked", text: agent.request?.line ?? null };
 }
 
 /** A turn's place on the card's rail: a ring in its end's colour, filled for the shown turn's two halves; the answer filled in success, the letters a small ring. */

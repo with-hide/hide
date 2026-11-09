@@ -1,7 +1,8 @@
 // The turn card's later half over fixed, invented wire values shaped like
 // three real sessions: a Conductor whose request is buried by mission
 // letters, a delegation that hit a block, and a child's question its parent
-// decided; the fourth opens the Conductor's whole answer.
+// decided; then an answer that stands for now and says what it waits for,
+// and the Conductor's whole answer and letters opened.
 import { useEffect } from "react";
 import { TurnCard } from "../PaneTurnCard";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -25,7 +26,7 @@ const WHOLE = `네, 실제로 생길 수 있습니다. 다만 흔한 경우는 �
 - 기본 계정이 준비 안 됨: 프로필은 준비됐는데도 시작이 거절됩니다.
 - 기본 계정만 준비됨: 프로필 쪽 훅이 빠져 있어도 그냥 시작됩니다.`;
 
-type Case = { id: string; label: string; header: PaneHeader; request: NonNullable<AgentRow["request"]>; opened?: boolean; lettersOpened?: boolean };
+type Case = { id: string; label: string; header: PaneHeader; request: NonNullable<AgentRow["request"]>; wait?: AgentRow["wait"]; opened?: boolean; lettersOpened?: boolean };
 
 const CONDUCTOR: Case = {
   id: "conductor",
@@ -105,6 +106,18 @@ const CASES: Case[] = [
       },
     },
   },
+  {
+    id: "waiting-children",
+    label: "답이 지금 상태 · 자식 기다림",
+    header: { working: false, notice: null, band: null, request: { text: "리뷰 두 갈래로 나눠 맡기기", images: 0 } },
+    wait: "children",
+    request: {
+      verb: "waiting", verb_since_unix_ms: AT, pull_requests: [], recent_turns: [{ request: "리뷰어 고르기", end: "waiting", line: null, at_unix_ms: min(-30) }], later_by: null, end: "waiting", line: "자식 둘이 리뷰 중",
+      request: { text: "리뷰 두 갈래로 나눠서 맡겨 줘", cut: false, images: 0, at_unix_ms: min(-20), sender: { kind: "operator" } },
+      request_summary: "리뷰 두 갈래로 나눠 맡기기",
+      answer: { offset: 2, end: "waiting", line: "리뷰를 자식 둘에게 맡기고 결과를 기다림", whole: false, at_unix_ms: min(-18) },
+    },
+  },
   { ...CONDUCTOR, id: "answer-opened", label: "답 전체 보기 펼침", opened: true },
   { ...CONDUCTOR, id: "letters-opened", label: "편지 전체 보기 펼침 (시간순)", lettersOpened: true },
 ];
@@ -122,7 +135,7 @@ export function TurnCardCases({ seed }: { seed: AgentRow }) {
           <div key={example.id} className="flex flex-col gap-xs" data-turn-card-case={example.id}>
             <div className="text-micro text-muted-foreground">{example.label}</div>
             <div className="w-(--size-turn-card) max-w-full rounded-md border border-border bg-popover text-caption text-popover-foreground shadow-lg">
-              <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} answerOpened={example.opened} lettersOpened={example.lettersOpened} />
+              <TurnCard agent={{ ...seed, id: example.id, pane_id: example.id, request: example.request, wait: example.wait }} header={example.header} onRecord={() => undefined} onReadWhole={() => undefined} answerOpened={example.opened} lettersOpened={example.lettersOpened} />
             </div>
           </div>
         ))}

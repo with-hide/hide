@@ -28,6 +28,7 @@ import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
 import { Button } from "./components/ui/button";
+import { RowOverlayButton } from "./components/ui/row-button";
 import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
 import { HumanTurnCopy } from "./components/human-turn-copy";
 
@@ -151,20 +152,26 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // surface; work left and a quiet turn sit in the head's surface.
   const tone = band && !unfinished(band) ? "bg-secondary border-l-2 border-warning text-foreground" : "bg-card border-t border-border text-muted-foreground";
   const twoLines = mode === "two_lines";
+  // With a request the whole `<request> → <answer>` is the turn card's one
+  // trigger: its button lies behind the row, the words let a press through
+  // to it, and every control in the row (the children button, Open, Done,
+  // copy) keeps its own press above it.
+  const through = request ? "pointer-events-none relative [&_button]:pointer-events-auto [&_[data-human-turn-place]]:pointer-events-auto [&_[data-pane-band-who]]:pointer-events-auto" : null;
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
     {/* One row whether or not it leads with a request, so the tree's
         popover stays open when the request comes or goes. One line caps the
         request at two fifths when an answer follows and cuts each part, so
         no turn grows over the terminal; two lines stack the parts, each cut. */}
-    <div className={cn("flex min-w-0 gap-x-xs px-sm text-caption", twoLines ? "flex-col items-stretch" : "flex-nowrap items-center", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
+    <div className={cn("relative flex min-w-0 gap-x-xs px-sm text-caption", twoLines ? "flex-col items-stretch" : "flex-nowrap items-center", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
+      {request ? <PaneTurnCard paneId={paneId} actions={actions} anchorClassName="peer/turn absolute inset-0" trigger={(state) => <TurnRowButton paneId={paneId} request={request} state={state} />} /> : null}
       {tree || request ? (
-        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full")} data-pane-turn-part="request">
+        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full", through, request && "text-subtle-foreground", request && TURN_LIT)} data-pane-turn-part="request">
           {tree}
-          {request ? <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
+          {request ? <span className="min-w-0 truncate" data-pane-turn-request-text="true">{requestWords(t, request)}</span> : null}
         </div>
       ) : null}
       {answered ? (
-        <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs", !twoLines && "grow", !twoLines && !request && "basis-0")} data-pane-turn-part="answer">
+        <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs", !twoLines && "grow", !twoLines && !request && "basis-0", through, request && TURN_LIT)} data-pane-turn-part="answer">
           {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
           {answer}
         </div>
@@ -174,32 +181,32 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   </div>;
 }
 
+/** The turn's words brightened together while the pointer is on the row or its card is open; a word in its own colour keeps it. */
+const TURN_LIT = "peer-hover/turn:text-foreground peer-has-[[data-state=open]]/turn:text-foreground";
+
 /**
- * The request half of the turn: the request's one line in quiet text, with
- * no word before it on screen (its name still says `요청`), a button the
- * keyboard reaches. A press or focus on it opens the turn card, the
- * pointer passing over does not; it never takes the keyboard from the terminal.
+ * The turn card's trigger: the whole `<request> → <answer>` row, a button
+ * behind its words that lights the row under the pointer, named `요청: …`
+ * with no word before the request on screen, and one stop for the keyboard.
+ * A press or focus on it opens the turn card, the pointer passing over does
+ * not; it never takes the keyboard from the terminal.
  */
-function TurnRequestButton({ paneId, request, state }: { paneId: string; request: NonNullable<PaneHeader["request"]>; state: TurnCardTrigger }) {
+function TurnRowButton({ paneId, request, state }: { paneId: string; request: NonNullable<PaneHeader["request"]>; state: TurnCardTrigger }) {
   const { t } = useInterfaceTranslation();
-  const words = requestWords(t, request);
   return (
-    <button
-      type="button"
-      aria-label={`${t("paneTurn.request")}: ${words}`}
+    <RowOverlayButton
+      aria-label={`${t("paneTurn.request")}: ${requestWords(t, request)}`}
       aria-expanded={state.open}
       data-pane-turn-request={paneId}
       data-pinned={state.pinned || undefined}
       data-state={state.open ? "open" : "closed"}
-      className="flex min-w-0 items-center gap-xxs rounded-xs px-xxs -mx-xxs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:text-foreground"
+      className="rounded-none"
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
       onFocus={state.onFocus}
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
-    >
-      <span className="min-w-0 truncate" data-pane-turn-request-text="true">{words}</span>
-    </button>
+    />
   );
 }
 
@@ -360,7 +367,7 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   return (
     // The button names the agent as the plain head does, then what a press
     // does. The pointer opens nothing here: the turn card opens from the
-    // request on the second row only, and the record shows the whole title.
+    // turn on the second row only, and the record shows the whole title.
     <button
       type="button"
       // Two columns, the marks and the title: the title's column gives up its width down to nothing, the marks' never, so a narrow head truncates the title rather than drawing the marks over the chips after it.
