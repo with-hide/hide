@@ -81,8 +81,8 @@ pub(super) enum Reread {
 }
 
 /// An input shown to the operator: the pane whose row shows it, since when,
-/// and what it says.
-pub(crate) type InputAsk = (String, u64, AskSubject);
+/// what it says, and the brief's spawn or the letter it is.
+pub(crate) type InputAsk = (String, u64, AskSubject, String);
 
 impl Runtime {
     /// The pane a spawn's agent was started in, as the delivery observations
@@ -718,8 +718,11 @@ impl Runtime {
                 && self.notice_to(&spawn.parent, ledger).is_some();
             if typed::shown_to_operator(input, has_parent, now) {
                 let held = self.input_held(&spawn.id, input.attempts);
-                asks.entry(observation.actor.pane_id.clone())
-                    .or_insert((since, subject(InputKind::Brief, input, held)));
+                asks.entry(observation.actor.pane_id.clone()).or_insert((
+                    since,
+                    subject(InputKind::Brief, input, held),
+                    spawn.id.clone(),
+                ));
             }
         }
         for letter in &ledger.letters {
@@ -748,12 +751,15 @@ impl Runtime {
             }
             let has_sender = self.observed_sender(&letter.sender).is_some();
             if typed::shown_to_operator(&input, has_sender, now) {
-                asks.entry(observation.actor.pane_id.clone())
-                    .or_insert((since, subject(InputKind::Letter, &input, false)));
+                asks.entry(observation.actor.pane_id.clone()).or_insert((
+                    since,
+                    subject(InputKind::Letter, &input, false),
+                    letter.id.clone(),
+                ));
             }
         }
         asks.into_iter()
-            .map(|(pane, (since, subject))| (pane, since, subject))
+            .map(|(pane, (since, subject, id))| (pane, since, subject, id))
             .collect()
     }
 }
@@ -767,7 +773,7 @@ impl Runtime {
         if asks == self.plans.input_asks {
             return false;
         }
-        for (pane, _, subject) in &asks {
+        for (pane, _, subject, _) in &asks {
             if !self
                 .plans
                 .input_asks
@@ -1228,6 +1234,7 @@ pub(crate) mod tests {
                     spent: false,
                     held: true,
                 },
+                spawn.clone(),
             )]
         );
         assert_eq!(input_of(&runtime, &spawn).attempts, 1);

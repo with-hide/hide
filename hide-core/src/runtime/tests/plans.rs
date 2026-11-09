@@ -363,6 +363,7 @@ fn a_new_plan_past_the_cap_takes_the_place_of_the_one_updated_longest_ago() {
                 ask: None,
                 created_at_unix_ms: 0,
                 updated_at_unix_ms: 1_000 + at as u64,
+                asked_at_unix_ms: None,
             },
         );
     }

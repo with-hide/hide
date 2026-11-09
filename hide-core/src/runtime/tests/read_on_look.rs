@@ -1151,3 +1151,51 @@ fn a_pane_the_move_worker_focuses_as_the_move_ends_is_read_with_no_window() {
     }
     assert!(fake.methods().contains(&"move_pane_beside"));
 }
+
+/// A question the core laid on a device's row is read as on this machine's
+/// (docs/status-model.md, A question the core lays stays read): the plan the
+/// operator read stays read while the device's agent works and rests under
+/// it, and the plan put up for review again is news.
+#[test]
+fn a_device_rows_read_plan_review_stays_read_through_its_agents_turns() {
+    let t = tree();
+    let (mut runtime, _views) = device(origins()[0].clone(), true);
+    let put_up = |runtime: &mut Runtime, at: u64| {
+        let plan: crate::plans::Plan = serde_json::from_value(json!({
+            "session": {"device_id": DEVICE, "agent": "codex", "session_id": "s-t1"},
+            "steps": [{"key": "a", "title": "Read it", "status": "planned"}],
+            "review": "proposed",
+            "created_at_unix_ms": 1, "updated_at_unix_ms": at, "asked_at_unix_ms": at
+        }))
+        .unwrap();
+        runtime.plans.book.insert(plan.session.clone(), plan);
+        runtime.plans.edit += 1;
+    };
+    let arrive = |runtime: &mut Runtime, t1: (&str, u64), focused: &str| {
+        runtime.ingest_remote_session(
+            DEVICE,
+            Ok(device_session(
+                &t.main,
+                &[("t1", t1.0, t1.1), ("t2", "working", 1)],
+                focused,
+            )),
+        );
+        publish(runtime);
+    };
+    put_up(&mut runtime, 1);
+    arrive(&mut runtime, ("idle", 1), "t2");
+    assert!(unread(&runtime, "t1"), "the plan waits to be read");
+    arrive(&mut runtime, ("idle", 1), "t1");
+    assert!(!unread(&runtime, "t1"), "the device's keyboard read it");
+
+    arrive(&mut runtime, ("working", 2), "t2");
+    arrive(&mut runtime, ("done", 3), "t2");
+    assert!(
+        !unread(&runtime, "t1"),
+        "the agent's own work and rest under the plan are not news"
+    );
+
+    put_up(&mut runtime, 2);
+    publish(&mut runtime);
+    assert!(unread(&runtime, "t1"), "the plan put up again is news");
+}

@@ -109,17 +109,68 @@ enum Asked {
     Pane(String),
 }
 
-/// A question the core asks, and when it was asked.
-type CoreAsk = (Asked, u64, AskSubject);
+/// A question the core asks, when it was asked, and the event that raised
+/// it (`ask_id`).
+type CoreAsk = (Asked, u64, AskSubject, String);
 
 /// What laying a core question changed on a row: whom the questions laid
 /// there were asked of, the question it put there, what it asks, and the
 /// demand the row had before.
+#[derive(Clone)]
 struct Laid {
     asked: Asked,
     turn: hide_session::turns::UserTurnFact,
     subject: AskSubject,
     demand: String,
+}
+
+/// What names each of the core's questions: the event that raised it, never
+/// its words or when it was laid, so the operator's read of a question
+/// holds while it stands and a question raised again or anew is news
+/// (docs/status-model.md, A question the core lays stays read). Each names
+/// one raise: a plan put up for review again, a mission's next question or
+/// next raise, is another.
+mod ask_id {
+    use crate::missions::{Attention, Mission, MissionNode};
+    use crate::plans::Plan;
+
+    /// A plan put up for review, by its session, its instance and when it
+    /// was put up; a plan proposed before that was kept is named by its
+    /// instance alone.
+    pub(super) fn plan_review(plan: &Plan) -> String {
+        let session = &plan.session;
+        format!(
+            "plan:{}/{}/{}:{}:{}",
+            session.device_id,
+            session.agent,
+            session.session_id,
+            plan.id(),
+            plan.asked_at_unix_ms.unwrap_or_default()
+        )
+    }
+
+    /// A mission's decision, by its question's key; a decision from before
+    /// questions carried one is the mission's only one.
+    pub(super) fn decision(mission: &Mission) -> String {
+        match &mission.question {
+            Some(question) => format!("decision:{}#{}", mission.id, question.key),
+            None => format!("decision:{}", mission.id),
+        }
+    }
+
+    /// A node's attention, by the mission's count of raises that names it.
+    pub(super) fn attention(
+        mission: &Mission,
+        node: &MissionNode,
+        attention: &Attention,
+    ) -> String {
+        format!("attention:{}/{}#{}", mission.id, node.key, attention.key)
+    }
+
+    /// Typed input not taken, by the brief's spawn or the letter.
+    pub(super) fn input(id: &str) -> String {
+        format!("input:{id}")
+    }
 }
 
 /// The plans the shell draws, one per pane whose session has one (B7).
@@ -856,6 +907,16 @@ impl Runtime {
             else {
                 continue;
             };
+            // The device's session kept as it arrived was laid with the
+            // published one and is published from again, so it is relaid
+            // the same way, from what was laid before (`laid` then follows
+            // the published rows).
+            if let Some(mut raw) = self.device_raw_sessions.remove(&target) {
+                let laid = self.plans.laid.clone();
+                self.relay_reviews(&target, &mut raw.agents, &asks);
+                self.plans.laid = laid;
+                self.device_raw_sessions.insert(target.clone(), raw);
+            }
             moved |= self.relay_reviews(&target, &mut agents, &asks);
             if let Some(session) = self.snapshot.status.remote[at].session.as_mut() {
                 session.agents = agents;
@@ -879,7 +940,9 @@ impl Runtime {
             return false;
         }
         self.refresh_agent_lineage();
-        self.refresh_pane_read_state();
+        // Every machine's rows: a question laid on a device's resting row
+        // is news there now, not at the device's next session.
+        self.refresh_read_state_everywhere();
         true
     }
 
@@ -904,6 +967,7 @@ impl Runtime {
                 agent.ask_subject = None;
                 agent.laid_since_unix_ms = None;
                 agent.laid_more = 0;
+                agent.laid_asks.clear();
                 agent.demand = laid.demand;
                 crate::agent_state::derive_from_axes(agent);
             }
@@ -934,15 +998,18 @@ impl Runtime {
             }
             let session = row_session(device, agent);
             // Oldest first, as `core_asks` sorts them.
-            let mut mine = asks.iter().filter(|(asked, ..)| match asked {
-                Asked::Session(asked) => session.as_ref() == Some(asked),
-                Asked::Pane(pane) => *pane == agent.pane_id,
-            });
-            let Some((asked, since, subject)) = mine.next() else {
+            let mine: Vec<&CoreAsk> = asks
+                .iter()
+                .filter(|(asked, ..)| match asked {
+                    Asked::Session(asked) => session.as_ref() == Some(asked),
+                    Asked::Pane(pane) => *pane == agent.pane_id,
+                })
+                .collect();
+            let Some((asked, since, subject, _)) = mine.first() else {
                 continue;
             };
             let (asked, since, subject, more) =
-                (asked.clone(), *since, subject.clone(), mine.count());
+                (asked.clone(), *since, subject.clone(), mine.len() - 1);
             // The question holds the row as a native one does; it carries
             // no words, only its subject.
             let turn = hide_session::turns::UserTurnFact {
@@ -962,6 +1029,7 @@ impl Runtime {
             agent.ask_subject = Some(subject);
             agent.laid_since_unix_ms = Some(since);
             agent.laid_more = more;
+            agent.laid_asks = mine.iter().map(|(.., id)| id.clone()).collect();
             crate::agent_state::derive_from_axes(agent);
         }
     }
@@ -980,6 +1048,7 @@ impl Runtime {
                     Asked::Session(session.clone()),
                     plan.updated_at_unix_ms,
                     review_subject(plan),
+                    ask_id::plan_review(plan),
                 )
             });
         let decisions = self.missions.book.missions.iter().filter_map(|mission| {
@@ -1010,20 +1079,28 @@ impl Runtime {
                 Asked::Session(session.clone()),
                 since,
                 AskSubject::MissionDecision { line: line.clone() },
+                ask_id::decision(mission),
             ))
         });
         let inputs = self
             .plans
             .input_asks
             .iter()
-            .map(|(pane, since, subject)| (Asked::Pane(pane.clone()), *since, subject.clone()));
+            .map(|(pane, since, subject, id)| {
+                (
+                    Asked::Pane(pane.clone()),
+                    *since,
+                    subject.clone(),
+                    ask_id::input(id),
+                )
+            });
         let attentions = self.mission_attention_asks();
         let mut asks: Vec<_> = reviews
             .chain(decisions)
             .chain(inputs)
             .chain(attentions)
             .collect();
-        asks.sort_by_key(|(_, since, _)| *since);
+        asks.sort_by_key(|(_, since, ..)| *since);
         asks
     }
 
@@ -1054,7 +1131,12 @@ impl Runtime {
                     },
                 };
                 if let Some(asked) = self.mission_attention_row(ledger.as_deref(), mission, node) {
-                    out.push((asked, since, subject));
+                    out.push((
+                        asked,
+                        since,
+                        subject,
+                        ask_id::attention(mission, node, attention),
+                    ));
                 }
             }
         }
@@ -1651,6 +1733,7 @@ mod tests {
                 ask: None,
                 created_at_unix_ms: 0,
                 updated_at_unix_ms: example["updated_at_unix_ms"].as_u64().unwrap(),
+                asked_at_unix_ms: None,
             };
             assert_eq!(
                 serde_json::to_value(summary_of(&plan)).unwrap(),
