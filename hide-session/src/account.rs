@@ -320,8 +320,8 @@ impl Root {
     pub(crate) fn holds(&self, path: &Path) -> bool {
         let suffix = self.suffix();
         let below = |anchor: &Path| {
-            path.strip_prefix(anchor)
-                .is_ok_and(|rest| rest.starts_with(suffix) && rest != suffix)
+            hide_platform::path::relative(&anchor.join(suffix), path)
+                .is_ok_and(|rest| !rest.is_root())
         };
         below(&self.anchor)
             || hide_platform::fs::identity::canonical(&self.anchor)
