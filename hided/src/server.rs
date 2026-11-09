@@ -1484,6 +1484,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "profile_unconfirmed" => {
             "The agent's start was typed but Hide could not confirm its program runs; look at the agent's pane before starting it again, since it may be running"
         }
+        "launch_records_full" => {
+            "Hide keeps as many records of how its agents started as it can, so an agent with a profile does not start; close agents you no longer need, then run the same command again"
+        }
         "beside_pane_unavailable" => {
             "The engine could not split your pane (it closed, or the engine refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
         }
@@ -1606,6 +1609,8 @@ enum ScopedRequest {
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
+    /// `hide agent profile`: planned on the owner thread, run off it.
+    AgentProfile(hide_core::agent_profiles::ProfileCommand),
     /// `hide ps [--all]`: the live panes and agents, read from the core's
     /// own state.
     Ps {
@@ -1650,6 +1655,7 @@ impl ScopedRequest {
                 | Self::Mission(..)
                 | Self::Plan(..)
                 | Self::AgentCatalog(..)
+                | Self::AgentProfile(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::AgentArchive { .. }
@@ -1767,6 +1773,12 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("agent_profile") => serde_json::from_value::<
+                            hide_core::agent_profiles::ProfileCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(hide_core::agent_profiles::ProfileCommand::valid)
+                        .map(ScopedRequest::AgentProfile),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -1976,6 +1988,16 @@ async fn scoped_client_loop(
                                     core.plan(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|code| {
                                             let next = hide_core::plans::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AgentProfile(command) => {
+                                    core.prepare_agent_profile(&cap.context.device_id, command)
+                                        .and_then(hide_core::agent_profiles::Prepared::run)
+                                        .map_err(|code| {
+                                            let next = hide_core::agent_profiles::next_action(
                                                 hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)

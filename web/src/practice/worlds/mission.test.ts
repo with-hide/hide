@@ -115,3 +115,19 @@ describe("the mission flow's end: the report and Memory (UI_BEHAVIOR, Practice w
     expect(missionIn(finish(dropped))!.nodes.every((node) => node.status === "done")).toBe(true);
   });
 });
+
+describe("the mission's card in the 보기 slot (operator decision 2026-11-09)", () => {
+  it("opens beside the pane from the chip and goes with ✕, the lane drawing it while it stands", () => {
+    const rest = (model: MissionModel) => MISSION_WORLD.snapshot(model, Date.now()).rest;
+    const open = apply(planned(), { kind: "detail_open", payload: { item: { kind: "mission", mission: "practice-mission" } } });
+    expect(doneAt("chip", open)).toBe(true);
+    expect(rest(open).ui_state!.detail).toEqual({ items: [{ kind: "mission", mission: "practice-mission" }], shown: true });
+    expect(rest(open).workspace_view!.open).toBe(true);
+    // A card of anything else is not this world's; the mission's card again changes nothing it shows.
+    expect(MISSION_WORLD.apply(planned(), { kind: "detail_open", payload: { item: { kind: "cost", workspace_id: "w" } } })).toBeNull();
+    const closed = apply(open, { kind: "detail_close", payload: {} });
+    expect(doneAt("leave", closed)).toBe(true);
+    expect(rest(closed).ui_state!.detail).toEqual({ items: [], shown: false });
+    expect(rest(closed).workspace_view!.open).toBe(false);
+  });
+});

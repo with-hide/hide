@@ -165,6 +165,7 @@ section!(StatusSections, StatusSnapshot, s, {
     stray_hand_offs: Vec<StrayHandOffSnapshot> => s.stray_hand_offs,
     project_adds: Vec<ProjectAddReceiptSnapshot> => s.project_adds,
     agent_definitions: Option<AgentDefinitionsSnapshot> => s.agent_definitions,
+    agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer> => s.agent_profile_answer,
 }, {});
 
 section!(RestSections, Snapshot, s, {

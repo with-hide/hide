@@ -24,7 +24,7 @@ use crate::missions::{
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, Restored, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
-use crate::model::{PrState, PullRequestBadge, ReviewDecision};
+use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
 
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
@@ -2051,15 +2051,17 @@ impl Runtime {
         });
         // The profile its pane's launch record says the session started
         // with, by the rule a child's start reads its parent's.
-        let profile = match self.caller_launch_profile(&actor, &actor.kind) {
-            crate::launch::Parent::Profile(profile) => Some(profile),
-            crate::launch::Parent::Default | crate::launch::Parent::None => None,
+        let (profile, profile_unknown) = match self.caller_launch_profile(&actor, &actor.kind) {
+            crate::launch::Parent::Profile(profile) => (Some(profile), false),
+            crate::launch::Parent::Default | crate::launch::Parent::None => (None, false),
+            crate::launch::Parent::Unknown => (None, true),
         };
         Conductor {
             actor,
             session,
             agent_id,
             profile,
+            profile_unknown,
         }
     }
 
@@ -2067,8 +2069,8 @@ impl Runtime {
     /// (이어받기, PRD mission-tool D-11) runs with when a mission's
     /// Conductor record names that session on that machine: the one the
     /// record kept, `None` for the built-in default (PRD agent-profiles
-    /// D-27); no record names it is `Ok(None)`. Records that name it with
-    /// different profiles answer none of them.
+    /// D-27); no record that knows its profile names it is `Ok(None)`.
+    /// Records that name it with different profiles answer none of them.
     pub(super) fn conductor_resume_profile(
         &self,
         payload: &super::events::AgentStartInCheckoutPayload,
@@ -2093,6 +2095,8 @@ impl Runtime {
             .filter(|device| !device.is_empty())
             .unwrap_or(self.node.as_str());
         let mut found: Option<&Option<crate::launch::LaunchProfile>> = None;
+        // A record that does not know its Conductor's profile says nothing
+        // of it; the session's machine answers then.
         for conductor in self
             .missions
             .book
@@ -2100,11 +2104,12 @@ impl Runtime {
             .iter()
             .map(|mission| &mission.conductor)
             .filter(|conductor| {
-                conductor.session.as_ref().is_some_and(|session| {
-                    session.device_id == device
-                        && session.agent == agent.as_str()
-                        && session.session_id == session_id
-                })
+                !conductor.profile_unknown
+                    && conductor.session.as_ref().is_some_and(|session| {
+                        session.device_id == device
+                            && session.agent == agent.as_str()
+                            && session.session_id == session_id
+                    })
             })
         {
             match found {
@@ -2182,10 +2187,11 @@ impl Runtime {
                 continue;
             };
             // The conversation that came back is the one the record named:
-            // a pane whose own record does not say its profile keeps the one
-            // the conversation started with.
-            if conductor.profile.is_none() && conductor.session == mission.conductor.session {
+            // a pane whose own record does not say its profile keeps what
+            // the mission knew of the one the conversation started with.
+            if conductor.profile_unknown && conductor.session == mission.conductor.session {
                 conductor.profile = mission.conductor.profile.clone();
+                conductor.profile_unknown = mission.conductor.profile_unknown;
             }
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
@@ -2358,7 +2364,19 @@ impl Runtime {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "missions.deleted_with_session", "count": dropped,
         }));
-        // The mission screen's detail of a mission that is gone sends nothing.
+        // A slot card of a mission that is gone would draw nothing, and the
+        // mission screen's detail of it sends nothing.
+        let known: Vec<String> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| mission.id.clone())
+            .collect();
+        self.drop_detail_items(|item| match item {
+            DetailItem::Mission { mission } => known.contains(mission),
+            _ => true,
+        });
         if self
             .missions
             .shown

@@ -188,6 +188,17 @@ fn a_new_start_takes_its_choice_then_its_parents_then_the_project_then_the_machi
         picked(&pick(None, &Parent::None, None)),
         Some("c".to_owned())
     );
+    // A project that names the built-in default starts it, over the
+    // machine's default; a parent still comes first.
+    let builtin_project = ProfileId::default_profile();
+    assert_eq!(
+        picked(&pick(None, &Parent::None, Some(&builtin_project))),
+        None
+    );
+    assert_eq!(
+        picked(&pick(None, &parent, Some(&builtin_project))),
+        Some("b".to_owned())
+    );
     // A parent on the built-in default hands that down, over the project's
     // and the machine's default.
     let builtin = pick(None, &Parent::Default, Some(&project));

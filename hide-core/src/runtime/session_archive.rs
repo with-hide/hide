@@ -1587,6 +1587,7 @@ impl Runtime {
                 resume_session_path,
                 // A descendant opens behind the root resumed before it (B23).
                 stay_behind: !front,
+                profile: None,
             },
             false,
             member.cwd.clone(),

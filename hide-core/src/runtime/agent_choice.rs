@@ -100,9 +100,12 @@ pub(crate) fn choice_arguments(
 
 /// The most launch records the core keeps. A record lives only while its pane
 /// is in its machine's topology and the machine is registered, so the map
-/// holds at most one per such pane; a start past this many is recorded
-/// nowhere and logged (`pane_launch.limit`), and its restarts run on the
-/// CLI's defaults.
+/// holds at most one per such pane. A start with a profile holds its slot
+/// from its plan (`launch::holds`) and is refused when none is left; a start
+/// on the built-in default past this many is recorded nowhere and logged
+/// (`pane_launch.limit`): its restarts run on the CLI's defaults, and a child
+/// it starts cannot know its account, so picks as a start with no parent
+/// does.
 pub(crate) const PANE_LAUNCH_LIMIT: usize = 1024;
 
 /// Whether `launch` describes `agent`: the same kind, and the name Hide
@@ -183,9 +186,10 @@ pub(crate) fn settle_pane_launches(
 impl Runtime {
     /// Records the choice and profile Hide started a `kind` agent named
     /// `name` with in `pane_id` (the core's id for the pane), replacing what
-    /// the pane held: a start on the CLI's defaults with the built-in default
-    /// profile leaves none. `session` is the conversation a restart resumed
-    /// there, which the record then already describes.
+    /// the pane held, the built-in default profile on the CLI's defaults
+    /// included: a record with no profile is what tells a child its parent
+    /// runs with the built-in default (D-32). `session` is the conversation
+    /// a restart resumed there, which the record then already describes.
     pub(crate) fn record_pane_launch(
         &mut self,
         pane_id: &str,
@@ -227,10 +231,15 @@ impl Runtime {
         profile: Option<&crate::launch::LaunchProfile>,
         session: Option<&str>,
     ) -> bool {
+        // A start with a profile took its slot when it was planned; one on
+        // the built-in default takes only a slot no such start holds.
+        let held = if profile.is_some() {
+            0
+        } else {
+            self.profile_holds.unrecorded()
+        };
         let launches = &mut self.snapshot.ui_state.pane_launches;
-        if choice.is_default() && profile.is_none() {
-            launches.remove(pane_id).is_some()
-        } else if !launches.contains_key(pane_id) && launches.len() >= PANE_LAUNCH_LIMIT {
+        if !launches.contains_key(pane_id) && launches.len() + held >= PANE_LAUNCH_LIMIT {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_choice", "kind": "pane_launch.limit",
                 "pane_id": pane_id, "limit": PANE_LAUNCH_LIMIT,
@@ -244,7 +253,12 @@ impl Runtime {
                 session: session.map(str::to_owned),
                 profile: profile.cloned(),
             };
-            launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch)
+            let moved = launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch);
+            if let Some(profile) = profile {
+                let (machine, pane) = crate::address::split_pane(self.node.as_str(), pane_id);
+                self.profile_holds.recorded(machine, pane, &profile.id);
+            }
+            moved
         }
     }
 
@@ -254,23 +268,56 @@ impl Runtime {
         self.kit_states.get(device)?.profiles.as_ref()
     }
 
-    /// The profile a new start of `kind` on `device` that names none and has
-    /// no parent runs with (D-32): the project's default once Project
-    /// settings choose one, else the agent's default there; `None` for the
-    /// built-in default and for a start of no agent.
+    /// The profile a new start of `kind` on `device` with no parent runs
+    /// with (D-32): the one the start panel's `▾` chose (`chosen`, by id),
+    /// else the default of the project at `root` that Project settings
+    /// choose, else the agent's default there; `None` for the built-in
+    /// default and for a start of no agent. A chosen profile the machine
+    /// does not list is refused (B16).
     pub(crate) fn new_start_profile(
         &self,
         device: &str,
         kind: Option<&str>,
-    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
-        crate::launch::pick(
-            kind?,
-            None,
+        root: Option<&str>,
+        chosen: Option<&str>,
+    ) -> Result<Option<(hide_agent_adapter::ProfileId, String)>, String> {
+        let Some(kind) = kind else {
+            return Ok(None);
+        };
+        let profiles = self.machine_profiles(device);
+        let chosen = chosen
+            .map(|id| crate::launch::chosen_id(kind, id, profiles))
+            .transpose()?;
+        let project = root.and_then(|root| self.project_agent_profile(device, root, kind));
+        Ok(crate::launch::pick(
+            kind,
+            chosen,
             &crate::launch::Parent::None,
-            None,
-            self.machine_profiles(device),
+            project.as_ref(),
+            profiles,
         )
-        .profile()
+        .profile())
+    }
+
+    /// The profile Project settings choose for `kind` in the project that
+    /// holds `path` on `device` (D-31): its root, or one of its worktrees.
+    pub(crate) fn project_agent_profile(
+        &self,
+        device: &str,
+        path: &str,
+        kind: &str,
+    ) -> Option<hide_agent_adapter::ProfileId> {
+        let agent = hide_agent_adapter::adapter(kind)?.id;
+        let root = self
+            .catalog_project_of(device, path)
+            .map_or(path, |project| project.root_path.as_str());
+        crate::project_settings::agent_profile(
+            &self.snapshot.ui_state.project_settings,
+            device,
+            root,
+            agent,
+        )
+        .map(|id| hide_agent_adapter::ProfileId(id.to_owned()))
     }
 
     /// The profile a resume of a `kind` session on `device` runs with when
@@ -395,7 +442,10 @@ impl Runtime {
     /// What the agent `actor` hands a child of `kind` it starts on its own
     /// machine (D-32): the profile it runs with, the built-in default
     /// included, when it is an agent of `kind` and its pane's record
-    /// describes it; nothing otherwise.
+    /// describes it; nothing for another agent; and, for one of `kind`
+    /// whose start Hide has no record of that describes it (started by
+    /// hand, recorded before this rule, or past the record limit), that its
+    /// account is unknown, which picks as no parent does.
     pub(crate) fn caller_launch_profile(
         &self,
         actor: &crate::delivery::Actor,
@@ -406,21 +456,28 @@ impl Runtime {
         {
             return crate::launch::Parent::None;
         }
-        self.snapshot
-            .ui_state
-            .pane_launches
-            .get(&actor.pane_id)
-            .filter(|launch| {
-                launch_describes(
-                    launch,
-                    &actor.kind,
-                    Some(&actor.name),
-                    actor.session.as_deref(),
-                ) || launch_describes(launch, &actor.kind, None, actor.session.as_deref())
-            })
-            .map_or(crate::launch::Parent::None, |launch| {
-                crate::launch::Parent::recorded(launch.profile.clone())
-            })
+        let record = self.snapshot.ui_state.pane_launches.get(&actor.pane_id);
+        let described = record.filter(|launch| {
+            launch_describes(
+                launch,
+                &actor.kind,
+                Some(&actor.name),
+                actor.session.as_deref(),
+            ) || launch_describes(launch, &actor.kind, None, actor.session.as_deref())
+        });
+        match described {
+            Some(launch) => crate::launch::Parent::recorded(launch.profile.clone()),
+            None => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_choice",
+                    "kind": "agent_profile.parent_unknown",
+                    "pane_id": actor.pane_id,
+                    "agent": hide_agent_adapter::canonical_kind(kind),
+                    "cause": if record.is_some() { "record_mismatch" } else { "no_record" },
+                }));
+                crate::launch::Parent::Unknown
+            }
+        }
     }
 
     /// The choice `agent` was started with, when its pane's record describes
@@ -468,6 +525,7 @@ impl Runtime {
             self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
             self.persist_ui_state();
         }
+        self.settle_profile_holds(agents, scope, live_pane_ids);
         // A mission worker's launch is proven once its record names the
         // worker's conversation (a settle, a wake or a resume writes it) and
         // the worker is bound to its node.

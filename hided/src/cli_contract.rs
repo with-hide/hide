@@ -229,7 +229,111 @@ const AGENT_ID: &[Arg] = &[Arg {
     value_with: None,
 }];
 
+/// An agent profile's agent and name (PRD agent-profiles D-33).
+const PROFILE: &[Arg] = &[
+    Arg {
+        name: "kind",
+        value: Text,
+        required: true,
+        value_with: None,
+    },
+    Arg {
+        name: "name",
+        value: Text,
+        required: true,
+        value_with: None,
+    },
+];
+
+/// The refusals every `hide agent profile` change can answer.
+const PROFILE_REFUSALS: &[&str] = &[
+    hide_core::agent_profiles::REFUSED,
+    hide_core::agent_profiles::IN_USE,
+    hide_core::agent_profiles::GONE,
+    hide_core::agent_profiles::BUILT_IN,
+    hide_core::agent_profiles::UNSUPPORTED,
+    hide_core::agent_profiles::UNREAD,
+    hide_core::agent_profiles::UNANSWERED,
+    hide_core::agent_profiles::INVALID,
+    hide_core::agent_profiles::BUSY,
+    "machine_unknown",
+    "machine_unavailable",
+];
+
+const fn profile_spec(
+    words: &'static [&'static str],
+    arguments: &'static [Arg],
+    options: &'static [Opt],
+    answers: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments,
+        repeats: None,
+        needs_one_of: &[],
+        options,
+        rest: None,
+        answers,
+        refusals: PROFILE_REFUSALS,
+    }
+}
+
 pub const COMMANDS: &[Spec] = &[
+    profile_spec(
+        &["agent", "profile", "list"],
+        &[],
+        &[
+            optional("--kind", Text),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["agent_profiles"],
+    ),
+    profile_spec(
+        &["agent", "profile", "add"],
+        PROFILE,
+        &[
+            optional("--account", Text),
+            optional("--program", Text),
+            repeated("--env", Text, 64),
+            switch("--default"),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["agent_profile"],
+    ),
+    profile_spec(
+        &["agent", "profile", "edit"],
+        PROFILE,
+        &[
+            optional("--rename", Text),
+            cleared("--program", Text, &["--no-program"]),
+            clearing("--no-program", &["--program"]),
+            repeated("--env", Text, 64),
+            repeated("--unset-env", Text, 64),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["agent_profile"],
+    ),
+    profile_spec(
+        &["agent", "profile", "default"],
+        PROFILE,
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_profile"],
+    ),
+    profile_spec(
+        &["agent", "profile", "remove"],
+        PROFILE,
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_profile_removed"],
+    ),
+    profile_spec(
+        &["agent", "profile", "reinstall"],
+        PROFILE,
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_profile"],
+    ),
     spec(
         &["agent", "register"],
         &[],
@@ -503,6 +607,7 @@ pub const COMMANDS: &[Spec] = &[
             "profile_refused",
             "profile_unanswered",
             "profile_unconfirmed",
+            "launch_records_full",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.
@@ -1502,6 +1607,12 @@ fn answers() -> Value {
         shape(&["machine", "installed_known", "items"]),
     );
     map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
+    map.insert("agent_profiles".into(), shape(&["machine", "profiles"]));
+    map.insert("agent_profile".into(), shape(&["machine", "profile"]));
+    map.insert(
+        "agent_profile_removed".into(),
+        shape(&["machine", "removed", "projects_back_to_default"]),
+    );
     map.insert("device_list".into(), shape(&["devices"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
@@ -1651,6 +1762,7 @@ mod tests {
                 | CommandKind::Mission(_)
                 | CommandKind::Plan(_)
                 | CommandKind::AgentCatalog { .. }
+                | CommandKind::AgentProfile(_)
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }

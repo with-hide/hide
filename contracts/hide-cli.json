@@ -877,6 +877,55 @@
             "title": "AgentList",
             "type": "object"
         },
+        "agent_profile": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "profile": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "profile"
+            ],
+            "type": "object"
+        },
+        "agent_profile_removed": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "projects_back_to_default": {
+                    "type": "object"
+                },
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "removed",
+                "projects_back_to_default"
+            ],
+            "type": "object"
+        },
+        "agent_profiles": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "profiles": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "profiles"
+            ],
+            "type": "object"
+        },
         "agent_register_check": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide agent register --check` for a caller not yet registered.",
@@ -3626,6 +3675,384 @@
     "commands": [
         {
             "answers": [
+                "agent_profiles"
+            ],
+            "arguments": [],
+            "command": "agent profile list",
+            "options": [
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile add",
+            "options": [
+                {
+                    "name": "--account",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--program",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--default",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile edit",
+            "options": [
+                {
+                    "name": "--rename",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-program"
+                    ],
+                    "name": "--program",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--program"
+                    ],
+                    "name": "--no-program",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--unset-env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile default",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile reinstall",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "agent",
                 "agent_register_check"
             ],
@@ -4191,7 +4618,8 @@
                 "profiles_unsupported",
                 "profile_refused",
                 "profile_unanswered",
-                "profile_unconfirmed"
+                "profile_unconfirmed",
+                "launch_records_full"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -6097,7 +6525,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:40f62d26bdc94eb18e22e352cf4f004e9049ad5f192d53acec318d4396522fd1",
+    "digest": "sha256:cc697d232f460d8e7595ebad8ca69c1914cc02b5c35d8b22839a8399e2d7154f",
     "envelopes": {
         "agent": {
             "answer": "value",

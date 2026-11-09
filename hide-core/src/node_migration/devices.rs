@@ -891,6 +891,7 @@ mod tests {
             session: Some(session(device)),
             agent_id: None,
             profile: None,
+            profile_unknown: false,
         };
         mission.nodes = vec![
             serde_json::from_value(json!({

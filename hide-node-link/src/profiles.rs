@@ -123,6 +123,64 @@ pub struct ProfileRefusal {
     /// The variable it is about, a name that passed the name check (D-29).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
+    /// Why, as a code a screen words in its own language; `text` stays the
+    /// CLI's and the log's. A node before codes sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProfileReason>,
+    /// The bound a `*_long`, `profiles_full` or `env_too_many` reason
+    /// crossed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+/// Why a node refused a profile change (`contracts/snapshot-wire-enums.json`:
+/// `profile_reason`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileReason {
+    /// Hide keeps no profiles for the agent, or the profile is another's.
+    KindUnknown,
+    ProfilesFull,
+    NameEmpty,
+    NameLong,
+    NameControl,
+    /// The name is the built-in profile's.
+    NameBuiltin,
+    /// Another profile of the agent has the name (D-30).
+    NameTaken,
+    ProgramLong,
+    /// The built-in profile is neither changed nor removed.
+    ProfileBuiltin,
+    ProfileMissing,
+    ProfileRemoving,
+    /// A default named for one agent is another agent's profile.
+    ProfileOtherKind,
+    /// The node's own value of the agent's variable is unusable.
+    NodeVariable,
+    /// The account starts at a home the place has none of.
+    AccountHomeMissing,
+    /// The agent's account cannot be moved.
+    AccountUnsupported,
+    /// A folder is needed and a name was given.
+    AccountNeedsFolder,
+    /// A name is needed and a folder was given.
+    AccountNeedsName,
+    AccountEmpty,
+    AccountRelative,
+    /// The folder is where the built-in profile reads.
+    AccountIsDefault,
+    AccountName,
+    /// The account folder could not be made.
+    AccountUnprepared,
+    EnvTooMany,
+    EnvName,
+    /// The variable is one the account, the home or Hide owns.
+    EnvReserved,
+    EnvRepeated,
+    EnvValue,
+    /// A code a newer node named that this build does not know.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

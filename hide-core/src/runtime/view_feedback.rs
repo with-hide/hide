@@ -961,6 +961,7 @@ impl Runtime {
                 resume_session_id: opener.resume.clone(),
                 resume_session_path: opener.resume_path.clone(),
                 stay_behind: false,
+                profile: None,
             },
             true,
             None,

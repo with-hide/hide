@@ -1780,6 +1780,13 @@ fn a_conductors_resume_runs_with_the_profile_its_mission_recorded() {
         conducted("mission-2", "codex", "codex-conductor", None),
         conducted("mission-3", "claude", "disputed", Some(&work)),
         conducted("mission-4", "claude", "disputed", None),
+        crate::missions::Mission {
+            conductor: crate::missions::Conductor {
+                profile_unknown: true,
+                ..conducted("mission-5", "claude", "by-hand", None).conductor
+            },
+            ..conducted("mission-5", "claude", "by-hand", None)
+        },
     ];
     let start = |runtime: &mut Runtime, provider: &str, session: &str, file: Option<&str>| {
         runtime.snapshot.task_operation = None;
@@ -1822,6 +1829,19 @@ fn a_conductors_resume_runs_with_the_profile_its_mission_recorded() {
             })
         )),
         "a resume that names its file is the file's"
+    );
+    // A Conductor started by hand keeps no profile its mission knows: its
+    // session's machine says which account holds it, as for any resume by
+    // id alone, never the built-in default assumed.
+    assert_eq!(
+        start(&mut runtime, "claude", "by-hand", None),
+        Some((
+            None,
+            Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "id".into(),
+                value: "by-hand".into(),
+            })
+        ))
     );
     assert_eq!(start(&mut runtime, "claude", "disputed", None), None);
     assert_eq!(

@@ -1510,6 +1510,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "agent_permission_set", payload: { device_id: deviceId, agent, ...permission } });
     },
 
+    /**
+     * One change to a machine's agent profiles (PRD agent-profiles B1-B13,
+     * B26-B28). The core checks it as `hide agent profile` is checked and
+     * answers in `status.agent_profile_answer` under `requestId`.
+     */
+    changeAgentProfile(deviceId: string, requestId: string, change: import("./agentProfiles").ProfileChange) {
+      dispatch({ schema_version: 2, kind: "agent_profile_change", payload: { device_id: deviceId, request_id: requestId, change } });
+    },
+
     /** A tab showing the kit opened: this Mac's parts are read once. */
     checkKit() {
       dispatch({ schema_version: 2, kind: "kit_check", payload: {} });
@@ -1741,6 +1750,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       model?: string | null;
       prompt?: string | null;
       requestId?: string;
+      /** The profile the operator picked in the start panel; absent lets the core pick (PRD agent-profiles D-32). */
+      profile?: string | null;
       tabTarget?: import("./agentLayout").AgentStartTarget;
       confirmOnly?: boolean;
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
@@ -1758,6 +1769,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
           ...(request.model ? { model: request.model } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
           ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(request.profile ? { profile: request.profile } : {}),
           ...(request.tabTarget ? { target: request.tabTarget } : {}),
           ...(request.confirmOnly ? { confirm_only: true } : {}),
           ...(request.resumeSessionId ? { resume_session_id: request.resumeSessionId } : {}),
@@ -1912,27 +1924,54 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A mission's detail on the mission screen (PRD mission-screen B10, B12,
-     * B13): a table row, a 내 차례 or Needs You row, the Overview, a
-     * Conductor row's mark and a pane's mission chip all open it here, never
-     * in the 보기 slot (D-09). A mission of another device brings that
-     * device's rail tile forward first. `from` names the agent pane whose
-     * chip opened it, which the head's `← <pane>` returns to (B14); another
-     * entry keeps the one the screen already had, or none.
+     * A mission's map as a card in the lane's 보기 slot, under the same rules
+     * as a pull request's card (operator decision 2026-11-09, replacing PRD
+     * mission-screen D-09, B12): a pane's mission chip, a Conductor row's
+     * mark, a 내 차례 or Needs You row and the Overview open it here, in the
+     * Agent tab in front, and the pane stays beside it. Away from a
+     * Workspace (Home, the Overview, the mission screen with no checkout in
+     * front) the mission's checkout comes to the front first, as a card's
+     * project does; a mission whose checkout no list holds opens on the
+     * mission screen instead, the one other place a map draws.
      */
-    openMission(missionId: string, from?: { paneId: string }) {
+    openMission(missionId: string) {
+      const mission = rest()?.missions?.items.find((row) => row.id === missionId);
+      if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      leaveMissionsForSlot();
+      if (!workspaceInFront()) {
+        const checkout = (mission.device_id === localDeviceId(rest()) ? rest()?.navigator?.workspaces : rest()?.status?.remote?.find((row) => row.target_id === mission.device_id)?.session?.workspaces)
+          ?.flatMap((row) => row.checkouts)
+          .find((row) => row.path === mission.checkout_path);
+        if (!checkout) {
+          diagnostic(`mission_open: checkout ${mission.checkout_path} is not listed; showing the mission screen`);
+          return this.showMissionOnScreen(missionId);
+        }
+        this.openWorkspace(mission.device_id, checkout.workspace_id, checkout.id);
+        state.setScreen({ kind: "workspace" });
+      }
+      ui().setStackFront("view");
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
+    },
+
+    /**
+     * A mission's detail on the mission screen (PRD mission-screen B10, B11,
+     * B13): a row of the screen's table or list, ↑ and ↓ in the list. A
+     * mission of another device brings that device's rail tile forward first.
+     */
+    showMissionOnScreen(missionId: string) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
       const state = ui();
       if (mission.device_id !== frontDeviceId(rest())) this.focusDevice(mission.device_id);
-      const returnPane = from?.paneId ?? (state.screen?.kind === "missions" ? state.missions.returnPane : null);
       // A chip that leaves this mission out lets go, so the list beside it holds the mission (B10).
       const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
-      state.setMissions({ deviceId: mission.device_id, selected: missionId, returnPane, projectId });
+      state.setMissions({ deviceId: mission.device_id, selected: missionId, projectId });
       if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
     },
 
-    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16). */
+    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16); a card in the 보기 slot the core reads itself. */
     missionShown(missionId: string | null) {
       dispatch({ schema_version: 2, kind: "mission_shown", payload: { mission: missionId } });
     },
@@ -2670,6 +2709,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       purpose: string | null;
       taskKey?: string | null;
       prompt?: string | null;
+      /** As `startAgent`'s. */
+      profile?: string | null;
     }) {
       // A worktree on this machine comes forward through its start's follow
       // in the core; the page only presents what the core selected, as for an
@@ -2692,6 +2733,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
           purpose: request.purpose,
           ...(request.taskKey ? { task_key: request.taskKey } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
+          ...(request.profile ? { profile: request.profile } : {}),
         },
       });
     },

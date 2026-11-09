@@ -120,6 +120,11 @@ enum Command {
         home: std::path::PathBuf,
         read: Result<hide_agent_adapter::definition::Catalog, String>,
     },
+    AgentProfile {
+        device_id: String,
+        command: hide_core::agent_profiles::ProfileCommand,
+        reply: Sender<Result<hide_core::agent_profiles::Prepared, String>>,
+    },
     AgentCatalog {
         device_id: String,
         machine: Option<String>,
@@ -650,6 +655,26 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "catalog_unavailable".to_owned())?
+    }
+
+    /// `hide agent profile`, planned on the owner thread; the caller runs
+    /// the plan (`Prepared::run`) on its own.
+    pub fn prepare_agent_profile(
+        &self,
+        device: &str,
+        command: hide_core::agent_profiles::ProfileCommand,
+    ) -> Result<hide_core::agent_profiles::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentProfile {
+                device_id: device.to_owned(),
+                command,
+                reply,
+            })
+            .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?;
+        result
+            .recv()
+            .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?
     }
 
     /// `hide agent sleep`, run on the owner thread.
@@ -1534,6 +1559,13 @@ fn owner_loop(
                 let _ = reply.send(core.agent_exec(&device_id, &pane_id, report));
             }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
+            Command::AgentProfile {
+                device_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_agent_profile(&device_id, command));
+            }
             Command::AgentCatalog {
                 device_id,
                 machine,

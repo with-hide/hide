@@ -30,6 +30,15 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                     context.engine.as_ref(),
                     context.node.as_ref(),
                     &request,
+                    // The fork holds its profile while it starts
+                    // (`launch::holds`), on this machine.
+                    &|start| {
+                        let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
+                        let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+                        runtime
+                            .hold_profile_start(runtime.node().as_str(), start)
+                            .map_err(String::from)
+                    },
                     &|| fork_execution_current(&context, &request),
                     |tab_id, pane_id| {
                         let Some(runtime) = context.runtime.upgrade() else {
@@ -148,6 +157,7 @@ fn run_agent_fork_with_registration(
     engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     request: &ForkRequest,
+    hold: &dyn Fn(crate::launch::Request) -> Result<crate::launch::Request, String>,
     current: &(dyn Fn() -> Result<(), String> + Sync),
     created: impl FnOnce(Option<&str>, &str),
     register: impl FnOnce(&str, &str) -> Result<(), String>,
@@ -185,7 +195,10 @@ fn run_agent_fork_with_registration(
     // D-26, D-27).
     let agent = crate::launch::resolve(
         Some(node),
-        &crate::launch::Request::recorded(request.agent.kind(), request.profile.as_ref()),
+        &hold(crate::launch::Request::recorded(
+            request.agent.kind(),
+            request.profile.as_ref(),
+        ))?,
     )
     .map_err(String::from)?;
     let (mut args, made) = fork_arguments(node, request, &agent)?;
@@ -771,6 +784,7 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -961,6 +975,7 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -1142,6 +1157,7 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| Ok(()),
                 |_, _| {},
                 |_, _| Ok(()),
@@ -1267,6 +1283,7 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| Ok(()),
                 |_, _| {},
                 |_, _| Ok(()),
@@ -1379,6 +1396,7 @@ mod tests {
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -1847,6 +1865,7 @@ mod tests {
             fake.engine().as_ref(),
             &hide_node::Local::new(None),
             &request,
+            &Ok,
             &|| Ok(()),
             |_, _| {},
             |_, _| Err("ledger_unavailable".into()),

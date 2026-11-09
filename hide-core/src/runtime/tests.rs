@@ -18,6 +18,8 @@ mod agent_definitions;
 mod agent_end;
 #[path = "tests/agent_features.rs"]
 mod agent_features;
+#[path = "tests/agent_profiles.rs"]
+mod agent_profiles;
 #[path = "tests/agent_scopes.rs"]
 mod agent_scopes;
 #[path = "tests/agent_sleep.rs"]

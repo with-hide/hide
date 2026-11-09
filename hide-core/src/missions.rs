@@ -1073,9 +1073,15 @@ pub struct Conductor {
     /// The profile the session's start ran with, as its pane's launch record
     /// kept it, which 이어받기's resume of the session runs with again
     /// (PRD agent-profiles D-27); `None` for the built-in default, as for
-    /// every mission recorded before profiles.
+    /// every mission recorded before profiles, unless `profile_unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<crate::launch::LaunchProfile>,
+    /// No launch record describes the session's start (a Conductor started
+    /// by hand), so the account it runs in is not known: 이어받기 asks the
+    /// session's machine, as a resume that names the session by id alone
+    /// does, never assuming the built-in default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_unknown: bool,
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -3043,6 +3049,7 @@ pub(crate) mod tests {
                 session: None,
                 agent_id: None,
                 profile: None,
+                profile_unknown: false,
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
@@ -3807,9 +3814,17 @@ pub(crate) mod tests {
                 name: "work".into(),
                 account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
             }),
-            ..conductor
+            ..conductor.clone()
         };
         let saved = serde_json::to_value(&work).unwrap();
         assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), work);
+        assert!(!conductor.profile_unknown, "a mission kept before profiles");
+        let unknown = Conductor {
+            profile_unknown: true,
+            ..conductor
+        };
+        let saved = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(saved["profile_unknown"], true);
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), unknown);
     }
 }

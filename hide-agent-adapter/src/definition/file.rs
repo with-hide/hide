@@ -390,7 +390,7 @@ pub fn account_section(text: &str) -> String {
 
 /// How an agent tells one account from another: a folder its variables
 /// name, a name of its own (omp's `OMP_PROFILE`), or not at all.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum By {
     Folder,

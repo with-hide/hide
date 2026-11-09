@@ -1,7 +1,8 @@
 //! A mission's events and the operator's answer from the banner (PRD
 //! mission-plan-visibility D-13, D-15, D-20, D-22, D-30): which change of
 //! the record is an event, the decision a `decide` asks, the answer the
-//! banner sends, and the events of the mission open in the 보기 slot.
+//! banner sends, and the events of the mission shown, on the mission
+//! screen or in the front Agent tab's 보기 slot.
 //!
 //! An answer is typed into the Conductor's conversation as the operator's
 //! own input by the doorbell's thread, under the doorbell's rules: at rest,
@@ -20,6 +21,7 @@ use crate::missions::{
     Answer, AnswerFailure, Mission, MissionEnd, MissionNode, MissionStatus, Question, WakeEvent,
     answer_text,
 };
+use crate::model::DetailItem;
 
 /// The events of the mission open in the 보기 slot (B18-B21, B31): sent
 /// only for that one, so a mission's history never rides every frame. The
@@ -778,10 +780,20 @@ impl Runtime {
         true
     }
 
-    /// Makes the published events those of the mission the page's detail
-    /// shows, when it or its events moved.
+    /// Makes the published events those of the mission shown, when it or its
+    /// events moved: the mission screen's detail while the page names one,
+    /// else the card on top of the front Agent tab's 보기 slot while the slot
+    /// is drawn (operator decision 2026-11-09). The slot is the core's, so its
+    /// card needs no page round trip; the screen is the page's, so it names
+    /// its detail (PRD mission-screen D-16).
     pub(super) fn refresh_mission_events(&mut self) {
-        let open = self.missions.shown.clone();
+        let open = self.missions.shown.clone().or_else(|| {
+            let slot = &self.snapshot.ui_state.detail;
+            match slot.top().filter(|_| slot.shown) {
+                Some(DetailItem::Mission { mission }) => Some(mission.clone()),
+                _ => None,
+            }
+        });
         if self.missions.events_made == (open.clone(), self.missions.events_edit) {
             return;
         }

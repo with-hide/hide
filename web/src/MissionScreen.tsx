@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -39,7 +39,6 @@ import {
 import { missionCells, missionCounts, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
-import { allAgents } from "./paneAgents";
 import { machineName } from "./screenMachine";
 import { catalogOf, type Mission, type MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
@@ -47,8 +46,9 @@ import { useUiStore } from "./ui";
 
 // The mission screen (PRD mission-screen D-01-D-11, B1-B23): one device's
 // missions, every project of it, as a table in the Mission tool's four
-// groups; a mission opened from it or from anywhere else narrows the table
-// to a list beside its detail, the map as it has always drawn. It is the
+// groups; a mission opened from it narrows the table to a list beside its
+// detail, the map as it has always drawn. A mission pressed anywhere else
+// opens as a card in the 보기 slot instead (operator decision 2026-11-09). It is the
 // page's own navigation, like the Overview and Desk: where it stands is
 // `MissionPlace`, and the core hears only which mission the detail shows,
 // so it sends that mission's events (D-16). Every state and number is the
@@ -133,8 +133,6 @@ export function MissionScreen({ actions }: { actions: Actions }) {
         projects={projects}
         projectId={projectId}
         selectedProject={selected?.mission.workspace_id ?? null}
-        returnPane={place.returnPane}
-        actions={actions}
       />
       {missions.state === "loading" ? (
         <Skeleton />
@@ -154,11 +152,10 @@ export function MissionScreen({ actions }: { actions: Actions }) {
 }
 
 /**
- * The head (B3, B9, B14): `← <pane>` when a pane's chip opened the screen,
- * `미션 · <device> · N개`, the device's `연결 안 됨` while it does not
+ * The head (B3, B9): `미션 · <device> · N개`, the device's `연결 안 됨` while it does not
  * answer, and the project chips, `모든 프로젝트` first.
  */
-function Head({ device, count, connected, projects, projectId, selectedProject, returnPane, actions }: {
+function Head({ device, count, connected, projects, projectId, selectedProject }: {
   device: string;
   count: number | null;
   connected: boolean;
@@ -166,21 +163,10 @@ function Head({ device, count, connected, projects, projectId, selectedProject, 
   projectId: string | null;
   /** The project of the mission the detail shows, if any. */
   selectedProject: string | null;
-  returnPane: string | null;
-  actions: Actions;
 }) {
   const { t } = useInterfaceTranslation();
-  const agents = useShellStore((s) => s.agents);
-  const remote = useShellStore((s) => s.rest?.status?.remote);
-  const pane = useMemo(() => (returnPane ? allAgents(agents, remote).find((row) => row.pane_id === returnPane)?.identity_label ?? null : null), [returnPane, agents, remote]);
   return (
     <header className="flex shrink-0 flex-col gap-xs border-b border-border px-lg py-sm" data-mission-screen-head="true">
-      {returnPane && pane ? (
-        <Button variant="ghost" size="sm" className="-ml-xs min-w-0 self-start text-muted-foreground" aria-label={t("missionScreen.back", { pane })} data-mission-screen-back={returnPane} onClick={() => actions.openAgent(returnPane)}>
-          <ArrowLeftIcon />
-          <span className="min-w-0 truncate" title={pane}>{pane}</span>
-        </Button>
-      ) : null}
       <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs">
         <h1 className="flex min-w-0 items-baseline gap-xs text-subhead">
           <span className="shrink-0 font-semibold text-foreground">{t("missionScreen.title")}</span>
@@ -332,7 +318,7 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
   const stale = mission.stale || !connected;
   return (
     <div className={cn("relative min-w-0 rounded-xs py-xs", TABLE_COLUMNS, stale && "opacity-(--opacity-dimmed)")} data-mission-row={mission.id} data-mission-row-group={group} data-mission-row-stale={stale || undefined}>
-      <RowOverlayButton aria-label={t("missionScreen.open", { title: mission.title })} onClick={() => actions.openMission(mission.id)} />
+      <RowOverlayButton aria-label={t("missionScreen.open", { title: mission.title })} onClick={() => actions.showMissionOnScreen(mission.id)} />
       <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs pl-xs">
         <span className="flex min-w-0 items-center gap-xs">
           <MissionNumber mission={mission} className="text-caption" />
@@ -457,7 +443,7 @@ function List({ groups, selected, connected, actions }: { groups: { group: Missi
     const next = order[index + (event.key === "ArrowDown" ? 1 : -1)];
     event.preventDefault();
     if (!next) return;
-    actions.openMission(next.mission.id);
+    actions.showMissionOnScreen(next.mission.id);
     requestAnimationFrame(() => box.current?.querySelector<HTMLElement>(`[data-mission-list-row="${CSS.escape(next.mission.id)}"]`)?.focus());
   };
   return (
@@ -488,7 +474,7 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
       aria-label={t("missionScreen.open", { title: mission.title })}
       aria-current={selected ? "true" : undefined}
       className={cn("flex-col items-stretch gap-xxs", selected && "bg-selected hover:bg-selected", stale && "opacity-(--opacity-dimmed)")}
-      onClick={() => actions.openMission(mission.id)}
+      onClick={() => actions.showMissionOnScreen(mission.id)}
       data-mission-list-row={mission.id}
       data-selected={selected ? "true" : undefined}
     >
