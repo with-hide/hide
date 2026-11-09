@@ -302,16 +302,18 @@ impl ItemReads {
                     .map_or(&[], |device| device.items.as_slice()),
             }
         };
-        let still_asked = |(machine, provider, profile): &ItemKey| {
+        let still_asked = |(machine, provider, profile): &ItemKey, within: usize| {
             asked(machine)
                 .iter()
-                .take(MAX_ITEM_READS)
+                .take(within)
                 .any(|ask| ask.provider == *provider && ask.profile == *profile)
         };
-        self.backends.retain(|key, _| still_asked(key));
-        // An item's failure is forgotten with it: a profile removed, a
-        // device gone, or past the cap, where no backend reads it.
-        self.logged.retain(|key, _| still_asked(key));
+        self.backends
+            .retain(|key, _| still_asked(key, MAX_ITEM_READS));
+        // An item's failure is forgotten with it, a profile removed or a
+        // device gone; one past the cap is still asked, so its
+        // `model_reads_full` stays written once.
+        self.logged.retain(|key, _| still_asked(key, usize::MAX));
     }
 
     /// Reads the model list of each item `asks` names on `machine` and puts
@@ -1476,25 +1478,41 @@ mod tests {
     }
 
     /// Past the cap a profile's list is a reported failure, never another
-    /// backend on its node (engineering 15).
+    /// backend on its node (engineering 15), written once however often the
+    /// same screen reads it and forgotten when the profile leaves.
     #[test]
     fn a_machines_profiles_past_the_cap_are_answered_without_a_backend() {
         let node = Arc::new(ProfilesNode::default());
         let machines = AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>);
         let mut items = ItemReads::default();
-        let asks: Vec<ItemAsk> = (0..=MAX_ITEM_READS)
-            .map(|index| ItemAsk {
-                provider: ProviderId::CLAUDE,
-                profile: ProfileId(if index == MAX_ITEM_READS {
-                    "p-gw".to_owned()
-                } else {
-                    format!("p-{index}")
-                }),
-                version: 1,
-            })
-            .collect();
-        let mut rows = BackgroundAiSnapshot::unread().providers;
-        items.read(&machines, None, &asks, &mut rows, &|| true);
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            items: (0..=MAX_ITEM_READS)
+                .map(|index| ItemAsk {
+                    provider: ProviderId::CLAUDE,
+                    profile: ProfileId(if index == MAX_ITEM_READS {
+                        "p-gw".to_owned()
+                    } else {
+                        format!("p-{index}")
+                    }),
+                    version: 1,
+                })
+                .collect(),
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
+            rows
+        };
+
+        let (rows, records) = crate::diagnostics::capture(|| {
+            let rows = read(&mut items, &request);
+            read(&mut items, &request);
+            rows
+        });
         let claude = rows.iter().find(|row| row.id == "claude").unwrap();
         assert_eq!(
             claude.profile_models[MAX_ITEM_READS]
@@ -1503,6 +1521,21 @@ mod tests {
             Some("model_reads_full")
         );
         assert!(node.built_for("p-gw").is_empty(), "no backend past the cap");
+        let full = records
+            .iter()
+            .filter(|record| record["reason"] == "model_reads_full")
+            .count();
+        assert_eq!(full, 1, "a second read writes it no more: {records:?}");
+
+        request.items.pop();
+        read(&mut items, &request);
+        assert!(
+            !items
+                .logged
+                .keys()
+                .any(|(_, _, profile)| profile.0 == "p-gw"),
+            "the record leaves with the profile"
+        );
     }
 
     /// Engineering 14: once no window reads model lists, the coordinator
