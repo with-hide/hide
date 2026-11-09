@@ -18,12 +18,13 @@ impl Runtime {
                     .flat_map(|session| &session.workspaces),
             )
             .map(|workspace| workspace.id.clone())
-            .chain(self.snapshot.navigator.devices.iter().flat_map(|device| {
-                [
-                    format!("cleanup/{}", device.id),
-                    crate::project_context::no_agents_fold_key(&device.id),
-                ]
-            }))
+            .chain(
+                self.snapshot
+                    .navigator
+                    .devices
+                    .iter()
+                    .map(|device| format!("cleanup/{}", device.id)),
+            )
             .collect()
     }
     /// Uses the existing runtime clock; idle ticks compare one deadline, the

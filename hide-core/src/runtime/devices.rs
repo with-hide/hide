@@ -969,13 +969,10 @@ impl Runtime {
         // project registrations, expanded folders and file tabs. Its
         // panes, agents and folders are not touched.
         let theirs = |id: &str| crate::address::device_of(id) == Some(device_id);
-        let device_folds = [
-            format!("cleanup/{}", device_id),
-            crate::project_context::no_agents_fold_key(device_id),
-        ];
+        let device_fold = format!("cleanup/{}", device_id);
         self.snapshot.ui_state.session_open_folds.retain(|key| {
             let project = key.strip_prefix("asleep/").unwrap_or(key);
-            !theirs(project) && !device_folds.contains(key)
+            !theirs(project) && *key != device_fold
         });
         let registrations = self.snapshot.ui_state.workspace_registrations.len();
         self.snapshot

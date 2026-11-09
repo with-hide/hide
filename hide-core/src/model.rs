@@ -873,12 +873,6 @@ pub struct NavigatorSnapshot {
     /// list. `workspaces` remains the one authoritative row collection so
     /// search, focus, and project navigation never lose a folded project.
     pub inactive_projects: Vec<InactiveProjectGroupSnapshot>,
-    /// Each device's projects with no agent row and no sleeping
-    /// conversation, folded after its active projects and before its
-    /// Inactive fold (PRD sidebar-titlebar-refresh D-01). Pinned projects,
-    /// the project in front and Inactive projects are never here; the open
-    /// state is the `no_agents/<device>` key of `session_open_folds`.
-    pub no_agent_projects: Vec<InactiveProjectGroupSnapshot>,
     pub agents: Vec<SidebarAgentSnapshot>,
     /// The checkouts Hide AI started an agent in, by device and path. A list
     /// beside the checkouts, not a field on them, because a checkout row is
@@ -7870,7 +7864,6 @@ impl Snapshot {
                 )],
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
-                no_agent_projects: Vec::new(),
                 agents: Vec::new(),
                 hide_ai_checkouts: Vec::new(),
                 sleeping_sessions: Vec::new(),
