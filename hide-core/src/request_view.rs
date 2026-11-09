@@ -387,7 +387,20 @@ pub(crate) fn apply<'a>(
                     .collect()
             })
             .unwrap_or_default();
-        let letters = shown_at.and_then(|shown_at| letters.since(&row.pane_id, shown_at));
+        let letters = shown_at
+            .and_then(|shown_at| letters.since(&row.pane_id, shown_at))
+            .map(|mut letters| {
+                // An unnamed peer on these rows goes by its title; one with
+                // no title keeps its runtime's name.
+                for line in &mut letters.recent {
+                    let titled = line.titled_by.as_ref().and_then(|pane| names.get(pane));
+                    if let Some(title @ RequestSender::Named(_)) = titled.map(|title| named(title))
+                    {
+                        line.peer = title;
+                    }
+                }
+                letters
+            });
         row.request = Some(AgentRequestSnapshot {
             verb,
             verb_since_unix_ms: since,

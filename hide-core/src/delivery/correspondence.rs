@@ -51,8 +51,14 @@ pub enum LetterMark {
 pub struct LetterLineSnapshot {
     pub direction: LetterDirection,
     /// The other side: the agent the letter went to or came from, the
-    /// operator, or the agent started.
+    /// operator, or the agent started, by its screen name (`docs/delivery.md`,
+    /// Names on the wire and on screen).
     pub peer: RequestSender,
+    /// An unnamed agent's pane, whose title the row lays over `peer` (its
+    /// runtime's name) when the pane is on the rows: a title changes every
+    /// turn, so the index never holds one.
+    #[serde(skip)]
+    pub(crate) titled_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mark: Option<LetterMark>,
     /// The letter's first line, its one-line summary by the letters' rule;
@@ -116,9 +122,11 @@ impl Correspondence {
                     entry.progress_at.push(letter.created_at_unix_ms);
                     continue;
                 }
+                let (peer, titled_by) = peer_of(ledger, peer);
                 entry.lines.push(LetterLineSnapshot {
                     direction,
-                    peer: peer_of(peer),
+                    peer,
+                    titled_by,
                     mark: mark(letter, direction),
                     line: line.clone(),
                     at_unix_ms: letter.created_at_unix_ms,
@@ -141,6 +149,7 @@ impl Correspondence {
                 .push(LetterLineSnapshot {
                     direction: LetterDirection::Started,
                     peer: crate::request_view::named(&spawn.name),
+                    titled_by: None,
                     mark: None,
                     line: None,
                     at_unix_ms: spawn.reserved_at_unix_ms,
@@ -185,11 +194,26 @@ impl Correspondence {
     }
 }
 
-fn peer_of(actor: &super::Actor) -> RequestSender {
+/// `actor`'s screen name as the bell gives it (`doorbell::bell_sender`): the
+/// name it registered under, else its pane's title, which the row lays, else
+/// its runtime's name. The wire name (`coordination::wire_name`) is never
+/// shown, since an unnamed agent's is its registration id.
+fn peer_of(ledger: &Ledger, actor: &super::Actor) -> (RequestSender, Option<String>) {
     if actor.operator_owned() {
-        RequestSender::Operator
-    } else {
-        crate::request_view::named(&actor.name)
+        return (RequestSender::Operator, None);
+    }
+    let registered = ledger
+        .agents
+        .iter()
+        .rev()
+        .find(|record| record.actor.same_identity(actor))
+        .and_then(|record| record.name.as_deref());
+    match registered {
+        Some(name) => (crate::request_view::named(name), None),
+        None => (
+            crate::request_view::named(&crate::sidebar::provider_name(Some(&actor.kind))),
+            Some(actor.pane_id.clone()),
+        ),
     }
 }
 
@@ -236,6 +260,17 @@ mod tests {
         letter
     }
 
+    /// `actor`'s registration under its own name.
+    fn registered(id: &str, actor: &Actor) -> crate::coordination::AgentRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": actor.name, "machine": "device", "host_scope": "scope",
+            "native_machine": "device", "session": actor.session, "instance": "i",
+            "terminal_id": null, "pane": actor.pane_id, "parent": null, "project": null,
+            "actor": actor, "ended": false
+        }))
+        .unwrap()
+    }
+
     fn named(name: &str) -> RequestSender {
         RequestSender::Named(name.into())
     }
@@ -251,7 +286,7 @@ mod tests {
         reply.reply_to = Some("letter-3".into());
         let mut cancelled = letter(9, &lead, &child, "report", "취소된 편지", 450);
         cancelled.state = State::Cancelled;
-        let ledger = Ledger {
+        let mut ledger = Ledger {
             letters: vec![
                 letter(1, &lead, &child, "request", "요청 전에 보낸 편지", 100),
                 letter(2, &child, &lead, "progress", "요청 전 중간 보고", 150),
@@ -271,6 +306,9 @@ mod tests {
             ],
             ..Ledger::default()
         };
+        for (n, agent) in [&lead, &child, &device].into_iter().enumerate() {
+            ledger.agents.push(registered(&format!("agent-{n}"), agent));
+        }
         let index = Correspondence::of(&ledger);
 
         let since = index.since("w1:p1", 200).unwrap();
@@ -362,15 +400,7 @@ mod tests {
         let lead = actor("w1:p1", "lead");
         let mut ledger = Ledger::default();
         let before = Correspondence::of(&ledger);
-        ledger.agents.push(
-            serde_json::from_value(serde_json::json!({
-                "id": "agent-1", "name": "lead", "machine": "device", "host_scope": "scope",
-                "native_machine": "device", "session": "session-w1:p1", "instance": "i",
-                "terminal_id": null, "pane": "w1:p1", "parent": null, "project": null,
-                "actor": lead, "ended": false
-            }))
-            .unwrap(),
-        );
+        ledger.agents.push(registered("agent-1", &lead));
         ledger.spawns.push(serde_json::from_value(serde_json::json!({
             "id": "spawn-2", "parent": "agent-1", "intent": "impl", "name": "auto-mission-impl",
             "kind": "claude", "repo": "/repo", "branch": "b", "requested_path": null, "args": [],

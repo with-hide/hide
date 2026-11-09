@@ -1120,6 +1120,66 @@ fn the_card_shows_the_answer_the_letters_and_the_questions_since_the_request() {
     );
 }
 
+/// A letter's other side goes by its screen name: the name it registered
+/// under, else its pane's title on these rows, else its runtime's name; an
+/// unnamed agent's registration id, its wire name, never shows.
+#[test]
+fn a_letters_peer_goes_by_its_registered_name_then_its_title_then_its_runtime() {
+    const LEAD: &str = "w1:p1";
+    let mut shown = rows(&[(LEAD, "idle"), ("w1:p2", "idle")]);
+    shown[1].identity_label = "리뷰 반영하기".to_owned();
+    let mut ledger = crate::delivery::ledger::Ledger {
+        letters: vec![
+            letter_between(1, "w1:p2", LEAD, "report", "제목으로", ASKED + 100),
+            letter_between(2, "w1:p3", LEAD, "report", "이름으로", ASKED + 200),
+            letter_between(3, "w1:p9", LEAD, "report", "런타임으로", ASKED + 300),
+        ],
+        ..Default::default()
+    };
+    for (id, pane, name) in [
+        ("agent-2", "w1:p2", "agent-2"),
+        ("agent-3", "w1:p3", "reviewer"),
+    ] {
+        ledger.agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": name, "machine": "device", "host_scope": "scope",
+                "native_machine": "device", "session": "s", "instance": "i",
+                "terminal_id": null, "pane": pane, "parent": null, "project": null,
+                "actor": {"pane_id": pane, "name": name, "kind": "claude", "device_id": "device", "session": "s"},
+                "ended": false
+            }))
+            .unwrap(),
+        );
+    }
+    apply(
+        &mut shown,
+        |_| None,
+        &GithubSnapshot::default(),
+        &crate::delivery::correspondence::Correspondence::of(&ledger),
+        &mut BTreeMap::new(),
+        ASKED + 1_000,
+    );
+    let peers: Vec<_> = shown[0]
+        .request
+        .as_ref()
+        .unwrap()
+        .letters
+        .as_ref()
+        .unwrap()
+        .recent
+        .iter()
+        .map(|line| line.peer.clone())
+        .collect();
+    assert_eq!(
+        peers,
+        vec![
+            RequestSender::Named("리뷰 반영하기".into()),
+            RequestSender::Named("reviewer".into()),
+            RequestSender::Named(crate::sidebar::provider_name(Some("claude"))),
+        ]
+    );
+}
+
 /// While the request's own turn still works there is no answer yet, and an
 /// answer whose turn was never judged offers no whole read.
 #[test]
