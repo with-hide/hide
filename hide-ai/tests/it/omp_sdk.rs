@@ -588,3 +588,82 @@ fn real_sdk_preserves_the_background_provider_boundary() {
     assert!(child.wait().unwrap().success());
     reader.join().unwrap();
 }
+
+/// PRD agent-profiles-phase2 D-09, B9: an omp item whose profile runs omp
+/// through a wrapper is answered `omp_wrapper_not_supported` on every call
+/// before anything starts, though the SDK would answer the default account's
+/// list, so no other account's list is ever given as the item's.
+#[test]
+fn an_item_with_a_wrapper_is_refused_before_the_sdk_starts() {
+    let folder = tempfile::tempdir().unwrap();
+    let package = folder.path().join("package");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        json!({"name": "@oh-my-pi/pi-coding-agent", "version": "18.7.0"}).to_string(),
+    )
+    .unwrap();
+    let omp = folder.path().join("omp");
+    std::fs::write(&omp, "").unwrap();
+    // A stand-in runtime in place of Bun: it marks that it started and
+    // answers the default account's catalog as the bridge would.
+    let started = folder.path().join("started");
+    let runtime = folder.path().join("bun");
+    std::fs::write(
+        &runtime,
+        format!(
+            "#!/bin/sh\n: > '{}'\necho '{}'\n",
+            started.display(),
+            json!({"protocol": 1, "kind": "catalog", "models": ["openai/default-account"]})
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for file in [&omp, &runtime] {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let backend = |run: hide_ai::ItemRun| {
+        let mut config = OmpConfig::new("openai/default-account");
+        config.cli.binary = Some(omp.clone());
+        config.cli.search_path = std::env::var_os("PATH");
+        config.cli.run = run;
+        config.package = Some(package.clone());
+        config.runtime = Some(runtime.clone());
+        OmpSdkBackend::new(config)
+    };
+
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            backend(hide_ai::ItemRun::default()).models(),
+            ModelCatalog::Fixed(vec![hide_ai::Model::plain("openai/default-account")]),
+            "the default item reads the SDK's catalog"
+        );
+        assert!(started.exists());
+        std::fs::remove_file(&started).unwrap();
+    }
+
+    let wrapped = backend(hide_ai::ItemRun {
+        env: vec![("OMP_PROFILE".to_owned(), "work".to_owned())],
+        program: Some(hide_ai::Wrapper {
+            file: folder.path().join("omp-work"),
+            leading: Vec::new(),
+        }),
+    });
+    let reason = "omp_wrapper_not_supported".to_owned();
+    assert_eq!(
+        wrapped.models(),
+        ModelCatalog::Unknown {
+            reason: reason.clone()
+        }
+    );
+    assert_eq!(wrapped.availability(), Availability::Unavailable { reason });
+    assert!(matches!(
+        wrapped.execute(&request("openai/default-account"), &CancelToken::new()),
+        Err(AiError::ProviderUnavailable(reason)) if reason == "omp_wrapper_not_supported"
+    ));
+    assert!(!started.exists(), "no SDK child starts for a wrapped item");
+}

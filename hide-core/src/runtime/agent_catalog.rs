@@ -186,7 +186,7 @@ impl Runtime {
 
     /// Whether the model list of `item` on the core's own machine is still
     /// to be read: its agent's row unread, or a profile the last read did
-    /// not list.
+    /// not list at its version now.
     fn item_unread(&self, item: &Item<'_>) -> bool {
         let Some(provider) = self
             .catalog_provider(item.adapter.id)
@@ -194,12 +194,8 @@ impl Runtime {
         else {
             return true;
         };
-        item.profile.is_some_and(|profile| {
-            !provider
-                .profile_models
-                .iter()
-                .any(|models| models.profile == profile.id)
-        })
+        item.profile
+            .is_some_and(|profile| read_for(provider, profile).is_none())
     }
 
     /// The catalog's row of one item on `machine`.
@@ -227,7 +223,7 @@ impl Runtime {
             match (provider, item.profile) {
                 (None, _) => Models::missing("models_not_read_by_hide_ai"),
                 (Some(provider), None) => Models::of_agent(provider),
-                (Some(provider), Some(profile)) => Models::of_profile(provider, &profile.id),
+                (Some(provider), Some(profile)) => Models::of_profile(provider, profile),
             }
         };
         // The model the agent runs with when asked for none, as Hide AI
@@ -373,6 +369,18 @@ fn definition_fields(
     fields
 }
 
+/// The list the last read gave for `profile` at its version now, if it
+/// reached it.
+fn read_for<'a>(
+    provider: &'a BackgroundAiProviderSnapshot,
+    profile: &ProfileSnapshot,
+) -> Option<&'a crate::model::BackgroundAiProfileModels> {
+    provider
+        .profile_models
+        .iter()
+        .find(|models| models.profile == profile.id && models.version == profile.version)
+}
+
 /// A catalog row's models: the list by the names a start passes, the names
 /// the agent shows for them, or why there is none.
 struct Models {
@@ -418,13 +426,10 @@ impl Models {
 
     /// The list `profile`'s own environment gave, or the agent's when it gave
     /// none (B9): the reason is in the log, and the row says it is the
-    /// agent's list. A profile the last read did not reach is unread.
-    fn of_profile(provider: &BackgroundAiProviderSnapshot, profile: &str) -> Self {
-        match provider
-            .profile_models
-            .iter()
-            .find(|models| models.profile == profile)
-        {
+    /// agent's list. A profile the last read did not reach at its version
+    /// now is unread: a list of the profile before an edit is not its list.
+    fn of_profile(provider: &BackgroundAiProviderSnapshot, profile: &ProfileSnapshot) -> Self {
+        match read_for(provider, profile) {
             None => Self::missing("models_unread"),
             Some(models) if !models.models.is_empty() => Self {
                 models: json!(models.models),

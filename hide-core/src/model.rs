@@ -7777,6 +7777,9 @@ pub struct BackgroundAiProviderSnapshot {
 pub struct BackgroundAiProfileModels {
     /// The profile's id.
     pub profile: String,
+    /// The profile's version this list was read for: a list of another
+    /// version than the profile's now is no list of it.
+    pub version: u64,
     /// The models the agent listed in the profile's environment. Empty when
     /// they could not be read, which `models_unavailable_reason` says; the
     /// screens then offer the agent's default list (B9).

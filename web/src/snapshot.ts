@@ -2403,6 +2403,8 @@ export type AiProvider = {
 export type AiProfileModels = {
   /** The profile's id. */
   profile: string;
+  /** The profile's version the list was read for; a list of another version than the profile's now is not its list. */
+  version: number;
   /** Empty when the list could not be read, which `models_unavailable_reason` says; a screen then offers the agent's own list. */
   models: string[];
   model_labels?: Record<string, string>;
