@@ -135,11 +135,11 @@ impl Finish {
     /// The engine definitely admitted no execution. A retry may submit
     /// again; leaving now releases the hold even if another clone survives.
     pub(crate) fn not_started(&self) {
-        if let Some(hold) = &self.hold {
-            if let Some(start) = hold.0.holds.lock().starts.get_mut(&hold.0.id) {
-                start.record = None;
-                start.pane = None;
-            }
+        if let Some(hold) = &self.hold
+            && let Some(start) = hold.0.holds.lock().starts.get_mut(&hold.0.id)
+        {
+            start.record = None;
+            start.pane = None;
         }
     }
 }

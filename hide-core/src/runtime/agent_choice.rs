@@ -300,18 +300,12 @@ impl Runtime {
         };
         let order = self.profile_holds.record_order();
         let launches = &mut self.snapshot.ui_state.pane_launches;
-        if order.is_none()
-            || (!launches.contains_key(pane_id) && launches.len() + held >= PANE_LAUNCH_LIMIT)
+        if let Some(order) = order
+            .filter(|_| launches.contains_key(pane_id) || launches.len() + held < PANE_LAUNCH_LIMIT)
         {
-            crate::diagnostic!(serde_json::json!({
-                "component": "agent_choice", "kind": "pane_launch.limit",
-                "pane_id": pane_id, "limit": PANE_LAUNCH_LIMIT,
-            }));
-            false
-        } else {
             let launch = crate::model::PaneLaunch {
                 pending: false,
-                start: order.expect("the launch clock was admitted"),
+                start: order,
                 kind: hide_agent_adapter::canonical_kind(kind).to_owned(),
                 name: name.to_owned(),
                 choice: choice.clone(),
@@ -319,6 +313,12 @@ impl Runtime {
                 profile: profile.cloned(),
             };
             launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch)
+        } else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_choice", "kind": "pane_launch.limit",
+                "pane_id": pane_id, "limit": PANE_LAUNCH_LIMIT,
+            }));
+            false
         }
     }
 
