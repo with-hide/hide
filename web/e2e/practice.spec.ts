@@ -102,7 +102,7 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
       if (id === "needs") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
       // The project view folds 내 차례 · 읽을 것 away, so its ring takes the projects alone, and each mark of a row has a tag that covers no tag or card.
-      if (id === "projects") await expect(practice.locator("[data-raised-group]")).toBeHidden();
+      if (id === "projects") await expect.poll(() => practice.locator("[data-raised-group]").evaluateAll((all) => all.length > 0 && all.every((one) => getComputedStyle(one).display === "none")), { message: "the raised sections are folded away" }).toBe(true);
       // A missing tag names its part: the card's callouts are ordered, so the ones present say which target has no box.
       await expect.poll(async () => { const said = await practice.locator("[data-practice-callout]").allInnerTexts(); return said.length === (CALLOUTS[id] ?? 0) ? "all" : said.join(" | "); }, { message: `${id}'s callouts`, timeout: 5_000 }).toBe("all");
       // Once the card has settled (it glides to its place), each part a card names has its own box and its tag stands against that box: on screen, not under the card, and covering neither another tag nor another box.
