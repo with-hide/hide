@@ -77,12 +77,10 @@ export function PracticePlayer({ chapter, operator, onStep, onHub, onLeave }: Pr
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, extra } = chapter.world.snapshot(model, Date.now());
-    const { laneExpanded = false, ...held } = extra ?? {};
     // The practice screen is the practice: its sidebar never invites to practice.
     const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
     // A world with no missions holds an empty book, so the sidebar's 미션 row opens the quiet empty table, as in Hide.
-    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null, ...held });
-    useUiStore.setState({ laneExpanded });
+    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null, ...extra });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {

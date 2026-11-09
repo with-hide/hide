@@ -2316,42 +2316,41 @@ It has no screen and no steps and writes no progress.
 Esc closes either dialog.
 Its words are the product's own (`agentPresentation.ts`, `taskLens.ts`, `commands.ts`), and it says only what [the status model](status-model.md) and [the sidebar sections](#sidebar-hierarchy) say: the 프로젝트 보기 reads project › branch or worktree › tab › agent; the 태스크 보기 groups by state, 내 차례 / 읽을 것 / 작업 중 / 확인함; a working row's ring is whole while the agent works and dashed while it waits, and a waiting row's second line says for what (`자식 기다림 · 자식 N개 작업 중`, `백그라운드 기다림`, `CI 기다림`, `답장 기다림`); a sleeping agent shows `재움 · 열면 깨어남`.
 
-The first run is twenty-three cards on the practice window of the introduction site's hero (`data/tour.json`), the big picture of a working day rather than single actions: each one screen, ⏎ once, with no task list and no wait; four cards ask the learner to press the part they ring (below), and ⏎ presses it for them.
+The first run is twenty-two cards on the practice window of the introduction site's hero (`data/tour.json`), the big picture of a working day rather than single actions: each one screen, ⏎ once, with no task list and no wait; three cards ask the learner to press the part they ring (below), and ⏎ presses it for them.
 Each card sets its own scene when it opens (`scene` on its step: the list the left sidebar shows, what the right lane holds, the pane that has the keyboard, one pane shown alone), and a card that says nothing keeps the scene before it, so ← and → always land on the scene a card was written for.
-The window is one tab of four panes: a lead running children and following a plan of its own (A), another agent conducting a mission (B, its mission chip), an agent started beside to review that waits with a question (C), and one working by itself (D).
+The window is one tab of four panes: a lead running eight children (A), another agent conducting a mission with two children (B, its mission chip), an agent started beside to review that waits for an approval (C), and one working by itself (D).
 A card is one ring and one card: the screen dims but for the ringed part, the card says what it is in one to three short lines, and ⏎ moves the ring to the next part; there are no tags or leader lines, and what matters less (a row's last activity, the folded `체크아웃 N` line, a lead's child PR count) is left to the product's own tooltips.
 `practice.spec.ts` fails a card that does not ring exactly one part (never a ring inside a ring), whose ring is off screen or under the floating card, or whose ring does not fit a small part.
 
 The ring and the card move gently, never by cutting: ring, dim and card glide together (about 0.35 s) from the part of one card to the part of the next, and a card's words fade in as it arrives.
-A card that changes what the screen shows (the list, the lane, the panes shown) lets the screen change first: the ring and the card fade out, and come back where they belong about 0.6 s later, once the screen has settled.
+A card that changes what the screen shows (the list, the lane, the panes shown) lets the screen change first: the card fades out, and comes back where it belongs about 0.6 s later, once the screen has settled; the ring's border and glow step aside the same way, but the dim stays, so the screen never brightens between two cards (the list switch, the fold of 내 차례 · 읽을 것 and the ring's move all land in one frame).
 With the system's reduced-motion setting nothing glides or fades and nothing waits (`PracticeCoach.tsx`, `coachStyle.ts`).
-A card that asks for a press (`press` on its step: the children chip, the plan chip, the Explorer's rail button, the 보기 slot's rail button) rings that one part and says to press it; pressing it, with the pointer or the keyboard, takes the card on to the next card a beat later (the one that rings what the press opened), and ⏎ or the card's button (`대신 누르기`) presses it for the learner. The world answers the press as the core would (`worlds/tour.ts`: the Explorer opens, the mission map opens, the lead's children and plan popovers open), and going back to the card closes what the press opened.
+A card that asks for a press (`press` on its step: the children chip, the mission chip, the Explorer's rail button) rings that one part and says to press it; pressing it, with the pointer or the keyboard, takes the card on to the next card a beat later (the one that rings what the press opened), and ⏎ or the card's button (`대신 누르기`) presses it for the learner. The world answers the press as the core would (`worlds/tour.ts`: the Explorer opens, the mission's map opens in the 보기 slot as the real chip's press does (`openMission`, a `detail_open` event), the Conductor's children popover opens), and going back to the card closes what the press opened.
 
 1. 왼쪽, 2. 가운데, 3. 오른쪽: the three parts, a ring each: the left list to choose from, the four windows to work in, the rail that opens what to look at.
 4. 프로젝트 보기: the list turned to the 프로젝트 lens with 내 차례 · 읽을 것 folded away (`hides`: the raised sections and their separator), so the ring takes the project list alone; a project is one line with `main` standing for it and its agents below.
 5. 한 줄이 세션 하나: one agent's line of that list.
 6. PR 마크: the PR mark of that line alone (`#439`), its colour is the state.
 7. 미션 진행: the mission chip of the same line alone (`1/3`).
-8. 내 차례: the task view's 내 차례 group alone, ringed: what waits for the learner (a question, an approval, a 볼 것 row); its second line says what it waits for.
-9. 읽을 것: the group of finished work, which goes there quietly and never calls the learner; its second line leads with `끝남`.
-10. 작업 중은 두 가지: the 작업 중 group, a session working by itself (the ring, no second line) beside one that waits, whose second line says for what (`자식 기다림 · 자식 N개 작업 중`).
-11. 창: one window ringed, one agent's workplace.
-12. 첫째 줄: the first line of the lead's window (A, shown alone) as one ring: its state, task, the steps it follows (the plan chip) and its PR.
-13. 둘째 줄: the second line as one ring: the children chip, what the agent was asked, then what it is doing now (the plan's current step), as the real pane head draws them from the lead's plan.
-14. 자식 칩 (press): the children chip; pressing it opens the list.
-15. 여러 에이전트를 부리기: the children list the press opened, ringed with its chip as one box; each child shows its state, and the words say any agent can be asked to start more; no chord is named. The card keeps the list open while it is up and closes it when it is left (`opens`).
-16. 작업 단계 칩 (press): the plan chip; pressing it opens the session's plan.
-17. 세션의 계획: the plan the press opened (steps, the one under way, when it last moved), ringed with its chip as one box, closed when the card is left.
-18. 탐색기 버튼 (press): the Explorer's rail button and its chord (⇧⌘E); pressing it opens the Explorer.
-19. 탐색기: the right lane with the Explorer beside a file opened from it, both ringed as the lane, showing the folder tree of the agent's checkout with its changes marked (`M` on the two files it edited, `U` on the one it made, a dot on the folder holding them), both columns drawn side by side as the lane's Expand draws them; the middle shows that agent alone.
-20. 미션 버튼 (press): the rail's 보기 button, which the slot shows once it holds the mission's map; pressing it opens the map.
-21. 미션: a big job is handed over by calling the hide-mission skill (`hide-mission으로 ~ 해 줘`, localized); the 보기 slot holds the mission map of the Conductor (B), beside its pane (shown alone for room): a plan, parts handed to several agents, only decisions in 내 차례, results as PRs, what was decided kept in Memory.
-22. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
-23. 여러 컴퓨터: the device rail with another computer's tile; pressing a tile switches the screen to that computer, and agents can work there too; connecting one is not taught. Its button, `Hide로 돌아가기` (⏎), closes the practice.
+8. 내 차례: 질문: the question's line alone, ringed (`Write the release notes`, whose second line is what it asks); 내 차례 holds only what waits for the learner, and nothing in it is a 볼 것.
+9. 내 차례: 승인: the approval's line alone (`Approve #431 and #436?`), whose second line says what to approve.
+10. 읽을 것: the group of finished work, which goes there quietly and never calls the learner; its second line leads with `끝남`.
+11. 작업 중은 두 가지: the 작업 중 group, a session working by itself (the ring, no second line) beside one that waits, whose second line says for what (`자식 기다림 · 자식 N개 작업 중`).
+12. 창: the Conductor's window (B) ringed, one agent's workplace.
+13. 첫째 줄: the first line of that window (shown alone) as one ring: its state, task, PR and the mission chip.
+14. 둘째 줄: the second line as one ring: the children chip and the part of the mission this session is on.
+15. 자식 칩 (press): the children chip; pressing it opens the list.
+16. 여러 에이전트를 부리기: the children list the press opened, ringed with its chip as one box; each child shows its state, and the words say any agent can be asked to start more; no chord is named. The card keeps the list open while it is up and closes it when it is left (`opens`).
+17. 미션 칩 (press): the mission chip of the window; pressing it opens that mission's map in the 보기 slot on the right, as in Hide.
+18. 미션 지도: the map the press opened, ringed as the lane beside the Conductor's window, with one line saying a big job handed over with `hide-mission` makes this map.
+19. 탐색기 버튼 (press): the Explorer's rail button (the lane closed again) and its chord (⇧⌘E); pressing it opens the Explorer.
+20. 탐색기: the right lane with the Explorer, both ringed as the lane, showing the folder tree of the agent's checkout with its changes marked (`M` on the two files it edited, `U` on the one it made, a dot on the folder holding them), and a file opened beside it; the lane keeps its own width (never expanded over the windows), so the agent's window stays beside it, and where the window is too narrow for both columns the lane shows the Explorer alone, as in Hide; the middle shows the agent who made the file alone.
+21. 찾기: the search field, ⌘K, which finds sessions, files and PRs, yesterday's work included.
+22. 여러 컴퓨터: the device rail with another computer's tile; pressing a tile switches the screen to that computer, and agents can work there too; connecting one is not taught. Its button, `Hide로 돌아가기` (⏎), closes the practice.
 
 A card's words are short lines, not a paragraph: `- ` opens a list item, `> ` quotes a line the learner would say, `**words**` are bold (`cardText.ts`), in the catalog's four languages alike.
-The window is static but for the scene: the learner's own press on the list switch still turns the list, and the shell's own keyboard and clicks still run on it with the world answering only those, the lane's Explorer and 보기 buttons and the plan and children popovers.
-Its rows cover every state the cards name: a row in each group, a row working by itself beside a waiting row with its second line, a lead with children, a row marked 볼 것, a branch whose agent wears a PR mark, and a second computer.
+The window is static but for the scene: the learner's own press on the list switch still turns the list, and the shell's own keyboard and clicks still run on it with the world answering only those, the lane's Explorer button, a pane's mission chip and the children popover.
+Its rows cover every state the cards name: a row in each group, a row working by itself beside a waiting row with its second line, a lead with children, a question row and an approval row, a branch whose agent wears a PR mark, and a second computer.
 A card spotlights its target: the screen dims but for the one ringed part, which wears the practice amber ring, and the card floats beside it in free space, never over it, the top bar or a part the card names without ringing (`keepClear`); `placeCard` in `web/src/practice/cardPlace.ts` picks the place from the boxes alone.
 There is no band under the screen, so the shell keeps its whole height while a card is up.
 The keyboard rests on the card's button, so ⏎ is always the card's, → goes on and ← goes back, and every other key reaches the shell untouched.

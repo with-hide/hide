@@ -12,8 +12,8 @@ import type { PracticeWorld } from "./world";
  */
 export type PracticeScene = {
   lens?: "projects" | "tasks";
-  /** The lane closed, the Documents, the Documents with the Explorer beside them, the 보기 slot holding the mission's map (`mission`), or that slot's button alone with the lane still closed (`slot`). */
-  lane?: "closed" | "documents" | "explorer" | "slot" | "mission";
+  /** The lane closed, the Documents, the Documents with the Explorer beside them, or the 보기 slot holding the mission's map (`mission`). */
+  lane?: "closed" | "documents" | "explorer" | "mission";
   /** The pane that holds the keyboard; null for none. */
   focus?: string | null;
   /** The one pane the tab shows alone, for a card whose lane needs the room; null for the four. */

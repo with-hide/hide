@@ -75,17 +75,18 @@ const FITTED: Record<string, string> = {
   session: '[data-sidebar-box] [data-pane="a2"]',
   pr: '[data-sidebar-box] [data-pane="a2"] [data-pr-mark]',
   mission: '[data-sidebar-box] [data-pane="a2"] [data-mission-chip]',
-  pane: '[data-pane-view="a1"]',
-  line1: '[data-pane-view="a1"] [data-pane-move-row]',
-  line2: '[data-pane-view="a1"] [data-pane-header-band]',
-  tree: '[data-pane-tree="a1"]',
-  plan: '[data-pane-plan-chip="a1"]',
+  ask: '[data-task-row="q1"]',
+  approve: '[data-task-row="a3"]',
+  pane: '[data-pane-view="a2"]',
+  line1: '[data-pane-view="a2"] [data-pane-move-row]',
+  line2: '[data-pane-view="a2"] [data-pane-header-band]',
+  tree: '[data-pane-tree="a2"]',
+  missionChip: '[data-pane-view="a2"] [data-pane-mission-chip]',
   explorerButton: '[data-lane-tool="explorer"]',
-  missionButton: '[data-lane-tool="detail"]',
 };
 
-/** The first-run cards, in order: one ring and one card a screen. A card that asks for a press (`tree`, `plan`, `explorerButton`, `missionButton`) goes on when its target is pressed, and ⏎ presses it. */
-const FIRST_RUN = ["left", "middle", "right", "projects", "session", "pr", "mission", "needs", "read", "work", "pane", "line1", "line2", "tree", "kids", "plan", "planSteps", "explorerButton", "explorer", "missionButton", "conduct", "find", "devices"];
+/** The first-run cards, in order: one ring and one card a screen. A card that asks for a press (`tree`, `missionChip`, `explorerButton`) goes on when its target is pressed, and ⏎ presses it. */
+const FIRST_RUN = ["left", "middle", "right", "projects", "session", "pr", "mission", "ask", "approve", "read", "work", "pane", "line1", "line2", "tree", "kids", "missionChip", "conduct", "explorerButton", "explorer", "find", "devices"];
 
 /** Plays the first run with Enter alone up to the card `id`, waiting for each card to come up before the next press. */
 async function toStep(practice: Page, id: string): Promise<void> {
@@ -127,7 +128,7 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       await expect.poll(ringed, { message: `${id}'s ring is missing, off screen, or under its card`, timeout: 5_000 }).toBe(true);
       // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
-      if (id === "needs") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
+      if (id === "ask") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
       // The project cards fold 내 차례 · 읽을 것 away, so the list shows the projects alone.
       if (id === "projects" || id === "session" || id === "pr" || id === "mission") await expect.poll(() => practice.locator("[data-raised-group]").evaluateAll((all) => all.length > 0 && all.every((one) => getComputedStyle(one).display === "none")), { message: "the raised sections are folded away" }).toBe(true);
       // A card says it all in its own words: no tag is drawn, and the one ring fits what it names.
@@ -141,19 +142,25 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
         };
         await expect.poll(fits, { message: `${id}'s ring does not fit its part`, timeout: 5_000 }).toBe(true);
       }
-      // The children list is open on its own card only, and the plan on its own; leaving a card closes what it opened.
-      if (id === "kids") await expect(practice.locator('[data-agent-tree="a1"]')).toBeVisible();
+      // The children list is open on its own card only; leaving a card closes what it opened.
+      if (id === "kids") await expect(practice.locator('[data-agent-tree="a2"]')).toBeVisible();
       else await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);
-      if (id === "planSteps") await expect(practice.locator('[data-pane-plan="a1"]')).toBeVisible();
-      else await expect(practice.locator("[data-pane-plan]")).toHaveCount(0);
+      // 내 차례 is shown one line at a time: a question, then an approval, and no 볼 것 anywhere.
+      if (id === "ask" || id === "approve") await expect(practice.locator('[data-task-group="needs_you"] [data-mark="look"]')).toHaveCount(0);
       // The Explorer card shows what the agent changed, marked in the tree, with a result opened beside it.
       if (id === "explorer") {
         await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");
         await expect(practice.locator('[data-decoration="modified"]').first()).toBeVisible();
         await expect(practice.locator('[data-decoration="untracked"]')).toBeVisible();
+        // The lane keeps about its default width: the agent's window stays wide enough to read beside it.
         await expect(practice.locator('[data-pane-view="q1"]')).toBeVisible();
+        expect((await practice.locator('[data-pane-view="q1"]').boundingBox())!.width).toBeGreaterThan(240);
       }
-      if (id === "conduct") await expect(practice.locator("[data-pane-mission-chip]")).toBeVisible();
+      // The mission chip opened the map beside the Conductor's window.
+      if (id === "conduct") {
+        await expect(practice.locator('[data-pane-view="a2"] [data-pane-mission-chip]')).toBeVisible();
+        await expect(practice.locator("[data-mission-map]").first()).toBeVisible();
+      }
       if (at === FIRST_RUN.length - 1) break;
       await practice.keyboard.press("Enter");
       await expect(layer).toHaveAttribute("data-practice-step", FIRST_RUN[at + 1]!);
@@ -182,29 +189,25 @@ test("a card that asks for a press goes on when its target is pressed, and the c
     await toStep(practice, "tree");
     await expect(practice.locator('[data-practice-card][data-practice-press="true"]')).toBeVisible();
     await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);
-    await practice.locator('[data-pane-tree="a1"]').click();
+    await practice.locator('[data-pane-tree="a2"]').click();
     await expect(layer).toHaveAttribute("data-practice-step", "kids");
-    await expect(practice.locator('[data-agent-tree="a1"]')).toBeVisible();
-    // The plan chip, pressed the same way.
-    await toStep(practice, "plan");
-    await practice.locator('[data-pane-plan-chip="a1"]').click();
-    await expect(layer).toHaveAttribute("data-practice-step", "planSteps");
-    await expect(practice.locator('[data-pane-plan="a1"]')).toBeVisible();
+    await expect(practice.locator('[data-agent-tree="a2"]')).toBeVisible();
+    // The mission chip, pressed the same way: the mission's map opens on the right.
+    await toStep(practice, "missionChip");
+    await expect(practice.locator("[data-mission-map]")).toHaveCount(0);
+    await practice.locator('[data-pane-view="a2"] [data-pane-mission-chip]').click();
+    await expect(layer).toHaveAttribute("data-practice-step", "conduct");
+    await expect(practice.locator("[data-mission-map]").first()).toBeVisible();
     // The Explorer's rail button opens the Explorer beside a result.
     await toStep(practice, "explorerButton");
     await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "false");
     await practice.locator('[data-lane-tool="explorer"]').click();
     await expect(layer).toHaveAttribute("data-practice-step", "explorer");
     await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");
-    // The 보기 button opens the mission's map.
-    await toStep(practice, "missionButton");
-    await practice.locator('[data-lane-tool="detail"]').click();
-    await expect(layer).toHaveAttribute("data-practice-step", "conduct");
-    await expect(practice.locator("[data-lane-column]").first()).toBeVisible();
     // Going back to a press card closes what the press opened: the card asks again.
     await practice.keyboard.press("ArrowLeft");
-    await expect(layer).toHaveAttribute("data-practice-step", "missionButton");
-    await expect(practice.locator('[data-lane-tool="detail"]')).toHaveAttribute("aria-pressed", "false");
+    await expect(layer).toHaveAttribute("data-practice-step", "explorerButton");
+    await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "false");
   });
 });
 
