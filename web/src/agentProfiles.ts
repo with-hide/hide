@@ -3,6 +3,7 @@
 // here. Changes go to the core as one `agent_profile_change` each, and the
 // screen reads only the answer that carries its own request id.
 
+import type { TFunction } from "i18next";
 import { agentAdapter } from "./agentAdapters";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
@@ -232,6 +233,15 @@ export function editChange(id: string, draft: ProfileDraft): ProfileChange {
 /** Whether two drafts would save the same profile. */
 export function sameDraft(a: ProfileDraft, b: ProfileDraft): boolean {
   return JSON.stringify(editChange("", a)) === JSON.stringify(editChange("", b));
+}
+
+/**
+ * An item's name on every screen that picks one (PRD agent-profiles-phase2
+ * D-01): its agent's name, then `· <profile>` for a profile other than the
+ * built-in default, which is the agent's name alone.
+ */
+export function itemName(t: TFunction<"translation">, agentLabel: string, profile?: string | null): string {
+  return profile ? t("agentProfiles.agentWithProfile", { agent: agentLabel, profile }) : agentLabel;
 }
 
 /** The project's chosen profile for `agent` (`project_settings.agent_profiles`), by the catalog project a start target names. */
