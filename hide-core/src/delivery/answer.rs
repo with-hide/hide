@@ -30,6 +30,10 @@ pub struct AgentView {
     /// The spawner, independently of responsibility; null for ordinary roots.
     pub origin: Option<String>,
     pub project: Option<String>,
+    /// The profile the agent runs with, named after its agent (`Claude ·
+    /// work`); null for its agent's built-in default (PRD agent-profiles
+    /// B17).
+    pub profile: Option<String>,
     pub runtime: Runtime,
     pub connection: Connection,
     pub registered: bool,
@@ -515,6 +519,7 @@ mod tests {
             (None, Some("agent-1")),
         ] {
             let agent = AgentView {
+                profile: None,
                 names: None,
                 id: "agent-2".into(),
                 name: "worker".into(),

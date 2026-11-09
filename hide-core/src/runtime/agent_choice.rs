@@ -320,6 +320,50 @@ impl Runtime {
         .map(|id| hide_agent_adapter::ProfileId(id.to_owned()))
     }
 
+    /// The profile a resume of a `kind` session on `device` runs with when
+    /// the session's start recorded none (a session line or record): the
+    /// built-in default for a session in the agent's default account, as for
+    /// every session recorded before profiles; else the profile of that agent
+    /// there whose account is `account`, the agent's default among several
+    /// first, then the list's order (PRD agent-profiles B19). An account no
+    /// profile names now (its profile was removed) starts nothing, so a
+    /// session is never resumed in an account other than its own.
+    pub(crate) fn session_profile(
+        &self,
+        device: &str,
+        kind: &str,
+        account: &hide_agent_adapter::AccountKey,
+    ) -> Result<Option<(hide_agent_adapter::ProfileId, String)>, &'static str> {
+        let spelled = match account {
+            hide_agent_adapter::AccountKey::Default => return Ok(None),
+            hide_agent_adapter::AccountKey::Folder(spelled)
+            | hide_agent_adapter::AccountKey::Name(spelled) => spelled,
+        };
+        let agent = hide_agent_adapter::adapter(kind)
+            .ok_or(crate::launch::PROFILE_GONE)?
+            .id;
+        let profiles = self
+            .machine_profiles(device)
+            .ok_or(crate::launch::PROFILE_GONE)?;
+        let default = profiles.defaults.get(agent);
+        profiles
+            .profiles
+            .iter()
+            .filter(|profile| {
+                profile.kind == agent
+                    && profile.install != Some(crate::model::ProfileInstall::Removing)
+                    && profile.account.as_deref() == Some(spelled.as_str())
+            })
+            .min_by_key(|profile| Some(&profile.id) != default)
+            .map(|profile| {
+                Some((
+                    hide_agent_adapter::ProfileId(profile.id.clone()),
+                    profile.name.clone(),
+                ))
+            })
+            .ok_or(crate::launch::PROFILE_GONE)
+    }
+
     /// The profile `agent` runs with, when its pane's record describes it;
     /// otherwise the built-in default (`None`).
     pub(crate) fn launch_profile_of(
@@ -332,6 +376,67 @@ impl Runtime {
             .get(&agent.pane_id)
             .filter(|launch| describes(launch, agent))
             .and_then(|launch| launch.profile.clone())
+    }
+
+    /// The account the `kind` agent started under `name` (none for one that
+    /// came back without it) whose conversation is `session` reads its
+    /// sessions in, in the pane the core calls `pane_id`: its profile's,
+    /// when the pane's record describes it, else the default account (PRD
+    /// agent-profiles B19). Every read of one agent's session names it, and
+    /// the node reads in that account alone.
+    pub(crate) fn pane_account(
+        &self,
+        pane_id: &str,
+        kind: &str,
+        name: Option<&str>,
+        session: Option<&str>,
+    ) -> hide_agent_adapter::AccountKey {
+        self.snapshot
+            .ui_state
+            .pane_launches
+            .get(pane_id)
+            .filter(|launch| launch_describes(launch, kind, name, session))
+            .and_then(|launch| launch.profile.as_ref())
+            .map(|profile| profile.account.clone())
+            .unwrap_or_default()
+    }
+
+    /// The launch records of the panes on `device` (`None` for this
+    /// machine) whose agent runs in an account other than the default, by
+    /// that machine's own pane ids, with the edit they were taken at; `None`
+    /// while the records have not moved since `edit`. The label reads of
+    /// one machine's coordinator name their accounts by them, and take them
+    /// again only when a record moved.
+    pub(crate) fn account_launches(
+        &self,
+        device: Option<&str>,
+        edit: Option<u64>,
+    ) -> Option<(u64, BTreeMap<String, crate::model::PaneLaunch>)> {
+        let current = self.missions.launches_edit;
+        if edit == Some(current) {
+            return None;
+        }
+        let launches = self
+            .snapshot
+            .ui_state
+            .pane_launches
+            .iter()
+            .filter(|(_, launch)| {
+                launch
+                    .profile
+                    .as_ref()
+                    .is_some_and(|profile| !profile.account.is_default())
+            })
+            .filter_map(|(pane, launch)| {
+                let pane = match device {
+                    Some(device) => crate::address::pane_of(pane, device)?,
+                    None if crate::address::is_device_scoped(pane) => return None,
+                    None => pane.as_str(),
+                };
+                Some((pane.to_owned(), launch.clone()))
+            })
+            .collect();
+        Some((current, launches))
     }
 
     /// What the agent `actor` hands a child of `kind` it starts on its own
@@ -402,11 +507,12 @@ impl Runtime {
         }
     }
 
-    /// Settles the launch records against one pass's agent rows, and saves
-    /// them when one moved.
+    /// Settles the launch records against one pass's agent rows, saves
+    /// them when one moved, and lays each row's profile from them
+    /// ([`Self::lay_profiles`]).
     pub(super) fn apply_pane_launches(
         &mut self,
-        agents: &[SidebarAgentSnapshot],
+        agents: &mut [SidebarAgentSnapshot],
         scope: crate::agent_state::ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) {
@@ -424,6 +530,51 @@ impl Runtime {
         // worker's conversation (a settle, a wake or a resume writes it) and
         // the worker is bound to its node.
         self.record_node_launches();
+        self.lay_profiles(agents);
+    }
+
+    /// The profile each of `records`' live agents runs with, by registration
+    /// id, as its row names it (`SidebarAgentSnapshot::profile`): what
+    /// `hide agent list` and `hide agent show` say beside the agent.
+    pub(crate) fn registration_profiles<'a>(
+        &self,
+        records: impl IntoIterator<Item = &'a crate::coordination::AgentRecord>,
+    ) -> BTreeMap<String, String> {
+        let rows: HashMap<&str, &SidebarAgentSnapshot> = self
+            .agent_rows()
+            .filter(|row| row.profile.is_some())
+            .map(|row| (row.pane_id.as_str(), row))
+            .collect();
+        if rows.is_empty() {
+            return BTreeMap::new();
+        }
+        records
+            .into_iter()
+            .filter(|record| !record.ended)
+            .filter_map(|record| {
+                let row = rows.get(record.actor.pane_id.as_str())?;
+                (hide_agent_adapter::canonical_kind(&row.agent_kind)
+                    == hide_agent_adapter::canonical_kind(&record.actor.kind))
+                .then(|| {
+                    Some((
+                        record.id.clone(),
+                        crate::launch::shown(&row.agent_kind, row.profile.as_deref()?),
+                    ))
+                })?
+            })
+            .collect()
+    }
+
+    /// Names on each row the profile its agent runs with, when its pane's
+    /// record describes it and the profile is not the built-in default (PRD
+    /// agent-profiles B17); the row's title stays as it is. One map lookup a
+    /// row.
+    fn lay_profiles(&self, agents: &mut [SidebarAgentSnapshot]) {
+        for agent in agents {
+            if let Some(profile) = self.launch_profile_of(agent) {
+                agent.profile = Some(profile.name);
+            }
+        }
     }
 
     /// Remembers the kind and model a start named, so every start surface

@@ -376,7 +376,13 @@ use crate::error::HostError;
 /// process of a pane fresh (`holders::PaneCall::Process`) and carries the
 /// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
 /// `executor`), by which the core decides what came of that start.
-pub const PROTOCOL_VERSION: u32 = 88;
+/// 89: a node answers which account it registered holds a session a resume
+/// names by its file or id alone (`SessionAccount`, PRD agent-profiles
+/// B19), so a session line resumes with the profile of its own account; a
+/// helper on 88 keeps profiles but would refuse the call, so it upgrades,
+/// and a node the core still admits on an older protocol keeps no profile,
+/// which the core reads as the default account.
+pub const PROTOCOL_VERSION: u32 = 89;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1072,13 +1078,16 @@ pub enum Call {
         profile: Option<crate::profiles::ProfileStart>,
     },
     /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
-    /// made, in the node account's own settings of that agent
-    /// (`hide_agent_hooks::folder_trust`). `agent` is the start's kind, as
-    /// the adapter names it.
+    /// made, in the agent's settings of the account the start runs in
+    /// (`hide_agent_hooks::folder_trust`): the account of `profile` when the
+    /// start names one, the node account's default one otherwise. `agent` is
+    /// the start's kind, as the adapter names it.
     AgentTrust {
         agent: String,
         path: String,
         trusted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<hide_agent_adapter::ProfileId>,
     },
     /// Answers the account's exact normal shell recipe and readiness policy.
     /// Tries Hide's first-prompt integration, otherwise preserves the same
@@ -1133,7 +1142,9 @@ pub enum Call {
     /// The helper keeps nothing between reads; it answers events and the
     /// next checkpoint, never a path.
     LabelTranscript {
-        request: hide_session::label_transcript::LabelTranscriptRequest,
+        /// Boxed: the request is the largest a node takes, and the call
+        /// enum is as large as its largest variant.
+        request: Box<hide_session::label_transcript::LabelTranscriptRequest>,
     },
     /// The one original turn a backlog item came from, for its panel's
     /// origin and the Start prompt. No other turn is returned.
@@ -1143,6 +1154,11 @@ pub enum Call {
     /// Metadata-only activity using the same native ownership proof as labels.
     SessionActivity {
         request: hide_session::session_activity::SessionActivityRequest,
+    },
+    /// The account the node registered that holds the session a resume
+    /// names by its file or id alone (`hide_session::session_account::read`).
+    SessionAccount {
+        request: hide_session::session_account::SessionAccountRequest,
     },
     /// The device's session files changed since a time and, for a later
     /// page, up to one, newest first and capped
@@ -1454,6 +1470,7 @@ impl Call {
             | Self::LabelTranscript { .. }
             | Self::SessionWorkTurn { .. }
             | Self::SessionActivity { .. }
+            | Self::SessionAccount { .. }
             | Self::LinkFiles { .. }
             | Self::LinkRead { .. }
             | Self::UsageFiles { .. }

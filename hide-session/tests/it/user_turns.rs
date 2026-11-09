@@ -53,6 +53,7 @@ impl Session {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, contents).unwrap();
         let request = LabelTranscriptRequest {
+            account: Default::default(),
             agent,
             reference_kind: "path".to_owned(),
             reference_value: path.display().to_string(),
@@ -70,7 +71,11 @@ impl Session {
     }
 
     fn read(&self) -> LabelTranscript {
-        read(self.home.path(), &self.request).unwrap()
+        read(
+            &hide_session::Accounts::new(self.home.path()),
+            &self.request,
+        )
+        .unwrap()
     }
 
     fn resume(&mut self, answer: &LabelTranscript) {
@@ -400,7 +405,11 @@ fn a_native_call_id_past_its_bound_is_a_reported_read_failure() {
         session.resume(&asked);
         session.append(&session.native_question(&"x".repeat(257), question("Q", &["A"])));
         assert_eq!(
-            read(session.home.path(), &session.request).unwrap_err(),
+            read(
+                &hide_session::Accounts::new(session.home.path()),
+                &session.request
+            )
+            .unwrap_err(),
             hide_session::ReadRefusal::Refused("user_turn_capacity".into())
         );
     }
@@ -423,8 +432,11 @@ fn more_waiting_questions_than_kept_are_unknown_until_a_person_writes_or_a_turn_
                 &session.native_question(&format!("capacity-{index}"), question("Q", &["A"])),
             );
         }
-        let crowded = read(session.home.path(), &session.request)
-            .unwrap_or_else(|reason| panic!("{agent:?}: the read stopped: {reason}"));
+        let crowded = read(
+            &hide_session::Accounts::new(session.home.path()),
+            &session.request,
+        )
+        .unwrap_or_else(|reason| panic!("{agent:?}: the read stopped: {reason}"));
         assert_eq!(
             crowded.turns.as_ref().unwrap().waiting(),
             None,
@@ -470,8 +482,11 @@ fn questions_answered_one_after_another_never_fill_a_turn() {
         let call = "interview-next";
         session.append(&session.native_question(call, question("Q", &["A"])));
         session.append(&session.result(call));
-        let next = read(session.home.path(), &session.request)
-            .unwrap_or_else(|reason| panic!("{agent:?}: an answered question refused: {reason}"));
+        let next = read(
+            &hide_session::Accounts::new(session.home.path()),
+            &session.request,
+        )
+        .unwrap_or_else(|reason| panic!("{agent:?}: an answered question refused: {reason}"));
         assert_eq!(fact(&next), None, "{agent:?}");
         if agent == Agent::Claude {
             // Claude's turn has no mode to settle: nothing waits, so a bell
@@ -628,7 +643,11 @@ fn a_native_question_without_a_valid_correlation_is_a_reported_read_failure() {
             }
             session.append(&record);
             assert_eq!(
-                read(session.home.path(), &session.request).unwrap_err(),
+                read(
+                    &hide_session::Accounts::new(session.home.path()),
+                    &session.request
+                )
+                .unwrap_err(),
                 hide_session::ReadRefusal::Refused("user_turn_invalid".into())
             );
         }
@@ -701,7 +720,11 @@ fn missing_native_content_stays_absent_and_plain_question_prose_is_no_native_fac
 
         fs::remove_file(&session.path).unwrap();
         assert!(
-            read(session.home.path(), &session.request).is_err(),
+            read(
+                &hide_session::Accounts::new(session.home.path()),
+                &session.request
+            )
+            .is_err(),
             "an unreadable source supplies no fabricated fact"
         );
     }

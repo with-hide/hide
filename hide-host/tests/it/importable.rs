@@ -66,7 +66,14 @@ impl Home {
     }
 
     fn find_by(&self, exclude: &[String], deadline: Instant) -> ImportableProjects {
-        find(&self.path, &self.variables(), now_ms(), exclude, deadline)
+        find(
+            &self.path,
+            &hide_session::Accounts::new(&self.path),
+            &self.variables(),
+            now_ms(),
+            exclude,
+            deadline,
+        )
     }
 
     fn folder(&self, relative: &str) -> PathBuf {

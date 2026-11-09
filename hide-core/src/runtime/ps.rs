@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::coordination::{Sleeping, life};
+use crate::coordination::{RegistrationFacts, life};
 use crate::delivery::answer::{Ps, PsAgent, PsMission, PsPane, PsState, Runtime as Life};
 use crate::delivery::ledger::Ledger;
 use crate::model::SidebarAgentSnapshot;
@@ -30,7 +30,7 @@ pub(crate) struct PsRows {
     missions_unreadable: bool,
     ledger: Arc<Ledger>,
     /// The registrations Hide holds asleep, read with the ledger.
-    sleeping: Sleeping,
+    sleeping: RegistrationFacts,
 }
 
 /// A pane id as the navigator spells it, as its machine and its own id.

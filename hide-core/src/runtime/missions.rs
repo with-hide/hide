@@ -555,7 +555,7 @@ struct ViewsMadeFrom {
     /// its mission's cap (`MISSION_RESERVATION_HOLD_MS`).
     until: u64,
     /// The missions' workers Hide holds asleep, which their cards read.
-    sleeping: crate::coordination::Sleeping,
+    sleeping: crate::coordination::RegistrationFacts,
     /// The rows carrying a core question, which decide whether a node's
     /// attention is on a row (`on_row`).
     laid: Vec<String>,
@@ -2049,11 +2049,77 @@ impl Runtime {
                 .find(|record| !record.ended && record.actor.same_identity(&actor))
                 .map(|record| record.id.clone())
         });
+        // The profile its pane's launch record says the session started
+        // with, by the rule a child's start reads its parent's.
+        let (profile, profile_unknown) = match self.caller_launch_profile(&actor, &actor.kind) {
+            crate::launch::Parent::Profile(profile) => (Some(profile), false),
+            crate::launch::Parent::Default | crate::launch::Parent::None => (None, false),
+            crate::launch::Parent::Unknown => (None, true),
+        };
         Conductor {
             actor,
             session,
             agent_id,
+            profile,
+            profile_unknown,
         }
+    }
+
+    /// The profile a resume of the session `payload` names by its id alone
+    /// (이어받기, PRD mission-tool D-11) runs with when a mission's
+    /// Conductor record names that session on that machine: the one the
+    /// record kept, `None` for the built-in default (PRD agent-profiles
+    /// D-27); no record that knows its profile names it is `Ok(None)`.
+    /// Records that name it with different profiles answer none of them.
+    pub(super) fn conductor_resume_profile(
+        &self,
+        payload: &super::events::AgentStartInCheckoutPayload,
+    ) -> Result<Option<Option<crate::launch::LaunchProfile>>, &'static str> {
+        let Some(session_id) = payload.resume_session_id.as_deref() else {
+            return Ok(None);
+        };
+        // A resume that names its file is the file's (`SessionAccount`).
+        if payload
+            .resume_session_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+        {
+            return Ok(None);
+        }
+        let Some(agent) = hide_session::Agent::from_kind(&payload.provider) else {
+            return Ok(None);
+        };
+        let device = payload
+            .device_id
+            .as_deref()
+            .filter(|device| !device.is_empty())
+            .unwrap_or(self.node.as_str());
+        let mut found: Option<&Option<crate::launch::LaunchProfile>> = None;
+        // A record that does not know its Conductor's profile says nothing
+        // of it; the session's machine answers then.
+        for conductor in self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| &mission.conductor)
+            .filter(|conductor| {
+                !conductor.profile_unknown
+                    && conductor.session.as_ref().is_some_and(|session| {
+                        session.device_id == device
+                            && session.agent == agent.as_str()
+                            && session.session_id == session_id
+                    })
+            })
+        {
+            match found {
+                Some(profile) if *profile != conductor.profile => {
+                    return Err("agent_start.invalid_resume");
+                }
+                _ => found = Some(&conductor.profile),
+            }
+        }
+        Ok(found.cloned())
     }
 
     /// What GitHub says now of pull request `number` in `mission`'s
@@ -2115,11 +2181,18 @@ impl Runtime {
         let now = crate::delivery::worker::now();
         let mut moved = false;
         for (id, pane, actor) in moves {
-            let conductor = self.conductor_of(device, &pane, actor);
+            let mut conductor = self.conductor_of(device, &pane, actor);
             let agent_id = conductor.agent_id.clone();
             let Some(mission) = self.missions.book.get_mut(&id) else {
                 continue;
             };
+            // The conversation that came back is the one the record named:
+            // a pane whose own record does not say its profile keeps what
+            // the mission knew of the one the conversation started with.
+            if conductor.profile_unknown && conductor.session == mission.conductor.session {
+                conductor.profile = mission.conductor.profile.clone();
+                conductor.profile_unknown = mission.conductor.profile_unknown;
+            }
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
             if let Err(code) =
@@ -2934,7 +3007,7 @@ impl Runtime {
         &self,
         mission: &Mission,
         agents: &HashMap<&str, &crate::coordination::AgentRecord>,
-        sleeping: &crate::coordination::Sleeping,
+        sleeping: &crate::coordination::RegistrationFacts,
         ledger: Option<&crate::delivery::ledger::Ledger>,
     ) -> MissionView {
         let github = self.github_project_on(&mission.device_id, &mission.project);

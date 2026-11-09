@@ -840,6 +840,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         requires_close_confirmation: false,
         requires_close_status_check: false,
         identity_label,
+        profile: None,
         progress,
         expected_reply,
         detail: None,

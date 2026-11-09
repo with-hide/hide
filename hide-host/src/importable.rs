@@ -51,6 +51,7 @@ struct Named {
 /// `deadline`.
 pub fn find(
     home: &Path,
+    accounts: &hide_session::Accounts,
     variables: hide_platform::host::Variables,
     now_unix_ms: u64,
     exclude: &[String],
@@ -59,7 +60,7 @@ pub fn find(
     let since = now_unix_ms.saturating_sub(RECENT_WINDOW_MS);
     let mut named = Vec::new();
     let mut dropped = Vec::new();
-    agents(home, since, deadline, &mut named, &mut dropped);
+    agents(accounts, since, deadline, &mut named, &mut dropped);
     for app in [ImportApp::Paseo, ImportApp::Herdr] {
         let read = if Instant::now() >= deadline {
             Err(LATE.to_owned())
@@ -91,13 +92,13 @@ fn app_name(app: ImportApp) -> &'static str {
 }
 
 fn agents(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     since: u64,
     deadline: Instant,
     named: &mut Vec<Named>,
     dropped: &mut Vec<DroppedSource>,
 ) {
-    let read = hide_session::SessionCatalog::new(home, "").worked_folders(since, deadline);
+    let read = hide_session::SessionCatalog::new(accounts, "").worked_folders(since, deadline);
     named.extend(read.folders.into_iter().map(|folder| Named {
         folder: folder.cwd,
         source: ImportSource::Agent(folder.agent),

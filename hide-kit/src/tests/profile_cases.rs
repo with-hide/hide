@@ -832,3 +832,140 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
         assert_eq!(recorded_targets(&fixture), Value::Null, "{row}");
     }
 }
+
+/// A worktree Hide made under `root`: a folder with a `.git` entry.
+fn made_worktree(root: &Path) -> PathBuf {
+    let tree = root.join("repo-task");
+    std::fs::create_dir_all(tree.join(".git")).unwrap();
+    std::fs::canonicalize(&tree).unwrap()
+}
+
+#[test]
+fn the_folder_trust_hide_wrote_in_a_profile_account_leaves_with_its_last_profile() {
+    use hide_agent_hooks::account::AccountAt;
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let mut fixture = Fixture::new();
+    let home = fixture.home().to_path_buf();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    with_profiles(&mut fixture, &[&profile], &[]);
+    apply(&fixture.target, &Scope::automatic());
+
+    crate::trust_writable(&home, &profile).unwrap();
+    let adapter = hide_agent_adapter::adapter("claude-code").unwrap();
+    let account = adapter
+        .resolve(
+            &profile,
+            &hide_agent_adapter::NodeEnv::new(Some(home.clone())),
+        )
+        .unwrap();
+    let at = AccountAt::Account {
+        home: &home,
+        account: &account,
+    };
+    let tree = made_worktree(&fixture.root);
+    // Claude Code keys a folder by its path as written.
+    let key = tree.to_str().unwrap().to_owned();
+    folder_trust::trust_worktree(Agent::ClaudeCode, at, &tree, Tools::none()).unwrap();
+    folder_trust::trust_worktree(Agent::ClaudeCode, &home, &tree, Tools::none()).unwrap();
+    let in_account = Agent::ClaudeCode.settings_path(at);
+    let in_default = Agent::ClaudeCode.settings_path(&home);
+    assert!(in_account.starts_with(&folder), "{in_account:?}");
+    let trusted = |file: &Path| {
+        serde_json::from_slice::<Value>(&std::fs::read(file).unwrap()).unwrap()["projects"]
+            .get(&key)
+            .is_some()
+    };
+    assert!(trusted(&in_account) && trusted(&in_default));
+
+    with_profiles(&mut fixture, &[], &[&profile]);
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(
+        place(&report.profiles, "p-work"),
+        &ProfilePlace::Removing { failure: None }
+    );
+    assert!(!trusted(&in_account), "the account's trust left with it");
+    assert!(trusted(&in_default), "the default account's trust stays");
+}
+
+/// A trust Hide could not take out of a going profile account keeps the
+/// account's target and says why, and the pass after the file is mended
+/// takes the trust out and lets the target go: the removal is owned until
+/// it is done, never forgotten on a failure.
+#[test]
+fn a_profile_account_trust_that_could_not_go_stays_owned_until_a_later_pass_takes_it_out() {
+    use hide_agent_hooks::account::AccountAt;
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let mut fixture = Fixture::new();
+    let home = fixture.home().to_path_buf();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    with_profiles(&mut fixture, &[&profile], &[]);
+    apply(&fixture.target, &Scope::automatic());
+    let account = hide_agent_adapter::adapter("claude-code")
+        .unwrap()
+        .resolve(
+            &profile,
+            &hide_agent_adapter::NodeEnv::new(Some(home.clone())),
+        )
+        .unwrap();
+    let at = AccountAt::Account {
+        home: &home,
+        account: &account,
+    };
+    let tree = made_worktree(&fixture.root);
+    let key = tree.to_str().unwrap().to_owned();
+    folder_trust::trust_worktree(Agent::ClaudeCode, at, &tree, Tools::none()).unwrap();
+    let in_account = Agent::ClaudeCode.settings_path(at);
+    let written = std::fs::read(&in_account).unwrap();
+    std::fs::write(&in_account, "{ not json").unwrap();
+
+    with_profiles(&mut fixture, &[], &[&profile]);
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    let ProfilePlace::Removing {
+        failure: Some(failure),
+    } = place(&report.profiles, "p-work")
+    else {
+        panic!("the removal reports its failure: {:?}", report.profiles);
+    };
+    assert!(failure.contains(".claude.json"), "{failure}");
+    assert_ne!(
+        recorded_targets(&fixture),
+        Value::Null,
+        "the target is kept"
+    );
+
+    std::fs::write(&in_account, &written).unwrap();
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(
+        place(&report.profiles, "p-work"),
+        &ProfilePlace::Removing { failure: None }
+    );
+    let trust = serde_json::from_slice::<Value>(&std::fs::read(&in_account).unwrap()).unwrap();
+    assert!(trust["projects"].get(&key).is_none(), "{trust}");
+    assert_eq!(recorded_targets(&fixture), Value::Null);
+}
+
+#[test]
+fn a_profile_account_whose_trust_file_leads_out_of_it_is_refused_a_trust() {
+    let mut fixture = Fixture::new();
+    let home = fixture.home().to_path_buf();
+    let folder = fixture.root.join("accounts/work");
+    let profile = claude("p-work", &folder.display().to_string());
+    added(&fixture, &profile);
+    with_profiles(&mut fixture, &[&profile], &[]);
+    apply(&fixture.target, &Scope::automatic());
+    let theirs = home.join(".claude.json");
+    std::fs::write(&theirs, "{}\n").unwrap();
+    std::os::unix::fs::symlink(&theirs, folder.join(".claude.json")).unwrap();
+
+    let refused = crate::trust_writable(&home, &profile).unwrap_err();
+
+    assert!(refused.contains(".claude.json"), "{refused}");
+    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "{}\n");
+}

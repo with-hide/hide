@@ -162,13 +162,13 @@ impl Runtime {
     pub(crate) fn sleeping_registrations<'a>(
         &self,
         records: impl IntoIterator<Item = &'a crate::coordination::AgentRecord>,
-    ) -> crate::coordination::Sleeping {
+    ) -> crate::coordination::RegistrationFacts {
         let store = &self.snapshot.ui_state.agent_sleep;
         if store.records.is_empty() && store.dormant.is_empty() {
-            return crate::coordination::Sleeping::default();
+            return crate::coordination::RegistrationFacts::default();
         }
-        crate::coordination::Sleeping(
-            records
+        crate::coordination::RegistrationFacts {
+            asleep: records
                 .into_iter()
                 .filter(|record| {
                     !record.ended
@@ -178,7 +178,21 @@ impl Runtime {
                 })
                 .map(|record| record.id.clone())
                 .collect(),
-        )
+            profiles: Default::default(),
+        }
+    }
+
+    /// [`Self::sleeping_registrations`] with the profile each live agent
+    /// runs with (`Runtime::registration_profiles`): what `hide agent list`
+    /// and `hide agent show` answer from.
+    pub(crate) fn registration_facts(
+        &self,
+        records: &[crate::coordination::AgentRecord],
+    ) -> crate::coordination::RegistrationFacts {
+        crate::coordination::RegistrationFacts {
+            profiles: self.registration_profiles(records),
+            ..self.sleeping_registrations(records)
+        }
     }
 
     /// The recipients asleep now, for the delivery store's pass: their

@@ -1229,9 +1229,9 @@ pub fn remove<'h>(
         total.preserved_entries += outcome.preserved_entries;
     }
     // Switching agy or Grok off also takes out the folder trust Hide added
-    // (D-08), and agy's also Hide AI's folder for agy (D-09). Hide records
-    // a trust in the default account only; a profile's account has none of
-    // Hide's to take.
+    // (D-08), and agy's also Hide AI's folder for agy (D-09). A profile's
+    // account has its trust taken out by the kit, which judges that
+    // account's file first (`hide_kit` targets).
     let trusted = match agent {
         _ if !at.is_default() => None,
         GuidanceAgent::Antigravity => Some(crate::folder_trust::Agent::Antigravity),

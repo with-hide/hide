@@ -4881,6 +4881,7 @@ mod tests {
         fixture.answer(&[]);
         assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
         let row = crate::model::SessionRowSnapshot {
+            account: Default::default(),
             id: SESSION.to_owned(),
             provider: "claude".to_owned(),
             provider_label: "Claude Code".to_owned(),
@@ -6927,6 +6928,7 @@ mod tests {
             )
             .unwrap();
         let session = ProjectSession {
+            account: Default::default(),
             id: "s2".into(),
             agent: hide_session::Agent::Claude,
             locator: "/s2.jsonl".into(),

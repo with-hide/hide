@@ -7,7 +7,8 @@
 //! What the agent appends is read on from where the last read stopped, and a
 //! session rewound or replaced under the phone is read anew.
 
-use std::path::{Path, PathBuf};
+use hide_agent_adapter::AccountKey;
+use hide_session::Accounts;
 
 use hide_session::label_transcript::{
     LabelEventKind, LabelTranscript, LabelTranscriptRequest, read,
@@ -24,7 +25,9 @@ const READS_PER_PAGE: usize =
 /// One proven OpenCode root session, as the phone names it.
 #[derive(Clone, Debug)]
 struct Session {
-    home: PathBuf,
+    /// The one account the session lies in, read alone, and its key.
+    accounts: Accounts,
+    account: AccountKey,
     id: String,
     cwd: String,
     /// The session's creation, so a replaced session is never continued.
@@ -61,7 +64,7 @@ fn refused(refusal: impl Into<hide_session::ReadRefusal>) -> SessionError {
 impl Session {
     fn checkpoint_at(&self, index: u64) -> Result<ConversationCheckpoint, SessionError> {
         let (checkpoint, confirmed) =
-            hide_session::opencode::message_checkpoint(&self.home, &self.id, &self.cwd, index)
+            hide_session::opencode::message_checkpoint(&self.accounts, &self.id, &self.cwd, index)
                 .map_err(refused)?;
         if confirmed.incarnation != self.incarnation {
             return Err(changed());
@@ -70,7 +73,7 @@ impl Session {
     }
 
     fn require_held(&self, next: &ConversationCheckpoint) -> Result<(), SessionError> {
-        let confirmed = hide_session::opencode::holds(&self.home, &self.id, &self.cwd, next)
+        let confirmed = hide_session::opencode::holds(&self.accounts, &self.id, &self.cwd, next)
             .map_err(refused)?;
         if confirmed.incarnation != self.incarnation {
             return Err(changed());
@@ -85,9 +88,10 @@ impl Session {
         checkpoint: &ConversationCheckpoint,
     ) -> Result<Option<LabelTranscript>, SessionError> {
         let transcript = read(
-            &self.home,
+            &self.accounts,
             &LabelTranscriptRequest {
                 agent: Agent::OpenCode,
+                account: self.account.clone(),
                 reference_kind: "id".to_owned(),
                 reference_value: self.id.clone(),
                 cwd: Some(self.cwd.clone()),
@@ -115,9 +119,13 @@ impl Session {
         let mut end = match end {
             Some(end) => end,
             None => {
-                let (_, confirmed) =
-                    hide_session::opencode::message_checkpoint(&self.home, &self.id, &self.cwd, 0)
-                        .map_err(refused)?;
+                let (_, confirmed) = hide_session::opencode::message_checkpoint(
+                    &self.accounts,
+                    &self.id,
+                    &self.cwd,
+                    0,
+                )
+                .map_err(refused)?;
                 if confirmed.incarnation != self.incarnation {
                     return Err(changed());
                 }
@@ -194,15 +202,17 @@ fn messages_in(transcript: &LabelTranscript, end: u64) -> impl Iterator<Item = M
 impl Transcript {
     /// Proves the session and reads its newest page.
     pub(super) fn open(
-        home: &Path,
+        accounts: &Accounts,
+        account: AccountKey,
         id: &str,
         cwd: Option<&str>,
     ) -> Result<(Self, Page), SessionError> {
         let cwd = cwd.ok_or(SessionError::CwdUnavailable)?;
         let (_, confirmed) =
-            hide_session::opencode::message_checkpoint(home, id, cwd, 0).map_err(refused)?;
+            hide_session::opencode::message_checkpoint(accounts, id, cwd, 0).map_err(refused)?;
         let session = Session {
-            home: home.to_path_buf(),
+            accounts: accounts.clone(),
+            account,
             id: id.to_owned(),
             cwd: cwd.to_owned(),
             incarnation: confirmed.incarnation,
@@ -353,7 +363,12 @@ mod tests {
     #[test]
     fn opencode_phone_pages_native_messages_by_index_and_only_appends_new_ones() {
         let (home, cwd, writer) = database(70);
-        let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+        let (mut open, page) = Open::open(
+            &hide_session::Accounts::new(home.path()),
+            "pane",
+            source(&cwd),
+        )
+        .unwrap();
         assert_eq!(page.messages.len(), PAGE_MESSAGES);
         assert_eq!(texts(&page.messages).first().unwrap(), "메시지 40");
         assert_eq!(texts(&page.messages).last().unwrap(), "메시지 69");
@@ -380,7 +395,12 @@ mod tests {
     #[test]
     fn opencode_phone_waits_for_an_answer_still_being_written() {
         let (home, cwd, writer) = database(1);
-        let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+        let (mut open, page) = Open::open(
+            &hide_session::Accounts::new(home.path()),
+            "pane",
+            source(&cwd),
+        )
+        .unwrap();
         assert_eq!(texts(&page.messages), ["메시지 0"]);
         writer
             .execute(
@@ -413,7 +433,12 @@ mod tests {
     #[test]
     fn opencode_phone_reads_a_rewound_session_anew_and_refuses_an_old_pager() {
         let (home, cwd, writer) = database(40);
-        let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+        let (mut open, page) = Open::open(
+            &hide_session::Accounts::new(home.path()),
+            "pane",
+            source(&cwd),
+        )
+        .unwrap();
         let pager = open.pager();
         // An OpenCode revert drops the newest messages; new ones follow.
         writer
@@ -457,10 +482,11 @@ mod tests {
             identity: SessionIdentity::id("ses_child"),
             ..source(&cwd)
         };
-        let refused = |source| match Open::open(home.path(), "pane", source) {
-            Err(SessionError::Checkpoint(reason)) => reason,
-            other => panic!("{other:?}"),
-        };
+        let refused =
+            |source| match Open::open(&hide_session::Accounts::new(home.path()), "pane", source) {
+                Err(SessionError::Checkpoint(reason)) => reason,
+                other => panic!("{other:?}"),
+            };
         assert_eq!(refused(child), "label_session_not_root");
         assert_eq!(
             refused(source(&home.path().display().to_string())),
@@ -471,11 +497,16 @@ mod tests {
             ..source(&cwd)
         };
         assert!(matches!(
-            Open::open(home.path(), "pane", path),
+            Open::open(&hide_session::Accounts::new(home.path()), "pane", path),
             Err(SessionError::UnsupportedSessionKind)
         ));
 
-        let (mut open, _) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+        let (mut open, _) = Open::open(
+            &hide_session::Accounts::new(home.path()),
+            "pane",
+            source(&cwd),
+        )
+        .unwrap();
         writer
             .execute("UPDATE session SET directory = '/elsewhere'", [])
             .unwrap();
@@ -567,7 +598,12 @@ mod tests {
         #[test]
         fn the_phone_pages_native_messages_by_index_and_only_appends_new_ones() {
             let (home, cwd, writer) = database(70);
-            let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            let (mut open, page) = Open::open(
+                &hide_session::Accounts::new(home.path()),
+                "pane",
+                source(&cwd),
+            )
+            .unwrap();
             assert_eq!(page.messages.len(), PAGE_MESSAGES);
             assert_eq!(texts(&page.messages).first().unwrap(), "메시지 40");
             assert_eq!(texts(&page.messages).last().unwrap(), "메시지 69");
@@ -594,7 +630,12 @@ mod tests {
         #[test]
         fn the_phone_waits_for_an_answer_still_being_written() {
             let (home, cwd, writer) = database(1);
-            let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            let (mut open, page) = Open::open(
+                &hide_session::Accounts::new(home.path()),
+                "pane",
+                source(&cwd),
+            )
+            .unwrap();
             assert_eq!(texts(&page.messages), ["메시지 0"]);
             let writing = |completed: bool| {
                 let mut time = serde_json::json!({"created": 1790989200001_u64});
@@ -627,7 +668,12 @@ mod tests {
         #[test]
         fn the_phone_reads_a_rewound_session_anew_and_refuses_an_old_pager() {
             let (home, cwd, writer) = database(40);
-            let (mut open, page) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            let (mut open, page) = Open::open(
+                &hide_session::Accounts::new(home.path()),
+                "pane",
+                source(&cwd),
+            )
+            .unwrap();
             let pager = open.pager();
             // An OpenCode revert drops the newest messages; new ones follow.
             writer
@@ -670,7 +716,11 @@ mod tests {
                 identity: SessionIdentity::id("ses_child"),
                 ..source(&cwd)
             };
-            let refused = |source| match Open::open(home.path(), "pane", source) {
+            let refused = |source| match Open::open(
+                &hide_session::Accounts::new(home.path()),
+                "pane",
+                source,
+            ) {
                 Err(SessionError::Checkpoint(reason)) => reason,
                 other => panic!("{other:?}"),
             };
@@ -680,7 +730,12 @@ mod tests {
                 "label_session_cwd_mismatch"
             );
 
-            let (mut open, _) = Open::open(home.path(), "pane", source(&cwd)).unwrap();
+            let (mut open, _) = Open::open(
+                &hide_session::Accounts::new(home.path()),
+                "pane",
+                source(&cwd),
+            )
+            .unwrap();
             writer
                 .execute("UPDATE session_v2 SET directory = '/elsewhere'", [])
                 .unwrap();
@@ -697,7 +752,7 @@ mod tests {
                 .execute_batch("ALTER TABLE session_message RENAME TO session_messages;")
                 .unwrap();
             assert!(matches!(
-                Open::open(home.path(), "pane", source(&cwd)),
+                Open::open(&hide_session::Accounts::new(home.path()), "pane", source(&cwd)),
                 Err(SessionError::Checkpoint(reason)) if reason == "opencode_db_schema_unknown"
             ));
         }

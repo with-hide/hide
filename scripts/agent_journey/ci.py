@@ -55,7 +55,7 @@ FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model l
 # start's Memory index, as the fake model does, so `guidance_memory` is its.
 FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the fake model lane measures it"
                       for cell in ("letter_busy", "letter_menu", "composer", "fork", "title", "usage",
-                                   "launch_brief")}
+                                   "launch_brief", "profile")}
 FIXTURE_CELLS = tuple(name for name in cells.CELLS
                       if name != "start_untrusted" and name not in FIXTURE_UNIMITATED)
 
@@ -108,17 +108,21 @@ def agent_environment(runtime, kind, path, journey_config=None, fake_env=None):
     return environment
 
 
-def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None, sandbox=None, folder=None):
+def wrapper(runtime, program, kind, path, journey_config=None, fake_env=None, sandbox=None, folder=None,
+            account_vars=()):
     """The program that runs `kind` in its environment (agent_environment),
     in `folder`, else in the candidate's bin folder, where a pane finds it as
     `kind`. Its PATH and temporary folder are set here as well as on the
     daemon, since a Windows pane takes what the daemon lacks from the
-    account's registry."""
+    account's registry. The contract's `account_vars`, which a start with a
+    profile sets to an account under the run's HOME, keep the start's value
+    (the `profile` cell)."""
     folder = folder or runtime.bin
     private_directory(folder)
     environment = agent_environment(runtime, kind, path, journey_config, fake_env)
     command = sandbox.command([str(program)]) if sandbox else [program]
-    return launcher(folder / kind, command, environment=environment, unset=["CLAUDE_CONFIG_DIR"])
+    return launcher(folder / kind, command, environment=environment, unset=["CLAUDE_CONFIG_DIR"],
+                    keep=account_vars, within=runtime.home)
 
 
 def runs_as_installed(row, fixture_bin):

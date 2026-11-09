@@ -1869,8 +1869,16 @@ pub struct SidebarAgentSnapshot {
     /// must wait for a fresh status rather than assuming the pane is idle.
     pub requires_close_status_check: bool,
     /// The title every surface calls this agent by; `sidebar.rs` owns the
-    /// ladder that picks it (PRD D-01).
+    /// ladder that picks it (PRD D-01). A profile agent's title is the one
+    /// its agent would have with the built-in default.
     pub identity_label: String,
+    /// The name of the profile the agent runs with, when it is not the
+    /// agent's built-in default (PRD agent-profiles B17): the screens mark
+    /// the agent with it beside its logo, and `hide agent list` names it
+    /// after its agent (`Claude · work`). Laid from the pane's launch record
+    /// (`Runtime::lay_profiles`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// The label's one-line progress sentence (`labels`).
     #[serde(skip_serializing)]
     pub progress: Option<String>,
@@ -2785,6 +2793,10 @@ pub struct TabAgentSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<AgentWait>,
     pub status_code: AgentStatusCode,
+    /// The row's profile name, which the tab's logo wears as its badge
+    /// (`SidebarAgentSnapshot::profile`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
@@ -2800,6 +2812,7 @@ impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
             emphasized: agent.emphasized,
             wait: agent.wait,
             status_code: agent.status_code,
+            profile: agent.profile.clone(),
         }
     }
 }
@@ -3742,6 +3755,10 @@ pub struct SessionRowSnapshot {
     pub updated_at_unix_ms: u64,
     pub title: Option<String>,
     pub unavailable_reason: Option<String>,
+    /// The account the session was listed in, which its detail is read in
+    /// (PRD agent-profiles B19); the shell does not see it.
+    #[serde(skip)]
+    pub account: hide_agent_adapter::AccountKey,
 }
 
 /// Project Memory on the wire: the Project a shell opened Memory for in its

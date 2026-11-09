@@ -20,7 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use hide_agent_adapter::account::Refusal;
 use hide_agent_adapter::definition::By;
@@ -314,6 +314,61 @@ fn launch_beside(
     }))
 }
 
+/// The account a start of `kind` with the profile `id` runs in, for the
+/// node to write the agent's folder trust there (docs/agent-hooks.md,
+/// Profile accounts): `None` for a profile in the agent's default account,
+/// whose trust is the default's. A profile that is gone, another agent's,
+/// being removed, or whose account Hide may not write in
+/// (`hide_kit::trust_writable`) is refused with a reason that names it.
+pub fn trust_account(
+    env: &Env,
+    kind: &str,
+    id: &ProfileId,
+) -> HostResult<Option<hide_agent_adapter::Account>> {
+    let refused = |text: String| Err(HostError::new(ErrorCode::InvalidPath, text));
+    if id.is_default() {
+        return Ok(None);
+    }
+    let place = place(env)?;
+    let file = read(&place.file)?;
+    let Some(stored) = file.profiles.iter().find(|stored| stored.profile.id == *id) else {
+        return refused(format!("the profile {} is no longer on this machine", id.0));
+    };
+    let profile = &stored.profile;
+    if stored.removing {
+        return refused(format!("the profile {} is being removed", profile.name));
+    }
+    let Some(adapter) =
+        hide_agent_adapter::adapter(kind).filter(|adapter| adapter.id == profile.kind)
+    else {
+        return refused(format!(
+            "the profile {} is not one of {kind}'s",
+            profile.name
+        ));
+    };
+    if profile.account.is_none() {
+        return Ok(None);
+    }
+    hide_kit::trust_writable(&place.home, profile).map_err(|why| {
+        HostError::new(
+            ErrorCode::InvalidPath,
+            format!(
+                "Hide may not write in the profile {}'s account: {why}",
+                profile.name
+            ),
+        )
+    })?;
+    adapter
+        .resolve(profile, &NodeEnv::new(Some(place.home.clone())))
+        .map(Some)
+        .map_err(|refusal| {
+            HostError::new(
+                ErrorCode::InvalidPath,
+                format!("the profile {} cannot start here: {refusal}", profile.name),
+            )
+        })
+}
+
 /// How the profile's `program` starts here: a bare name found as a pane's
 /// shell finds an agent's program (`hide_platform::programs::account_path`),
 /// or an absolute path, each a program this account can start
@@ -384,6 +439,74 @@ pub(crate) fn settle_after_kit(env: &Env, reports: &[ProfileReport]) {
     if let Err(error) = settle(&place.file, &judged) {
         log("profiles.settle_failed", &error.message);
     }
+}
+
+/// The accounts this node reads sessions in (PRD agent-profiles D-36,
+/// `hide_session::Accounts`): each agent's default account under `home`, and
+/// the account of every profile the file holds, one being removed included,
+/// whose sessions stay readable until it leaves the file. A node that keeps
+/// no profiles, or whose file cannot be read, reads the default accounts
+/// alone, and the log says why; one whose file cannot be read never answers
+/// that the default account is all it keeps
+/// (`hide_session::Accounts::default_alone`), nor does one that could not be
+/// looked at. The answer is kept while a look at the file finds what it found
+/// (`hide_session::stamp::Seen`), so a session read costs one stat of it.
+pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::Accounts> {
+    static KEPT: Mutex<Option<KeptAccounts>> = Mutex::new(None);
+    use hide_session::stamp::Seen;
+    let file = state.map(hide_kit::layout::agent_profiles);
+    let seen = file
+        .as_deref()
+        .map_or(Seen::Absent, hide_session::stamp::seen_at);
+    let mut kept = KEPT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(kept) = kept
+        .as_ref()
+        .filter(|kept| kept.home == home && kept.file == file && kept.seen == seen)
+    {
+        return Arc::clone(&kept.accounts);
+    }
+    // A file that could not be looked at is not read: what it keeps is not
+    // known, never the default accounts alone a missing file reads as.
+    let profiles = match &seen {
+        Seen::Unseen(kind) => Err(HostError::new(
+            ErrorCode::Io,
+            format!("the profile file could not be looked at: {kind}"),
+        )),
+        Seen::At(_) | Seen::Absent => file.as_deref().map(read).transpose(),
+    };
+    let accounts = match profiles {
+        Ok(read) => {
+            let profiles: Vec<_> = read.map_or_else(Vec::new, |read| {
+                read.profiles
+                    .into_iter()
+                    .map(|stored| stored.profile)
+                    .collect()
+            });
+            hide_session::Accounts::new(home).with_profiles(&profiles)
+        }
+        Err(error) => {
+            log("profiles.session_accounts_unread", &error.message);
+            hide_session::Accounts::new(home).unread()
+        }
+    };
+    let accounts = Arc::new(accounts);
+    *kept = Some(KeptAccounts {
+        home: home.to_path_buf(),
+        file,
+        seen,
+        accounts: Arc::clone(&accounts),
+    });
+    accounts
+}
+
+/// [`session_accounts`]' last answer and what it was made from.
+struct KeptAccounts {
+    home: PathBuf,
+    file: Option<PathBuf>,
+    seen: hide_session::stamp::Seen,
+    accounts: Arc<hide_session::Accounts>,
 }
 
 /// The file as it is now.
@@ -1204,6 +1327,51 @@ mod tests {
         assert_eq!(gone.code, ErrorCode::NotFound);
     }
 
+    #[test]
+    fn a_profiles_worktree_trust_is_written_in_its_account_and_a_gone_profile_is_refused() {
+        let node = Node::new();
+        let id = node
+            .apply(add("claude-code", "work", folder("~/accounts/work")))
+            .added
+            .unwrap();
+        let tree = node.root.join("repo-task");
+        std::fs::create_dir_all(tree.join(".git")).unwrap();
+        let tree = std::fs::canonicalize(&tree).unwrap();
+        let trust = |profile: Option<ProfileId>| {
+            node.call(Call::AgentTrust {
+                agent: "claude".to_owned(),
+                path: hide_platform::path::to_wire(&tree).unwrap(),
+                trusted: true,
+                profile,
+            })
+        };
+        let trusted = |file: &Path| {
+            std::fs::read(file).ok().is_some_and(|bytes| {
+                serde_json::from_slice::<Value>(&bytes).unwrap()["projects"]
+                    .get(tree.to_str().unwrap())
+                    .is_some()
+            })
+        };
+        let in_account = node.home().join("accounts/work/.claude.json");
+        let in_default = node.home().join(".claude.json");
+
+        trust(Some(id.clone())).unwrap();
+        assert!(trusted(&in_account));
+        assert!(!trusted(&in_default), "the default account is not touched");
+        trust(None).unwrap();
+        assert!(trusted(&in_default));
+
+        assert_eq!(
+            node.apply(ProfileOp::Remove { id: id.clone() }).refused,
+            None
+        );
+        let refused = trust(Some(id)).unwrap_err();
+        assert!(
+            refused.message.contains("no longer on this machine"),
+            "{refused:?}"
+        );
+    }
+
     /// A node program `own` with the `hide` beside it, as every package
     /// places them.
     fn package(node: &Node) -> PathBuf {
@@ -1339,5 +1507,187 @@ mod tests {
         let refused = handle_in(Call::ProfileList { values: false }, &standalone).unwrap_err();
 
         assert_eq!(refused.code, ErrorCode::Unsupported);
+    }
+
+    /// A profile's sessions are read in its account, found by the account
+    /// key its start carries; the default account does not hold them, and
+    /// an account the node never registered is refused, whatever folder it
+    /// names (PRD agent-profiles B19, B31).
+    /// A Claude Code or Codex resume by id alone keeps the default account
+    /// only while the profile file, read, keeps no other account for the
+    /// agent: a wrapper in the default account adds none, a profile being
+    /// removed still keeps its own, and a file that cannot be read answers
+    /// nothing rather than the default account.
+    #[test]
+    fn a_resume_by_id_alone_keeps_the_default_account_only_while_the_file_read_keeps_no_other() {
+        use hide_agent_adapter::AccountKey;
+        use hide_session::Agent;
+        use hide_session::session_account::{SessionAccountRequest, UNPROVEN};
+
+        let node = Node::new();
+        let ask = |agent| {
+            node.call(Call::SessionAccount {
+                request: SessionAccountRequest {
+                    agent,
+                    reference_kind: "id".to_owned(),
+                    reference_value: "019a-session".to_owned(),
+                },
+            })
+        };
+        let default = serde_json::to_value(AccountKey::Default).unwrap();
+        assert_eq!(ask(Agent::Claude).unwrap(), default, "no profile file");
+        let wrapper = node.apply(add("claude-code", "wrapper", None));
+        assert_eq!(wrapper.refused, None, "{wrapper:?}");
+        assert_eq!(ask(Agent::Claude).unwrap(), default);
+
+        let work = node.apply(add("claude-code", "work", folder("~/accounts/work/")));
+        let id = work.added.clone().unwrap();
+        assert_eq!(ask(Agent::Claude).unwrap_err().message, UNPROVEN);
+        let file = hide_kit::layout::agent_profiles(node.env.state.as_deref().unwrap());
+        let mut kept: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        for profile in kept["profiles"].as_array_mut().unwrap() {
+            if profile["id"].as_str() == Some(id.0.as_str()) {
+                profile["removing"] = true.into();
+            }
+        }
+        std::fs::write(&file, serde_json::to_vec(&kept).unwrap()).unwrap();
+        assert!(
+            node.list(false)
+                .profiles
+                .iter()
+                .any(|profile| profile.id == id && profile.removing),
+            "the profile is being removed"
+        );
+        assert_eq!(
+            ask(Agent::Claude).unwrap_err().message,
+            UNPROVEN,
+            "an account being removed is still kept"
+        );
+        assert_eq!(ask(Agent::Codex).unwrap(), default);
+
+        std::fs::write(&file, "{ not json").unwrap();
+        for agent in [Agent::Claude, Agent::Codex] {
+            assert_eq!(
+                ask(agent).unwrap_err().message,
+                hide_session::account::ACCOUNTS_UNSETTLED,
+                "{agent:?}"
+            );
+        }
+    }
+
+    /// The node keeps its accounts while a look at the profile file finds
+    /// what it found: one that cannot look at the file (a link to itself)
+    /// refuses an id-only resume however often it is asked, never reusing
+    /// the default it answered while the file was missing, and answers again
+    /// once the file can be looked at.
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_file_that_cannot_be_looked_at_never_reuses_the_default_a_missing_one_answered() {
+        use hide_agent_adapter::AccountKey;
+        use hide_session::Agent;
+        use hide_session::session_account::{SessionAccountRequest, UNPROVEN};
+
+        let node = Node::new();
+        let ask = || {
+            node.call(Call::SessionAccount {
+                request: SessionAccountRequest {
+                    agent: Agent::Claude,
+                    reference_kind: "id".to_owned(),
+                    reference_value: "019a-session".to_owned(),
+                },
+            })
+        };
+        let default = serde_json::to_value(AccountKey::Default).unwrap();
+        let file = hide_kit::layout::agent_profiles(node.env.state.as_deref().unwrap());
+        assert_eq!(ask().unwrap(), default, "missing");
+
+        std::os::unix::fs::symlink(&file, &file).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                ask().unwrap_err().message,
+                hide_session::account::ACCOUNTS_UNSETTLED,
+                "a file that cannot be looked at"
+            );
+        }
+
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(ask().unwrap(), default, "missing again");
+        let work = node.apply(add("claude-code", "work", folder("~/accounts/work/")));
+        assert_eq!(work.refused, None, "{work:?}");
+        assert_eq!(ask().unwrap_err().message, UNPROVEN, "the file read again");
+    }
+
+    #[test]
+    fn a_profiles_session_is_read_in_its_account_and_an_unregistered_account_is_refused() {
+        use hide_agent_adapter::AccountKey;
+        use hide_session::label_transcript::{LabelTranscript, LabelTranscriptRequest};
+
+        let node = Node::new();
+        let own = package(&node);
+        let id = node
+            .apply(add("claude-code", "work", folder("~/accounts/work/")))
+            .added
+            .unwrap();
+        let ProfileLaunch::Ready(start) =
+            launch_beside(&node.env, "claude", &id, Some(&own)).unwrap()
+        else {
+            panic!("the profile starts");
+        };
+        let session = "a1b2c3d4-0000-4000-8000-000000000001";
+        let projects = node.home().join("accounts/work/projects/-work-app");
+        hide_platform::fs::private::create_dir_all(&projects).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../hide-session/tests/fixtures/adapters/claude-2.1.288/projects/-work-app/{session}.jsonl"
+            )),
+            projects.join(format!("{session}.jsonl")),
+        )
+        .unwrap();
+        let read = |account: AccountKey| {
+            node.call(Call::LabelTranscript {
+                request: Box::new(LabelTranscriptRequest {
+                    agent: hide_session::Agent::Claude,
+                    account,
+                    reference_kind: "id".to_owned(),
+                    reference_value: session.to_owned(),
+                    cwd: Some("/work/app".to_owned()),
+                    checkpoint: None,
+                    subagents: Default::default(),
+                    turns: None,
+                    tools: None,
+                }),
+            })
+        };
+
+        let transcript: LabelTranscript =
+            serde_json::from_value(read(start.account.clone()).unwrap()).unwrap();
+        assert!(
+            transcript
+                .events
+                .iter()
+                .any(|event| event.text.contains("요청 보기를 만들어줘")),
+            "{transcript:?}"
+        );
+        assert_eq!(
+            read(AccountKey::Default).unwrap_err().code,
+            ErrorCode::NotFound,
+            "the default account holds no session of the profile's"
+        );
+        let stranger = AccountKey::Folder(node.home().join("accounts").display().to_string());
+        let refused = read(stranger).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::OutsideRoot);
+        assert_eq!(refused.message, hide_session::account::ACCOUNT_UNREGISTERED);
+        let listed = node
+            .call(Call::LinkFiles {
+                since_unix_ms: 0,
+                until_unix_ms: None,
+            })
+            .unwrap();
+        assert!(
+            listed.as_array().unwrap().iter().any(|row| row["path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path).starts_with(&projects))),
+            "a listing walks every registered account: {listed}"
+        );
     }
 }

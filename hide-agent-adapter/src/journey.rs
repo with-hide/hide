@@ -38,6 +38,11 @@ pub struct JourneyAdapter {
     /// Private fixture Stop HTTP-hook file, with sessionId,
     /// lastAssistantMessage, stopHookActive and end_turn input semantics.
     pub stop_observer: Option<&'static [&'static str]>,
+    /// The variables a start with a profile sets to name the account it runs
+    /// in (`[account.vars]`), which a wrapper the journey puts around the
+    /// agent keeps as the start set them; empty for an agent a profile does
+    /// not move.
+    pub account_vars: Vec<&'static str>,
     /// The agent's input ladder (`AgentAdapter::input`), each rung by its
     /// name, its own way in first and `typed` last: the cells check that a
     /// brief and a letter took the rung the agent declares.
@@ -188,6 +193,11 @@ pub struct JourneyCells {
     pub fork: bool,
     pub title: bool,
     pub usage: bool,
+    /// A start with a profile whose account is not the agent's default (PRD
+    /// agent-profiles B19): its first turn, a letter and a Wake, each read
+    /// from that account. Declared for an agent a profile moves to an
+    /// account of its own (`[account] by` a folder or a name).
+    pub profile: bool,
 }
 
 /// The current probe proves context through a private Memory-card token.
@@ -220,6 +230,14 @@ fn busy_letter_paths(row: &super::AgentAdapter) -> Vec<&'static str> {
     paths
 }
 
+/// Whether a profile can run the agent in an account of its own: its
+/// definition moves the account by a folder or a name.
+fn moves_account(row: &super::AgentAdapter) -> bool {
+    use crate::definition::By;
+    row.account_rule()
+        .is_some_and(|rule| matches!(rule.by, By::Folder | By::Name))
+}
+
 pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
     super::ADAPTERS.iter().map(|row| {
         let start = row.start.is_some();
@@ -241,6 +259,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             fork: start && row.fork.is_some(),
             title: start && row.titles.is_some(),
             usage: start && matches!(row.usage.tokens, super::usage::Support::Supported(_)),
+            profile: start && moves_account(row),
         };
         // The turns a run starts: the first prompt in the trusted and the
         // never-trusted start, the launch brief's start, the question about the Memory card the start
@@ -251,7 +270,8 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         // what Hide shows of those turns and start none; the composer cell
         // types text it never submits.
         // The busy letter starts two: the turn it waits behind and its own.
-        // The launch brief starts one, in a start of its own.
+        // The launch brief starts one, in a start of its own. The profile's
+        // start, letter and Wake start one each, in an account of their own.
         let turns = [
             start,
             cells.start_untrusted,
@@ -263,6 +283,9 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             cells.letter_menu,
             cells.fork,
             cells.resume,
+            cells.profile,
+            cells.profile && cells.letter,
+            cells.profile && cells.resume,
         ]
         .into_iter()
         .filter(|&turn| turn)
@@ -319,6 +342,12 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
                 _ => panic!("turn-end journey needs a declared Stop observer dialect"),
             }),
             input: row.input.iter().map(|rung| rung.name()).collect(),
+            account_vars: row
+                .account_rule()
+                .filter(|_| moves_account(row))
+                .map_or_else(Vec::new, |rule| {
+                    rule.vars.iter().map(|var| var.name.as_str()).collect()
+                }),
             wake,
             title,
         }

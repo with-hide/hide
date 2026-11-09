@@ -539,11 +539,14 @@ fn real(path: &Path) -> PathBuf {
     }
 }
 
-/// The pieces the kit keeps in an account.
+/// The pieces the kit keeps in an account, and the folder trust the node
+/// writes there for the worktrees Hide makes (`hide_agent_hooks::folder_trust`),
+/// which every write in a profile account is judged like.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PieceKind {
     Hook,
     Skill,
+    FolderTrust,
 }
 
 /// The piece that writes the account's place `place`, itself or by asking
@@ -555,13 +558,13 @@ fn written_by(place: AccountPath) -> Option<PieceKind> {
     match place {
         AccountPath::Hooks | AccountPath::HookTrust | AccountPath::Plugins => Some(PieceKind::Hook),
         AccountPath::Skills => Some(PieceKind::Skill),
-        // Hide records folder trust in the default account alone
-        // (docs/agent-hooks.md, Profile accounts).
-        AccountPath::FolderTrust
-        | AccountPath::Sessions
-        | AccountPath::Login
-        | AccountPath::State
-        | AccountPath::Usage => None,
+        // The node writes it for a start in a worktree Hide made, in the
+        // account the start's profile runs in, and a going target takes
+        // Hide's entries out (docs/agent-hooks.md, Profile accounts).
+        AccountPath::FolderTrust => Some(PieceKind::FolderTrust),
+        AccountPath::Sessions | AccountPath::Login | AccountPath::State | AccountPath::Usage => {
+            None
+        }
     }
 }
 
@@ -831,7 +834,81 @@ fn take_out(
     {
         removed |= remove_skill_in(&spot.location)?;
     }
+    removed |= forget_trust(target, own)?;
     Ok(removed)
+}
+
+/// Where the folder trust of `own`'s agent is kept in the account, as a
+/// piece the kit judges ([`written`]); `None` for an agent whose trust Hide
+/// does not record.
+fn trust_spot(own: &Own) -> Option<(hide_agent_hooks::folder_trust::Agent, Spot)> {
+    let agent = own
+        .adapter
+        .declaration()
+        .start
+        .and_then(hide_agent_hooks::folder_trust::Agent::of)?;
+    let Place::At(location) = own.account.place(AccountPath::FolderTrust) else {
+        return None;
+    };
+    Some((
+        agent,
+        Spot {
+            location: location.clone(),
+            paths: written(&own.account, PieceKind::FolderTrust, None, ""),
+        },
+    ))
+}
+
+/// Takes the folder trust Hide recorded in a going profile account out of
+/// it, once [`judged`] lets Hide write there, by the rule [`take_out`] holds
+/// every piece to: a trust file that could not be read, and a removal that
+/// failed (Codex's own program missing included), are errors, so the
+/// account's target and its `Removing` state stay for the next pass; a place
+/// Hide may not write stays for good, and the log says why. True when an
+/// entry went.
+fn forget_trust(target: &KitTarget, own: &Own) -> Result<bool, String> {
+    let Some((agent, spot)) = trust_spot(own) else {
+        return Ok(false);
+    };
+    match judged(own, &spot, Touch::Write) {
+        Ok(_) => {}
+        Err(reason) if reason.why.cause == PartCause::Unreadable => return Err(reason.text),
+        Err(reason) => {
+            log("profile_target.trust_left", Some(&own.key), &reason.text);
+            return Ok(false);
+        }
+    }
+    let tools = hide_agent_hooks::folder_trust::Tools {
+        codex: target.codex.as_ref(),
+        stop: &target.stop,
+    };
+    hide_agent_hooks::folder_trust::forget_account(agent, &target.home, &own.account, tools)
+        .map(|forgotten| forgotten > 0)
+        .map_err(|failure| failure.message())
+}
+
+/// Whether the node may write `profile`'s folder trust in the account the
+/// profile runs in: every folder from the one it names down to the agent's
+/// own is the account's, and the trust file is reached through no link, the
+/// judgment every write Hide makes in a profile account passes
+/// (docs/agent-hooks.md, Profile accounts). A profile in its agent's default
+/// account keeps the default's own checks.
+pub fn trust_writable(home: &Path, profile: &Profile) -> Result<(), String> {
+    let Some(spelled) = &profile.account else {
+        return Ok(());
+    };
+    let adapter = crate::agents::adapter(&profile.kind)
+        .ok_or_else(|| format!("Hide has no agent named {}", profile.kind))?;
+    let own = match locate(home, adapter.id, spelled).map_err(|reason| reason.text)? {
+        Located::Default => return Ok(()),
+        Located::Own(own) => own,
+    };
+    checked(&own.root, &own.folder).map_err(|reason| reason.text)?;
+    let (_, spot) = trust_spot(&own)
+        .ok_or_else(|| format!("Hide records no folder trust for {}", adapter.label))?;
+    judged(&own, &spot, Touch::Write)
+        .map(drop)
+        .map_err(|reason| reason.text)
 }
 
 /// What a pass may do: a read changes nothing.

@@ -287,7 +287,10 @@ fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
         cwd: fixture.cwd.to_str().unwrap().to_owned(),
     };
     let project = hide_project::resolve(&fixture.cwd, "fixture").unwrap();
-    let catalog = hide_session::SessionCatalog::new(fixture.home.path(), "fixture");
+    let catalog = hide_session::SessionCatalog::new(
+        &hide_session::Accounts::new(fixture.home.path()),
+        "fixture",
+    );
     let sessions = catalog.project_sessions(&project).unwrap().sessions;
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].agent, Agent::Cursor);
@@ -307,8 +310,9 @@ fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
         1
     );
     let activity = hide_session::session_activity::read(
-        fixture.home.path(),
+        &hide_session::Accounts::new(fixture.home.path()),
         &hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: Agent::Cursor,
             reference_kind: "id".into(),
             reference_value: ID.into(),
@@ -321,6 +325,7 @@ fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
     assert!(activity.bytes >= std::fs::metadata(&fixture.path).unwrap().len());
     assert!(activity.modified_at_unix_ms > 0);
     let request = label_transcript::LabelTranscriptRequest {
+        account: Default::default(),
         agent: Agent::Cursor,
         reference_kind: "id".into(),
         reference_value: ID.into(),
@@ -330,7 +335,8 @@ fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
         turns: None,
         tools: None,
     };
-    let first = label_transcript::read(fixture.home.path(), &request).unwrap();
+    let first = label_transcript::read(&hide_session::Accounts::new(fixture.home.path()), &request)
+        .unwrap();
     assert_eq!(
         first
             .events
@@ -342,7 +348,7 @@ fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
     assert!(first.title.is_none() && first.custom_title.is_none() && first.turns.is_none());
     assert!(first.pr_sightings.is_empty());
     let anchored = label_transcript::read(
-        fixture.home.path(),
+        &hide_session::Accounts::new(fixture.home.path()),
         &label_transcript::LabelTranscriptRequest {
             checkpoint: first.anchor,
             ..request.clone()
@@ -689,6 +695,7 @@ fn root_route_reader_role() {
     let expected = std::env::var("CURSOR_ROUTE_READER_EXPECTED").unwrap();
     let cwd = home.join("project");
     let request = hide_session::session_activity::SessionActivityRequest {
+        account: Default::default(),
         agent: hide_session::Agent::Cursor,
         reference_kind: "id".into(),
         reference_value: ID.into(),
@@ -696,7 +703,8 @@ fn root_route_reader_role() {
         exact_route: true,
         expected_id: Some(ID.into()),
     };
-    let activity = hide_session::session_activity::read(&home, &request);
+    let activity =
+        hide_session::session_activity::read(&hide_session::Accounts::new(&home), &request);
     if expected == "allowed" {
         assert!(activity.unwrap().bytes > 0);
     } else {
@@ -706,7 +714,7 @@ fn root_route_reader_role() {
         );
         // Refusing lifecycle effects must not discard ordinary default-root reads.
         let read_only = hide_session::session_activity::read(
-            &home,
+            &hide_session::Accounts::new(&home),
             &hide_session::session_activity::SessionActivityRequest {
                 exact_route: false,
                 ..request
@@ -760,7 +768,10 @@ fn a_session_whose_folder_cannot_be_confirmed_is_skipped_not_refused() {
         return;
     }
     let fixture = Fixture::new();
-    let catalog = hide_session::SessionCatalog::new(fixture.home.path(), "fixture");
+    let catalog = hide_session::SessionCatalog::new(
+        &hide_session::Accounts::new(fixture.home.path()),
+        "fixture",
+    );
     let deadline = || std::time::Instant::now() + std::time::Duration::from_secs(60);
 
     let found = catalog.worked_folders(0, deadline());
