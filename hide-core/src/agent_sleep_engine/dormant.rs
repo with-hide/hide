@@ -117,10 +117,11 @@ pub(crate) fn spawn_dormant_tab(
                     Ok((tab, pane, snapshot)) => {
                         DormantTabOutcome::Created(tab, pane, Box::new(snapshot))
                     }
-                    Err(_) => {
+                    Err(reason) => {
                         crate::diagnostic!(serde_json::json!({
                             "component": "agent_sleep", "kind": "agent_sleep.tab_unconfirmed",
                             "sleep_id": work.id.as_str(),
+                            "reason": reason,
                         }));
                         DormantTabOutcome::Unknown
                     }
