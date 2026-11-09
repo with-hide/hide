@@ -35,6 +35,19 @@ export function moreTail(t: TFunction<"translation">, more: number): string | nu
   return more > 0 ? t("agentSessions.moreAsks", { count: more }) : null;
 }
 
+/** A decision with Views linked to it says on its row how many wait to be looked at, an eye and the count; its card lists them. */
+export function DecisionViewsCount({ subject, hidden }: { subject: AskSubject | null | undefined; hidden?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const views = subject?.cause === "mission_decision" ? (subject.views ?? 0) : 0;
+  if (!views) return null;
+  return (
+    <span aria-hidden={hidden} className="flex shrink-0 items-center gap-xxs self-center text-muted-foreground" title={t("mission.banner.looks", { count: views })} data-ask-views={views}>
+      <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      {views}
+    </span>
+  );
+}
+
 /**
  * A Needs You row's second line: what to do, and the count of the other asks
  * waiting under the same root (B2, needs-you-cleanup B9). A person's turn
@@ -50,7 +63,6 @@ export function AskLine({ ask, copy, textHidden = false, className }: { ask: Non
   const what = askWhat(t, ask.verb, ask.what, ask.subject);
   const more = moreTail(t, ask.more);
   const human = ask.subject?.cause === "human_turn" ? ask.subject : null;
-  const views = ask.subject?.cause === "mission_decision" ? (ask.subject.views ?? 0) : 0;
   const hidden = textHidden || undefined;
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
@@ -59,13 +71,7 @@ export function AskLine({ ask, copy, textHidden = false, className }: { ask: Non
       </span>
       {human && copy ? <HumanTurnCopy turn={human} copy={copy} /> : null}
       {human?.device ? <span aria-hidden={hidden} className="contents"><DeviceChip label={human.device} variant="inline" className="shrink-0 self-center" /></span> : null}
-      {/* A decision with Views linked to it says how many wait to be looked at; its card lists them. */}
-      {views ? (
-        <span aria-hidden={hidden} className="flex shrink-0 items-center gap-xxs self-center text-muted-foreground" title={t("mission.banner.looks", { count: views })} data-ask-views={views}>
-          <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          {views}
-        </span>
-      ) : null}
+      <DecisionViewsCount subject={ask.subject} hidden={hidden} />
       {more ? <span aria-hidden={hidden} className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
     </span>
   );

@@ -10,7 +10,7 @@ import { agentProductName } from "./agentAdapters";
 import { agentWithProfile, backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { AskLine, askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { AskLine, askParts, DecisionViewsCount, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
@@ -667,6 +667,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
         {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+        {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
     </>

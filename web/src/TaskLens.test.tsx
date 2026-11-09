@@ -142,6 +142,19 @@ it.each(["status", "project"] as const)("in %s keeps a read question's core-owne
   expect(task.querySelector('[data-task-line="needs_you"] [data-line-part]')?.textContent).toContain("질문");
 });
 
+it("ends a mission decision's line with an eye and how many Views it links to look at, and draws none without them", async () => {
+  const asking = (id: string, views?: number) => {
+    const agent = row(id, { status_code: "question" }, { group: "needs_you" });
+    return { ...agent, state: { ...agent.state, ask: { verb: "answer" as const, what: null, more: 0, subject: { cause: "mission_decision" as const, line: "화면을 보고 머지할까요?", views } } } };
+  };
+  const agents = [asking("looks", 2), asking("bare")];
+  const { container } = await render(snapshot(agents, [card("looks", "needs_you", "hide-main"), card("bare", "needs_you", "hide-main")]), agents);
+  const line = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-task-line]`)!;
+  expect(line("looks").querySelector("[data-ask-views]")?.textContent).toBe("2");
+  expect(line("looks").textContent).toContain("화면을 보고 머지할까요?");
+  expect(line("bare").querySelector("[data-ask-views]")).toBeNull();
+});
+
 it("in 상태별 draws 내 차례 and 읽을 것 as the first sections of the one list, arrows crossing them, and only 상태별 does", async () => {
   const agents = [row("ask", {}, { group: "needs_you" }), row("done"), row("works"), row("rest")];
   const cards = [card("ask", "needs_you", "hide-main"), card("done", "done", "hide-main"), card("works", "working", "hide-main"), card("rest", "resting", "hide-main")];
