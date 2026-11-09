@@ -1201,6 +1201,180 @@ mod tests {
         }
     }
 
+    /// A node whose agents list one model each and whose profile `p-gw`
+    /// lists a gateway's, and that keeps every backend it was asked to
+    /// build and release.
+    #[derive(Default)]
+    struct ProfilesNode {
+        built: Mutex<Vec<BackendSpec>>,
+        released: Mutex<Vec<u64>>,
+    }
+
+    impl NodeLink for ProfilesNode {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, LinkError> {
+            let logged =
+                |value: serde_json::Value| serde_json::json!({ "value": value, "log": [] });
+            let value = match call {
+                Call::AiAvailability { .. } => {
+                    logged(serde_json::to_value(Availability::Ready).unwrap())
+                }
+                Call::AiModels { backend } => {
+                    let catalog = match backend.profile.as_ref().map(|profile| profile.0.as_str()) {
+                        None => ModelCatalog::plain(["sonnet"]),
+                        Some("p-gw") => ModelCatalog::Offered(vec![hide_ai::Model {
+                            id: "opus".to_owned(),
+                            label: Some("glm-4.6".to_owned()),
+                        }]),
+                        Some(other) => {
+                            return Err(LinkError::Refused(hide_node_link::HostError::new(
+                                hide_node_link::ErrorCode::NotFound,
+                                format!("This machine has no profile {other}"),
+                            )));
+                        }
+                    };
+                    let mut built = self.built.lock().unwrap();
+                    if !built.iter().any(|spec| spec.instance == backend.instance) {
+                        built.push(backend);
+                    }
+                    logged(serde_json::to_value(catalog).unwrap())
+                }
+                Call::AiRelease { instance } => {
+                    self.released.lock().unwrap().push(instance);
+                    serde_json::Value::Null
+                }
+                _ => serde_json::Value::Null,
+            };
+            Ok(hide_node_link::link::LinkAnswer::Parsed(value))
+        }
+    }
+
+    impl ProfilesNode {
+        /// The backends built for `profile`, by instance.
+        fn built_for(&self, profile: &str) -> Vec<u64> {
+            self.built
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|spec| spec.profile.as_ref().is_some_and(|id| id.0 == profile))
+                .map(|spec| spec.instance)
+                .collect()
+        }
+    }
+
+    /// PRD agent-profiles-phase2 D-09, B8, B9, B10: while a screen reads
+    /// model lists, each profile of the core's machine is read as that
+    /// profile on its own backend and kept beside its agent's row with the
+    /// names the agent shows; a list that cannot be read carries its
+    /// reason, and the backends are kept for the screen and released with
+    /// it or with an edit of the profile.
+    #[test]
+    fn each_profiles_model_list_is_read_as_that_profile_and_kept_beside_its_agents() {
+        let node = Arc::new(ProfilesNode::default());
+        let machines = AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>);
+        let mut items = ItemReads::default();
+        let item = |profile: &str, version: u64| ItemAsk {
+            provider: ProviderId::CLAUDE,
+            profile: ProfileId(profile.to_owned()),
+            version,
+        };
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            items: vec![item("p-gw", 1), item("p-gone", 1)],
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows);
+            rows
+        };
+
+        let rows = read(&mut items, &request);
+        let claude = rows.iter().find(|row| row.id == "claude").unwrap();
+        assert_eq!(
+            claude.profile_models.len(),
+            2,
+            "{:?}",
+            claude.profile_models
+        );
+        let gateway = &claude.profile_models[0];
+        assert_eq!(gateway.profile, "p-gw");
+        assert_eq!(gateway.models, ["opus"], "a start passes the value");
+        assert_eq!(
+            gateway.model_labels,
+            BTreeMap::from([("opus".to_owned(), "glm-4.6".to_owned())]),
+            "a menu shows the gateway's name"
+        );
+        let gone = &claude.profile_models[1];
+        assert!(gone.models.is_empty());
+        assert!(
+            gone.models_unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no profile p-gone")),
+            "{gone:?}"
+        );
+        assert!(
+            rows.iter()
+                .filter(|row| row.id != "claude")
+                .all(|row| row.profile_models.is_empty()),
+            "a profile is read beside its own agent only"
+        );
+
+        // The same screen reads again on the backend it made.
+        read(&mut items, &request);
+        let first = node.built_for("p-gw");
+        assert_eq!(first.len(), 1, "one backend per item while it is read");
+
+        // An edit of the profile is read by a new backend, and the old one
+        // is released.
+        request.items[0].version = 2;
+        read(&mut items, &request);
+        let rebuilt = node.built_for("p-gw");
+        assert_eq!(rebuilt.len(), 2);
+        assert!(node.released.lock().unwrap().contains(&first[0]));
+
+        // With no screen reading lists, no profile's backend stays.
+        request.observing = false;
+        items.keep(&request);
+        assert!(items.backends.is_empty());
+        assert!(node.released.lock().unwrap().contains(&rebuilt[1]));
+    }
+
+    /// Past the cap a profile's list is a reported failure, never another
+    /// backend on its node (engineering 15).
+    #[test]
+    fn a_machines_profiles_past_the_cap_are_answered_without_a_backend() {
+        let node = Arc::new(ProfilesNode::default());
+        let machines = AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>);
+        let mut items = ItemReads::default();
+        let asks: Vec<ItemAsk> = (0..=MAX_ITEM_READS)
+            .map(|index| ItemAsk {
+                provider: ProviderId::CLAUDE,
+                profile: ProfileId(if index == MAX_ITEM_READS {
+                    "p-gw".to_owned()
+                } else {
+                    format!("p-{index}")
+                }),
+                version: 1,
+            })
+            .collect();
+        let mut rows = BackgroundAiSnapshot::unread().providers;
+        items.read(&machines, None, &asks, &mut rows);
+        let claude = rows.iter().find(|row| row.id == "claude").unwrap();
+        assert_eq!(
+            claude.profile_models[MAX_ITEM_READS]
+                .models_unavailable_reason
+                .as_deref(),
+            Some("model_reads_full")
+        );
+        assert!(node.built_for("p-gw").is_empty(), "no backend past the cap");
+    }
+
     /// PRD wsl-device B12: with Runs on placed on a device, a worktree name,
     /// a label and a Memory analysis are each answered there, on the
     /// device's own login, and nothing is asked of the core's machine.
