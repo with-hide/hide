@@ -367,7 +367,7 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
       className="grid grid-flow-col grid-cols-[auto_minmax(0,auto)] items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => actions.togglePaneRecord(session)}
+      onClick={() => actions.togglePaneRecord(session, paneId)}
       data-pane-record={session.session_id}
     >
       {children}
@@ -387,7 +387,7 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
   const pulls = agent ? rowPulls(agent) : [];
   if (!agent || pulls.length === 0) return null;
   // The pane names no project; the PR's URL finds the one that lists it.
-  return <AgentPrMark agent={agent} pulls={pulls} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
+  return <AgentPrMark agent={agent} pulls={pulls} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, { pane: paneId })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
 }
 
 /** How many direct children the children button draws a mark for beside the count. */

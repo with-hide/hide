@@ -97,11 +97,16 @@ struct StoredUiState {
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<serde_json::Value>,
-    /// The tab `detail` belongs to, and the slots of the other tabs by tab id.
+    /// The pane `detail` belongs to, and the slots of the panes not in
+    /// front, the one seen longest ago first. The per-tab slots earlier
+    /// builds kept (`detail_home`, `detail_tabs`) are not read: their front
+    /// slot loads as `detail` and goes to the pane in front, the other tabs'
+    /// are dropped and leave the file on the next write (operator decision
+    /// 2026-11-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    detail_home: Option<String>,
+    detail_pane: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    detail_tabs: Option<serde_json::Value>,
+    detail_panes: Option<serde_json::Value>,
     /// Kept as JSON and read record by record
     /// (`OverviewGraphChoices::read_stored`), so a record this build cannot
     /// read is left out and the rest of the store still loads.
@@ -610,24 +615,28 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 DetailSlot::default()
             }),
     };
-    // One slot this build cannot read drops alone; the others still load.
-    let detail_tabs = match stored.detail_tabs {
-        None => BTreeMap::new(),
-        Some(serde_json::Value::Object(slots)) => slots
-            .into_iter()
-            .filter_map(|(tab, value)| {
-                let slot = serde_json::from_value::<DetailSlot>(value)
+    // One slot this build cannot read drops alone; the others still load,
+    // the newest up to the cap.
+    let detail_panes = match stored.detail_panes {
+        None => crate::model::PaneDetailSlots::default(),
+        Some(serde_json::Value::Array(slots)) => {
+            let mut kept = crate::model::PaneDetailSlots::default();
+            for value in slots {
+                match serde_json::from_value::<crate::model::PaneDetailSlot>(value)
                     .ok()
-                    .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT);
-                if slot.is_none() {
-                    unrecognized.push(UnrecognizedField::Detail);
+                    .filter(|held| held.slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT)
+                {
+                    Some(held) => {
+                        kept.keep(held.pane, held.slot);
+                    }
+                    None => unrecognized.push(UnrecognizedField::Detail),
                 }
-                slot.map(|slot| (tab, slot))
-            })
-            .collect(),
+            }
+            kept
+        }
         Some(_) => {
             unrecognized.push(UnrecognizedField::Detail);
-            BTreeMap::new()
+            crate::model::PaneDetailSlots::default()
         }
     };
     let overview_graph = match stored.overview_graph {
@@ -732,8 +741,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             practice,
             practice_invite_closed: stored.practice_invite_closed,
             detail,
-            detail_home: stored.detail_home,
-            detail_tabs,
+            detail_pane: stored.detail_pane,
+            detail_panes,
             overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
@@ -921,9 +930,9 @@ pub fn save(
         practice_invite_closed: state.practice_invite_closed,
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
-        detail_home: state.detail_home.clone(),
-        detail_tabs: (!state.detail_tabs.is_empty())
-            .then(|| serde_json::to_value(&state.detail_tabs).expect("the 보기 slots serialize")),
+        detail_pane: state.detail_pane.clone(),
+        detail_panes: (!state.detail_panes.is_empty())
+            .then(|| serde_json::to_value(&state.detail_panes).expect("the 보기 slots serialize")),
         overview_graph: Some(
             serde_json::to_value(&state.overview_graph)
                 .expect("the Overview map's choices serialize"),
@@ -1811,17 +1820,17 @@ mod tests {
             workspace_id: "workspace:alpha".to_owned(),
             number: 7,
         });
-        state.detail_home = Some("w1:t1".to_owned());
+        state.detail_pane = Some("w1:p1".to_owned());
         let mut other = DetailSlot::default();
         other.open(crate::model::DetailItem::Cost {
             workspace_id: "workspace:alpha".to_owned(),
         });
-        state.detail_tabs.insert("w1:t2".to_owned(), other);
+        state.detail_panes.keep("w1:p2".to_owned(), other);
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the lens");
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
-        assert_eq!(restored.detail_home, state.detail_home);
-        assert_eq!(restored.detail_tabs, state.detail_tabs);
+        assert_eq!(restored.detail_pane, state.detail_pane);
+        assert_eq!(restored.detail_panes, state.detail_panes);
         assert_eq!(restored.sidebar_lens, SidebarLens::Tasks);
         assert_eq!(restored.task_view, TaskView::Project);
         assert_eq!(restored.sidebar_project, state.sidebar_project);
@@ -1836,7 +1845,7 @@ mod tests {
         assert_eq!(older_state.sidebar_project, None);
         assert_eq!(older_state.detail, DetailSlot::default());
         assert_eq!(
-            (older_state.detail_home, older_state.detail_tabs.len()),
+            (older_state.detail_pane, older_state.detail_panes.len()),
             (None, 0)
         );
 
@@ -1853,12 +1862,12 @@ mod tests {
         assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(unknown_state.detail, DetailSlot::default());
 
-        // A mission's card in a slot, the front one's or an Agent tab's,
-        // loads as it was saved, between the other items (operator decision
+        // A mission's card in a slot, the front one's or a pane's, loads as
+        // it was saved, between the other items (operator decision
         // 2026-11-09, replacing PRD mission-screen B20).
         let with_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
             "detail":{"items":[{"kind":"pull_request","workspace_id":"w","number":7},{"kind":"mission","mission":"mission-3"}],"shown":true},
-            "detail_tabs":{"w1:t2":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}}"#;
+            "detail_panes":[{"pane":"w1:p2","slot":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}]}"#;
         let (mission_state, _sizes, mission_disposition) = decode(with_mission);
         assert_eq!(mission_disposition, LoadDisposition::Loaded);
         assert_eq!(
@@ -1877,10 +1886,30 @@ mod tests {
             }
         );
         assert_eq!(
-            mission_state.detail_tabs["w1:t2"].items,
+            mission_state.detail_panes.0[0].slot.items,
             vec![crate::model::DetailItem::Mission {
                 mission: "mission-4".into()
             }]
+        );
+
+        // An earlier build's per-tab slots: the front one loads for the pane
+        // in front to take, the other tabs' are dropped, and the store still
+        // loads whole (operator decision 2026-11-09).
+        let per_tab = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"mission","mission":"mission-41"}],"shown":true},
+            "detail_home":"w1:t1",
+            "detail_tabs":{"w1:t2":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}}"#;
+        let (per_tab_state, _sizes, per_tab_disposition) = decode(per_tab);
+        assert_eq!(per_tab_disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            per_tab_state.detail.items,
+            vec![crate::model::DetailItem::Mission {
+                mission: "mission-41".into()
+            }]
+        );
+        assert_eq!(
+            (per_tab_state.detail_pane, per_tab_state.detail_panes.len()),
+            (None, 0)
         );
     }
 

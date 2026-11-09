@@ -2960,8 +2960,8 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's card on top of the front Agent
-/// tab's 보기 slot sends its events while the slot is drawn; the mission
+/// Operator decision 2026-11-09: a mission's card on top of the front pane's
+/// 보기 slot sends its events while the slot is drawn; the mission
 /// screen's detail, when the page names one, wins; the card goes with its
 /// mission.
 #[test]
@@ -3023,11 +3023,11 @@ fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
     assert_eq!(runtime.snapshot.mission_events.mission, None);
 }
 
-/// Operator decision 2026-11-09: a mission pressed outside the slot opens
-/// in its Conductor's tab, the Conductor's pane coming forward with it, and
-/// leaves the focus where it was while no Conductor holds it.
+/// Operator decision 2026-11-09: a mission's row opens its map in the slot
+/// of its Conductor's pane, which comes forward with it, and leaves the focus
+/// where it was while no Conductor holds it.
 #[test]
-fn a_mission_opens_in_its_conductors_tab() {
+fn a_mission_opens_in_its_conductors_slot() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
@@ -3035,18 +3035,16 @@ fn a_mission_opens_in_its_conductors_tab() {
     let open = |runtime: &mut Runtime| {
         assert!(runtime.dispatch_json(&explorer_event(
             "detail_open",
-            json!({"item": {"kind": "mission", "mission": "mission-1"}, "in_owner_tab": true}),
+            json!({"item": {"kind": "mission", "mission": "mission-1"}, "at": "owner"}),
         )));
+    };
+    let map = DetailItem::Mission {
+        mission: "mission-1".into(),
     };
     assert!(runtime.dispatch_json(&operator_focus_event("recipient")));
     open(&mut runtime);
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail.items.last(),
-        Some(&DetailItem::Mission {
-            mission: "mission-1".into()
-        })
-    );
+    assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&map));
 
     // Its Conductor's pane is gone: the pane in front stays.
     runtime.missions.book.missions[0].conductor.actor.pane_id = "gone".into();

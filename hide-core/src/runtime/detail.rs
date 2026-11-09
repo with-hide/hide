@@ -1,14 +1,16 @@
 //! The sidebar's lens, 태스크 view option and project, and the lane's 보기
 //! slot (PRD sidebar-task-lens D-10, D-11, D-25, D-48, D-50): one
-//! UI value each (the slot one per Agent tab), kept in `core-state.json` with
-//! the rest of the UI state. The slot
-//! holds a pull request's card or a session's record, belongs to the Agent
-//! tab that was in front when it was opened (`ui_state.detail_home`), and
-//! starts the read of what it shows on the event that opens it, so one
-//! operator action is one event. `ui_state.detail` is always the front tab's
-//! slot: another tab coming in front swaps its own in (`sync_detail_home`),
-//! so every reader and the wire see one slot.
+//! UI value each (the slot one per pane), kept in `core-state.json` with the
+//! rest of the UI state. The slot
+//! holds a pull request's card, a session's record or a mission's map,
+//! belongs to the pane it was opened for (`ui_state.detail_pane`; operator
+//! decision 2026-11-09, "a card opens where it was pressed"), and starts the
+//! read of what it shows on the event that opens it, so one operator action
+//! is one event. `ui_state.detail` is always the front pane's slot: another
+//! pane in front swaps its own in (`sync_detail_pane`), so every reader and
+//! the wire see one slot.
 
+use super::workspace_view::WorkspaceKey;
 use super::*;
 use crate::model::{
     DetailItem, PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PracticeProgress, SidebarLens,
@@ -60,14 +62,28 @@ pub(super) struct PracticeProgressPayload {
 #[serde(deny_unknown_fields)]
 pub(super) struct DetailOpenPayload {
     pub(super) item: DetailItem,
-    /// Opened where the item's own agent works (operator decision
-    /// 2026-11-09): a session's record or plan in that session's tab, a
-    /// mission's map in its Conductor's, the agent's pane taking the
-    /// keyboard. An item whose agent has no pane on this machine opens in the
-    /// tab in front. Unset for what a card opens inside the slot, such as a
-    /// child's record, which stays in the slot it was pressed in.
     #[serde(default)]
-    pub(super) in_owner_tab: bool,
+    pub(super) at: DetailPlace,
+}
+
+/// Which pane's 보기 slot an item opens in: where it was pressed (operator
+/// decision 2026-11-09). `detail_open` and `pr_open` carry it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum DetailPlace {
+    /// The slot in front, over what it shows, with the tab and the keyboard
+    /// where they are: what a card opens inside the slot (a child's record,
+    /// a pull request in a record or a mission node's panel), for `←` to
+    /// come back from.
+    #[default]
+    Here,
+    /// The slot of the pane whose agent row, head or chip was pressed,
+    /// which takes the keyboard (`{"pane": "<pane id>"}`).
+    Pane(String),
+    /// The slot of the agent that owns the item, pressed where no agent is
+    /// (the PR list, Memory, a mission's row): a pull request's maker, a
+    /// session's own pane, a mission's Conductor (`detail_owner_pane`).
+    Owner,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,9 +258,9 @@ impl Runtime {
     /// columns B9); the Workspace, its Agent tab and the keyboard stay
     /// (D-43).
     pub(super) fn open_detail(&mut self, item: DetailItem) -> bool {
-        // An event that moved the tab first (a card opened in its own
-        // Workspace) opens in the tab it left in front.
-        self.sync_detail_home();
+        // An event that moved the pane first (an agent row's card, a card
+        // opened in its own Workspace) opens in the slot it left in front.
+        self.sync_detail_pane();
         let before = self.snapshot.ui_state.detail.clone();
         self.snapshot.ui_state.detail.open(item);
         // Opening the item shown again reads it again, as Look again does.
@@ -256,22 +272,106 @@ impl Runtime {
         true
     }
 
-    /// `detail_open` with `in_owner_tab`: the item's own agent comes
-    /// forward first, so the slot it opens in is that agent's tab's (operator
-    /// decision 2026-11-09), in one event.
-    pub(super) fn open_detail_in_owner_tab(&mut self, item: DetailItem) -> bool {
-        if let Some(pane) = self.detail_owner_pane(&item) {
-            self.focus_pane(pane, PaneFocusOrigin::Operator, None);
+    /// `detail_open` and `pr_open`: `item` in the slot of the pane `at`
+    /// names, in one event (operator decision 2026-11-09). An owner with no
+    /// pane on this machine leaves the item in the slot in front.
+    pub(super) fn open_detail_at(&mut self, item: DetailItem, at: DetailPlace) -> bool {
+        let pane = match at {
+            DetailPlace::Here => None,
+            DetailPlace::Pane(pane) => Some(pane),
+            DetailPlace::Owner => self.detail_owner_pane(&item),
+        };
+        match pane {
+            Some(pane) => self.open_detail_in_pane(pane, item),
+            None => self.open_detail(item),
         }
-        self.open_detail(item)
+    }
+
+    /// `item` in the slot of `pane`, the pane taking the keyboard. A pane of
+    /// this machine comes forward with its tab on this event, so the item
+    /// opens in front. A device's pane comes forward only when the device
+    /// answers, so the item waits in that pane's slot with the lane of its
+    /// Workspace opened for it, and shows when the device reports the pane in
+    /// front (`sync_detail_pane`). A pane no catalog lists any more (it
+    /// closed, or its agent sleeps) leaves the item in the slot in front, as
+    /// a card pressed where no agent is opens.
+    fn open_detail_in_pane(&mut self, pane: String, item: DetailItem) -> bool {
+        if self.local_tab_pane(&pane) {
+            self.focus_pane(pane, PaneFocusOrigin::Operator, None);
+            if self.snapshot.status.last_error.is_none()
+                && !self.device_in_front(self.node.as_str())
+            {
+                self.bring_device_forward(self.node.as_str().to_owned());
+            }
+            return self.open_detail(item);
+        }
+        self.sync_detail_pane();
+        if self.snapshot.ui_state.detail_pane.as_deref() == Some(pane.as_str()) {
+            return self.open_detail(item);
+        }
+        let Some((device, key)) = self.device_pane_place(&pane) else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "detail", "kind": "detail_open.pane_unplaced", "pane": pane,
+            }));
+            return self.open_detail(item);
+        };
+        let evicted = self
+            .snapshot
+            .ui_state
+            .detail_panes
+            .open_in(pane.clone(), item);
+        self.report_evicted_detail(evicted);
+        self.persist_ui_state();
+        self.call_lane(&key);
+        self.request_remote_control(RemoteControlPayload {
+            target_id: device,
+            request_id: format!("detail-open:{}:{pane}", unix_milliseconds()),
+            report_pane_focus_outcome: false,
+            focus_device: true,
+            request: RemoteControlRequest::FocusPane { pane_id: pane },
+        });
+        true
+    }
+
+    /// A slot the cap pushed out goes to the diagnostic log; the operator
+    /// has nothing to act on.
+    fn report_evicted_detail(&self, evicted: Option<crate::model::PaneDetailSlot>) {
+        if let Some(gone) = evicted {
+            crate::diagnostic!(serde_json::json!({
+                "component": "detail", "kind": "detail.slot_evicted",
+                "pane": gone.pane, "limit": crate::model::DETAIL_PANE_LIMIT,
+            }));
+        }
+    }
+
+    /// The device a pane of a connected device runs on and the Workspace that
+    /// holds it, as that device's session lists it.
+    fn device_pane_place(&self, pane: &str) -> Option<(String, WorkspaceKey)> {
+        self.snapshot.status.remote.iter().find_map(|remote| {
+            let checkout = remote
+                .session
+                .as_ref()?
+                .workspaces
+                .iter()
+                .flat_map(|workspace| &workspace.checkouts)
+                .find(|checkout| {
+                    checkout
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.panes.iter().any(|row| row.id == pane))
+                })?;
+            Some((
+                remote.target_id.clone(),
+                (remote.target_id.clone(), checkout.path.clone()),
+            ))
+        })
     }
 
     /// The pane on this machine whose agent owns `item`: the session's own
     /// pane for its record or plan, the Conductor's for a mission while it
-    /// holds the mission, the agent that made a pull request for its card. A device's pane is focused on that device and its
-    /// tab comes forward only when the device answers, so an item owned
-    /// there opens in the tab in front (`docs/INSTALL.md`, What each system
-    /// supports).
+    /// holds the mission, the agent that made a pull request for its card.
+    /// An owner on a connected device is not looked up, so its item opens
+    /// in the slot in front (`docs/INSTALL.md`, What each system supports).
     fn detail_owner_pane(&self, item: &DetailItem) -> Option<String> {
         match item {
             DetailItem::Record { session } | DetailItem::Plan { session } => {
@@ -394,6 +494,12 @@ impl Runtime {
         let Some(key) = self.front_workspace_key() else {
             return;
         };
+        self.call_lane(&key);
+    }
+
+    /// `call_front_lane` for the Workspace `key`, in front or about to come
+    /// forward with a device's pane.
+    fn call_lane(&mut self, key: &WorkspaceKey) {
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -402,13 +508,13 @@ impl Runtime {
         if was_closed {
             entry.documents = false;
         }
-        store.call_lane(&key, crate::model::LaneCallSide::View);
+        store.call_lane(key, crate::model::LaneCallSide::View);
         if was_closed {
             self.persist_workspace_views();
         }
     }
 
-    /// Takes out of every tab's slot the items whose subject is gone (a
+    /// Takes out of every pane's slot the items whose subject is gone (a
     /// deleted session's plan, a mission no longer kept); a slot this empties
     /// is left as ✕ leaves it, what stood under the slot in the viewing column
     /// or the column closed (lane-two-columns B13). Whether anything was
@@ -416,7 +522,8 @@ impl Runtime {
     pub(super) fn drop_detail_items(&mut self, keep: impl Fn(&DetailItem) -> bool) -> bool {
         let state = &mut self.snapshot.ui_state;
         let mut taken = false;
-        for slot in std::iter::once(&mut state.detail).chain(state.detail_tabs.values_mut()) {
+        let kept = state.detail_panes.0.iter_mut().map(|held| &mut held.slot);
+        for slot in std::iter::once(&mut state.detail).chain(kept) {
             let had = slot.items.len();
             slot.items.retain(|item| keep(item));
             if slot.items.len() == had {
@@ -427,111 +534,170 @@ impl Runtime {
                 slot.shown = false;
             }
         }
-        state.detail_tabs.retain(|_, slot| !slot.items.is_empty());
+        // The slots this emptied go.
+        state.detail_panes.retain(|_| true);
         if taken {
             self.persist_ui_state();
         }
         taken
     }
 
-    /// Keeps `ui_state.detail` the slot of the Agent tab in front (operator
-    /// decision 2026-11-08): the slot a tab opened stays with it while the
-    /// operator clicks about inside the tab, another tab in front shows its
-    /// own slot or none, and a tab that closed takes its slot with it. With
-    /// no Workspace in front nothing moves. After a launch, a slot kept
-    /// window-wide by an older build attaches to the tab then in front.
-    /// Whether the front slot or a saved slot changed.
+    /// Keeps `ui_state.detail` the slot of the pane in front (operator
+    /// decision 2026-11-09): the slot a pane opened stays with it, another
+    /// pane in front, of the same tab or another, shows its own slot or none,
+    /// and a pane that closed takes its slot with it. With no pane in front
+    /// nothing moves. After a launch, the slot loaded then (one an older
+    /// build kept for its front tab or window-wide) attaches to the pane then
+    /// in front. Whether the front slot changed.
     ///
     /// It runs on every event, terminal input included, so the work per call
-    /// is one lookup of the front tab and, while the front tab is the slot's
-    /// home with no other slot held, nothing more.
-    pub(super) fn sync_detail_home(&mut self) -> bool {
-        let Some(front) = self
-            .front_workspace_key()
-            .and_then(|key| self.front_visible_tab(&key))
-            .map(|(tab_id, _delegated)| tab_id)
-        else {
+    /// is one lookup of the front pane and, while that pane is the slot's,
+    /// nothing more; another pane in front adds one search of the at most
+    /// [`DETAIL_PANE_LIMIT`] kept slots and one look at whether the pane it
+    /// leaves still exists.
+    ///
+    /// [`DETAIL_PANE_LIMIT`]: crate::model::DETAIL_PANE_LIMIT
+    pub(super) fn sync_detail_pane(&mut self) -> bool {
+        let Some(front) = self.front_detail_pane() else {
             return false;
         };
-        let state = &self.snapshot.ui_state;
-        let home_moved = state.detail_home.as_deref() != Some(front.as_str());
-        if !home_moved && state.detail_tabs.is_empty() {
+        let Some(home) = self.snapshot.ui_state.detail_pane.clone() else {
+            // The first pane in front adopts the slot as it was loaded.
+            self.snapshot.ui_state.detail_pane = Some(front);
+            self.persist_ui_state();
+            return false;
+        };
+        if home == front {
             return false;
         }
-        let closed: BTreeSet<String> = state
-            .detail_tabs
-            .keys()
-            .map(String::as_str)
-            .chain(state.detail_home.as_deref())
-            .filter(|tab| self.tab_closed(tab))
-            .map(str::to_owned)
-            .collect();
-        if !home_moved && closed.is_empty() {
-            return false;
-        }
+        let home_closed = self.detail_pane_closed(&home);
         let state = &mut self.snapshot.ui_state;
-        let mut changed = false;
-        for tab in &closed {
-            changed |= state.detail_tabs.remove(tab).is_some();
-        }
-        if !home_moved {
-            if changed {
-                self.persist_ui_state();
-            }
-            return changed;
-        }
-        let before = state.detail.top().cloned();
-        match state.detail_home.replace(front.clone()) {
-            // The first tab in front adopts the slot as it was loaded.
-            None => {}
-            Some(home) => {
-                let leaving = std::mem::take(&mut state.detail);
-                let leaving_held = leaving != crate::model::DetailSlot::default();
-                if leaving_held && !closed.contains(&home) {
-                    state.detail_tabs.insert(home, leaving);
-                }
-                state.detail = state.detail_tabs.remove(&front).unwrap_or_default();
-                changed |= leaving_held || state.detail != crate::model::DetailSlot::default();
-            }
-        }
+        let before = std::mem::take(&mut state.detail);
+        let empty = crate::model::DetailSlot::default();
+        // The incoming slot leaves the kept ones before the outgoing one joins
+        // them, so at the cap the slot coming back is never the one dropped.
+        let incoming = state.detail_panes.take(&front).unwrap_or_default();
+        let evicted = if before != empty && !home_closed {
+            state.detail_panes.keep(home, before.clone())
+        } else {
+            None
+        };
+        state.detail = incoming;
+        state.detail_pane = Some(front);
+        let changed = state.detail != before;
+        let held = before != empty || state.detail != empty;
+        self.report_evicted_detail(evicted);
         if changed {
-            self.read_detail_top(before.as_ref(), false);
+            self.read_detail_top(before.top(), false);
+        }
+        if held {
             self.persist_ui_state();
         }
         changed
     }
 
-    /// Whether the catalog that owns `tab` is here and does not list it: a
-    /// tab of this machine is judged against the navigator once it lists any
-    /// tab, a device's against that device's session once it has one, so a
-    /// launch before a session arrives, or a device that is offline, drops
-    /// no slot.
-    fn tab_closed(&self, tab: &str) -> bool {
-        let lists = |workspaces: &[crate::model::WorkspaceSnapshot]| {
+    /// The pane with the keyboard in the tab the front Workspace shows, as
+    /// Hide holds it on this machine (the tab's own focused pane while the
+    /// keyboard is elsewhere) and as the device reports it on a device.
+    fn front_detail_pane(&self) -> Option<String> {
+        let key = self.front_workspace_key()?;
+        let (tab_id, _delegated) = self.front_visible_tab(&key)?;
+        let holds = |workspaces: &[crate::model::WorkspaceSnapshot], pane: &str| {
             workspaces
                 .iter()
                 .flat_map(|workspace| &workspace.checkouts)
                 .flat_map(|checkout| &checkout.tabs)
-                .any(|row| row.id.as_deref() == Some(tab))
+                .find(|tab| tab.id.as_deref() == Some(tab_id.as_str()))
+                .is_some_and(|tab| tab.panes.iter().any(|row| row.id == pane))
         };
-        let device = self.snapshot.status.remote.iter().find(|remote| {
-            tab.strip_prefix("remote:")
-                .and_then(|rest| rest.strip_prefix(remote.target_id.as_str()))
-                .is_some_and(|rest| rest.starts_with(':'))
-        });
-        match device {
-            Some(remote) => remote
-                .session
-                .as_ref()
-                .is_some_and(|session| !lists(&session.workspaces)),
-            None if tab.starts_with("remote:") => false,
+        if key.0 == self.node.as_str() {
+            let workspaces = &self.snapshot.navigator.workspaces;
+            return self
+                .snapshot
+                .focused
+                .pane_id
+                .as_deref()
+                .filter(|pane| holds(workspaces, pane))
+                .or_else(|| {
+                    self.snapshot
+                        .pane_layouts
+                        .iter()
+                        .find(|layout| layout.tab_id == tab_id)
+                        .map(|layout| layout.focused_pane_id.as_str())
+                })
+                .map(str::to_owned);
+        }
+        let session = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .find(|remote| remote.target_id == key.0)?
+            .session
+            .as_ref()?;
+        session
+            .focused_pane_id
+            .clone()
+            .filter(|pane| holds(&session.workspaces, pane))
+    }
+
+    /// Drops the kept slots of the panes that closed, so a slot ends with its
+    /// pane; an agent that sleeps and wakes in a new pane finds that pane's
+    /// slot empty. Whether any went.
+    pub(super) fn prune_detail_panes(&mut self) -> bool {
+        let closed: Vec<String> = self
+            .snapshot
+            .ui_state
+            .detail_panes
+            .0
+            .iter()
+            .map(|held| held.pane.as_str())
+            .filter(|pane| self.detail_pane_closed(pane))
+            .map(str::to_owned)
+            .collect();
+        if closed.is_empty() {
+            return false;
+        }
+        self.snapshot
+            .ui_state
+            .detail_panes
+            .retain(|held| !closed.contains(&held.pane));
+        self.persist_ui_state();
+        true
+    }
+
+    /// Whether the catalog that owns `pane` is here and does not list it: a
+    /// pane of this machine is judged against the navigator once it lists any
+    /// pane, a device's against that device's session once it has one, so a
+    /// launch before a session arrives, or a device that is offline, drops no
+    /// slot; the first session after a launch drops what the saved slots
+    /// kept of panes that closed meanwhile.
+    fn detail_pane_closed(&self, pane: &str) -> bool {
+        let lists = |workspaces: &[crate::model::WorkspaceSnapshot], any: bool| {
+            workspaces
+                .iter()
+                .flat_map(|workspace| &workspace.checkouts)
+                .flat_map(|checkout| &checkout.tabs)
+                .any(|tab| {
+                    if any {
+                        !tab.panes.is_empty()
+                    } else {
+                        tab.panes.iter().any(|row| row.id == pane)
+                    }
+                })
+        };
+        match crate::address::pane_device(pane) {
+            Some(device) => self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .find(|remote| remote.target_id == device)
+                .and_then(|remote| remote.session.as_ref())
+                .is_some_and(|session| !lists(&session.workspaces, false)),
             None => {
                 let local = &self.snapshot.navigator.workspaces;
-                local
-                    .iter()
-                    .flat_map(|workspace| &workspace.checkouts)
-                    .any(|checkout| !checkout.tabs.is_empty())
-                    && !lists(local)
+                lists(local, true) && !lists(local, false)
             }
         }
     }

@@ -191,7 +191,7 @@ describe("what the detail opens in the 보기 slot (D-09)", () => {
     })));
     const session = { pane_id: "w1:p4", device_id: "mac" } as never;
     // A node's `크게 ›` keeps the plan in the slot the map was pressed in.
-    act(() => actions.openPlan(session, false));
+    act(() => actions.openPlan(session, "here"));
     expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
     expect(events.filter((event) => event.kind === "detail_open").map((event) => (event.payload as { item: { kind: string } }).item.kind)).toEqual(["plan"]);
     act(() => useUiStore.setState({ screen: { kind: "missions" } }));
@@ -231,7 +231,7 @@ describe("opening a mission (B2, B13, D-04; operator decision 2026-11-09)", () =
     })));
     act(() => actions.openMission("mission-1"));
     expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
-    expect(events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, in_owner_tab: true }]);
+    expect(events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, at: "owner" }]);
     // The screen's own detail is left as it was, for the sidebar row to come back to.
     expect(useUiStore.getState().missions.selected).toBe("mission-2");
   });
