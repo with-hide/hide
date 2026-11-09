@@ -20,7 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use hide_agent_adapter::account::Refusal;
 use hide_agent_adapter::{AccountRef, NodeEnv, Profile, ProfileId};
@@ -383,6 +383,56 @@ pub(crate) fn settle_after_kit(env: &Env, reports: &[ProfileReport]) {
     if let Err(error) = settle(&place.file, &judged) {
         log("profiles.settle_failed", &error.message);
     }
+}
+
+/// The accounts this node reads sessions in (PRD agent-profiles D-36,
+/// `hide_session::Accounts`): each agent's default account under `home`, and
+/// the account of every profile the file holds, one being removed included,
+/// whose sessions stay readable until it leaves the file. A node that keeps
+/// no profiles, or whose file cannot be read, reads the default accounts
+/// alone, and the log says why. The answer is kept while the file's stamp
+/// holds, so a session read costs one stat of the file.
+pub fn session_accounts(state: Option<&Path>, home: &Path) -> Arc<hide_session::Accounts> {
+    static KEPT: Mutex<Option<KeptAccounts>> = Mutex::new(None);
+    let file = state.map(hide_kit::layout::agent_profiles);
+    let stamp = file.as_deref().and_then(hide_session::stamp::stamp_at);
+    let mut kept = KEPT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(kept) = kept
+        .as_ref()
+        .filter(|kept| kept.home == home && kept.file == file && kept.stamp == stamp)
+    {
+        return Arc::clone(&kept.accounts);
+    }
+    let profiles = match file.as_deref().map(read).transpose() {
+        Ok(read) => read.map_or_else(Vec::new, |read| {
+            read.profiles
+                .into_iter()
+                .map(|stored| stored.profile)
+                .collect()
+        }),
+        Err(error) => {
+            log("profiles.session_accounts_unread", &error.message);
+            Vec::new()
+        }
+    };
+    let accounts = Arc::new(hide_session::Accounts::new(home).with_profiles(&profiles));
+    *kept = Some(KeptAccounts {
+        home: home.to_path_buf(),
+        file,
+        stamp,
+        accounts: Arc::clone(&accounts),
+    });
+    accounts
+}
+
+/// [`session_accounts`]' last answer and what it was made from.
+struct KeptAccounts {
+    home: PathBuf,
+    file: Option<PathBuf>,
+    stamp: Option<String>,
+    accounts: Arc<hide_session::Accounts>,
 }
 
 /// The file as it is now.

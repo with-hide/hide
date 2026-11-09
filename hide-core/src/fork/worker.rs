@@ -161,6 +161,7 @@ fn run_agent_fork_with_registration(
         confirm_session_launch(
             node,
             request.agent.kind(),
+            &crate::launch::LaunchProfile::account_of(request.profile.as_ref()),
             &request.session_id,
             request.cwd.as_deref(),
             request.source_reference.as_ref(),
@@ -1705,8 +1706,14 @@ mod tests {
                     kind: "id".into(),
                     value: id.into(),
                 };
-                let result =
-                    confirm_session_launch(&node, agent, id, cwd.to_str(), Some(&reference));
+                let result = confirm_session_launch(
+                    &node,
+                    agent,
+                    &Default::default(),
+                    id,
+                    cwd.to_str(),
+                    Some(&reference),
+                );
                 assert_eq!(result.is_ok(), proven, "{agent} {code:?}: {result:?}");
                 assert_eq!(
                     node.left.load(std::sync::atomic::Ordering::SeqCst),

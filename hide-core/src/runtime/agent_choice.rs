@@ -273,6 +273,44 @@ impl Runtime {
         .profile()
     }
 
+    /// The profile a resume of the `kind` conversation whose file is `path`
+    /// on `device` runs with when it recorded none (a session picked from
+    /// the session list): a profile of that agent whose own account folder
+    /// holds the file, the agent's default among them first; the built-in
+    /// default when none does, as for every session recorded before
+    /// profiles (PRD agent-profiles B19). OpenCode's sessions name no file,
+    /// so they resume with the built-in default.
+    pub(crate) fn resume_profile(
+        &self,
+        device: &str,
+        kind: Option<&str>,
+        path: Option<&str>,
+    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
+        let path = std::path::Path::new(path?);
+        let profiles = self.machine_profiles(device)?;
+        let agent = hide_agent_adapter::adapter(kind?)?.id;
+        let default = profiles.defaults.get(agent);
+        profiles
+            .profiles
+            .iter()
+            .filter(|profile| {
+                // The account folder the kit judged, else the one the
+                // profile names, until the kit has judged it.
+                let folder = profile.folder.as_deref().or(profile
+                    .account
+                    .as_deref()
+                    .filter(|account| std::path::Path::new(account).is_absolute()));
+                profile.kind == agent && folder.is_some_and(|folder| path.starts_with(folder))
+            })
+            .min_by_key(|profile| Some(&profile.id) != default)
+            .map(|profile| {
+                (
+                    hide_agent_adapter::ProfileId(profile.id.clone()),
+                    profile.name.clone(),
+                )
+            })
+    }
+
     /// The profile `agent` runs with, when its pane's record describes it;
     /// otherwise the built-in default (`None`).
     pub(crate) fn launch_profile_of(
@@ -285,6 +323,67 @@ impl Runtime {
             .get(&agent.pane_id)
             .filter(|launch| describes(launch, agent))
             .and_then(|launch| launch.profile.clone())
+    }
+
+    /// The account the `kind` agent started under `name` (none for one that
+    /// came back without it) whose conversation is `session` reads its
+    /// sessions in, in the pane the core calls `pane_id`: its profile's,
+    /// when the pane's record describes it, else the default account (PRD
+    /// agent-profiles B19). Every read of one agent's session names it, and
+    /// the node reads in that account alone.
+    pub(crate) fn pane_account(
+        &self,
+        pane_id: &str,
+        kind: &str,
+        name: Option<&str>,
+        session: Option<&str>,
+    ) -> hide_agent_adapter::AccountKey {
+        self.snapshot
+            .ui_state
+            .pane_launches
+            .get(pane_id)
+            .filter(|launch| launch_describes(launch, kind, name, session))
+            .and_then(|launch| launch.profile.as_ref())
+            .map(|profile| profile.account.clone())
+            .unwrap_or_default()
+    }
+
+    /// The launch records of the panes on `device` (`None` for this
+    /// machine) whose agent runs in an account other than the default, by
+    /// that machine's own pane ids, with the edit they were taken at; `None`
+    /// while the records have not moved since `edit`. The label reads of
+    /// one machine's coordinator name their accounts by them, and take them
+    /// again only when a record moved.
+    pub(crate) fn account_launches(
+        &self,
+        device: Option<&str>,
+        edit: Option<u64>,
+    ) -> Option<(u64, BTreeMap<String, crate::model::PaneLaunch>)> {
+        let current = self.missions.launches_edit;
+        if edit == Some(current) {
+            return None;
+        }
+        let launches = self
+            .snapshot
+            .ui_state
+            .pane_launches
+            .iter()
+            .filter(|(_, launch)| {
+                launch
+                    .profile
+                    .as_ref()
+                    .is_some_and(|profile| !profile.account.is_default())
+            })
+            .filter_map(|(pane, launch)| {
+                let pane = match device {
+                    Some(device) => crate::address::pane_of(pane, device)?,
+                    None if crate::address::is_device_scoped(pane) => return None,
+                    None => pane.as_str(),
+                };
+                Some((pane.to_owned(), launch.clone()))
+            })
+            .collect();
+        Some((current, launches))
     }
 
     /// What the agent `actor` hands a child of `kind` it starts on its own

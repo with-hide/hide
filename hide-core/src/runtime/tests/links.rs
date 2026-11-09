@@ -441,7 +441,7 @@ fn a_pi_or_omp_child_spawned_by_its_file_is_in_its_parents_record() {
                 .unwrap();
             let read = |store: &mut crate::links::store::LinkStore| {
                 let answer = hide_session::links::read(
-                    home.path(),
+                    &hide_session::Accounts::new(home.path()),
                     &[hide_session::links::ReadRequest {
                         agent: hide_session::Agent::from_kind(kind).unwrap(),
                         path: path.clone(),

@@ -53,6 +53,8 @@ const ACTIVITY_EVERY_MS: u64 = 1_000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ThreadReference {
     agent: hide_session::Agent,
+    /// The account the agent's profile names (PRD agent-profiles B19).
+    account: hide_agent_adapter::AccountKey,
     reference_kind: String,
     reference_value: String,
     cwd: Option<String>,
@@ -60,8 +62,11 @@ pub(crate) struct ThreadReference {
 
 impl ThreadReference {
     /// The reference of an agent whose runtime has a thread reader and that
-    /// reported its session; `None` otherwise.
-    pub(crate) fn of(agent: &crate::sidebar::SessionAgentPayload) -> Option<Self> {
+    /// reported its session, read in `account`; `None` otherwise.
+    pub(crate) fn of(
+        agent: &crate::sidebar::SessionAgentPayload,
+        account: hide_agent_adapter::AccountKey,
+    ) -> Option<Self> {
         let kind = hide_session::Agent::from_kind(agent.agent.as_deref()?)?;
         let session = agent.agent_session.as_ref()?;
         (hide_session::thread::reads(kind.format())
@@ -69,6 +74,7 @@ impl ThreadReference {
             && matches!(session.kind.as_str(), "id" | "path"))
         .then(|| Self {
             agent: kind,
+            account,
             reference_kind: session.kind.clone(),
             reference_value: session.value.clone(),
             cwd: agent.cwd.clone().filter(|cwd| cwd.len() <= 4096),
@@ -78,6 +84,7 @@ impl ThreadReference {
     fn request(&self, read: ThreadRead) -> ThreadRequest {
         ThreadRequest {
             agent: self.agent,
+            account: self.account.clone(),
             reference_kind: self.reference_kind.clone(),
             reference_value: self.reference_value.clone(),
             cwd: self.cwd.clone(),
@@ -88,6 +95,7 @@ impl ThreadReference {
     fn activity(&self) -> SessionActivityRequest {
         SessionActivityRequest {
             agent: self.agent,
+            account: self.account.clone(),
             reference_kind: self.reference_kind.clone(),
             reference_value: self.reference_value.clone(),
             cwd: self.cwd.clone(),

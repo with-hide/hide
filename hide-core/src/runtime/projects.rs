@@ -4798,7 +4798,11 @@ impl Runtime {
         }
         let profile = match (&resume, recorded) {
             (_, Some(recorded)) => Some((recorded.id.clone(), recorded.name.clone())),
-            (Some(_), None) => None,
+            (Some(_), None) => self.resume_profile(
+                &device,
+                agent_kind.as_deref(),
+                payload.resume_session_path.as_deref(),
+            ),
             (None, None) => self.new_start_profile(&device, agent_kind.as_deref()),
         };
         let mut arguments = resume.unwrap_or_default();

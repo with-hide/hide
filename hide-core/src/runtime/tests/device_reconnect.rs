@@ -183,6 +183,7 @@ impl Labels {
     fn read(&mut self, status: &str, seq: u64) -> crate::labels::overlay::LabelOverlay {
         let (worker, woken) = self.worker.as_mut().unwrap();
         let child = ObservedAgent {
+            account: Default::default(),
             pane_id: DEVICE_PANE.to_owned(),
             agent: Some("claude".to_owned()),
             status: Some(status.to_owned()),

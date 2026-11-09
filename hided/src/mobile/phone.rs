@@ -508,7 +508,7 @@ async fn conversation_step(
                 Err(error) => conversation_failed(&error.to_string()),
             }
         }
-        match Transcript::open(reader.home(), &pane_id, source) {
+        match Transcript::open(&reader.session_accounts(), &pane_id, source) {
             Ok((open, page)) => (Some(open), Some((page.messages, page.before, "reset"))),
             // Reported, and nothing written yet.
             Err(hide_session::SessionError::SessionFileMissing) => (None, None),

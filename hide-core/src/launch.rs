@@ -43,6 +43,14 @@ pub struct LaunchProfile {
     pub account: AccountKey,
 }
 
+impl LaunchProfile {
+    /// The account an agent run with `profile` reads its sessions in: the
+    /// default account for the built-in default (`None`).
+    pub(crate) fn account_of(profile: Option<&Self>) -> AccountKey {
+        profile.map_or_else(AccountKey::default, |profile| profile.account.clone())
+    }
+}
+
 /// What a start asks for before its machine is asked: the agent and the
 /// profile it runs with ([`LaunchTarget`]), and the name the start knew the
 /// profile by, which a refusal names; none for the built-in default.

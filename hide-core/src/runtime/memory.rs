@@ -405,6 +405,7 @@ pub(crate) fn session_stat(
                 Call::SessionActivity {
                     request: hide_session::session_activity::SessionActivityRequest {
                         agent: session.agent,
+                        account: session.account.clone(),
                         reference_kind: "id".to_owned(),
                         reference_value: session.id.clone(),
                         cwd: Some(session.checkout_path.to_string_lossy().into_owned()),
@@ -560,6 +561,7 @@ fn persisted_unavailable_session_row(source: SessionSourceRecord) -> SessionRowS
                 .unavailable_reason
                 .unwrap_or_else(|| "Session source is no longer available".to_owned()),
         ),
+        account: Default::default(),
     }
 }
 
@@ -579,6 +581,7 @@ fn project_session_row(session: ProjectSession) -> SessionRowSnapshot {
         updated_at_unix_ms: session.updated_at_unix_ms,
         title: session.title,
         unavailable_reason,
+        account: session.account,
     }
 }
 
@@ -778,6 +781,7 @@ fn load_opencode_detail(
 ) -> Result<ArchiveDetailSnapshot, String> {
     let mut request = hide_session::label_transcript::LabelTranscriptRequest {
         agent: Agent::OpenCode,
+        account: row.account.clone(),
         reference_kind: "id".into(),
         reference_value: row.id.clone(),
         cwd: Some(row.checkout_path.clone()),

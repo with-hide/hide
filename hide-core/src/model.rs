@@ -3742,6 +3742,10 @@ pub struct SessionRowSnapshot {
     pub updated_at_unix_ms: u64,
     pub title: Option<String>,
     pub unavailable_reason: Option<String>,
+    /// The account the session was listed in, which its detail is read in
+    /// (PRD agent-profiles B19); the shell does not see it.
+    #[serde(skip)]
+    pub account: hide_agent_adapter::AccountKey,
 }
 
 /// Project Memory on the wire: the Project a shell opened Memory for in its

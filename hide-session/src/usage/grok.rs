@@ -1,5 +1,6 @@
 //! Grok's PromptUsage includes its children. The native summary session_kind
 //! prefix is the same discriminator Grok uses for hidden subagent sessions.
+use crate::account::Accounts;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -31,12 +32,12 @@ impl Summary {
     }
 }
 
-pub(super) fn summary(home: &Path, path: &Path) -> Result<Summary, Refusal> {
+pub(super) fn summary(accounts: &Accounts, path: &Path) -> Result<Summary, Refusal> {
     let path = path
         .parent()
         .ok_or(Refusal::OutsideRoot)?
         .join("summary.json");
-    let file = checked_file(home, Agent::Grok, &path)?;
+    let file = checked_file(accounts, Agent::Grok, &path)?;
     let bytes = crate::source::window::read_whole(&file, super::SUMMARY_LIMIT_BYTES)
         .map_err(|_| Refusal::Unreadable)?
         .ok_or(Refusal::Capacity)?;

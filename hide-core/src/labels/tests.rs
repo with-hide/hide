@@ -407,6 +407,7 @@ impl Harness {
 
 fn agent(path: &Path, status: &str, seq: u64) -> ObservedAgent {
     ObservedAgent {
+        account: Default::default(),
         pane_id: "w1:p1".to_owned(),
         agent: Some("claude".to_owned()),
         status: Some(status.to_owned()),
@@ -539,6 +540,7 @@ fn an_opencode_refusal_recovers_native_proof_without_another_state_report() {
     let (mut worker, woken, source) = harness.worker(harness.store());
     worker.set_summaries(false, Instant::now());
     let observed = ObservedAgent {
+        account: Default::default(),
         pane_id: "w1:p1".into(),
         agent: Some("opencode".into()),
         status: Some("idle".into()),
@@ -588,6 +590,7 @@ fn an_opencode_transaction_keeps_proof_and_caps_its_pending_reread() {
     let (mut worker, woken, source) = harness.worker(harness.store());
     worker.set_summaries(false, Instant::now());
     let mut observed = ObservedAgent {
+        account: Default::default(),
         pane_id: "w1:p1".into(),
         agent: Some("opencode".into()),
         status: Some("idle".into()),
@@ -665,6 +668,7 @@ fn agy_conversation(harness: &Harness, id: &str) -> ObservedAgent {
     )
     .unwrap();
     ObservedAgent {
+        account: Default::default(),
         pane_id: "w1:p1".into(),
         agent: Some("agy".into()),
         status: Some("idle".into()),
@@ -780,6 +784,7 @@ fn a_titles_only_opencode_session_keeps_its_native_title_and_generated_goal() {
     harness.backend.answer("요청 보기 구현 작업", "done", "");
     let (mut worker, woken, _) = harness.worker(harness.store());
     let observed = ObservedAgent {
+        account: Default::default(),
         pane_id: "w1:p1".into(),
         agent: Some("opencode".into()),
         status: Some("idle".into()),
@@ -2440,6 +2445,7 @@ fn an_imported_label_shows_only_for_the_session_it_was_proven_for() {
     .unwrap();
     let (mut worker, _woken, _) = harness.worker(harness.store());
     let by_id = |pane: &str, id: &str| ObservedAgent {
+        account: Default::default(),
         pane_id: pane.to_owned(),
         agent: Some("claude".to_owned()),
         status: Some("idle".to_owned()),
@@ -2993,7 +2999,7 @@ impl crate::node_access::NodeLink for HelperAt {
     ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
         match call {
             hide_node_link::protocol::Call::LabelTranscript { request } => {
-                hide_host::serve::label_transcript(&self.0, &request)
+                hide_host::serve::label_transcript(&hide_session::Accounts::new(&self.0), &request)
                     .map(crate::node_access::LinkAnswer::Parsed)
                     .map_err(crate::node_access::LinkError::Refused)
             }
@@ -5018,7 +5024,7 @@ impl crate::node_access::NodeLink for HelperWithoutTurns {
     ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
         match call {
             hide_node_link::protocol::Call::LabelTranscript { request } => {
-                hide_host::serve::label_transcript(&self.0, &request)
+                hide_host::serve::label_transcript(&hide_session::Accounts::new(&self.0), &request)
                     .map(|mut answer| {
                         answer.as_object_mut().unwrap().remove("turns");
                         crate::node_access::LinkAnswer::Parsed(answer)
@@ -5078,6 +5084,7 @@ fn a_codex_session_not_found_is_not_known_until_a_later_state_reads_it() {
     let (mut worker, woken, source) = harness.worker(harness.store());
     worker.set_summaries(false, Instant::now());
     let by_id = |seq: u64| ObservedAgent {
+        account: Default::default(),
         pane_id: "w1:p1".to_owned(),
         agent: Some("codex".to_owned()),
         status: Some("idle".to_owned()),

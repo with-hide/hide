@@ -45,19 +45,23 @@ fn read(
         "path" => hide_session::SessionIdentity::path(reference),
         _ => return Err("reference_kind_unknown".to_owned()),
     };
-    let path = hide_session::SessionLocator::new(home)
+    let path = hide_session::SessionLocator::new(&hide_session::Accounts::new(home))
         .locate("journey", agent, Some(&identity), Some(cwd))
         .map_err(|error| format!("session_locate_failed: {error}"))?;
     let id = match &identity {
         hide_session::SessionIdentity::Id(id) => id.clone(),
         // The id the file itself names, as Hide's own reads prove it in the
         // checkout; a file name is not one (Pi's carries a timestamp before its id).
-        hide_session::SessionIdentity::Path(_) => {
-            hide_session::confirm_session_file(home, agent, &path, None, Some(cwd))
-                .map_err(|error| format!("session_id_unconfirmed: {error}"))?
-                .native_session_id
-                .ok_or("session_id_unavailable")?
-        }
+        hide_session::SessionIdentity::Path(_) => hide_session::confirm_session_file(
+            &hide_session::Accounts::new(home),
+            agent,
+            &path,
+            None,
+            Some(cwd),
+        )
+        .map_err(|error| format!("session_id_unconfirmed: {error}"))?
+        .native_session_id
+        .ok_or("session_id_unavailable")?,
     };
     let scope = hide_session::SessionReadScope {
         id,
@@ -66,10 +70,16 @@ fn read(
     let mut events = Vec::new();
     let mut checkpoint = None;
     for _ in 0..MAX_PAGES {
-        let page = hide_session::read_session_file(home, agent, &path, Some(&scope), || {
-            hide_session::read_conversation(home, agent, &path, &scope, checkpoint.take())
-                .map_err(|error| format!("session_conversation_read_failed: {error}"))
-        })?;
+        let page = hide_session::read_session_file(
+            &hide_session::Accounts::new(home),
+            agent,
+            &path,
+            Some(&scope),
+            || {
+                hide_session::read_conversation(home, agent, &path, &scope, checkpoint.take())
+                    .map_err(|error| format!("session_conversation_read_failed: {error}"))
+            },
+        )?;
         events.extend(page.events.into_iter().map(
             |event| serde_json::json!({"role": event.role, "kind": event.kind, "text": event.text, "at": event.at_unix_ms}),
         ));
@@ -99,8 +109,12 @@ fn read_opencode(
     let mut events = Vec::new();
     let mut checkpoint = None;
     for _ in 0..MAX_PAGES {
-        let page = hide_session::opencode::read_conversation(home, &scope, checkpoint.take())
-            .map_err(|error| format!("session_conversation_read_failed: {error}"))?;
+        let page = hide_session::opencode::read_conversation(
+            &hide_session::Accounts::new(home),
+            &scope,
+            checkpoint.take(),
+        )
+        .map_err(|error| format!("session_conversation_read_failed: {error}"))?;
         events.extend(page.events.into_iter().map(
             |event| serde_json::json!({"role": event.role, "kind": event.kind, "text": event.text, "at": event.at_unix_ms}),
         ));

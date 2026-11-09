@@ -391,7 +391,7 @@ fn pruned_native_session_resumes(replaced: bool) {
         .unwrap();
     let read = |checkpoint| {
         hide_session::links::read(
-            directory.path(),
+            &hide_session::Accounts::new(directory.path()),
             &[hide_session::links::ReadRequest {
                 agent: hide_session::Agent::Claude,
                 path: file.to_string_lossy().into(),

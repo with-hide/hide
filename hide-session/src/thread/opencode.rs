@@ -8,6 +8,7 @@
 //! A page is a run of whole messages, newest first, within the page's byte
 //! cap; its cursor is the index of its first message in the session.
 
+use crate::account::Accounts;
 use agent_client_protocol_schema::v1::{PlanEntryStatus, ToolKind};
 use hide_agent_adapter::HookDialect;
 use rusqlite::{Connection, params};
@@ -35,7 +36,7 @@ struct Message {
 }
 
 pub(super) fn read(
-    home: &std::path::Path,
+    accounts: &Accounts,
     scope: &SessionReadScope,
     read: &ThreadRead,
 ) -> Result<ThreadPage, ReadRefusal> {
@@ -47,7 +48,7 @@ pub(super) fn read(
     if stale {
         return Err(ReadRefusal::from("thread_cursor_stale"));
     }
-    with_read(home, |connection, schema| {
+    with_read(accounts, |connection, schema| {
         prove(
             connection,
             schema,

@@ -29,14 +29,23 @@ const MAY_EXIST: &str = "a fork may exist in OpenCode's session list";
 /// Forks the root session `source` that OpenCode recorded in `cwd`, running
 /// OpenCode as the fork's agent will run: with its profile's variables and
 /// program (`profile`, none for the built-in default).
+///
+/// The session is read in the account the profile runs in, which the node
+/// must have registered (`accounts`).
 pub(crate) fn fork(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     source: &str,
     cwd: &Path,
     profile: Option<&ProfileStart>,
     stop: &AtomicBool,
 ) -> Result<OpenCodeFork, HostError> {
-    fork_with(home, source, cwd, stop, || opencode(profile))
+    let account = profile
+        .map(|profile| profile.account.clone())
+        .unwrap_or_default();
+    let accounts = accounts
+        .reading(hide_session::Agent::OpenCode, &account)
+        .map_err(|refusal| HostError::new(ErrorCode::OutsideRoot, refusal.reason()))?;
+    fork_with(&accounts, source, cwd, stop, || opencode(profile))
 }
 
 /// The `opencode` command a fork runs: found and run on the account's own
@@ -62,7 +71,7 @@ fn opencode(profile: Option<&ProfileStart>) -> Command {
 /// [`fork`] with the `opencode` command it runs, made only for a session in
 /// 2.x's tables.
 fn fork_with(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     source: &str,
     cwd: &Path,
     stop: &AtomicBool,
@@ -73,7 +82,7 @@ fn fork_with(
         .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "session_route_cwd_unconfirmed"))?;
     // Busy only while the route's read met OpenCode writing its database,
     // before anything was forked, so the core may ask again.
-    match hide_session::opencode::fork_route(home, source, checkout).map_err(|refusal| {
+    match hide_session::opencode::fork_route(accounts, source, checkout).map_err(|refusal| {
         let code = match refusal {
             hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
             hide_session::ReadRefusal::Refused(_) => ErrorCode::Io,
@@ -244,7 +253,7 @@ mod tests {
         writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
         let fork = || {
             fork_with(
-                home.path(),
+                &hide_session::Accounts::new(home.path()),
                 ROOT,
                 &checkout,
                 &AtomicBool::new(false),
@@ -294,7 +303,7 @@ mod tests {
             &checkout,
         );
         let answer = fork_with(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             ROOT,
             &checkout,
             &AtomicBool::new(false),
@@ -326,9 +335,13 @@ mod tests {
             &checkout,
         );
         assert_eq!(
-            fork_with(one.path(), ROOT, &checkout, &AtomicBool::new(false), || {
-                panic!("a 1.x session runs no opencode")
-            }),
+            fork_with(
+                &hide_session::Accounts::new(one.path()),
+                ROOT,
+                &checkout,
+                &AtomicBool::new(false),
+                || { panic!("a 1.x session runs no opencode") }
+            ),
             Ok(OpenCodeFork::Flag)
         );
     }

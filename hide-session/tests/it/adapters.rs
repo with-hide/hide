@@ -99,7 +99,7 @@ fn context_resets_require_native_metadata_and_keep_their_record_offsets() {
         &lines,
     )
     .unwrap();
-    let label = read(home.path(), &request).unwrap();
+    let label = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     assert_eq!(label.memory_receipts.len(), 2);
     assert!(
         label
@@ -209,6 +209,7 @@ pub(crate) fn request(agent: Agent) -> LabelTranscriptRequest {
         Agent::Antigravity => AGY_ID,
     };
     LabelTranscriptRequest {
+        account: Default::default(),
         agent,
         reference_kind: "id".to_owned(),
         reference_value: id.to_owned(),
@@ -223,11 +224,11 @@ pub(crate) fn request(agent: Agent) -> LabelTranscriptRequest {
 /// Reads until nothing is left, as the label worker does.
 pub(crate) fn read_whole(home: &Path, agent: Agent) -> LabelTranscript {
     let mut request = request(agent);
-    let mut whole = read(home, &request).unwrap();
+    let mut whole = read(&hide_session::Accounts::new(home), &request).unwrap();
     while whole.has_more {
         request.checkpoint = Some(whole.checkpoint.clone());
         request.subagents = whole.subagents.clone();
-        let next = read(home, &request).unwrap();
+        let next = read(&hide_session::Accounts::new(home), &request).unwrap();
         whole.events.extend(next.events);
         whole.pr_sightings.extend(next.pr_sightings);
         whole.memory_receipts.extend(next.memory_receipts);
@@ -261,6 +262,7 @@ fn subagent_poll_fixture() -> (tempfile::TempDir, PathBuf, LabelTranscriptReques
     let folder = project.join("budget-session/subagents");
     std::fs::create_dir_all(&folder).unwrap();
     let request = LabelTranscriptRequest {
+        account: Default::default(),
         agent: Agent::Claude,
         reference_kind: "path".to_owned(),
         reference_value: path.display().to_string(),
@@ -327,7 +329,7 @@ fn claude_subagent_poll_caps_aggregate_bytes_and_resumes_a_partial_record_once()
             .collect();
         write_poll_subagent(&folder, index, &contents);
     }
-    let first = read(home.path(), &request).unwrap();
+    let first = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     let committed_bytes: u64 = first.subagents.values().map(|cursor| cursor.offset()).sum();
     assert!(
         committed_bytes <= 2 * 1024 * 1024,
@@ -346,7 +348,7 @@ fn claude_subagent_poll_caps_aggregate_bytes_and_resumes_a_partial_record_once()
             .collect::<Vec<_>>()
     );
     resume_subagent_poll(&mut request, &first);
-    let next = read(home.path(), &request).unwrap();
+    let next = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     sightings.extend(next.pr_sightings.iter().map(|pr| pr.number));
     assert_eq!(
         sightings,
@@ -358,7 +360,12 @@ fn claude_subagent_poll_caps_aggregate_bytes_and_resumes_a_partial_record_once()
     assert_eq!(next.subagents["agent-3.jsonl"].offset(), 900 * 1024);
     assert!(!next.has_more);
     resume_subagent_poll(&mut request, &next);
-    assert!(read(home.path(), &request).unwrap().pr_sightings.is_empty());
+    assert!(
+        read(&hide_session::Accounts::new(home.path()), &request)
+            .unwrap()
+            .pr_sightings
+            .is_empty()
+    );
 }
 
 #[test]
@@ -378,12 +385,12 @@ fn claude_subagent_poll_resumes_an_oversized_tool_discard_across_its_budget() {
         // at the line cap instead of authorizing a silent discard.
         &(sized_tool_result_record(300, 900 * 1024, None) + &sized_tool_record(301, 1024)),
     );
-    let first = read(home.path(), &request).unwrap();
+    let first = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     assert_eq!(first.subagents["agent-3.jsonl"].offset(), 648 * 1024);
     assert!(first.has_more);
     assert!(first.pr_sightings.iter().all(|pr| pr.number < 300));
     resume_subagent_poll(&mut request, &first);
-    let next = read(home.path(), &request).unwrap();
+    let next = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     assert_eq!(
         next.pr_sightings
             .iter()
@@ -393,7 +400,12 @@ fn claude_subagent_poll_resumes_an_oversized_tool_discard_across_its_budget() {
     );
     assert!(!next.has_more);
     resume_subagent_poll(&mut request, &next);
-    assert!(read(home.path(), &request).unwrap().pr_sightings.is_empty());
+    assert!(
+        read(&hide_session::Accounts::new(home.path()), &request)
+            .unwrap()
+            .pr_sightings
+            .is_empty()
+    );
 }
 
 #[test]
@@ -408,7 +420,7 @@ fn claude_subagent_poll_counts_the_bytes_of_a_skipped_oversized_record() {
         .map(|record| sized_tool_record(record, 100 * 1024))
         .collect();
     write_poll_subagent(&folder, 3, &contents);
-    let first = read(home.path(), &request).unwrap();
+    let first = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     assert_eq!(
         first
             .pr_sightings
@@ -426,7 +438,7 @@ fn claude_subagent_poll_counts_the_bytes_of_a_skipped_oversized_record() {
         );
     }
     resume_subagent_poll(&mut request, &first);
-    let next = read(home.path(), &request).unwrap();
+    let next = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     assert_eq!(
         next.pr_sightings
             .iter()
@@ -620,18 +632,21 @@ mod wake_devices {
         let mut request = request(Agent::Claude);
         request.checkpoint = Some(first.checkpoint.clone());
         request.turns = first.turns.clone();
-        let second = read(home.path(), &request).unwrap();
+        let second = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
         assert_eq!(live(&second).len(), 2, "the first task is remembered");
         request.checkpoint = Some(second.checkpoint.clone());
         request.turns = second.turns.clone();
         append(&path, &[ended("bg1")]);
-        let third = read(home.path(), &request).unwrap();
+        let third = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
         assert_eq!(live(&third).len(), 1);
 
         // The same read repeated from the earlier checkpoint folds nothing twice.
         request.checkpoint = Some(first.checkpoint.clone());
         request.turns = third.turns.clone();
-        assert_eq!(live(&read(home.path(), &request).unwrap()).len(), 1);
+        assert_eq!(
+            live(&read(&hide_session::Accounts::new(home.path()), &request).unwrap()).len(),
+            1
+        );
     }
 
     #[test]
@@ -768,7 +783,7 @@ mod wake_devices {
         let mut request = request(Agent::Claude);
         request.checkpoint = Some(first.checkpoint.clone());
         request.turns = first.turns.clone();
-        let second = read(home.path(), &request).unwrap();
+        let second = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
         assert_eq!(
             live(&second),
             [],
@@ -1215,8 +1230,12 @@ fn the_doorbells_line_is_never_the_operators_words_and_a_look_alike_instruction_
                 id: OPENCODE_ROOT.to_owned(),
                 cwd: "/work/app".to_owned(),
             };
-            let read =
-                hide_session::opencode::read_conversation(home.path(), &scope, None).unwrap();
+            let read = hide_session::opencode::read_conversation(
+                &hide_session::Accounts::new(home.path()),
+                &scope,
+                None,
+            )
+            .unwrap();
             assert_eq!(
                 operator_words(&read.events),
                 [(typed, true), (said, operator)],
@@ -1316,7 +1335,10 @@ pub(crate) mod omp {
         }
 
         fn read(&self) -> Result<LabelTranscript, hide_session::ReadRefusal> {
-            read(self.home.path(), &self.request)
+            read(
+                &hide_session::Accounts::new(self.home.path()),
+                &self.request,
+            )
         }
         fn resume(&mut self, answer: &LabelTranscript) {
             self.request.checkpoint = Some(answer.checkpoint.clone());
@@ -1411,7 +1433,7 @@ pub(crate) mod omp {
         native.request.reference_value = native.path.display().to_string();
         let pane = native.read().unwrap();
         let linked = hide_session::links::read(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             &[hide_session::links::ReadRequest {
                 agent: Agent::Omp,
                 path: native.path.display().to_string(),
@@ -1447,10 +1469,13 @@ pub(crate) mod omp {
         let project =
             hide_project::resolve(Path::new(native.request.cwd.as_deref().unwrap()), "local")
                 .unwrap();
-        let catalog = hide_session::SessionCatalog::new(native.home.path(), "local")
-            .project_sessions(&project)
-            .unwrap()
-            .sessions;
+        let catalog = hide_session::SessionCatalog::new(
+            &hide_session::Accounts::new(native.home.path()),
+            "local",
+        )
+        .project_sessions(&project)
+        .unwrap()
+        .sessions;
         assert_eq!(catalog[0].started_at_unix_ms, Some(1_893_456_000_000));
     }
 
@@ -1474,16 +1499,19 @@ pub(crate) mod omp {
         let project =
             hide_project::resolve(Path::new(native.request.cwd.as_deref().unwrap()), "local")
                 .unwrap();
-        let catalog = hide_session::SessionCatalog::new(native.home.path(), "local")
-            .project_sessions(&project)
-            .unwrap()
-            .sessions;
+        let catalog = hide_session::SessionCatalog::new(
+            &hide_session::Accounts::new(native.home.path()),
+            "local",
+        )
+        .project_sessions(&project)
+        .unwrap()
+        .sessions;
         assert_eq!(catalog.len(), 1);
         assert_eq!(catalog[0].agent, Agent::Omp);
         assert_eq!(catalog[0].id, "omp-native-a");
         assert_eq!(catalog[0].title.as_deref(), Some("stale header"));
         let linked = hide_session::links::read(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             &[hide_session::links::ReadRequest {
                 agent: Agent::Omp,
                 path: native.path.display().to_string(),
@@ -1507,6 +1535,7 @@ pub(crate) mod omp {
         let by_path = native.read().unwrap();
         assert_eq!(by_id.confirmed.owner, by_path.confirmed.owner);
         let action = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: Agent::Omp,
             reference_kind: "path".into(),
             reference_value: native.path.display().to_string(),
@@ -1514,7 +1543,13 @@ pub(crate) mod omp {
             exact_route: true,
             expected_id: Some("omp-native-a".into()),
         };
-        assert!(hide_session::session_activity::read(native.home.path(), &action).is_ok());
+        assert!(
+            hide_session::session_activity::read(
+                &hide_session::Accounts::new(native.home.path()),
+                &action
+            )
+            .is_ok()
+        );
         let sibling = native
             .path
             .parent()
@@ -1525,12 +1560,22 @@ pub(crate) mod omp {
             .replace("omp-native-a", "other-owner");
         fs::write(&sibling, other).unwrap();
         assert_eq!(
-            hide_session::session_activity::read(native.home.path(), &action).unwrap_err(),
+            hide_session::session_activity::read(
+                &hide_session::Accounts::new(native.home.path()),
+                &action
+            )
+            .unwrap_err(),
             hide_session::ReadRefusal::Refused("session_route_ambiguous".into())
         );
         assert!(native.read().is_ok(), "ambiguity is action-local");
         fs::remove_file(sibling).unwrap();
-        assert!(hide_session::session_activity::read(native.home.path(), &action).is_ok());
+        assert!(
+            hide_session::session_activity::read(
+                &hide_session::Accounts::new(native.home.path()),
+                &action
+            )
+            .is_ok()
+        );
         native.request.cwd = Some(native.home.path().display().to_string());
         assert!(native.read().is_err());
     }
@@ -1546,6 +1591,7 @@ pub(crate) mod omp {
             // not its selector (args.ts, pinned 18.7.0); --fork requires a value.
             fs::write(&native.path, source.replace("omp-native-a", id)).unwrap();
             let action = hide_session::session_activity::SessionActivityRequest {
+                account: Default::default(),
                 agent: Agent::Omp,
                 reference_kind: "path".into(),
                 reference_value: native.path.display().to_string(),
@@ -1554,7 +1600,11 @@ pub(crate) mod omp {
                 expected_id: Some(id.into()),
             };
             assert!(
-                hide_session::session_activity::read(native.home.path(), &action).is_err(),
+                hide_session::session_activity::read(
+                    &hide_session::Accounts::new(native.home.path()),
+                    &action
+                )
+                .is_err(),
                 "a native flag cannot become a session selector: {id}"
             );
         }
@@ -1581,6 +1631,7 @@ pub(crate) mod omp {
             let cwd = Path::new(native.request.cwd.as_deref().unwrap());
             let root = native.home.path().join(".omp/agent/sessions");
             let action = hide_session::session_activity::SessionActivityRequest {
+                account: Default::default(),
                 agent: Agent::Omp,
                 reference_kind: "path".into(),
                 reference_value: native.path.display().to_string(),
@@ -1589,8 +1640,11 @@ pub(crate) mod omp {
                 expected_id: Some("omp-native-a".into()),
             };
             let check = || {
-                hide_session::session_activity::read(native.home.path(), &action)
-                    .map_err(String::from)
+                hide_session::session_activity::read(
+                    &hide_session::Accounts::new(native.home.path()),
+                    &action,
+                )
+                .map_err(String::from)
             };
             assert!(check().is_ok());
             // These names come from upstream session-paths/session-listing, not
@@ -1686,6 +1740,7 @@ pub(crate) mod omp {
             .replace("omp-native-a", "knative");
         fs::write(&native.path, &source).unwrap();
         let action = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: Agent::Omp,
             reference_kind: "path".into(),
             reference_value: native.path.display().to_string(),
@@ -1693,7 +1748,12 @@ pub(crate) mod omp {
             exact_route: true,
             expected_id: Some("knative".into()),
         };
-        let check = || hide_session::session_activity::read(native.home.path(), &action);
+        let check = || {
+            hide_session::session_activity::read(
+                &hide_session::Accounts::new(native.home.path()),
+                &action,
+            )
+        };
         assert!(check().is_ok());
         for name in ["Knative.jsonl", "date_Knative.jsonl"] {
             // ECMAScript lowercases Kelvin sign to ASCII k. Native OMP
@@ -1749,6 +1809,7 @@ pub(crate) mod omp {
         native.request.reference_value = correct.display().to_string();
         assert!(native.read().is_ok());
         let action = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: Agent::Omp,
             reference_kind: "path".into(),
             reference_value: correct.display().to_string(),
@@ -1756,7 +1817,13 @@ pub(crate) mod omp {
             exact_route: true,
             expected_id: Some("omp-native-a".into()),
         };
-        assert!(hide_session::session_activity::read(native.home.path(), &action).is_ok());
+        assert!(
+            hide_session::session_activity::read(
+                &hide_session::Accounts::new(native.home.path()),
+                &action
+            )
+            .is_ok()
+        );
     }
 }
 
@@ -1837,7 +1904,10 @@ pub(crate) mod grok {
         }
 
         fn read(&self) -> Result<LabelTranscript, hide_session::ReadRefusal> {
-            read(self.home.path(), &self.request)
+            read(
+                &hide_session::Accounts::new(self.home.path()),
+                &self.request,
+            )
         }
 
         /// The label store keeps a checkpoint as JSON, so each read resumes
@@ -1883,8 +1953,9 @@ pub(crate) mod grok {
             expected_id: Option<&str>,
         ) -> Result<(), String> {
             hide_session::session_activity::read(
-                self.home.path(),
+                &hide_session::Accounts::new(self.home.path()),
                 &hide_session::session_activity::SessionActivityRequest {
+                    account: Default::default(),
                     agent: Agent::Grok,
                     reference_kind: kind.into(),
                     reference_value: value.into(),
@@ -2300,7 +2371,7 @@ pub(crate) mod grok {
         assert!(native.read().is_err());
         assert_eq!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Grok,
                 &native.path,
                 None,
@@ -2314,7 +2385,7 @@ pub(crate) mod grok {
 
         let confirm = |path: &Path| {
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Grok,
                 path,
                 None,
@@ -2395,7 +2466,7 @@ pub(crate) mod grok {
                 )
                 .is_err()
         );
-        let located = SessionLocator::new(native.home.path())
+        let located = SessionLocator::new(&hide_session::Accounts::new(native.home.path()))
             .locate(
                 "pane",
                 Agent::Grok,
@@ -2405,7 +2476,7 @@ pub(crate) mod grok {
             .unwrap();
         assert_eq!(located, native.path);
         assert!(
-            SessionLocator::new(native.home.path())
+            SessionLocator::new(&hide_session::Accounts::new(native.home.path()))
                 .locate(
                     "pane",
                     Agent::Grok,
@@ -2423,10 +2494,11 @@ pub(crate) mod grok {
         let native = Native::new();
         native.summary(|summary| summary["created_at"] = json!("2030-01-01T00:00:00.000000Z"));
         let project = hide_project::resolve(&native.cwd, "local").unwrap();
-        let sessions = SessionCatalog::new(native.home.path(), "local")
-            .project_sessions(&project)
-            .unwrap()
-            .sessions;
+        let sessions =
+            SessionCatalog::new(&hide_session::Accounts::new(native.home.path()), "local")
+                .project_sessions(&project)
+                .unwrap()
+                .sessions;
         assert_eq!(sessions[0].started_at_unix_ms, Some(1_893_456_000_000));
     }
 
@@ -2445,10 +2517,11 @@ pub(crate) mod grok {
         summary["session_kind"] = json!("subagent");
         fs::write(child.join("summary.json"), summary.to_string()).unwrap();
         let project = hide_project::resolve(&native.cwd, "local").unwrap();
-        let sessions = SessionCatalog::new(native.home.path(), "local")
-            .project_sessions(&project)
-            .unwrap()
-            .sessions;
+        let sessions =
+            SessionCatalog::new(&hide_session::Accounts::new(native.home.path()), "local")
+                .project_sessions(&project)
+                .unwrap()
+                .sessions;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, GROK_ID);
         assert_eq!(sessions[0].agent, Agent::Grok);
@@ -2458,7 +2531,7 @@ pub(crate) mod grok {
             Some("요청 보기를 만들어줘 긴 요청의 둘째 줄")
         );
         let answer = hide_session::links::read(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             &[hide_session::links::ReadRequest {
                 agent: Agent::Grok,
                 path: native.path.display().to_string(),
@@ -2469,7 +2542,12 @@ pub(crate) mod grok {
         assert!(answer.error.is_none());
         assert_eq!(answer.facts.session_id.as_deref(), Some(GROK_ID));
         assert_eq!(answer.facts.prs.len(), 1);
-        let candidates = hide_session::links::candidates(native.home.path(), 0, None).unwrap();
+        let candidates = hide_session::links::candidates(
+            &hide_session::Accounts::new(native.home.path()),
+            0,
+            None,
+        )
+        .unwrap();
         let grok: Vec<_> = candidates
             .iter()
             .filter(|candidate| candidate.agent == Agent::Grok)
@@ -2581,7 +2659,10 @@ pub(crate) mod pi {
         }
 
         fn read(&self) -> Result<LabelTranscript, hide_session::ReadRefusal> {
-            read(self.home.path(), &self.request)
+            read(
+                &hide_session::Accounts::new(self.home.path()),
+                &self.request,
+            )
         }
 
         fn append(&self, record: serde_json::Value) {
@@ -2666,7 +2747,7 @@ pub(crate) mod pi {
             hide_session::ReadRefusal::Refused("session_file_missing".into())
         );
         assert!(
-            SessionLocator::new(native.home.path())
+            SessionLocator::new(&hide_session::Accounts::new(native.home.path()))
                 .locate(
                     "pane",
                     Agent::Pi,
@@ -2677,7 +2758,7 @@ pub(crate) mod pi {
         );
         assert!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &native.path,
                 None,
@@ -2689,7 +2770,7 @@ pub(crate) mod pi {
         fs::copy(&native.path, &outside).unwrap();
         assert!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &outside,
                 None,
@@ -2710,7 +2791,7 @@ pub(crate) mod pi {
         fs::remove_file(&native.path).unwrap();
         let proof = |path: &Path| {
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 path,
                 None,
@@ -2726,7 +2807,7 @@ pub(crate) mod pi {
         };
         assert_eq!(
             hide_session::read_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &native.path,
                 Some(&scope),
@@ -2792,7 +2873,7 @@ pub(crate) mod pi {
         native.request.reference_value = native.path.display().to_string();
         let pane = native.read().unwrap();
         let linked = hide_session::links::read(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             &[hide_session::links::ReadRequest {
                 agent: Agent::Pi,
                 path: native.path.display().to_string(),
@@ -2819,10 +2900,11 @@ pub(crate) mod pi {
         header["timestamp"] = json!("2030-01-01T00:00:00.000Z");
         fs::write(&native.path, format!("{header}\n{records}")).unwrap();
         let project = hide_project::resolve(&native.cwd, "local").unwrap();
-        let sessions = SessionCatalog::new(native.home.path(), "local")
-            .project_sessions(&project)
-            .unwrap()
-            .sessions;
+        let sessions =
+            SessionCatalog::new(&hide_session::Accounts::new(native.home.path()), "local")
+                .project_sessions(&project)
+                .unwrap()
+                .sessions;
         assert_eq!(sessions[0].started_at_unix_ms, Some(1_893_456_000_000));
     }
 
@@ -2830,16 +2912,17 @@ pub(crate) mod pi {
     fn catalog_and_link_reads_share_pi_identity_and_tool_provenance() {
         let native = Native::new();
         let project = hide_project::resolve(&native.cwd, "local").unwrap();
-        let sessions = SessionCatalog::new(native.home.path(), "local")
-            .project_sessions(&project)
-            .unwrap()
-            .sessions;
+        let sessions =
+            SessionCatalog::new(&hide_session::Accounts::new(native.home.path()), "local")
+                .project_sessions(&project)
+                .unwrap()
+                .sessions;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "pi-native-a");
         assert_eq!(sessions[0].agent, Agent::Pi);
         assert_eq!(sessions[0].title.as_deref(), Some("요청 보기 만들기"));
         let answer = hide_session::links::read(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             &[hide_session::links::ReadRequest {
                 agent: Agent::Pi,
                 path: native.path.display().to_string(),
@@ -2852,10 +2935,14 @@ pub(crate) mod pi {
         assert_eq!(answer.facts.prs.len(), 1);
         assert_eq!(answer.facts.prs[0].number, 12);
         assert!(
-            hide_session::links::candidates(native.home.path(), 0, None)
-                .unwrap()
-                .iter()
-                .any(|candidate| candidate.agent == Agent::Pi)
+            hide_session::links::candidates(
+                &hide_session::Accounts::new(native.home.path()),
+                0,
+                None
+            )
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate.agent == Agent::Pi)
         );
     }
 
@@ -2873,7 +2960,7 @@ pub(crate) mod pi {
         assert!(native.read().is_err());
         assert_eq!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &wrong,
                 None,
@@ -2891,7 +2978,7 @@ pub(crate) mod pi {
         assert!(native.read().is_err());
         assert_eq!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &native.path,
                 None,
@@ -2905,8 +2992,9 @@ pub(crate) mod pi {
 
     fn route(native: &Native) -> Result<hide_session::session_activity::SessionActivity, String> {
         hide_session::session_activity::read(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             &hide_session::session_activity::SessionActivityRequest {
+                account: Default::default(),
                 agent: Agent::Pi,
                 reference_kind: "id".into(),
                 reference_value: "pi-native-a".into(),
@@ -2932,6 +3020,7 @@ pub(crate) mod pi {
             .unwrap();
         assert_eq!(route(&native).unwrap_err(), "session_route_ambiguous");
         let by_path = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: Agent::Pi,
             reference_kind: "path".into(),
             reference_value: duplicate.display().to_string(),
@@ -2940,13 +3029,17 @@ pub(crate) mod pi {
             expected_id: None,
         };
         assert_eq!(
-            hide_session::session_activity::read(native.home.path(), &by_path).unwrap_err(),
+            hide_session::session_activity::read(
+                &hide_session::Accounts::new(native.home.path()),
+                &by_path
+            )
+            .unwrap_err(),
             hide_session::ReadRefusal::Refused("session_route_ambiguous".into())
         );
         // A reported path alone remains readable, but does not authorize CLI routing.
         assert!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &duplicate,
                 Some("pi-native-a"),
@@ -2997,8 +3090,9 @@ pub(crate) mod pi {
         }
         assert_eq!(
             hide_session::session_activity::read(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 &hide_session::session_activity::SessionActivityRequest {
+                    account: Default::default(),
                     agent: Agent::Pi,
                     reference_kind: "path".into(),
                     reference_value: native.path.display().to_string(),
@@ -3024,7 +3118,7 @@ pub(crate) mod pi {
         fs::write(&native.path, old.replace("pi-native-a", "pi-native-b")).unwrap();
         let called = std::cell::Cell::new(false);
         let result = hide_session::read_session_file(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             Agent::Pi,
             &native.path,
             Some(&expected),
@@ -3037,7 +3131,7 @@ pub(crate) mod pi {
         assert!(!called.get());
         assert!(
             hide_session::read_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &native.path,
                 None,
@@ -3055,12 +3149,18 @@ pub(crate) mod pi {
             path: native.path.display().to_string(),
             checkpoint: None,
         };
-        let first = hide_session::links::read(native.home.path(), &[request.clone()]).remove(0);
+        let first = hide_session::links::read(
+            &hide_session::Accounts::new(native.home.path()),
+            &[request.clone()],
+        )
+        .remove(0);
         assert!(first.error.is_none());
         request.checkpoint = first.checkpoint;
         native.append(json!({"type":"session", "version":0, "id":"other-owner", "cwd":"/other"}));
         native.append(json!({"type":"message", "timestamp":"2026-10-03T01:02:00Z", "message":{"role":"toolResult", "content":[{"type":"text", "text":"https://github.com/acme/project/pull/44"}]}}));
-        let next = hide_session::links::read(native.home.path(), &[request]).remove(0);
+        let next =
+            hide_session::links::read(&hide_session::Accounts::new(native.home.path()), &[request])
+                .remove(0);
         assert!(next.error.is_none());
         assert_eq!(next.facts.session_id.as_deref(), Some("pi-native-a"));
         assert_eq!(next.facts.cwd.as_deref(), native.cwd.to_str());
@@ -3116,7 +3216,7 @@ pub(crate) mod pi {
         )
         .unwrap();
         let result = hide_session::read_session_file(
-            native.home.path(),
+            &hide_session::Accounts::new(native.home.path()),
             Agent::Pi,
             &native.path,
             Some(&expected),
@@ -3209,7 +3309,7 @@ pub(crate) mod pi {
         assert!(native.read().is_err());
         assert_eq!(
             hide_session::confirm_session_file(
-                native.home.path(),
+                &hide_session::Accounts::new(native.home.path()),
                 Agent::Pi,
                 &native.path,
                 None,
@@ -3239,9 +3339,13 @@ pub(crate) mod pi {
         native.request.reference_value = native.path.display().to_string();
         assert!(native.read().is_err());
         assert!(
-            hide_session::links::candidates(native.home.path(), 0, None)
-                .unwrap()
-                .is_empty()
+            hide_session::links::candidates(
+                &hide_session::Accounts::new(native.home.path()),
+                0,
+                None
+            )
+            .unwrap()
+            .is_empty()
         );
     }
 }
@@ -3339,13 +3443,23 @@ fn a_locked_opencode_database_is_a_skipped_read_that_never_blocks_opencode() {
     writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
     let started = std::time::Instant::now();
     assert_eq!(
-        read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode)
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::InMotion("opencode_db_busy")
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     // OpenCode's write goes on and the next read takes it.
     writer.execute_batch("COMMIT;").unwrap();
-    assert!(read(home.path(), &request(Agent::OpenCode)).is_ok());
+    assert!(
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode)
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -3363,11 +3477,20 @@ fn an_opencode_message_still_being_written_waits_for_the_next_read() {
             ],
         )
         .unwrap();
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert!(!first.has_more);
     let mut again = request(Agent::OpenCode);
     again.checkpoint = Some(first.checkpoint.clone());
-    assert!(read(home.path(), &again).unwrap().events.is_empty());
+    assert!(
+        read(&hide_session::Accounts::new(home.path()), &again)
+            .unwrap()
+            .events
+            .is_empty()
+    );
 }
 
 /// Adds an operator message with one text part of `bytes` bytes.
@@ -3409,7 +3532,11 @@ fn an_opencode_part_over_the_row_limit_is_skipped_without_being_read() {
     let home = home(Agent::OpenCode);
     add_opencode_request(home.path(), 0, hide_session::SESSION_LINE_LIMIT_BYTES);
     let transcript = read_whole(home.path(), Agent::OpenCode);
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert_eq!(first.skipped_reasons.get("part_capacity"), Some(&1));
     assert!(
         transcript
@@ -3426,7 +3553,11 @@ fn a_long_opencode_session_is_read_a_budget_at_a_time_and_whole_in_the_end() {
     for index in 0..8 {
         add_opencode_request(home.path(), index, 200 * 1024);
     }
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert!(
         first.has_more,
         "eight 200 KiB requests are more than one read"
@@ -3469,14 +3600,18 @@ fn opencode_metadata_uses_the_read_budget_even_when_it_cannot_be_parsed() {
             )
             .unwrap();
     }
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert!(first.events.is_empty());
     assert_eq!(first.checkpoint.offset(), 16);
     assert_eq!(first.skipped_reasons.get("malformed_json"), Some(&16));
     assert!(first.has_more, "remaining metadata belongs to a later read");
     let mut again = request(Agent::OpenCode);
     again.checkpoint = Some(first.checkpoint);
-    let next = read(home.path(), &again).unwrap();
+    let next = read(&hide_session::Accounts::new(home.path()), &again).unwrap();
     assert_eq!(next.checkpoint.offset(), 32);
     assert_eq!(next.skipped_reasons.get("malformed_json"), Some(&16));
 }
@@ -3512,7 +3647,11 @@ fn opencode_empty_and_skipped_parts_have_a_work_cap_and_advance() {
                 .unwrap();
         }
         add_opencode_request(home.path(), 1, 10);
-        let transcript = read(home.path(), &request(Agent::OpenCode)).unwrap();
+        let transcript = read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode),
+        )
+        .unwrap();
         let reason = if matches!(data, rusqlite::types::Value::Text(_)) {
             "malformed_json"
         } else {
@@ -3567,7 +3706,11 @@ fn opencode_part_work_is_bounded_across_messages_and_resumes() {
                 .unwrap();
         }
     }
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert!(first.events.is_empty());
     assert_eq!(first.skipped_reasons.get("malformed_json"), Some(&512));
     assert_eq!(first.skipped_reasons.get("part_work_capacity"), Some(&2));
@@ -3575,7 +3718,7 @@ fn opencode_part_work_is_bounded_across_messages_and_resumes() {
     assert!(first.has_more);
     let mut again = request(Agent::OpenCode);
     again.checkpoint = Some(first.checkpoint);
-    let last = read(home.path(), &again).unwrap();
+    let last = read(&hide_session::Accounts::new(home.path()), &again).unwrap();
     assert!(
         last.events
             .iter()
@@ -3596,7 +3739,11 @@ fn opencode_bounds_sql_work_when_a_part_sort_cannot_use_an_index() {
     add_opencode_request(home.path(), 0, 10);
     writer.execute_batch("WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<100000) INSERT INTO part SELECT printf('prt_many_%06d', n), 'msg_big_000', 'ses_0a1b2c3d4e5f60718293a4b5c6', n, n, '' FROM rows;").unwrap();
     assert_eq!(
-        read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode)
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("opencode_db_work_capacity".into())
     );
     let parts: i64 = writer
@@ -3632,7 +3779,11 @@ fn an_oversized_first_opencode_message_has_bounded_output_and_allows_progress() 
             .unwrap();
     }
     add_opencode_request(home.path(), 1, 200 * 1024);
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     let output_bytes: usize = first.events.iter().map(|event| event.text.len()).sum();
     assert!(output_bytes <= hide_session::SESSION_INCREMENT_READ_LIMIT_BYTES as usize);
     assert_eq!(first.checkpoint.offset(), 1);
@@ -3640,7 +3791,7 @@ fn an_oversized_first_opencode_message_has_bounded_output_and_allows_progress() 
     assert!(first.has_more);
     let mut again = request(Agent::OpenCode);
     again.checkpoint = Some(first.checkpoint);
-    let next = read(home.path(), &again).unwrap();
+    let next = read(&hide_session::Accounts::new(home.path()), &again).unwrap();
     assert!(
         next.events
             .iter()
@@ -3677,7 +3828,11 @@ fn an_opencode_row_that_holds_no_text_or_too_much_is_skipped_and_the_read_goes_o
         .unwrap();
     add_opencode_request(home.path(), 2, 10);
 
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert_eq!(first.title, None, "a title past the cut is no title");
     assert_eq!(first.skipped_reasons.get("not_text"), Some(&1));
     assert_eq!(first.skipped_reasons.get("message_capacity"), Some(&1));
@@ -3760,7 +3915,7 @@ fn waiting(answer: &LabelTranscript) -> Option<Waiting> {
 #[test]
 fn a_codex_plan_turn_waits_for_approval_until_the_next_turn_starts() {
     let (home, rollout) = plan_home();
-    let proposed = read(home.path(), &plan_request()).unwrap();
+    let proposed = read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap();
     assert_eq!(waiting(&proposed), Some(Waiting::PlanApproval));
 
     // Approving starts the next turn in default mode.
@@ -3775,16 +3930,24 @@ fn a_codex_plan_turn_waits_for_approval_until_the_next_turn_starts() {
             person("Implement the plan."),
         ],
     );
-    let approved = read(home.path(), &continued(&proposed)).unwrap();
+    let approved = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&proposed),
+    )
+    .unwrap();
     assert_eq!(waiting(&approved), Some(Waiting::Nothing));
 }
 
 #[test]
 fn a_persons_message_after_the_plan_ends_the_wait() {
     let (home, rollout) = plan_home();
-    let proposed = read(home.path(), &plan_request()).unwrap();
+    let proposed = read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap();
     append(&rollout, &[person("계획을 조금 바꿔줘")]);
-    let answered = read(home.path(), &continued(&proposed)).unwrap();
+    let answered = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&proposed),
+    )
+    .unwrap();
     assert_eq!(waiting(&answered), Some(Waiting::Nothing));
 }
 
@@ -3792,7 +3955,7 @@ fn a_persons_message_after_the_plan_ends_the_wait() {
 fn a_plan_mode_turn_that_ends_in_a_question_or_is_interrupted_does_not_wait() {
     for ending in ["question", "interrupted"] {
         let (home, rollout) = plan_home();
-        let first = read(home.path(), &plan_request()).unwrap();
+        let first = read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap();
         let mut records = vec![
             event(
                 "task_started",
@@ -3819,7 +3982,11 @@ fn a_plan_mode_turn_that_ends_in_a_question_or_is_interrupted_does_not_wait() {
             ));
         }
         append(&rollout, &records);
-        let after = read(home.path(), &continued(&first)).unwrap();
+        let after = read(
+            &hide_session::Accounts::new(home.path()),
+            &continued(&first),
+        )
+        .unwrap();
         assert_eq!(waiting(&after), Some(Waiting::Nothing), "{ending}");
     }
 }
@@ -3827,7 +3994,7 @@ fn a_plan_mode_turn_that_ends_in_a_question_or_is_interrupted_does_not_wait() {
 #[test]
 fn a_plan_turn_still_running_is_not_known_and_a_default_turn_is_not_waiting() {
     let (plan, rollout) = plan_home();
-    let first = read(plan.path(), &plan_request()).unwrap();
+    let first = read(&hide_session::Accounts::new(plan.path()), &plan_request()).unwrap();
     append(
         &rollout,
         &[
@@ -3839,7 +4006,11 @@ fn a_plan_turn_still_running_is_not_known_and_a_default_turn_is_not_waiting() {
             person("다른 계획도 세워줘"),
         ],
     );
-    let running = read(plan.path(), &continued(&first)).unwrap();
+    let running = read(
+        &hide_session::Accounts::new(plan.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(waiting(&running), None);
 
     // The fixture's other agent session finishes a turn with no mode.
@@ -3868,7 +4039,10 @@ fn a_changed_codex_record_format_is_not_known_rather_than_not_waiting() {
     );
     assert_ne!(mode_changed, original);
     std::fs::write(&rollout, &mode_changed).unwrap();
-    assert_eq!(waiting(&read(home.path(), &plan_request()).unwrap()), None);
+    assert_eq!(
+        waiting(&read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap()),
+        None
+    );
 
     let renamed = original
         .replace(r#""type":"task_started""#, r#""type":"turn_started""#)
@@ -3876,7 +4050,10 @@ fn a_changed_codex_record_format_is_not_known_rather_than_not_waiting() {
         .replace(r#""type":"task_complete""#, r#""type":"turn_complete""#)
         .replace("<proposed_plan>", "<plan>");
     std::fs::write(&rollout, renamed).unwrap();
-    assert_eq!(waiting(&read(home.path(), &plan_request()).unwrap()), None);
+    assert_eq!(
+        waiting(&read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap()),
+        None
+    );
 }
 
 #[test]
@@ -3886,10 +4063,14 @@ fn a_read_split_inside_the_plan_turn_and_resumed_at_its_anchor_answers_the_same(
     let lines: Vec<&str> = whole.split_inclusive('\n').collect();
     // Stop after the plan turn's person message, before its plan.
     std::fs::write(&rollout, lines[..11].concat()).unwrap();
-    let first = read(home.path(), &plan_request()).unwrap();
+    let first = read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap();
     assert_eq!(waiting(&first), None, "a plan turn still running");
     std::fs::write(&rollout, whole).unwrap();
-    let second = read(home.path(), &continued(&first)).unwrap();
+    let second = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(waiting(&second), Some(Waiting::PlanApproval));
 
     // A restarted reader resumes at the anchor, the turn's person message,
@@ -3900,7 +4081,7 @@ fn a_read_split_inside_the_plan_turn_and_resumed_at_its_anchor_answers_the_same(
         ..continued(&second)
     };
     assert_eq!(
-        waiting(&read(home.path(), &resumed).unwrap()),
+        waiting(&read(&hide_session::Accounts::new(home.path()), &resumed).unwrap()),
         Some(Waiting::PlanApproval)
     );
 }
@@ -3908,13 +4089,17 @@ fn a_read_split_inside_the_plan_turn_and_resumed_at_its_anchor_answers_the_same(
 #[test]
 fn a_replaced_session_file_folds_its_turns_again() {
     let (home, rollout) = plan_home();
-    let proposed = read(home.path(), &plan_request()).unwrap();
+    let proposed = read(&hide_session::Accounts::new(home.path()), &plan_request()).unwrap();
     // The file is replaced by one shorter than what was read: a rescan, so
     // the previous turn's wait does not carry over.
     let whole = std::fs::read_to_string(&rollout).unwrap();
     let lines: Vec<&str> = whole.split_inclusive('\n').collect();
     std::fs::write(&rollout, lines[..8].concat()).unwrap();
-    let rescanned = read(home.path(), &continued(&proposed)).unwrap();
+    let rescanned = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&proposed),
+    )
+    .unwrap();
     assert!(rescanned.rescanned.is_some());
     assert_eq!(waiting(&rescanned), Some(Waiting::Nothing));
 }
@@ -4397,7 +4582,11 @@ fn an_opencode_question_waits_with_its_text_and_choices_until_it_is_answered() {
     use hide_session::turns::UserTurnKind;
     let home = home(Agent::OpenCode);
     let writer = opencode_writer(home.path());
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert_eq!(
         first.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
@@ -4406,7 +4595,11 @@ fn an_opencode_question_waits_with_its_text_and_choices_until_it_is_answered() {
     // The question waits while its message is unfinished.
     opencode_assistant(&writer, "msg_07", START + 400_000, false);
     opencode_question(&writer, "msg_07", START + 400_100, "running");
-    let asking = read(home.path(), &opencode_continued(&first)).unwrap();
+    let asking = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&first),
+    )
+    .unwrap();
     assert!(
         asking.events.is_empty(),
         "the unfinished message is no event yet"
@@ -4420,7 +4613,11 @@ fn an_opencode_question_waits_with_its_text_and_choices_until_it_is_answered() {
     assert!(content.contains("release"), "{content}");
 
     // An idle reread of the same unfinished message keeps the same wait.
-    let again = read(home.path(), &opencode_continued(&asking)).unwrap();
+    let again = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&asking),
+    )
+    .unwrap();
     assert_eq!(
         again.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Question)
@@ -4429,7 +4626,11 @@ fn an_opencode_question_waits_with_its_text_and_choices_until_it_is_answered() {
     // The operator answers: the part completes and OpenCode finishes the message.
     opencode_question(&writer, "msg_07", START + 400_100, "completed");
     opencode_assistant(&writer, "msg_07", START + 400_000, true);
-    let answered = read(home.path(), &opencode_continued(&again)).unwrap();
+    let answered = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&again),
+    )
+    .unwrap();
     assert_eq!(
         answered.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
@@ -4441,16 +4642,28 @@ fn an_opencode_question_waits_with_its_text_and_choices_until_it_is_answered() {
 fn a_pending_opencode_question_is_asked_with_its_choices_once_it_runs() {
     let home = home(Agent::OpenCode);
     let writer = opencode_writer(home.path());
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     opencode_assistant(&writer, "msg_07", START + 400_000, false);
     opencode_question(&writer, "msg_07", START + 400_100, "pending");
-    let streaming = read(home.path(), &opencode_continued(&first)).unwrap();
+    let streaming = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&first),
+    )
+    .unwrap();
     assert_eq!(
         streaming.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
     );
     opencode_question(&writer, "msg_07", START + 400_100, "running");
-    let asking = read(home.path(), &opencode_continued(&streaming)).unwrap();
+    let asking = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&streaming),
+    )
+    .unwrap();
     let fact = asking.turns.as_ref().unwrap().user_turn().unwrap();
     let content = serde_json::to_value(fact.content.unwrap())
         .unwrap()
@@ -4481,7 +4694,11 @@ fn more_opencode_questions_than_the_cap_refuse_the_read_rather_than_miss_one() {
             .unwrap();
     }
     assert_eq!(
-        read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode)
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("user_turn_capacity".into())
     );
 }
@@ -4584,13 +4801,21 @@ fn an_opencode_question_past_the_read_budget_waits_for_the_next_read_and_then_as
         64 * 1024,
     );
 
-    let first = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let first = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert!(first.has_more);
     assert_eq!(
         first.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
     );
-    let next = read(home.path(), &opencode_continued(&first)).unwrap();
+    let next = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&first),
+    )
+    .unwrap();
     assert_eq!(
         next.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Question)
@@ -4631,7 +4856,11 @@ fn an_unknown_opencode_question_state_refuses_the_read_rather_than_guessing() {
         )
         .unwrap();
     assert_eq!(
-        read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode)
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("user_turn_invalid".into())
     );
 }
@@ -4651,7 +4880,7 @@ fn an_opencode_child_session_is_never_read_into_or_as_the_root_conversation() {
     let mut child = request(Agent::OpenCode);
     child.reference_value = "ses_0a1b2c3d4e5f60718293child".into();
     assert_eq!(
-        read(home.path(), &child).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &child).unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_not_root".into())
     );
 }
@@ -4662,23 +4891,25 @@ fn an_opencode_session_proves_its_checkout_and_refuses_another_one() {
     let mut other = request(Agent::OpenCode);
     other.cwd = Some("/work/other".into());
     assert_eq!(
-        read(home.path(), &other).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &other).unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     other.cwd = None;
     assert_eq!(
-        read(home.path(), &other).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &other).unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_unconfirmed".into())
     );
     other.cwd = Some("/work/app/".into());
-    let confirmed = read(home.path(), &other).unwrap().confirmed;
+    let confirmed = read(&hide_session::Accounts::new(home.path()), &other)
+        .unwrap()
+        .confirmed;
     assert_eq!(confirmed.native_session_id.as_deref(), Some(OPENCODE_ROOT));
     assert_eq!(confirmed.incarnation, "opencode:1790989200000");
     let mut path = request(Agent::OpenCode);
     path.reference_kind = "path".into();
     path.reference_value = "/work/app/.opencode/session".into();
     assert_eq!(
-        read(home.path(), &path).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &path).unwrap_err(),
         hide_session::ReadRefusal::Refused("session_kind_unsupported".into())
     );
 }
@@ -4692,7 +4923,11 @@ fn a_linked_opencode_database_is_refused() {
     std::os::unix::fs::symlink(home.path().join("elsewhere.db"), folder.join("opencode.db"))
         .unwrap();
     assert_eq!(
-        read(home.path(), &request(Agent::OpenCode)).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &request(Agent::OpenCode)
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_linked".into())
     );
 }
@@ -4718,16 +4953,25 @@ fn a_skipped_opencode_message_still_witnesses_where_a_read_ended() {
         .unwrap();
     let whole = read_whole(home.path(), Agent::OpenCode);
     assert!(whole.skipped_reasons.contains_key("message_capacity"));
-    let held =
-        hide_session::opencode::holds(home.path(), OPENCODE_ROOT, "/work/app", &whole.checkpoint);
+    let held = hide_session::opencode::holds(
+        &hide_session::Accounts::new(home.path()),
+        OPENCODE_ROOT,
+        "/work/app",
+        &whole.checkpoint,
+    );
     assert!(held.is_ok(), "{held:?}");
     // Once that message is gone the same checkpoint no longer holds.
     writer
         .execute("DELETE FROM message WHERE id = 'msg_07'", [])
         .unwrap();
     assert!(
-        hide_session::opencode::holds(home.path(), OPENCODE_ROOT, "/work/app", &whole.checkpoint)
-            .is_err()
+        hide_session::opencode::holds(
+            &hide_session::Accounts::new(home.path()),
+            OPENCODE_ROOT,
+            "/work/app",
+            &whole.checkpoint
+        )
+        .is_err()
     );
 }
 
@@ -4760,7 +5004,11 @@ fn an_opencode_session_rewound_and_grown_back_is_read_again_not_continued() {
             ],
         )
         .unwrap();
-    let again = read(home.path(), &opencode_continued(&first)).unwrap();
+    let again = read(
+        &hide_session::Accounts::new(home.path()),
+        &opencode_continued(&first),
+    )
+    .unwrap();
     assert_eq!(again.rescanned.as_deref(), Some("replaced"));
     assert_eq!(
         again.events.first().map(|event| event.text.as_str()),
@@ -4817,8 +5065,12 @@ fn opencode_conversation_page_is_its_label_read_by_message_with_receipts_as_inje
         cwd: cwd.to_owned(),
     };
 
-    let page =
-        hide_session::opencode::read_conversation(home.path(), &scope("/work/app"), None).unwrap();
+    let page = hide_session::opencode::read_conversation(
+        &hide_session::Accounts::new(home.path()),
+        &scope("/work/app"),
+        None,
+    )
+    .unwrap();
     let events = page
         .events
         .iter()
@@ -4843,7 +5095,11 @@ fn opencode_conversation_page_is_its_label_read_by_message_with_receipts_as_inje
     assert!(page.read_bytes > 0 && !page.rescanned);
 
     // The same messages, at the same indexes, as the label read reports them.
-    let label = read(home.path(), &request(Agent::OpenCode)).unwrap();
+    let label = read(
+        &hide_session::Accounts::new(home.path()),
+        &request(Agent::OpenCode),
+    )
+    .unwrap();
     assert_eq!(
         label
             .events
@@ -4856,7 +5112,7 @@ fn opencode_conversation_page_is_its_label_read_by_message_with_receipts_as_inje
 
     // Read on from its checkpoint, nothing new is there.
     let next = hide_session::opencode::read_conversation(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &scope("/work/app"),
         Some(page.checkpoint),
     )
@@ -4865,8 +5121,12 @@ fn opencode_conversation_page_is_its_label_read_by_message_with_receipts_as_inje
     assert_eq!(next.checkpoint.offset(), 7);
 
     assert_eq!(
-        hide_session::opencode::read_conversation(home.path(), &scope("/work/other"), None)
-            .unwrap_err(),
+        hide_session::opencode::read_conversation(
+            &hide_session::Accounts::new(home.path()),
+            &scope("/work/other"),
+            None
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
 }
@@ -4876,6 +5136,7 @@ fn opencode_activity_answers_its_newest_write_and_count_only_for_its_proven_owne
     use hide_session::session_activity::{SessionActivityRequest, read as activity};
     let home = home(Agent::OpenCode);
     let request = |cwd: &str| SessionActivityRequest {
+        account: Default::default(),
         agent: Agent::OpenCode,
         reference_kind: "id".into(),
         reference_value: OPENCODE_ROOT.into(),
@@ -4883,17 +5144,25 @@ fn opencode_activity_answers_its_newest_write_and_count_only_for_its_proven_owne
         exact_route: true,
         expected_id: Some(OPENCODE_ROOT.into()),
     };
-    let answer = activity(home.path(), &request("/work/app")).unwrap();
+    let answer = activity(
+        &hide_session::Accounts::new(home.path()),
+        &request("/work/app"),
+    )
+    .unwrap();
     assert_eq!(answer.bytes, 6);
     assert_eq!(answer.modified_at_unix_ms, 1_790_989_331_000);
     assert_eq!(
-        activity(home.path(), &request("/work/other")).unwrap_err(),
+        activity(
+            &hide_session::Accounts::new(home.path()),
+            &request("/work/other")
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     let mut changed = request("/work/app");
     changed.expected_id = Some("ses_other".into());
     assert_eq!(
-        activity(home.path(), &changed).unwrap_err(),
+        activity(&hide_session::Accounts::new(home.path()), &changed).unwrap_err(),
         hide_session::ReadRefusal::Refused("session_route_owner_changed".into())
     );
     let value = serde_json::to_string(&answer).unwrap();
@@ -4924,7 +5193,7 @@ fn opencode_catalog_holds_only_its_root_sessions_in_the_project() {
         .unwrap();
     let project = hide_project::resolve(&checkout, "local").unwrap();
 
-    let sessions = SessionCatalog::new(home.path(), "local")
+    let sessions = SessionCatalog::new(&hide_session::Accounts::new(home.path()), "local")
         .project_sessions(&project)
         .unwrap();
     assert!(sessions.refusals.is_empty(), "{:?}", sessions.refusals);
@@ -4968,7 +5237,7 @@ fn original_issue_turn_is_scoped_and_bound_to_the_end_witness_for_native_adapter
             witness: original.witness(),
         };
         assert_eq!(
-            read_work_turn(home.path(), &request).unwrap(),
+            read_work_turn(&hide_session::Accounts::new(home.path()), &request).unwrap(),
             original,
             "{agent:?}"
         );
@@ -4979,7 +5248,7 @@ fn original_issue_turn_is_scoped_and_bound_to_the_end_witness_for_native_adapter
         }
         .witness();
         assert_eq!(
-            read_work_turn(home.path(), &changed).unwrap_err(),
+            read_work_turn(&hide_session::Accounts::new(home.path()), &changed).unwrap_err(),
             "work_turn_changed",
             "{agent:?}"
         );
@@ -5008,7 +5277,10 @@ fn original_turn_rejects_a_same_id_file_replacement_before_preview_and_accepts_a
     };
     use std::io::Write;
     std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"\n{\"type\":\"event_msg\",\"timestamp\":\"2026-10-03T01:01:00Z\",\"payload\":{\"type\":\"user_message\",\"message\":\"Later turn\"}}\n").unwrap();
-    assert_eq!(read_work_turn(home.path(), &request).unwrap(), original);
+    assert_eq!(
+        read_work_turn(&hide_session::Accounts::new(home.path()), &request).unwrap(),
+        original
+    );
     let content = std::fs::read_to_string(&path).unwrap();
     let changed = content.replacen("요청 보기를", "요청 요기를", 1);
     assert_ne!(
@@ -5019,7 +5291,7 @@ fn original_turn_rejects_a_same_id_file_replacement_before_preview_and_accepts_a
     std::fs::write(&replacement, changed).unwrap();
     std::fs::rename(replacement, &path).unwrap();
     assert_eq!(
-        read_work_turn(home.path(), &request).unwrap_err(),
+        read_work_turn(&hide_session::Accounts::new(home.path()), &request).unwrap_err(),
         "work_turn_changed"
     );
 }
@@ -5040,7 +5312,7 @@ fn a_codex_goal_is_the_operators_request_and_its_turn_reminder_is_not() {
         reference_value: "0199a000-0000-7000-8000-0000000000b1".to_owned(),
         ..request(Agent::Codex)
     };
-    let transcript = read(home.path(), &request).unwrap();
+    let transcript = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     let humans = transcript
         .events
         .iter()
@@ -5136,8 +5408,9 @@ pub(crate) mod antigravity {
 
         fn route(&self, id: &str, cwd: &Path) -> Result<(), hide_session::ReadRefusal> {
             hide_session::session_activity::read(
-                self.home.path(),
+                &hide_session::Accounts::new(self.home.path()),
                 &hide_session::session_activity::SessionActivityRequest {
+                    account: Default::default(),
                     agent: Agent::Antigravity,
                     reference_kind: "id".into(),
                     reference_value: id.into(),
@@ -5153,7 +5426,11 @@ pub(crate) mod antigravity {
     #[test]
     fn native_history_has_the_shared_conversation_facts() {
         let native = Native::new();
-        let transcript = read(native.home.path(), &native.request).unwrap();
+        let transcript = read(
+            &hide_session::Accounts::new(native.home.path()),
+            &native.request,
+        )
+        .unwrap();
         assert_eq!(transcript.title.as_deref(), Some("요청 보기 만들기"));
         let people: Vec<_> = transcript
             .events
@@ -5187,10 +5464,10 @@ pub(crate) mod antigravity {
             reference_value: CHILD.into(),
             ..native.request.clone()
         };
-        assert!(read(native.home.path(), &child).is_err());
+        assert!(read(&hide_session::Accounts::new(native.home.path()), &child).is_err());
         // The newest conversation in the checkout is the subagent's; a pane
         // with no reported session still reads its operator's.
-        let located = SessionLocator::new(native.home.path())
+        let located = SessionLocator::new(&hide_session::Accounts::new(native.home.path()))
             .locate("pane", Agent::Antigravity, None, native.cwd.to_str())
             .unwrap();
         assert_eq!(
@@ -5330,7 +5607,7 @@ pub(crate) mod antigravity {
             &transcript,
         )
         .unwrap();
-        let located = SessionLocator::new(native.home.path()).locate(
+        let located = SessionLocator::new(&hide_session::Accounts::new(native.home.path())).locate(
             "pane",
             Agent::Antigravity,
             Some(&SessionIdentity::id(missing)),
@@ -5388,6 +5665,7 @@ fn a_turn_hands_on_only_the_tool_calls_it_left_failed() {
         result(10, "t4", true),
     ]);
     let request = LabelTranscriptRequest {
+        account: Default::default(),
         agent: Agent::Claude,
         reference_kind: "path".to_owned(),
         reference_value: path.display().to_string(),
@@ -5397,7 +5675,7 @@ fn a_turn_hands_on_only_the_tool_calls_it_left_failed() {
         turns: None,
         tools: None,
     };
-    let first = read(home.path(), &request).unwrap();
+    let first = read(&hide_session::Accounts::new(home.path()), &request).unwrap();
     let heads = |transcript: &LabelTranscript| {
         transcript
             .failed_tools
@@ -5416,7 +5694,7 @@ fn a_turn_hands_on_only_the_tool_calls_it_left_failed() {
         result(12, "t5", false),
     ]);
     let next = read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &LabelTranscriptRequest {
             checkpoint: Some(first.checkpoint.clone()),
             turns: first.turns.clone(),

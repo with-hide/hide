@@ -18,6 +18,8 @@
 //! (Claude Code's subagents' tools included). Status, pull requests and
 //! lineage do not depend on the agent and are not read here.
 
+use crate::account::Accounts;
+use hide_agent_adapter::AccountKey;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -39,6 +41,10 @@ pub struct LabelTranscriptRequest {
     pub reference_value: String,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The account the agent runs in, which the session is read in; the
+    /// node refuses one it did not register (`crate::Accounts::reading`).
+    #[serde(default, skip_serializing_if = "AccountKey::is_default")]
+    pub account: AccountKey,
     /// Where the previous read stopped; `None` reads from the start.
     #[serde(default)]
     pub checkpoint: Option<ConversationCheckpoint>,
@@ -128,7 +134,7 @@ const WORK_TURN_PAGES: usize = 64;
 
 /// Return only the requested original turn, through the same location,
 /// owner and replacement checks as labels. No other turn reaches a caller.
-pub fn read_work_turn(home: &Path, turn: &WorkTurnRequest) -> Result<WorkTurn, String> {
+pub fn read_work_turn(accounts: &Accounts, turn: &WorkTurnRequest) -> Result<WorkTurn, String> {
     let (kind, value) = if matches!(turn.agent, Agent::OpenCode | Agent::Cursor) {
         ("id", turn.session_id.as_str())
     } else {
@@ -141,20 +147,40 @@ pub fn read_work_turn(home: &Path, turn: &WorkTurnRequest) -> Result<WorkTurn, S
         reference_kind: kind.into(),
         reference_value: value.into(),
         cwd: Some(turn.cwd.clone()),
+        account: AccountKey::Default,
         checkpoint: None,
         subagents: BTreeMap::new(),
         turns: None,
         tools: None,
     };
     if turn.agent == Agent::OpenCode {
-        request.checkpoint = Some(
-            crate::opencode::message_checkpoint(home, &turn.session_id, &turn.cwd, turn.offset)?.0,
-        );
+        // The turn is read in the account whose database holds its session.
+        let mut found = Err("session_file_missing".to_owned());
+        for (account, accounts) in accounts.each(Agent::OpenCode) {
+            found = crate::opencode::message_checkpoint(
+                &accounts,
+                &turn.session_id,
+                &turn.cwd,
+                turn.offset,
+            )
+            .map(|(checkpoint, _)| (account, checkpoint));
+            if !matches!(&found, Err(reason) if reason == "session_file_missing") {
+                break;
+            }
+        }
+        let (account, checkpoint) = found?;
+        request.account = account;
+        request.checkpoint = Some(checkpoint);
     } else if turn.agent != Agent::Cursor {
-        let (path, confirmed) = locate_confirmed(home, turn.agent, kind, value, Some(&turn.cwd))?;
+        let (path, confirmed) =
+            locate_confirmed(accounts, turn.agent, kind, value, Some(&turn.cwd))?;
         if confirmed.native_session_id.as_deref() != Some(&turn.session_id) {
             return Err("work_turn_owner_mismatched".into());
         }
+        request.account = accounts
+            .account_of(turn.agent, &path)
+            .cloned()
+            .unwrap_or_default();
         request.checkpoint = Some(
             ConversationCheckpoint::for_turn(&path, turn.offset)
                 .map_err(|_| "work_turn_offset_invalid")?,
@@ -163,7 +189,7 @@ pub fn read_work_turn(home: &Path, turn: &WorkTurnRequest) -> Result<WorkTurn, S
     let mut answer: Option<WorkTurn> = None;
     let mut chars = 0;
     for _ in 0..WORK_TURN_PAGES {
-        let page = read(home, &request)?;
+        let page = read(accounts, &request)?;
         if page.confirmed.native_session_id.as_deref() != Some(&turn.session_id)
             || page.rescanned.is_some()
         {
@@ -367,15 +393,19 @@ const CODEX_INDEX_TAIL_BYTES: u64 = 64 * 1024;
 /// The owner is proven before and after the read; a file replaced or
 /// shrunk in between is refused rather than analyzed across the change.
 /// An error is a stable reason code with no path or content in it.
-pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadRefusal> {
+pub fn read(
+    accounts: &Accounts,
+    request: &LabelTranscriptRequest,
+) -> Result<LabelTranscript, ReadRefusal> {
     if request.reference_kind == "id" && !is_session_id(&request.reference_value) {
         return Err("label_session_id_invalid".into());
     }
+    let accounts = &accounts.reading(request.agent, &request.account)?;
     if request.agent == Agent::OpenCode {
-        return crate::opencode::read(home, request);
+        return crate::opencode::read(accounts, request);
     }
     let (path, before) = locate_confirmed(
-        home,
+        accounts,
         request.agent,
         &request.reference_kind,
         &request.reference_value,
@@ -390,7 +420,7 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         .unwrap_or_default();
     let read = if request.agent == Agent::Cursor {
         cursor.read_confirmed(
-            home,
+            accounts.home(),
             request.agent,
             &path,
             &crate::SessionReadScope {
@@ -426,7 +456,7 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         }
     }
     let after = crate::confirm_session_file(
-        home,
+        accounts,
         request.agent,
         &path,
         reported_id,
@@ -503,7 +533,7 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
     let mut subagents_left_out = 0;
     if request.agent == Agent::Claude {
         (subagents_pending, subagents_left_out) = read_subagents(
-            home,
+            accounts,
             &path,
             &request.subagents,
             &mut subagents,
@@ -511,7 +541,7 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         );
     }
     let title = match request.agent {
-        Agent::Codex => codex_thread_name(home, request, &path),
+        Agent::Codex => codex_thread_name(accounts, request, &path),
         Agent::Cursor => None,
         // agy keeps a conversation's title in its index, not its transcript.
         Agent::Antigravity => crate::antigravity::title(&path),
@@ -621,7 +651,7 @@ fn location_refusal(error: SessionError) -> ReadRefusal {
 /// readers. Neither reader may use cwd as ownership evidence or leave the
 /// provider's transcript root through a reported path or a link.
 pub(crate) fn locate_confirmed(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     reference_kind: &str,
     reference_value: &str,
@@ -638,12 +668,12 @@ pub(crate) fn locate_confirmed(
     if reference_kind == "id" && !is_session_id(reference_value) {
         return Err("label_session_id_invalid".into());
     }
-    let located = SessionLocator::new(home)
+    let located = SessionLocator::new(accounts)
         .locate("label", agent, Some(&identity), cwd)
         .map_err(location_refusal)?;
-    let path = inside_agent_root(home, agent, &located)?;
+    let path = inside_agent_root(accounts, agent, &located)?;
     let reported_id = (reference_kind == "id").then_some(reference_value);
-    let confirmed = crate::confirm_session_file(home, agent, &path, reported_id, cwd)
+    let confirmed = crate::confirm_session_file(accounts, agent, &path, reported_id, cwd)
         .map_err(|error| ReadRefusal::of(&error))?;
     Ok((path, confirmed))
 }
@@ -656,7 +686,7 @@ pub(crate) fn locate_confirmed(
 /// many files the cap left out. A file that cannot be read keeps its
 /// checkpoint and is tried again on the next read.
 fn read_subagents(
-    home: &Path,
+    accounts: &Accounts,
     session: &Path,
     before: &BTreeMap<String, ConversationCheckpoint>,
     after: &mut BTreeMap<String, ConversationCheckpoint>,
@@ -700,7 +730,7 @@ fn read_subagents(
             pending = true;
             continue;
         }
-        let Ok(file) = inside_agent_root(home, Agent::Claude, &folder.join(&name)) else {
+        let Ok(file) = inside_agent_root(accounts, Agent::Claude, &folder.join(&name)) else {
             continue;
         };
         let mut cursor = checkpoint
@@ -727,15 +757,18 @@ fn read_subagents(
 
 /// Codex's name for the session, from the newest `session_index.jsonl`
 /// entry for its id; `None` when it has none or the index cannot be read.
-fn codex_thread_name(home: &Path, request: &LabelTranscriptRequest, path: &Path) -> Option<String> {
+fn codex_thread_name(
+    accounts: &Accounts,
+    request: &LabelTranscriptRequest,
+    path: &Path,
+) -> Option<String> {
     let id = if request.reference_kind == "id" {
         request.reference_value.clone()
     } else {
         codex_id_from_file_name(path)?
     };
-    let index = hide_agent_adapter::AgentId::Codex
-        .adapter()
-        .place_in(home, hide_agent_adapter::AccountPath::State)
+    let index = accounts
+        .place(Agent::Codex, hide_agent_adapter::AccountPath::State)?
         .join("session_index.jsonl");
     let tail = crate::read_tail(&index, CODEX_INDEX_TAIL_BYTES).ok()?;
     tail.records_newest_first().find_map(|line| {
@@ -777,8 +810,8 @@ pub(crate) fn is_session_id(value: &str) -> bool {
 /// [`crate::inside_session_root`] for the agent's own folder: a reported
 /// path, or a link planted inside the folder, never makes the reader open a
 /// file elsewhere.
-fn inside_agent_root(home: &Path, agent: Agent, located: &Path) -> Result<PathBuf, String> {
-    crate::inside_session_root(home, &[agent], located)
+fn inside_agent_root(accounts: &Accounts, agent: Agent, located: &Path) -> Result<PathBuf, String> {
+    crate::inside_session_root(accounts, &[agent], located)
         .map_err(|refusal| refusal.reason().to_owned())
 }
 
@@ -836,6 +869,7 @@ mod tests {
 
     fn request(path: &Path, checkpoint: Option<ConversationCheckpoint>) -> LabelTranscriptRequest {
         LabelTranscriptRequest {
+            account: Default::default(),
             agent: Agent::Claude,
             reference_kind: "path".to_owned(),
             reference_value: path.display().to_string(),
@@ -857,7 +891,7 @@ mod tests {
                 + &claude_line("assistant", "s1", "on it", "2026-10-01T00:00:01Z"),
         )
         .unwrap();
-        let first = read(root.path(), &request(&path, None)).unwrap();
+        let first = read(&crate::Accounts::new(root.path()), &request(&path, None)).unwrap();
         assert_eq!(
             first.events.iter().map(|e| e.kind).collect::<Vec<_>>(),
             [LabelEventKind::Human, LabelEventKind::Assistant]
@@ -867,13 +901,21 @@ mod tests {
         let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
         file.write_all(claude_line("assistant", "s1", "done", "2026-10-01T00:00:02Z").as_bytes())
             .unwrap();
-        let second = read(root.path(), &request(&path, Some(first.checkpoint.clone()))).unwrap();
+        let second = read(
+            &crate::Accounts::new(root.path()),
+            &request(&path, Some(first.checkpoint.clone())),
+        )
+        .unwrap();
         assert_eq!(second.events.len(), 1);
         assert_eq!(second.events[0].text, "done");
         assert!(second.anchor.is_none());
 
         // Resuming at the anchor recovers the turn from its human record.
-        let resumed = read(root.path(), &request(&path, first.anchor.clone())).unwrap();
+        let resumed = read(
+            &crate::Accounts::new(root.path()),
+            &request(&path, first.anchor.clone()),
+        )
+        .unwrap();
         assert_eq!(resumed.events[0].text, "first request");
         assert_eq!(resumed.events.len(), 3);
     }
@@ -915,7 +957,7 @@ mod tests {
                 .set_modified(written)
                 .unwrap();
         }
-        let answer = read(root.path(), &request(&path, None)).unwrap();
+        let answer = read(&crate::Accounts::new(root.path()), &request(&path, None)).unwrap();
         assert_eq!(
             answer
                 .pr_sightings
@@ -938,14 +980,14 @@ mod tests {
         )
         .unwrap();
         let mut request = request(&path, None);
-        let proven = read(root.path(), &request).unwrap();
+        let proven = read(&crate::Accounts::new(root.path()), &request).unwrap();
         assert_eq!(
             Some(proven.confirmed.owner),
             crate::label_reference_token("claude", "id", "native-a")
         );
         request.reference_kind = "id".to_owned();
         request.reference_value = "native-b".to_owned();
-        assert!(read(root.path(), &request).is_err());
+        assert!(read(&crate::Accounts::new(root.path()), &request).is_err());
     }
 
     #[test]
@@ -962,7 +1004,7 @@ mod tests {
                 + &claude_line("assistant", "s1", "after the tool", "2026-10-01T00:00:02Z"),
         )
         .unwrap();
-        let answer = read(root.path(), &request(&path, None)).unwrap();
+        let answer = read(&crate::Accounts::new(root.path()), &request(&path, None)).unwrap();
         assert_eq!(
             answer.skipped_reasons.get("non_conversation_capacity"),
             Some(&1)
@@ -976,7 +1018,11 @@ mod tests {
                 + &claude_line("assistant", "s1", &huge, "2026-10-01T00:00:01Z"),
         )
         .unwrap();
-        let answer = read(root.path(), &request(&sentence, None)).unwrap();
+        let answer = read(
+            &crate::Accounts::new(root.path()),
+            &request(&sentence, None),
+        )
+        .unwrap();
         assert_eq!(
             answer.skipped_reasons.get("conversation_capacity"),
             Some(&1)
@@ -997,7 +1043,9 @@ mod tests {
         let mut request = request(&transcript_path(root.path(), "missing.jsonl"), None);
         request.reference_kind = "pid".to_owned();
         assert_eq!(
-            read(root.path(), &request).unwrap_err().reason(),
+            read(&crate::Accounts::new(root.path()), &request)
+                .unwrap_err()
+                .reason(),
             "session_kind_unsupported"
         );
     }
@@ -1010,7 +1058,9 @@ mod tests {
         for id in ["../../secret", "a/b", "..", "id with space", "id\\x"] {
             request.reference_value = id.to_owned();
             assert_eq!(
-                read(root.path(), &request).unwrap_err().reason(),
+                read(&crate::Accounts::new(root.path()), &request)
+                    .unwrap_err()
+                    .reason(),
                 "label_session_id_invalid",
                 "{id}"
             );
@@ -1027,7 +1077,11 @@ mod tests {
             claude_line("user", "s1", "private", "2026-10-01T00:00:00Z"),
         )
         .unwrap();
-        let error = read(root.path(), &request(&elsewhere, None)).unwrap_err();
+        let error = read(
+            &crate::Accounts::new(root.path()),
+            &request(&elsewhere, None),
+        )
+        .unwrap_err();
         assert_eq!(error.reason(), "label_session_outside_roots");
 
         // A Codex root is no root for a Claude session either.
@@ -1036,9 +1090,12 @@ mod tests {
         let in_codex = codex.join("session.jsonl");
         fs::copy(&elsewhere, &in_codex).unwrap();
         assert_eq!(
-            read(root.path(), &request(&in_codex, None))
-                .unwrap_err()
-                .reason(),
+            read(
+                &crate::Accounts::new(root.path()),
+                &request(&in_codex, None)
+            )
+            .unwrap_err()
+            .reason(),
             "label_session_outside_roots"
         );
     }
@@ -1062,7 +1119,7 @@ mod tests {
         }
 
         assert_eq!(
-            read(root.path(), &request(&link, None))
+            read(&crate::Accounts::new(root.path()), &request(&link, None))
                 .unwrap_err()
                 .reason(),
             "label_session_outside_roots"
@@ -1071,7 +1128,9 @@ mod tests {
         by_id.reference_kind = "id".to_owned();
         by_id.reference_value = "s1".to_owned();
         assert_eq!(
-            read(root.path(), &by_id).unwrap_err().reason(),
+            read(&crate::Accounts::new(root.path()), &by_id)
+                .unwrap_err()
+                .reason(),
             "label_session_outside_roots"
         );
     }

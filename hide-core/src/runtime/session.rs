@@ -4951,6 +4951,18 @@ impl Runtime {
         });
     }
 
+    /// The profile task `id`'s agent starts with, `None` for the built-in
+    /// default or a task that starts no agent.
+    pub(crate) fn task_agent_profile(
+        &self,
+        id: u64,
+    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
+        self.task_agent_launch
+            .as_ref()
+            .filter(|launch| launch.task == id)
+            .and_then(|launch| launch.profile.clone())
+    }
+
     /// The agent the task's worker should now start: the created pane, the
     /// chosen kind, its first prompt and its CLI arguments, once the creation
     /// is settled.

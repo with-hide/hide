@@ -234,12 +234,18 @@ impl Placed {
     }
 
     fn read_from(&self, from: &ThreadCursor) -> Result<ThreadPage, hide_session::ReadRefusal> {
-        read_thread_from(&self.home, self.agent, Some(&self.path), &self.scope, from)
+        read_thread_from(
+            &hide_session::Accounts::new(&self.home),
+            self.agent,
+            Some(&self.path),
+            &self.scope,
+            from,
+        )
     }
 
     fn read(&self, before: Option<&ThreadCursor>) -> Result<ThreadPage, hide_session::ReadRefusal> {
         read_thread(
-            &self.home,
+            &hide_session::Accounts::new(&self.home),
             self.agent,
             Some(&self.path),
             &self.scope,
@@ -694,7 +700,7 @@ fn a_format_without_a_converter_and_a_path_outside_the_sessions_are_refused() {
     let placed = Placed::new(&SAMPLES[0]);
     assert_eq!(
         read_thread(
-            &placed.home,
+            &hide_session::Accounts::new(&placed.home),
             Agent::Cursor,
             Some(&placed.path),
             &placed.scope,
@@ -708,7 +714,7 @@ fn a_format_without_a_converter_and_a_path_outside_the_sessions_are_refused() {
     std::fs::copy(&placed.path, &outside).unwrap();
     assert_eq!(
         read_thread(
-            &placed.home,
+            &hide_session::Accounts::new(&placed.home),
             placed.agent,
             Some(&outside),
             &placed.scope,
@@ -810,7 +816,7 @@ fn an_opencode_1_session_reads_from_its_parts() {
         .execute_batch(&std::fs::read_to_string(fixture).unwrap())
         .unwrap();
     let page = read_thread(
-        &root,
+        &hide_session::Accounts::new(&root),
         Agent::OpenCode,
         None,
         &scope("ses_0a1b2c3d4e5f60718293a4b5c6", cwd),
@@ -819,7 +825,7 @@ fn an_opencode_1_session_reads_from_its_parts() {
     .unwrap();
     let updates = json_of(&page);
     let forward = read_thread_from(
-        &root,
+        &hide_session::Accounts::new(&root),
         Agent::OpenCode,
         None,
         &scope("ses_0a1b2c3d4e5f60718293a4b5c6", cwd),
@@ -993,13 +999,18 @@ fn a_pane_thread_is_read_by_the_session_reference_the_engine_reports() {
     {
         let placed = Placed::new(sample);
         let request = |read| ThreadRequest {
+            account: Default::default(),
             agent: placed.agent,
             reference_kind: "path".to_owned(),
             reference_value: placed.path.to_str().unwrap().to_owned(),
             cwd: Some(placed.scope.cwd.clone()),
             read,
         };
-        let newest = read_pane_thread(&placed.home, &request(ThreadRead::Newest)).unwrap();
+        let newest = read_pane_thread(
+            &hide_session::Accounts::new(&placed.home),
+            &request(ThreadRead::Newest),
+        )
+        .unwrap();
         assert_eq!(
             json_of(&newest),
             json_of(&placed.read(None).unwrap()),
@@ -1007,7 +1018,7 @@ fn a_pane_thread_is_read_by_the_session_reference_the_engine_reports() {
             sample.format
         );
         let forward = read_pane_thread(
-            &placed.home,
+            &hide_session::Accounts::new(&placed.home),
             &request(ThreadRead::From(newest.start.clone())),
         )
         .unwrap();
@@ -1019,6 +1030,7 @@ fn a_pane_thread_is_read_by_the_session_reference_the_engine_reports() {
 fn a_pane_thread_refuses_an_unsafe_id_and_an_agent_without_a_converter() {
     let placed = Placed::new(&SAMPLES[0]);
     let request = |agent, value: &str| ThreadRequest {
+        account: Default::default(),
         agent,
         reference_kind: "id".to_owned(),
         reference_value: value.to_owned(),
@@ -1026,20 +1038,26 @@ fn a_pane_thread_refuses_an_unsafe_id_and_an_agent_without_a_converter() {
         read: ThreadRead::Newest,
     };
     assert_eq!(
-        read_pane_thread(&placed.home, &request(placed.agent, "../escape"))
-            .unwrap_err()
-            .reason(),
+        read_pane_thread(
+            &hide_session::Accounts::new(&placed.home),
+            &request(placed.agent, "../escape")
+        )
+        .unwrap_err()
+        .reason(),
         "label_session_id_invalid"
     );
     assert_eq!(
-        read_pane_thread(&placed.home, &request(Agent::Cursor, &placed.scope.id))
-            .unwrap_err()
-            .reason(),
+        read_pane_thread(
+            &hide_session::Accounts::new(&placed.home),
+            &request(Agent::Cursor, &placed.scope.id)
+        )
+        .unwrap_err()
+        .reason(),
         "thread_unsupported"
     );
     assert_eq!(
         read_pane_thread(
-            &placed.home,
+            &hide_session::Accounts::new(&placed.home),
             &request(placed.agent, "00000000-0000-4000-8000-000000000000")
         )
         .unwrap_err()

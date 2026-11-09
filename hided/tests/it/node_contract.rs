@@ -484,6 +484,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
             device.link.as_ref(),
             Call::LabelTranscript {
                 request: LabelTranscriptRequest {
+                    account: Default::default(),
                     agent,
                     reference_kind: "id".to_owned(),
                     reference_value: id.to_owned(),
@@ -578,6 +579,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
         device.link.as_ref(),
         Call::LabelTranscript {
             request: LabelTranscriptRequest {
+                account: Default::default(),
                 agent: Agent::Omp,
                 reference_kind: "id".into(),
                 reference_value: "native-omp".into(),

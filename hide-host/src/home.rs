@@ -595,9 +595,10 @@ fn only_the_marker_is_left(folder: &Path) -> HostResult<bool> {
 
 /// Whether an agent recorded a session whose folder is `home_path`. Asked last,
 /// and only of a folder that would otherwise go; stores it could not read are
-/// an error, so the folder is not removed on a guess.
+/// an error, so the folder is not removed on a guess. Only the default
+/// accounts are asked: the builds that made the folder had no profiles.
 fn recorded_session(user_home: &Path, home_path: &Path) -> HostResult<bool> {
-    let catalog = hide_session::SessionCatalog::new(user_home, "");
+    let catalog = hide_session::SessionCatalog::new(&hide_session::Accounts::new(user_home), "");
     let found = catalog.worked_folders(0, Instant::now() + SESSION_SEARCH);
     if !found.refusals.is_empty() {
         return Err(HostError::new(

@@ -96,6 +96,7 @@ pub(crate) fn spawn_dormant_tab(
             let route = crate::live::confirm_session_launch(
                 context.node.as_ref(),
                 &work.record.kind,
+                &crate::launch::LaunchProfile::account_of(work.record.profile.as_ref()),
                 &work.record.native_session_id,
                 Some(&work.record.cwd),
                 work.record.source_reference.as_ref(),
@@ -238,6 +239,7 @@ fn close_route_confirmed(context: &LiveContext, key: &str) -> Result<(), EngineE
     crate::live::confirm_session_launch(
         context.node.as_ref(),
         &record.kind,
+        &crate::launch::LaunchProfile::account_of(record.profile.as_ref()),
         &record.native_session_id,
         Some(&record.cwd),
         record.source_reference.as_ref(),
@@ -325,6 +327,7 @@ fn start_dormant(
         crate::live::confirm_session_launch(
             node,
             &work.record.kind,
+            &crate::launch::LaunchProfile::account_of(work.record.profile.as_ref()),
             &work.record.native_session_id,
             Some(&work.record.cwd),
             work.record.source_reference.as_ref(),
