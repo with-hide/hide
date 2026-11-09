@@ -2006,6 +2006,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     readMissionBrief(missionId: string, node: string) {
       dispatch({ schema_version: 2, kind: "mission_brief_read", payload: { mission: missionId, node } });
     },
+    /** A turn card's `전체 보기` was pressed: the core reads that turn's last message and puts it in the `turn_answer` section. */
+    readTurnAnswer(paneId: string, offset: number) {
+      dispatch({ schema_version: 2, kind: "turn_answer_read", payload: { pane_id: paneId, offset } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);

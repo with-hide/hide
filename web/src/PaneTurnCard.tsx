@@ -2,14 +2,19 @@ import { useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode }
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { askWhat } from "./components/agent-tree";
+import { Button } from "./components/ui/button";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { statusText } from "./agentStatus";
+import { formatDateTime } from "./i18n/format";
 import { useInterfaceTranslation } from "./i18n/client";
+import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
+import { renderMarkdown } from "./mobile/markdown";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { sessionOfAgent } from "./sessionWork";
-import { type AgentRow, type LabelEnd, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
+import { type AgentRow, type AskedTurn, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead } from "./snapshot";
 import { useShellStore } from "./store";
+import { cardLines, letterCount, lettersBefore } from "./turnCard";
 
 /** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
@@ -95,7 +100,7 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
           side="bottom"
           align="start"
           collisionPadding={8}
-          className="max-h-(--radix-popover-content-available-height) overflow-y-auto p-0 text-caption"
+          className="max-h-[min(var(--radix-popover-content-available-height),70dvh)] w-(--size-turn-card) overflow-y-auto p-0 text-caption"
           data-pane-turn-card={paneId}
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => event.preventDefault()}
@@ -128,7 +133,7 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
             dismiss();
           }}
         >
-          <TurnCard agent={agent} header={header} onRecord={session ? () => {
+          <TurnCard agent={agent} header={header} onReadWhole={(offset) => actions.readTurnAnswer(paneId, offset)} onRecord={session ? () => {
             close();
             actions.openSessionRecord(session);
           } : null} />
@@ -165,8 +170,8 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
   return { verb: t(`requests.end.${end}`), asks: end === "question" || end === "blocked", text: agent.request?.line ?? null };
 }
 
-/** A turn's place on the card's rail: a ring in its end's colour, filled for the shown turn's two halves. */
-type RailDot = "past" | "past-asks" | "past-done" | "request" | Tone;
+/** A turn's place on the card's rail: a ring in its end's colour, filled for the shown turn's two halves; the answer filled in success, the letters a small ring. */
+type RailDot = "past" | "past-asks" | "past-done" | "request" | "answer" | "letters" | Tone;
 
 /** How the agent stands on the shown turn: waiting on the operator, working, finished or quiet. */
 type Tone = "asks" | "working" | "done" | "quiet";
@@ -176,6 +181,8 @@ const DOT: Record<RailDot, string> = {
   "past-asks": "border-warning bg-popover",
   "past-done": "border-success bg-popover",
   request: "border-foreground bg-foreground",
+  answer: "border-success bg-success",
+  letters: "border-muted-foreground bg-popover",
   asks: "border-warning bg-warning ring-3 ring-warning/25",
   working: "border-agent-working bg-agent-working ring-3 ring-agent-working/25",
   done: "border-success bg-success",
@@ -205,17 +212,148 @@ function pastDot(end: LabelEnd | null): RailDot {
   return end === "done" ? "past-done" : "past";
 }
 
+/** A clock time on the card, in the operator's language. */
+function Clock({ at }: { at: number }) {
+  const { i18n } = useInterfaceTranslation();
+  return (
+    <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(at).toISOString()}>
+      {formatDateTime(requireInterfaceLanguage(i18n.language), at, { hour: "2-digit", minute: "2-digit", hour12: false })}
+    </time>
+  );
+}
+
+/** Which way a letter went, as a glyph in its direction's colour. */
+const DIRECTION: Record<LetterLine["direction"], { glyph: string; tone: string }> = {
+  sent: { glyph: "↗", tone: "text-agent-working" },
+  received: { glyph: "↙", tone: "text-success" },
+  started: { glyph: "+", tone: "text-subtle-foreground" },
+};
+
+/**
+ * A letter's mark: a block and a report in their states' colours, the rest
+ * quiet, since the warning colour is kept for what the operator answers.
+ */
+const MARK: Record<LetterMark, string> = {
+  block: "bg-destructive/15 text-destructive",
+  report: "bg-success/15 text-success",
+  waiting_answer: "bg-secondary text-subtle-foreground",
+  reply: "bg-secondary text-subtle-foreground",
+  question: "bg-secondary text-subtle-foreground",
+};
+
+/** One line of the card's later half: glyph, who, mark, words and time, cut to the card's width. */
+function CardRow({ glyph, who, mark, words, at, className, label, ...rest }: { glyph: ReactNode; who: string; mark?: ReactNode; words: ReactNode; at: number; className?: string; label: string } & { [data: `data-${string}`]: string | number | undefined }) {
+  return (
+    <li className={cn("flex min-w-0 items-baseline gap-xs", className)} aria-label={label} {...rest}>
+      <span aria-hidden="true" className="w-(--size-icon-sm) shrink-0 text-center">{glyph}</span>
+      <span aria-hidden="true" className="max-w-1/4 shrink-0 truncate text-muted-foreground">{who}</span>
+      {mark}
+      <span aria-hidden="true" className="min-w-0 flex-1 truncate">{words}</span>
+      <Clock at={at} />
+    </li>
+  );
+}
+
+function LetterRow({ letter }: { letter: LetterLine }) {
+  const { t } = useInterfaceTranslation();
+  const who = senderName(t, letter.peer);
+  const direction = DIRECTION[letter.direction];
+  const words = letter.direction === "started" ? t("paneTurn.started") : letter.line ?? "";
+  const markWord = letter.mark ? t(`paneTurn.mark.${letter.mark}`) : null;
+  return (
+    <CardRow
+      glyph={<span className={direction.tone}>{direction.glyph}</span>}
+      who={who}
+      mark={letter.mark ? <span className={cn("shrink-0 rounded-xs px-xxs text-micro font-semibold", MARK[letter.mark])}>{markWord}</span> : null}
+      words={<span className="text-foreground">{words}</span>}
+      at={letter.at_unix_ms}
+      label={[t(`paneTurn.direction.${letter.direction}`, { name: who }), markWord, words].filter(Boolean).join(" · ")}
+      data-turn-card-letter={letter.direction}
+    />
+  );
+}
+
+function AskedRow({ asked }: { asked: AskedTurn }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <CardRow
+      glyph={<span className="font-semibold text-warning">!</span>}
+      who={t("paneTurn.askedTo")}
+      words={<span className="text-warning">{asked.line} · {t("paneTurn.unanswered")}</span>}
+      at={asked.at_unix_ms}
+      className="-mx-xs rounded-xs bg-warning/10 px-xs"
+      label={`${t("paneTurn.askedTo")} · ${asked.line} · ${t("paneTurn.unanswered")}`}
+      data-turn-card-asked="true"
+    />
+  );
+}
+
+/**
+ * The agent's answer to the request: the label's line in bold and the first
+ * lines of its own last message dimmed under it, or that message alone in
+ * the foreground without a line. `전체 보기` opens the whole message in place,
+ * read when opened (`turn_answer`) and drawn as Markdown, in a box of its own height so the letters
+ * under it stay in view.
+ */
+function AnswerItem({ answer, pill, read, onReadWhole, opened = false }: { answer: TurnAnswer; pill: ReactNode; read: TurnAnswerRead | undefined; onReadWhole: (offset: number) => void; opened?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(opened);
+  const mine = read?.offset === answer.offset;
+  const phase = open && mine ? read?.phase : null;
+  return (
+    <RailItem dot={pill ? "done" : "answer"} data-turn-card-answer="true">
+      <h3 className="sr-only">{t("paneTurn.answer")}</h3>
+      <p className="flex items-center gap-xs text-micro text-muted-foreground">
+        {pill ?? <span>{t("paneTurn.answer")}</span>}
+        <Clock at={answer.at_unix_ms} />
+      </p>
+      <div className="mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-tl-xs bg-success/10 px-sm py-xs">
+        {answer.line ? <p className="whitespace-normal font-semibold text-foreground [overflow-wrap:anywhere]" data-turn-card-answer-line="true">{answer.line}</p> : null}
+        {answer.head && !(open && phase === "ready") ? (
+          <p className={cn("line-clamp-2 whitespace-pre-line [overflow-wrap:anywhere]", answer.line ? "text-muted-foreground" : "text-foreground")} data-turn-card-answer-head="true">{answer.head}</p>
+        ) : null}
+        {open && phase === "ready" && read?.text ? (
+          // The agent's words as Markdown, its tables and lists drawn as the
+          // PR card draws a body, with no HTML of its own.
+          <div className="flex max-h-(--size-turn-card-answer) flex-col gap-sm overflow-y-auto text-foreground" data-turn-card-answer-whole="true">
+            {renderMarkdown(read.text)}
+          </div>
+        ) : null}
+        {open && phase === "reading" ? <p className="text-muted-foreground">{t("paneTurn.wholeReading")}</p> : null}
+        {open && phase === "failed" ? <p className="text-muted-foreground" data-turn-card-answer-failed="true">{t("paneTurn.wholeFailed")}</p> : null}
+        {answer.whole ? (
+          <Button
+            variant="text"
+            size="inline"
+            className="self-start text-caption"
+            aria-expanded={open}
+            data-turn-card-whole={open ? "open" : "closed"}
+            onClick={() => {
+              if (!open) onReadWhole(answer.offset);
+              setOpen(!open);
+            }}
+          >
+            {open ? `${t("paneTurn.fold")} ▴` : `${t("paneTurn.whole")} ▾`}
+          </Button>
+        ) : null}
+      </div>
+    </RailItem>
+  );
+}
+
 /**
  * The card's body: the session as one conversation read top to bottom on a
  * rail: the turns before (oldest first, dimmed, each ringed in how it ended),
- * the shown request in a bubble under who sent it (its summary and its own
- * first two lines, who asked after), and the agent's half: what it does about
- * it as a coloured verb with the label's words. The agent's own words stay in
- * the record, which `기록 열기` opens. A part with nothing to say is not drawn
- * (B7).
+ * the shown request in a bubble under who sent it and when (its summary and
+ * its own first two lines, who asked after), the agent's answer to it once
+ * that turn is over, the letters the agent sent and received and the agents
+ * it started since, with the questions its later turns put to the operator in
+ * their places, and the agent's half now: what it does as a coloured verb
+ * with the label's words. A part with nothing to say is not drawn (B7).
  */
-function TurnCard({ agent, header, onRecord }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null }) {
+export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null; onReadWhole: (offset: number) => void; /** The gallery's opened answer. */ answerOpened?: boolean }) {
   const { t } = useInterfaceTranslation();
+  const read = useShellStore((state) => (state.rest?.turn_answer?.pane_id === agent.pane_id ? state.rest.turn_answer : undefined));
   const view = agent.request;
   const raw = view?.request ?? null;
   const summary = view?.request_summary ?? null;
@@ -224,7 +362,16 @@ function TurnCard({ agent, header, onRecord }: { agent: AgentRow; header: PaneHe
   const earlier = [...(view?.recent_turns ?? [])].reverse();
   const original = raw?.text.trim() || null;
   const tone: Tone = response?.asks ? "asks" : header?.working ? "working" : header?.finished ? "done" : "quiet";
-  const rail = raw !== null || response !== null || earlier.length > 0;
+  const answer = view?.answer ?? null;
+  // With no later turn and nothing asked, the answer is how the agent stands
+  // now: it wears the verb, and no second line repeats it.
+  const answerIsNow = answer !== null && !view?.later_by && response !== null && !response.asks && !header?.working;
+  const lines = cardLines(view?.letters, view?.asked, response?.asks === true);
+  const count = letterCount(view?.letters);
+  const before = lettersBefore(view?.letters);
+  const progress = view?.letters?.progress ?? 0;
+  const later = lines.length > 0 || count > 0;
+  const rail = raw !== null || response !== null || earlier.length > 0 || answer !== null || later;
   return (
     <div className="flex min-w-0 flex-col [word-break:keep-all]" data-turn-card="true">
       <div className="flex flex-col gap-sm px-sm pt-sm">
@@ -246,7 +393,10 @@ function TurnCard({ agent, header, onRecord }: { agent: AgentRow; header: PaneHe
             {raw ? (
               <RailItem dot="request" data-turn-card-request="true">
                 <h3 className="sr-only">{t("paneTurn.request")}</h3>
-                <p className="text-micro text-muted-foreground" data-turn-card-sender="true">{senderName(t, raw.sender)}</p>
+                <p className="flex items-center gap-xs text-micro text-muted-foreground">
+                  <span data-turn-card-sender="true">{senderName(t, raw.sender)}</span>
+                  <Clock at={raw.at_unix_ms} />
+                </p>
                 <div className="mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-bl-xs bg-secondary px-sm py-xs">
                   <p className="whitespace-normal font-semibold text-foreground [overflow-wrap:anywhere]" data-turn-card-summary="true">{requestWords(t, { text: summary, images: raw.images })}</p>
                   {original && original !== summary ? <p className="line-clamp-2 whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]" data-turn-card-original="true">{original}</p> : null}
@@ -254,7 +404,26 @@ function TurnCard({ agent, header, onRecord }: { agent: AgentRow; header: PaneHe
                 {view?.later_by ? <p className="mt-xxs text-micro text-muted-foreground" data-turn-card-later="true">{t("paneTurn.laterBy", { name: senderName(t, view.later_by) })}</p> : null}
               </RailItem>
             ) : null}
-            {response ? (
+            {answer ? (
+              <AnswerItem
+                answer={answer}
+                pill={answerIsNow && response ? <span className={cn("inline-flex items-center rounded-full px-xs font-semibold", TONE[tone])}>{response.verb}</span> : null}
+                read={read}
+                onReadWhole={onReadWhole}
+                opened={answerOpened}
+              />
+            ) : null}
+            {later ? (
+              <RailItem dot="letters" data-turn-card-letters={count}>
+                <h3 className="text-micro text-muted-foreground" data-turn-card-letters-head="true">{t("paneTurn.letters", { count })}</h3>
+                <ol className="mt-xxs flex min-w-0 flex-col gap-xxs">
+                  {before > 0 ? <li className="text-muted-foreground" data-turn-card-letters-before={before}>{t("paneTurn.lettersEarlier", { count: before })}</li> : null}
+                  {lines.map((line, index) => (line.kind === "letter" ? <LetterRow key={index} letter={line.letter} /> : <AskedRow key={index} asked={line.asked} />))}
+                  {progress > 0 ? <li className="text-muted-foreground" data-turn-card-progress={progress}>{t("paneTurn.progressFolded", { count: progress })}</li> : null}
+                </ol>
+              </RailItem>
+            ) : null}
+            {response && !answerIsNow ? (
               <RailItem dot={tone}>
                 <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-turn-card-response="true">
                   <span className={cn("mr-xs inline-flex items-center rounded-full px-xs font-semibold", TONE[tone])}>{response.verb}</span>

@@ -682,6 +682,55 @@ it("opens the turn card from the request on a press, not on hover, until Esc", a
   } finally { await unmount(); }
 });
 
+// The card's later half (docs/UI_BEHAVIOR.md, the turn card): the answer to
+// the request in bold over its first lines, the letters since with their
+// marks and the folded reports, a question a letter's turn put to the
+// operator in its place, and the whole answer read only when opened.
+it("draws the answer, the letters and the unanswered question since the request", async () => {
+  const value: PaneHeader = { working: true, notice: null, band: null, progress: "Waiting on Windows CI", request: { text: "Can a profile exist without the default folder?", images: 0 } };
+  const agent = turnAgent();
+  agent.request = {
+    ...agent.request!,
+    later_by: { kind: "named", name: "review" },
+    recent_turns: [],
+    answer: { offset: 7, end: "done", line: "Yes, rarely: a profile-only machine", head: "Yes, it can happen.\nNot common though.", whole: true, at_unix_ms: 1_000 },
+    letters: {
+      total: 3, progress: 10,
+      recent: [
+        { direction: "sent", peer: { kind: "named", name: "windows-x" }, mark: "waiting_answer", line: "Reviewer FAIL forwarded", at_unix_ms: 2_000 },
+        { direction: "received", peer: { kind: "named", name: "impl" }, mark: "block", line: "Plugin contract needed", at_unix_ms: 3_000 },
+      ],
+    },
+    asked: [{ line: "Decide the closed tab defect", at_unix_ms: 2_500, current: false }],
+  };
+  const rest = { status: { pane_focus_request: null }, terminal: { headers: { solo: value } }, turn_answer: { pane_id: "solo", offset: 7, phase: "failed", text: null } } as unknown as SnapshotRest;
+  const { container, events, unmount } = await mount(value, [agent], { paneId: "solo", rest });
+  const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
+  try {
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!.click());
+    expect(card().querySelector("[data-turn-card-answer-line]")?.textContent).toBe("Yes, rarely: a profile-only machine");
+    expect(card().querySelector("[data-turn-card-answer-head]")?.textContent).toBe("Yes, it can happen.\nNot common though.");
+    expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("13 letters since");
+    expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("1 earlier");
+    expect(card().querySelector("[data-turn-card-progress]")?.textContent).toBe("10 progress reports folded");
+    // Letters and the question read in time order, each named for assistive technology.
+    expect([...card().querySelectorAll("[data-turn-card-letter], [data-turn-card-asked]")].map((line) => line.getAttribute("aria-label"))).toEqual([
+      "Sent to windows-x · Awaiting reply · Reviewer FAIL forwarded",
+      "To me · Decide the closed tab defect · not answered",
+      "From impl · Blocked · Plugin contract needed",
+    ]);
+    // The agent still works on a later turn, so how it stands now stays its own line.
+    expect(card().querySelector("[data-turn-card-response]")?.textContent).toBe("WorkingWaiting on Windows CI");
+    const whole = () => card().querySelector<HTMLButtonElement>("[data-turn-card-whole]")!;
+    await act(async () => whole().click());
+    expect(events.filter((event) => event.kind === "turn_answer_read").map((event) => event.payload)).toEqual([{ pane_id: "solo", offset: 7 }]);
+    expect(card().querySelector("[data-turn-card-answer-failed]")?.textContent).toBe("Couldn't read the whole answer");
+    await act(async () => whole().click());
+    expect(whole().getAttribute("data-turn-card-whole")).toBe("closed");
+    expect(events.filter((event) => event.kind === "turn_answer_read")).toHaveLength(1);
+  } finally { await unmount(); }
+});
+
 // PRD pane-last-request B6, B9: the keyboard reaches the card's 기록 열기
 // with Tab from the focused request, the card stays open while focus is in
 // it, Shift+Tab goes back, Tab past its end closes it on the request, and
