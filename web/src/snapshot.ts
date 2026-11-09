@@ -182,6 +182,8 @@ export type AgentRow = {
   wait?: AgentWait;
   /** The background tasks a finished turn left running, which its line ends with (status-marks D-19); absent when none. */
   background_left?: number;
+  /** The descendants still working under a root whose finished turn the operator has not read, which its line ends with; absent when none. */
+  children_left?: number;
   /** How deep under its lineage root; a root is 0. */
   lineage_depth?: number;
   /** Whether the operator has this row's descendants folded away; folded is the default. */
@@ -1351,6 +1353,15 @@ export type DetailItem =
   | { kind: "plan"; session: WorkSession }
   /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
+
+/**
+ * Which agent's 보기 slot an item opens in, where it was pressed (operator
+ * decision 2026-11-09): `here` the slot in front, over what it shows, for
+ * what a card opens inside the slot; `{ pane }` the slot of the agent whose
+ * row, head or chip was pressed, that pane taking the keyboard; `owner` the
+ * slot of the agent that owns the item, pressed where no agent is.
+ */
+export type DetailPlace = "here" | "owner" | { pane: string };
 
 /** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
 export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {

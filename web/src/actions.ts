@@ -500,16 +500,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
-   * Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15;
-   * lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay.
-   * With `inOwnerTab` the core first brings forward the agent that owns the
-   * item, a record's or plan's session or a mission's Conductor, so the card
-   * belongs to that agent's tab (operator decision 2026-11-09).
+   * Puts `item` in a 보기 slot (PRD sidebar-task-lens B14, B15;
+   * lane-two-columns B9) where it was pressed (operator decision
+   * 2026-11-09): `here` the slot in front, the Workspace, its Agent tab and
+   * the keyboard staying; `{ pane }` or `owner` the slot of that agent, whose
+   * pane the core brings forward in the same event.
    */
-  const openDetail = (item: import("./snapshot").DetailItem, inOwnerTab = false) => {
+  /** The `at` an open event carries; `here` is the core's default and goes unsaid. */
+  const placeOf = (at: import("./snapshot").DetailPlace) => (at === "here" ? {} : { at });
+
+  const openDetail = (item: import("./snapshot").DetailItem, at: import("./snapshot").DetailPlace = "here") => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
     ui().setStackFront("view");
-    dispatch({ schema_version: 2, kind: "detail_open", payload: { item, ...(inOwnerTab ? { in_owner_tab: true } : {}) } });
+    dispatch({ schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
   };
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
@@ -1882,24 +1885,30 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "branch", workspace_id: workspaceId, row, ...(path ? { path } : {}) } } });
     },
 
-    /** A session link retains repository identity even when its maker moved projects. */
-    openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}) {
+    /**
+     * A session link retains repository identity even when its maker moved
+     * projects. `at` says where it was pressed: an agent's row passes its
+     * pane, a card in the 보기 slot `here`, and a place with no agent leaves
+     * it to the agent that made the pull request.
+     */
+    openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}, at: import("./snapshot").DetailPlace = "owner") {
       const projects = catalogWorkspaces(rest());
       const project = projects.find((row) => row.id === pull.workspace_id && row.pull_requests?.some((pr) => pr.number === pull.number && sameGithubPullRequest(pr.url, pull.url)))
         ?? projects.find((row) => row.pull_requests?.some((pr) => pr.number === pull.number && sameGithubPullRequest(pr.url, pull.url)));
-      if (project) this.openPrCard(project.id, pull.number);
+      if (project) this.openPrCard(project.id, pull.number, undefined, at);
       else this.openLink(pull.url, false);
     },
 
     /**
-     * A pull request's decision card (PRD sidebar-task-lens D-43, D-50,
-     * B14, B17): one event, and the core puts the card in the lane's 보기
-     * slot; the Workspace in front, its Agent tab and the keyboard stay. At
-     * Home the PR's Workspace opens too, with the card in its lane. A project
-     * this core does not read opens the page on GitHub instead. A modal
-     * Overview closes first so the card shows.
+     * A pull request's decision card (PRD sidebar-task-lens D-50, B14,
+     * B17): one event, and the core puts the card in the 보기 slot of the
+     * agent `at` names (operator decision 2026-11-09): by default the one
+     * that made it, which comes forward with its pane. At Home the PR's
+     * Workspace opens too, with the card in its lane. A project this core
+     * does not read opens the page on GitHub instead. A modal Overview
+     * closes first so the card shows.
      */
-    openPrCard(projectId: string, number: number, checkoutId?: string) {
+    openPrCard(projectId: string, number: number, checkoutId?: string, at: import("./snapshot").DetailPlace = "owner") {
       const project = catalogWorkspaces(rest()).find((row) => row.id === projectId);
       if (!project) return diagnostic(`pr_open: no project ${projectId}`);
       const pull = project.pull_requests?.find((row) => row.number === number);
@@ -1910,7 +1919,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       const openWorkspace = !workspaceInFront();
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}) } });
+      dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}), ...placeOf(at) } });
     },
 
     /**
@@ -1927,17 +1936,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A mission's map as a card in the lane's 보기 slot, under the same rules
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
-     * mission-screen D-09, B12): a pane's mission chip, a Conductor row's
-     * mark, a 내 차례 or Needs You row and the Overview open it here, in the
-     * Conductor's Agent tab, which the core brings forward with its pane
-     * (operator decision 2026-11-09), or in the tab in front while no
-     * Conductor of this machine holds the mission. Away from a
+     * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
+     * You row and the Overview open it in the Conductor's slot, which the
+     * core brings forward with its pane, or in the slot in front while no
+     * Conductor of this machine holds the mission; an agent row's mark
+     * passes its pane, the row pressed (operator decision 2026-11-09). Away
+     * from a
      * Workspace (Home, the Overview, the mission screen with no checkout in
      * front) the mission's checkout comes to the front first, as a card's
      * project does; a mission whose checkout no list holds opens on the
      * mission screen instead, the one other place a map draws.
      */
-    openMission(missionId: string) {
+    openMission(missionId: string, at: import("./snapshot").DetailPlace = "owner") {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
       const state = ui();
@@ -1955,7 +1965,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         state.setScreen({ kind: "workspace" });
       }
       ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId }, in_owner_tab: true } });
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId }, ...placeOf(at) } });
     },
 
     /**
@@ -3220,26 +3230,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
-     * lane's 보기 slot of the session's own tab, which the core brings
-     * forward with the session's pane (operator decision 2026-11-09), where
-     * it starts its read, or in the Overview's panel when no Workspace is in
-     * front. A session with no pane on this machine opens in the tab in front.
+     * 보기 slot of the agent `at` names (operator decision 2026-11-09), by
+     * default the session's own, which the core brings forward with its
+     * pane, where it starts its read, or in the Overview's panel when no
+     * Workspace is in front. A session with no pane on this machine opens in
+     * the slot in front.
      */
-    openSessionRecord(session: import("./snapshot").WorkSession) {
-      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, true);
+    openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
+      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at);
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
     /**
      * A session's plan, large in the lane's 보기 slot (PRD hide-plan B11), in
-     * the session's own tab as its record opens (operator decision
-     * 2026-11-09); a mission node's `크게 ›` passes `inOwnerTab: false`, so
-     * the plan stays in the slot the map was pressed in, as a worker's record
-     * does.
+     * the session's own slot as its record opens (operator decision
+     * 2026-11-09); a mission node's `크게 ›` passes `here`, so the plan stays
+     * in the slot the map was pressed in, as a worker's record does.
      */
-    openPlan(session: import("./snapshot").WorkSession, inOwnerTab = true) {
+    openPlan(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
       leaveMissionsForSlot();
       if (ui().screen?.kind === "missions") return diagnostic("plan_open: no Workspace in front to draw the slot");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session }, ...(inOwnerTab ? { in_owner_tab: true } : {}) } });
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session }, ...placeOf(at) } });
     },
     /**
      * ⇧⌘U: pins the focused pane's plan chip open, or a Conductor pane's
@@ -3267,14 +3277,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
     /**
-     * A pane head's title (B15): the slot shows that session's record, or,
-     * when the lane already draws it, the lane goes back to its tool. The
-     * keyboard stays in the pane's terminal.
+     * A pane head's title (B15): the pane's slot shows that session's
+     * record, or, when the lane already draws it, the lane goes back to its
+     * tool. The keyboard goes to the pane pressed.
      */
-    togglePaneRecord(session: import("./snapshot").WorkSession) {
+    togglePaneRecord(session: import("./snapshot").WorkSession, paneId: string) {
       const top = rest()?.ui_state?.detail?.items.at(-1);
       if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("detail")) return this.toggleDetail();
-      this.openSessionRecord(session);
+      this.openSessionRecord(session, { pane: paneId });
     },
     searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
       dispatch({ schema_version: 2, kind: "session_work_search", payload: { query, ...(options ? { options } : {}) } });

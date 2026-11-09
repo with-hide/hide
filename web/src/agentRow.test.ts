@@ -85,6 +85,8 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     expect(markWords(t, { mark: "unknown", status_code: "unknown" })).toBe("상태 모름");
     // A finished turn names the tasks it left (B27); a sleeping row says only its own words (B31).
     expect(markWords(t, { mark: "done", status_code: "done", background_left: 2 })).toBe("읽을 것 · 끝남 · 백그라운드 2개 남음");
+    // A finished root names the children still working under it.
+    expect(markWords(t, { mark: "done", status_code: "done", children_left: 2 })).toBe("읽을 것 · 끝남 · 자식 2개 작업 중");
     expect(markWords(t, { mark: "asleep", status_code: "sleeping" })).toBe("재움 · 열면 깨어남");
     // In progress names nothing more while the agent works, and its wait while it waits (D-25, B36).
     expect(markWords(t, { mark: "going", status_code: "working" })).toBe("진행 중");
@@ -256,6 +258,14 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const left = row("d", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "배포 시작함", background_left: 2 });
     expect(lineParts(t, left, sidebarLine(left)!)).toEqual({ lead: "끝남", text: "배포 시작함", tail: "백그라운드 2" });
     expect(lineText(t, left, sidebarLine(left)!)).toBe("끝남 · 배포 시작함 · 백그라운드 2");
+  });
+
+  it("ends a finished root's line with the children still working, kept apart from the sentence a narrow row cuts", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const root = row("r", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "질문에 답함", children_left: 2 });
+    expect(lineParts(t, root, sidebarLine(root)!)).toEqual({ lead: "끝남", text: "질문에 답함", tail: "자식 2개 작업 중" });
+    expect(lineText(t, root, sidebarLine(root)!)).toBe("끝남 · 질문에 답함 · 자식 2개 작업 중");
+    expect(lineText(t, { ...root, children_left: 1 }, sidebarLine(root)!)).toBe("끝남 · 질문에 답함 · 자식 1개 작업 중");
   });
 
   it("draws a sleeping row with its moon and no line, and a waking or failed one with its words, none dimmed (D-21, B31)", async () => {

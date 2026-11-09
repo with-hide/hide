@@ -114,10 +114,11 @@ fn card_checkout<'a>(
 
 impl Runtime {
     /// `pr_open`: the pull request's card in the lane's 보기 slot, read
-    /// again, in the Agent tab of the agent that made it, which comes
-    /// forward with the keyboard (operator decision 2026-11-09, replacing
-    /// PRD sidebar-task-lens D-43); with no such agent on this machine the
-    /// Workspace, its Agent tab and the keyboard stay. Asked from Home, the
+    /// again, in the slot of the pane where it was pressed (`at`; operator
+    /// decision 2026-11-09, replacing PRD sidebar-task-lens D-43): an agent
+    /// row's pane, which takes the keyboard, the slot in front for a card
+    /// pressed inside a record or a mission node's panel, or the pane of the
+    /// agent that made it for a place with no agent. Asked from Home, the
     /// pull request's Workspace opens too and its live agent comes forward
     /// (B17).
     /// One event, so a refusal partway cannot leave the screen half moved.
@@ -158,7 +159,8 @@ impl Runtime {
         };
         let number = payload.pr_number;
         let workspace_id = project.id.clone();
-        if payload.open_workspace {
+        let pressed_at_pane = matches!(payload.at, super::detail::DetailPlace::Pane(_));
+        if payload.open_workspace && !pressed_at_pane {
             let lead = pull_request_lead(&project, number);
             let Some(target) = card_checkout(
                 &project,
@@ -190,10 +192,10 @@ impl Runtime {
             workspace_id: payload.workspace_id,
             number,
         };
-        if payload.open_workspace {
+        if payload.open_workspace && !pressed_at_pane {
             self.open_detail(item)
         } else {
-            self.open_detail_in_owner_tab(item)
+            self.open_detail_at(item, payload.at)
         }
     }
 

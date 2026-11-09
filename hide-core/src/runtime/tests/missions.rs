@@ -2960,8 +2960,8 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's card on top of the front Agent
-/// tab's 보기 slot sends its events while the slot is drawn; the mission
+/// Operator decision 2026-11-09: a mission's card on top of the front pane's
+/// 보기 slot sends its events while the slot is drawn; the mission
 /// screen's detail, when the page names one, wins; the card goes with its
 /// mission.
 #[test]
@@ -3023,11 +3023,11 @@ fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
     assert_eq!(runtime.snapshot.mission_events.mission, None);
 }
 
-/// Operator decision 2026-11-09: a mission pressed outside the slot opens
-/// in its Conductor's tab, the Conductor's pane coming forward with it, and
-/// leaves the focus where it was while no Conductor holds it.
+/// Operator decision 2026-11-09: a mission's row opens its map in the slot
+/// of its Conductor's pane, which comes forward with it, and leaves the focus
+/// where it was while no Conductor holds it.
 #[test]
-fn a_mission_opens_in_its_conductors_tab() {
+fn a_mission_opens_in_its_conductors_slot() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
@@ -3035,18 +3035,16 @@ fn a_mission_opens_in_its_conductors_tab() {
     let open = |runtime: &mut Runtime| {
         assert!(runtime.dispatch_json(&explorer_event(
             "detail_open",
-            json!({"item": {"kind": "mission", "mission": "mission-1"}, "in_owner_tab": true}),
+            json!({"item": {"kind": "mission", "mission": "mission-1"}, "at": "owner"}),
         )));
+    };
+    let map = DetailItem::Mission {
+        mission: "mission-1".into(),
     };
     assert!(runtime.dispatch_json(&operator_focus_event("recipient")));
     open(&mut runtime);
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail.items.last(),
-        Some(&DetailItem::Mission {
-            mission: "mission-1".into()
-        })
-    );
+    assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&map));
 
     // Its Conductor's pane is gone: the pane in front stays.
     runtime.missions.book.missions[0].conductor.actor.pane_id = "gone".into();
@@ -6292,6 +6290,90 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         shown(&mut runtime),
         (Some(false), vec!["mission-1".to_owned()])
     );
+}
+
+/// The operator's report of 2026-11-09: a Conductor's row carrying a raise
+/// they had read lit up again, and was announced again, each time a worker's
+/// letter woke the Conductor and it rested. The raise they read stays read
+/// through the Conductor's own work and rest; another raise is news, one
+/// notice (docs/status-model.md, A question the core lays stays read).
+#[test]
+fn a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests() {
+    use crate::agent_state::{phone, push};
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let mut transitions = push::Transitions::default();
+    // What the next published snapshot shows of the Conductor's row, and the
+    // notices it sends.
+    let mut shown = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let row = runtime.snapshot.navigator.agents[0].clone();
+        let rest = json!({"navigator": {"agents": [serde_json::to_value(&row).unwrap()]}});
+        let (notices, _) =
+            transitions.observe(&phone::project(&rest, crate::labels::store::LOCAL_TARGET));
+        (row, notices)
+    };
+    // The engine sends the Conductor's row at `seq`, working or finished.
+    let engine = |runtime: &mut Runtime, status: &str, seq: u64| {
+        let mut row = conductor_row();
+        row.activity = if status == "working" {
+            "working"
+        } else {
+            "stopped"
+        }
+        .into();
+        row.completed = status == "done";
+        row.state_change_seq = Some(seq);
+        let mut rows = vec![row];
+        runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
+        runtime.snapshot.navigator.agents = rows;
+        runtime.refresh_pane_read_state();
+    };
+    let raise = |runtime: &mut Runtime, node: &str, now: u64| {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let reason = AttentionReason::WorkerEnded;
+        assert!(
+            !crate::runtime::mission_health::raise(mission, node, reason, None, now).is_empty()
+        );
+        runtime.save_missions();
+        runtime.raise_to_operator(now + 10 * 60 * 1000);
+    };
+    shown(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    raise(&mut runtime, "fix", now);
+    let (asking, notices) = shown(&mut runtime);
+    assert_eq!((asking.group.as_str(), asking.unread), ("needs_you", true));
+    assert_eq!(notices.len(), 1);
+
+    runtime.set_operator_focus(Some("sender".into()));
+    runtime.set_operator_focus(None);
+    let (read, notices) = shown(&mut runtime);
+    assert!(!read.unread);
+    assert!(notices.is_empty());
+
+    // A worker's letter wakes the Conductor; it works, then rests.
+    engine(&mut runtime, "working", 2);
+    let (working, notices) = shown(&mut runtime);
+    assert_eq!(working.ask_subject, None, "a working row carries no raise");
+    assert!(notices.is_empty());
+    engine(&mut runtime, "done", 3);
+    let (rested, notices) = shown(&mut runtime);
+    assert_eq!(rested.ask_subject, read.ask_subject);
+    assert_eq!((rested.demand.as_str(), rested.unread), ("question", false));
+    assert!(notices.is_empty(), "the raise read is not announced again");
+    assert!(
+        rested.revisit.is_some_and(|revisit| revisit.read_ask),
+        "it is still the operator's to answer"
+    );
+
+    // Another raise beside it is news, once.
+    raise(&mut runtime, "cause", now + 1);
+    let (more, notices) = shown(&mut runtime);
+    assert_eq!((more.group.as_str(), more.unread), ("needs_you", true));
+    assert_eq!(notices.len(), 1);
 }
 
 /// The fix node of `running_criteria_mission`, its pull request 7 merged

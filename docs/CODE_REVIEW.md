@@ -26,7 +26,7 @@ So every review covers the perspectives below, and names the perspective of each
   One decision has one owner; every caller asks that owner.
 - A new function that is most of an existing one; extend the existing one for the callers that exist now instead.
 - Two implementations of one boundary (two engines, two hosts, two systems) that each carry their own copy of a shared rule instead of calling one place.
-- A second string match, threshold or delay added for a decision that already has one: model the state instead of adding a case.
+- A fix that adds a special case for the instance in front of it (a second string match, threshold, delay or hardcoded value for a decision that already has one), above all when the same kind of bug has come back before: fix the common cause and model the state instead of adding a case.
 
 ### 3. Simplicity
 
@@ -52,6 +52,7 @@ So every review covers the perspectives below, and names the perspective of each
 
 - A test asserts what a caller observes, with the expected answer taken from outside the implementation.
 - A test that costs more to keep than it returns, or that would still pass with the fix reverted, is a finding.
+- A bug fix comes with a test that fails without it and covers the kind of bug, not only the reported case, so the same bug cannot come back unseen; a fix without one is a finding.
 - A change that stores a device or machine id adds a step to the release-state scenario (`scripts/release_state/scenario.py`) and regenerates the folders it applies to ([TESTING.md, Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)); without one, the first start after an upgrade can hold the device unconnected and no test sees it, which is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at and how to keep a test deterministic.
 

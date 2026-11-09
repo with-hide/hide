@@ -27,6 +27,8 @@ export type PhoneAgent = {
   descendants_working: number;
   /** The background tasks a finished turn left running (status-marks D-19); absent when none. */
   background_left?: number;
+  /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
+  children_left?: number;
   agent_kind: string;
   title: string;
   place: string | null;

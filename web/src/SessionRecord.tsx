@@ -637,7 +637,8 @@ function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
   const all = record.pr_groups.flatMap((group) => group.pulls);
   const settled = all.filter(settledOutput);
   const allMerged = all.length > 0 && all.every((pull) => pull.state === "merged");
-  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number });
+  // Pressed inside the card, it stacks in the same slot for ← to come back from (operator decision 2026-11-09).
+  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, "here");
   const rows = (items: readonly SessionPull[]) => items.map((pull) => {
     const word = t(PR_LOOK[pull.state].word);
     const stale = pull.stale ? pull.last_read_at_unix_ms ? new Date(pull.last_read_at_unix_ms).toLocaleString() : t("common.unavailable") : null;
