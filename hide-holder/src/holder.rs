@@ -131,6 +131,10 @@ const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
 /// pane's program never gets it.
 const HOLD_RUNNING: &str = "HIDE_HOLDER_TEST_HOLD_RUNNING";
 
+/// How long a holder started with [`HOLD_RUNNING`] holds at most: a test
+/// that fails before it releases the holder leaves no holder waiting.
+const HOLD_RUNNING_LIMIT: Duration = Duration::from_secs(30);
+
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -703,7 +707,8 @@ impl Holder {
         // start writes its record once less (each write is flushed, and the
         // start of every new pane waited for them).
         if let Some(release) = &hold_running {
-            while !release.exists() {
+            let given_up = Instant::now() + HOLD_RUNNING_LIMIT;
+            while !release.exists() && Instant::now() < given_up {
                 thread::park_timeout(Duration::from_millis(10));
             }
         }

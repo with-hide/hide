@@ -579,10 +579,17 @@ impl PaneHolders for LocalPanes {
     ) -> Result<HolderProof, HolderError> {
         match self.proof(pane) {
             Err(HolderError::Refused { code, .. }) if code == PANE_STARTING => {
+                // Taken first, so logging adds nothing to the wait.
+                let deadline = std::time::Instant::now() + within;
+                crate::diagnostic!(serde_json::json!({
+                    "component": "pane_holder",
+                    "kind": "pane.proof.start_wait",
+                    "pane_id": pane,
+                    "within_ms": u64::try_from(within.as_millis()).unwrap_or(u64::MAX),
+                }));
                 // The node's start settles only after the holder wrote the
                 // program and `running`; the record answers either way.
-                self.holders
-                    .wait_settled(pane, std::time::Instant::now() + within);
+                self.holders.wait_settled(pane, deadline);
                 self.proof(pane)
             }
             answer => answer,
