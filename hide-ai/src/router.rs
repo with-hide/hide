@@ -3686,7 +3686,7 @@ mod tests {
         let wsl = Scripted::new(ProviderId::CLAUDE, vec![ok("wsl")]);
         let on = |machine: Option<&str>| SharedAccount {
             machine: machine.map(str::to_owned),
-            key: AccountKey::Folder("/home/user/accounts/work/".to_owned()),
+            key: AccountKey::Folder("/accounts/work/".to_owned()),
         };
         let config = RouterConfig {
             priority: vec![
