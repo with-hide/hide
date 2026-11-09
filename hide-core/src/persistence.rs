@@ -931,9 +931,8 @@ pub fn save(
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
         detail_pane: state.detail_pane.clone(),
-        detail_panes: (!state.detail_panes.is_empty()).then(|| {
-            serde_json::to_value(&state.detail_panes).expect("the 보기 slots serialize")
-        }),
+        detail_panes: (!state.detail_panes.is_empty())
+            .then(|| serde_json::to_value(&state.detail_panes).expect("the 보기 slots serialize")),
         overview_graph: Some(
             serde_json::to_value(&state.overview_graph)
                 .expect("the Overview map's choices serialize"),

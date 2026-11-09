@@ -4634,7 +4634,8 @@ impl PaneDetailSlots {
 
     /// Keeps only the slots `keep` answers for, emptied ones dropped.
     pub fn retain(&mut self, mut keep: impl FnMut(&PaneDetailSlot) -> bool) {
-        self.0.retain(|held| !held.slot.items.is_empty() && keep(held));
+        self.0
+            .retain(|held| !held.slot.items.is_empty() && keep(held));
     }
 
     pub fn is_empty(&self) -> bool {

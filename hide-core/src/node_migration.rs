@@ -311,7 +311,12 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     // The pane the front 보기 slot belongs to, and the slots of the panes
     // not in front.
     (CORE_STATE, "/detail_pane", Mechanism::Owned, Moves::Pane),
-    (CORE_STATE, "/detail_panes/*/pane", Mechanism::Owned, Moves::Pane),
+    (
+        CORE_STATE,
+        "/detail_panes/*/pane",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
     (
         CORE_STATE,
         "/detail_panes/*/slot/items/*/workspace_id",

@@ -298,7 +298,8 @@ impl Runtime {
     fn open_detail_in_pane(&mut self, pane: String, item: DetailItem) -> bool {
         if self.local_tab_pane(&pane) {
             self.focus_pane(pane, PaneFocusOrigin::Operator, None);
-            if self.snapshot.status.last_error.is_none() && !self.device_in_front(self.node.as_str())
+            if self.snapshot.status.last_error.is_none()
+                && !self.device_in_front(self.node.as_str())
             {
                 self.bring_device_forward(self.node.as_str().to_owned());
             }

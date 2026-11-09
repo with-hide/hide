@@ -393,7 +393,11 @@ fn the_detail_slot_stays_with_the_pane_it_was_opened_for() {
     let checkout_path = "/private/tmp/hide-slot-per-agent";
     let (mut runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
-    let agents = [("w-order:t1:p", 1), ("w-order:t2:p", 2), ("w-order:t3:p", 3)];
+    let agents = [
+        ("w-order:t1:p", 1),
+        ("w-order:t2:p", 2),
+        ("w-order:t3:p", 3),
+    ];
     runtime.ingest_session(Ok(with_agents(
         tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1"),
         checkout_path,
@@ -485,8 +489,10 @@ fn two_agents_in_one_tab(checkout_path: &str) -> SessionSnapshotPayload {
     let tabs = ["w-order:t1", "w-order:t2"];
     let mut payload = tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1");
     payload.panes.push(
-        serde_json::from_value(serde_json::json!({"pane_id": "w-order:t1:q", "cwd": checkout_path}))
-            .unwrap(),
+        serde_json::from_value(
+            serde_json::json!({"pane_id": "w-order:t1:q", "cwd": checkout_path}),
+        )
+        .unwrap(),
     );
     let layout = payload
         .layouts
@@ -501,7 +507,11 @@ fn two_agents_in_one_tab(checkout_path: &str) -> SessionSnapshotPayload {
     with_agents(
         payload,
         checkout_path,
-        &[("w-order:t1:p", 1), ("w-order:t1:q", 2), ("w-order:t2:p", 3)],
+        &[
+            ("w-order:t1:p", 1),
+            ("w-order:t1:q", 2),
+            ("w-order:t2:p", 3),
+        ],
     )
 }
 
@@ -523,7 +533,10 @@ fn a_card_opened_for_one_pane_is_not_shown_on_another_pane_of_the_same_tab() {
         "detail_open",
         serde_json::json!({"item": map})
     ));
-    assert_eq!(runtime.snapshot.ui_state.detail.items, [map.clone()]);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items,
+        std::slice::from_ref(&map)
+    );
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:q")));
     assert_eq!(
@@ -570,7 +583,10 @@ fn a_pane_without_an_agent_keeps_its_own_slot() {
         workspace_id: "workspace:order".into(),
     };
     open_at(&mut runtime, &worktrees, serde_json::json!("here"));
-    assert_eq!(runtime.snapshot.ui_state.detail.items, [worktrees.clone()]);
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items,
+        std::slice::from_ref(&worktrees)
+    );
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [cost]);
@@ -690,10 +706,7 @@ fn a_record_pressed_where_no_agent_is_opens_in_its_sessions_pane() {
         ..session.clone()
     };
     open_at(&mut runtime, &record(&gone), serde_json::json!("owner"));
-    assert_eq!(
-        detail_pane(&runtime),
-        Some("w-order:t1:p")
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t1:p"));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [record(&gone)]);
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
@@ -702,10 +715,7 @@ fn a_record_pressed_where_no_agent_is_opens_in_its_sessions_pane() {
 
     // Opened inside the slot, the record stays where it was pressed.
     open_at(&mut runtime, &record(&session), serde_json::json!("here"));
-    assert_eq!(
-        detail_pane(&runtime),
-        Some("w-order:t1:p")
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t1:p"));
     assert_eq!(
         runtime.snapshot.ui_state.detail.items,
         [record(&gone), record(&session)]
@@ -781,10 +791,7 @@ fn a_pull_request_pressed_where_no_agent_is_opens_at_its_makers_pane() {
     with_pull_requests(&mut runtime, &[(42, "w-order:t2:p"), (43, "gone")]);
 
     open_pull_request(&mut runtime, 42, serde_json::json!("owner"));
-    assert_eq!(
-        detail_pane(&runtime),
-        Some("w-order:t2:p")
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t2:p"));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42)]);
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
@@ -793,10 +800,7 @@ fn a_pull_request_pressed_where_no_agent_is_opens_at_its_makers_pane() {
 
     // Its agent has no pane here: the slot in front takes the card.
     open_pull_request(&mut runtime, 43, serde_json::json!("owner"));
-    assert_eq!(
-        detail_pane(&runtime),
-        Some("w-order:t2:p")
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t2:p"));
     assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42), card(43)]);
 }
 
@@ -813,7 +817,11 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
     runtime.ingest_session(Ok(with_agents(
         tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t3"),
         checkout_path,
-        &[("w-order:t1:p", 1), ("w-order:t2:p", 2), ("w-order:t3:p", 3)],
+        &[
+            ("w-order:t1:p", 1),
+            ("w-order:t2:p", 2),
+            ("w-order:t3:p", 3),
+        ],
     )));
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t3:p")));
     // The parent works in t1, its child in t2; the child made both.
@@ -829,7 +837,10 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
             "#{number} opens where it was pressed"
         );
         assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(parent));
-        assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&card(number)));
+        assert_eq!(
+            runtime.snapshot.ui_state.detail.items.last(),
+            Some(&card(number))
+        );
     }
     assert_eq!(runtime.snapshot.ui_state.detail.items, [card(42), card(43)]);
     assert!(runtime.dispatch_json(&operator_focus_event(child)));
@@ -850,9 +861,16 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
     assert_eq!(runtime.snapshot.ui_state.detail.items, [record]);
 
     // A row whose pane closed (its agent sleeps): the slot in front takes it.
-    open_pull_request(&mut runtime, 42, serde_json::json!({"pane": "w-order:t9:p"}));
+    open_pull_request(
+        &mut runtime,
+        42,
+        serde_json::json!({"pane": "w-order:t9:p"}),
+    );
     assert_eq!(detail_pane(&runtime), Some(child));
-    assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&card(42)));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail.items.last(),
+        Some(&card(42))
+    );
 }
 
 /// Operator report 2026-11-09: a pull request pressed inside a session's
@@ -876,13 +894,14 @@ fn a_pull_request_pressed_inside_a_record_stacks_in_the_same_slot_and_back_retur
     let record = DetailItem::Record {
         session: session(&runtime, 2),
     };
-    open_at(&mut runtime, &record, serde_json::json!({"pane": "w-order:t1:p"}));
+    open_at(
+        &mut runtime,
+        &record,
+        serde_json::json!({"pane": "w-order:t1:p"}),
+    );
 
     open_pull_request(&mut runtime, 42, serde_json::json!("here"));
-    assert_eq!(
-        detail_pane(&runtime),
-        Some("w-order:t1:p")
-    );
+    assert_eq!(detail_pane(&runtime), Some("w-order:t1:p"));
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
         Some("w-order:t1:p"),
@@ -984,7 +1003,11 @@ fn a_device_agents_row_opens_its_card_when_the_device_brings_the_pane_forward() 
             .collect::<Vec<_>>()
     };
 
-    open_at(&mut runtime, &cost, serde_json::json!({"pane": device_pane}));
+    open_at(
+        &mut runtime,
+        &cost,
+        serde_json::json!({"pane": device_pane}),
+    );
     assert_eq!(
         runtime.snapshot.ui_state.detail,
         crate::model::DetailSlot::default(),
@@ -1003,7 +1026,11 @@ fn a_device_agents_row_opens_its_card_when_the_device_brings_the_pane_forward() 
     assert!(kept(&runtime).is_empty());
 
     runtime.snapshot.status.remote[0].session = Some(session.clone());
-    open_at(&mut runtime, &cost, serde_json::json!({"pane": device_pane}));
+    open_at(
+        &mut runtime,
+        &cost,
+        serde_json::json!({"pane": device_pane}),
+    );
     // The device brings the pane forward.
     session.focused_workspace_id = Some(workspace_id.to_owned());
     session.focused_checkout_id = Some(checkout_id.to_owned());
