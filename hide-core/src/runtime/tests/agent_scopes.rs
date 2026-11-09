@@ -355,6 +355,9 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         recent_turns: Vec::new(),
         later_by: None,
         pull_requests: vec![pull],
+        answer: None,
+        letters: None,
+        asked: Vec::new(),
     });
     assert!(runtime.refresh_agent_scopes());
     let tasks = &runtime.snapshot.navigator.workspaces[0].agent_scope.tasks;

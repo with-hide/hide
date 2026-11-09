@@ -118,6 +118,7 @@ mod terminal_input;
 mod transition_letters;
 mod tree_close;
 mod tree_reopen;
+pub(crate) mod turn_answer;
 pub(crate) mod typed_input;
 mod unreadable_letters;
 mod unseen_views;
@@ -1159,6 +1160,11 @@ pub(crate) struct DeviceGithubRead {
 pub struct Runtime {
     snapshot: Snapshot,
     delivery_ledger: Result<Arc<crate::delivery::ledger::Ledger>, String>,
+    /// Each pane's letters and started agents in time order, built from the
+    /// published ledger off the lock (`delivery::correspondence`), which the
+    /// turn card's letters are read from; empty while the ledger is
+    /// unavailable.
+    letter_index: Arc<crate::delivery::correspondence::Correspondence>,
     /// What the ledger says Hide itself started, derived again only when a
     /// ledger change moves it (PRD hide-ai-origin-mark D-01).
     hide_started: crate::coordination::started::HideStarted,
@@ -1635,6 +1641,8 @@ pub struct Runtime {
     archive_detail_load_generation: u64,
     /// What the link worker was last handed, and its panel reads.
     links_work: links::LinksWork,
+    /// The turn card's whole-answer read (`turn_answer.rs`).
+    turn_answer_work: turn_answer::TurnAnswerWork,
     /// The one session thread a screen has open (`runtime/session_thread.rs`).
     session_thread: session_thread::ThreadWork,
     backlog_work: backlog::BacklogWork,
@@ -2361,8 +2369,15 @@ impl Runtime {
             store
         });
         let front_device = snapshot.navigator.focused_device_id.clone();
+        let letter_index = Arc::new(
+            delivery_ledger
+                .as_ref()
+                .map(|ledger| crate::delivery::correspondence::Correspondence::of(ledger))
+                .unwrap_or_default(),
+        );
         let mut runtime = Self {
             snapshot,
+            letter_index,
             hide_started: delivery_ledger
                 .as_ref()
                 .map(|ledger| crate::coordination::started::hide_started(ledger))
@@ -2544,6 +2559,7 @@ impl Runtime {
             memory_sessions_load_generation: 0,
             archive_detail_load_generation: 0,
             links_work: links::LinksWork::default(),
+            turn_answer_work: Default::default(),
             session_thread: session_thread::ThreadWork::default(),
             backlog_work: backlog::BacklogWork::default(),
             issue_detail_work: issues::IssueDetailWork::default(),

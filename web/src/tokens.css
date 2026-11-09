@@ -315,6 +315,8 @@
   --size-start-branch-field: 176px;
   --size-usage-popover: 320px;
   --size-pr-popover: 360px;
+  --size-turn-card: 520px;
+  --size-turn-card-answer: 320px;
   --size-mission-node: 224px;
   --size-mission-node-gap: 24px;
   --size-mission-layer-gap: 40px;

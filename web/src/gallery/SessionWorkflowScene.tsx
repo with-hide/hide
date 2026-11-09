@@ -9,6 +9,7 @@ import { PaneView } from "../PaneView";
 import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup, SessionPull } from "../snapshot";
 import type { RowMark, StatusTone, RequestVerb } from "../snapshot";
 import { useShellStore } from "../store";
+import { TurnCardCases } from "./TurnCardCases";
 import { listedPull, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import type { SceneParams } from "./SidebarScene";
 
@@ -242,6 +243,8 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, theme, scale, turnRow]);
+  // state=turn-card: the turn card opened on three sessions' facts (docs/UI_BEHAVIOR.md, the turn card).
+  if (kind === "pane-header" && state === "turn-card") return <TurnCardCases seed={fixture.agents[0]!} />;
   // state=widths: one head, its PR, children and finished mission, at each width its chips fold at (docs/UI_BEHAVIOR.md, Agent panes).
   if (kind === "pane-header" && state === "widths") {
     return <TooltipProvider><div className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{HEAD_WIDTHS.map((headWidth) => <div key={headWidth} data-pane-header-case={widthPane(headWidth)} style={{ width: headWidth }} className="max-w-full min-w-0"><div className="pb-xs text-micro text-muted-foreground">{headWidth}px</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id: widthPane(headWidth), identity_label: content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계" }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="claude" markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;

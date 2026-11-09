@@ -152,11 +152,31 @@ pub(crate) struct PaneRecord {
     /// written before it was kept reads it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) recent_turns: Vec<RecentTurn>,
+    /// The newest turns that ended on a question to the operator, whoever
+    /// began them, oldest first, at most [`ASKED_TURNS`]: the turn card
+    /// lists the ones after the request it shows (`나에게 물은 것`), which
+    /// `recent_turns` cannot, since a lead's letter turns are not kept there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) asked: Vec<AskedTurn>,
     /// The offsets of the newest requests an analysis summarized, at most
     /// [`SUMMARIZED_KEPT`], so a ledger context that has not caught up
     /// with the write does not have them summarized again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) summarized: Vec<u64>,
+}
+
+/// The question turns a record keeps for the turn card.
+pub(crate) const ASKED_TURNS: usize = 4;
+
+/// A turn the label judged to end on a question to the operator.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AskedTurn {
+    /// The offset of the message that began the turn.
+    pub(crate) offset: u64,
+    /// The label's line: what the question asks.
+    pub(crate) line: String,
+    /// When the turn ended.
+    pub(crate) at_unix_ms: u64,
 }
 
 /// Summarized request offsets a record keeps.
@@ -177,6 +197,12 @@ pub(crate) struct RecentTurn {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) line: String,
     pub(crate) at_unix_ms: u64,
+    /// The witness of the turn's text as its end was judged
+    /// (`label_transcript::WorkTurn::witness`), which a later read of the
+    /// whole answer must match; none before the end, or on a record written
+    /// before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) witness: Option<String>,
 }
 
 /// Whether `reference` names the session a label was made for: its owner,
@@ -274,6 +300,7 @@ impl PaneRecord {
         self.end = None;
         self.facts = SessionFacts::default();
         self.recent_turns.clear();
+        self.asked.clear();
         self.summarized.clear();
         self.reset_analysis();
     }
@@ -287,6 +314,7 @@ impl PaneRecord {
         self.facts.forget_offsets();
         // Offsets of a rewritten conversation name other messages.
         self.recent_turns.clear();
+        self.asked.clear();
         self.summarized.clear();
     }
 
@@ -330,6 +358,7 @@ impl PaneRecord {
                         end: None,
                         line: String::new(),
                         at_unix_ms,
+                        witness: None,
                     },
                 );
                 index
@@ -348,10 +377,58 @@ impl PaneRecord {
         self.recent_turns != before
     }
 
+    /// Keeps the witness of a kept turn's text as its end was judged.
+    /// Returns whether it changed.
+    pub(crate) fn note_turn_witness(&mut self, offset: u64, witness: Option<&str>) -> bool {
+        let Some(turn) = self
+            .recent_turns
+            .iter_mut()
+            .find(|turn| turn.offset == offset)
+        else {
+            return false;
+        };
+        let witness = witness.map(str::to_owned);
+        if turn.witness == witness {
+            return false;
+        }
+        turn.witness = witness;
+        true
+    }
+
+    /// Keeps how the turn begun at `offset` ended, for the turn card's
+    /// questions: a question is kept with its line and end time, and a later
+    /// judgment that it ended otherwise takes it out. Returns whether the
+    /// list changed.
+    pub(crate) fn note_turn_end(
+        &mut self,
+        offset: u64,
+        end: LabelEnd,
+        line: &str,
+        at_unix_ms: u64,
+    ) -> bool {
+        let before = self.asked.clone();
+        self.asked.retain(|asked| asked.offset != offset);
+        if end == LabelEnd::Question && !line.trim().is_empty() {
+            let index = self.asked.partition_point(|asked| asked.offset < offset);
+            self.asked.insert(
+                index,
+                AskedTurn {
+                    offset,
+                    line: line.to_owned(),
+                    at_unix_ms,
+                },
+            );
+            let over = self.asked.len().saturating_sub(ASKED_TURNS);
+            self.asked.drain(..over);
+        }
+        self.asked != before
+    }
+
     /// A judgment of the turn begun at `offset` failed: how it stood is
     /// unknown again, while its request summary stays.
     /// Returns whether it knew one.
     pub(crate) fn forget_turn_outcome(&mut self, offset: u64) -> bool {
+        self.asked.retain(|asked| asked.offset != offset);
         let Some(turn) = self
             .recent_turns
             .iter_mut()
@@ -441,6 +518,9 @@ struct DeviceMark {
     /// `goal` and `line` (PRD pane-last-request D-09).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     recent_turns: Vec<RecentTurn>,
+    /// The question turns the turn card lists (`PaneRecord::asked`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asked: Vec<AskedTurn>,
     #[serde(default)]
     changed_unix_ms: u64,
 }
@@ -462,6 +542,7 @@ impl DeviceMark {
             goal: record.goal.clone(),
             line: record.line.clone(),
             recent_turns: record.recent_turns.clone(),
+            asked: record.asked.clone(),
             changed_unix_ms: record.changed_unix_ms,
         })
     }
@@ -479,6 +560,7 @@ impl DeviceMark {
             &self.goal,
             &self.line,
             &self.recent_turns,
+            &self.asked,
         )
     }
 
@@ -492,6 +574,7 @@ impl DeviceMark {
             goal: self.goal,
             line: self.line,
             recent_turns: self.recent_turns,
+            asked: self.asked,
             changed_unix_ms: self.changed_unix_ms,
             ..PaneRecord::default()
         }
@@ -1045,6 +1128,45 @@ mod tests {
 
     /// B13: a device pane's request summaries come back with its mark after a
     /// restart, as its goal and line do.
+    #[test]
+    fn question_turns_are_kept_newest_four_and_leave_when_judged_otherwise() {
+        let mut record = PaneRecord::default();
+        for offset in 1..=5 {
+            assert!(record.note_turn_end(
+                offset,
+                LabelEnd::Question,
+                &format!("질문 {offset}"),
+                offset * 10
+            ));
+        }
+        assert_eq!(
+            record
+                .asked
+                .iter()
+                .map(|asked| asked.offset)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
+        assert!(
+            !record.note_turn_end(1, LabelEnd::Done, "끝", 10),
+            "an older turn is not brought back"
+        );
+        assert!(record.note_turn_end(4, LabelEnd::Done, "끝", 40));
+        assert!(
+            record.forget_turn_outcome(5) || record.asked.iter().all(|asked| asked.offset != 5)
+        );
+        assert_eq!(
+            record
+                .asked
+                .iter()
+                .map(|asked| asked.offset)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        record.reset_analysis();
+        assert!(record.asked.is_empty());
+    }
+
     #[test]
     fn a_device_marks_recent_turns_survive_a_restart() {
         let root = tempfile::tempdir().unwrap();

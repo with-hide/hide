@@ -1067,6 +1067,19 @@ impl AgentRecord {
         self.name.as_deref().unwrap_or(&self.id)
     }
 
+    /// The name a person reads first for this agent: the one it registered
+    /// under, unless Hide made it up for its pane (`hide-claude-w1-p2`, a wake
+    /// or a fork name), which only spells a pane id; the caller then names it
+    /// by its title, else its runtime (`docs/delivery.md`, Names on the wire
+    /// and on screen).
+    pub(crate) fn screen_name(&self) -> Option<&str> {
+        self.name.as_deref().filter(|name| {
+            ![self.pane.as_str(), self.actor.pane_id.as_str()]
+                .iter()
+                .any(|pane| crate::fork::hide_made_name(name, &self.actor.kind, pane))
+        })
+    }
+
     /// A record written while a pane id was taken for a name, or under its own
     /// registration id, reads as having none. Reading does it, so no migration
     /// is needed: the next save writes the record in its current shape.
