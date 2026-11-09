@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Runtime;
+use super::mission_criteria::Caller as MissionCaller;
 use super::mission_landing::{
     NodeLanding, landing_order, node_landing, reads_branch, stack_settled, stack_waiting,
 };
@@ -1578,7 +1579,14 @@ impl Runtime {
                             .join(", "),
                     ));
                 }
-                let id = self.node_mission(&actor, mission.as_deref(), &node, &patch)?;
+                let ledger = self.delivery_state().ok();
+                let (id, caller) = self.node_mission(
+                    &actor,
+                    ledger.as_deref(),
+                    mission.as_deref(),
+                    &node,
+                    &patch,
+                )?;
                 let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
                 let index = current
                     .nodes
@@ -1686,7 +1694,13 @@ impl Runtime {
                 // pushed: its project is read again within the read's own
                 // spacing (D-09, B23).
                 self.ask_mission_pulls(&id);
-                Ok((json!({"mission": self.mission_view_of(&id)}), changed))
+                // A worker's patch binds no agent, so the registrations read
+                // for it draw the answer.
+                let view = match &caller {
+                    Some(caller) => self.mission_view_for(&id, caller),
+                    None => self.mission_view_of(&id),
+                };
+                Ok((json!({"mission": view}), changed))
             }
             MissionCommand::Start { mission } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
@@ -1835,7 +1849,8 @@ impl Runtime {
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
             MissionCommand::Show { mission, node } => {
-                let (id, node) = match mission {
+                let ledger = self.delivery_state().ok();
+                let (id, node, caller) = match mission {
                     Some(id) => (
                         self.missions
                             .book
@@ -1843,20 +1858,32 @@ impl Runtime {
                             .map(|mission| mission.id.clone())
                             .ok_or("mission_unknown")?,
                         node,
+                        None,
                     ),
-                    None => self.shown_mission(&actor, node)?,
+                    None => {
+                        let caller = MissionCaller::of(
+                            &actor,
+                            ledger.as_deref(),
+                            &self.missions.book.missions,
+                        );
+                        let (id, node) = self.shown_mission(&caller, node)?;
+                        (id, node, Some(caller))
+                    }
                 };
-                let Some(key) = node else {
-                    return Ok((json!({"mission": self.mission_view_of(&id)}), false));
-                };
-                // One read of the mission's workers and checkers serves the
-                // view and both letter lists.
+                // One pass over the ledger's agents serves the view and both
+                // letter lists: the one that found the caller's mission, else
+                // one for the mission's workers and checkers.
                 let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
-                let ledger = self.delivery_state().ok();
-                let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
+                let agents = match &caller {
+                    Some(caller) => caller.records_of(mission),
+                    None => worker_records(ledger.as_deref(), std::iter::once(mission)),
+                };
                 let sleeping = self.sleeping_registrations(agents.values().copied());
-                let shown = self
-                    .view_mission(mission, &agents, &sleeping, ledger.as_deref())
+                let view = self.view_mission(mission, &agents, &sleeping, ledger.as_deref());
+                let Some(key) = node else {
+                    return Ok((json!({"mission": view}), false));
+                };
+                let shown = view
                     .nodes
                     .into_iter()
                     .find(|node| node.key == key)
@@ -1921,7 +1948,7 @@ impl Runtime {
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))
     }
 
-    /// What `hide mission show` from `actor` names no mission for: the
+    /// What `hide mission show` from `caller` names no mission for: the
     /// mission it means (`mission_meant`, with-hide/hide#2302), and `node`
     /// read in it. A key that is no node of that mission but names a
     /// mission is that whole mission, as Hide's own letters write
@@ -1929,11 +1956,10 @@ impl Runtime {
     /// caller whose mission is ambiguous.
     fn shown_mission(
         &self,
-        actor: &Actor,
+        caller: &MissionCaller<'_>,
         node: Option<String>,
     ) -> Result<(String, Option<String>), String> {
-        let caller = super::mission_criteria::Caller::of(self, actor);
-        let taken = self.mission_meant(&caller);
+        let taken = self.mission_meant(caller);
         if let Some(key) = &node
             && !matches!(&taken, Ok(Some(mission)) if mission.node(key).is_some())
             && let Some(named) = self.missions.book.get(key)
@@ -1947,27 +1973,29 @@ impl Runtime {
     /// The mission `hide mission node <node>` from `actor` changes: one it
     /// conducts, or, for what a worker sets on its own node
     /// (`NodePatch::workers_own`), the open mission whose node `node` it
-    /// works (with-hide/hide#2302). Anything else from an agent of the
-    /// mission, or about another node, stays its Conductor's.
-    fn node_mission(
+    /// works (with-hide/hide#2302), with the caller its answer is drawn
+    /// from. Anything else from an agent of the mission, or about another
+    /// node, stays its Conductor's.
+    fn node_mission<'a>(
         &self,
-        actor: &Actor,
+        actor: &'a Actor,
+        ledger: Option<&'a crate::delivery::ledger::Ledger>,
         named: Option<&str>,
         node: &str,
         patch: &crate::missions::NodePatch,
-    ) -> Result<String, String> {
-        let conducted = self.conducted_mission(actor, named, true);
-        if conducted.is_ok() {
-            return conducted;
-        }
+    ) -> Result<(String, Option<MissionCaller<'a>>), String> {
+        let refused = match self.conducted_mission(actor, named, true) {
+            Ok(id) => return Ok((id, None)),
+            Err(refused) => refused,
+        };
         use super::mission_criteria::Part;
-        let caller = super::mission_criteria::Caller::of(self, actor);
+        let caller = MissionCaller::of(actor, ledger, &self.missions.book.missions);
         let found = match named {
             Some(id) => self.missions.book.get(id),
             None => self.mission_meant(&caller)?,
         };
         let Some(mission) = found else {
-            return conducted;
+            return Err(refused);
         };
         match (
             Self::part_in(mission, &caller, Some(node)),
@@ -1977,12 +2005,12 @@ impl Runtime {
             (_, Some(Part::Worker | Part::Checker)) => {
                 return Err("mission_not_conductor".into());
             }
-            _ => return conducted,
+            _ => return Err(refused),
         }
         match mission.status {
             MissionStatus::Cancelled => Err("mission_cancelled".into()),
             MissionStatus::Done => Err("mission_closed".into()),
-            _ => Ok(mission.id.clone()),
+            _ => Ok((mission.id.clone(), Some(caller))),
         }
     }
 
@@ -2950,6 +2978,20 @@ impl Runtime {
         Some(self.view_mission(mission, &agents, &sleeping, ledger.as_deref()))
     }
 
+    /// The view of mission `id` drawn from the registrations `caller` read
+    /// (`MissionCaller::of`), so a command that read them for its caller answers
+    /// with no second pass over the ledger's agents.
+    pub(super) fn mission_view_for(
+        &self,
+        id: &str,
+        caller: &MissionCaller<'_>,
+    ) -> Option<MissionView> {
+        let mission = self.missions.book.get(id)?;
+        let agents = caller.records_of(mission);
+        let sleeping = self.sleeping_registrations(agents.values().copied());
+        Some(self.view_mission(mission, &agents, &sleeping, caller.ledger))
+    }
+
     /// The letters to an open mission's Conductor that only the operator can
     /// let through (`delivery::held::letters_held`), and when the next one held
     /// for that comes of age.
@@ -3508,13 +3550,12 @@ fn node_checker_letters(
     })
 }
 
-/// The registrations of the workers `missions` name, read in one pass.
-fn worker_records<'a, 'm>(
-    ledger: Option<&'a crate::delivery::ledger::Ledger>,
+/// The registrations `missions` name: their nodes' workers and bound
+/// checkers (B29).
+pub(super) fn named_agents<'m>(
     missions: impl Iterator<Item = &'m Mission>,
-) -> HashMap<&'a str, &'a crate::coordination::AgentRecord> {
-    // The nodes' workers and their bound checkers (B29).
-    let wanted: std::collections::HashSet<&str> = missions
+) -> std::collections::HashSet<&'m str> {
+    missions
         .flat_map(|mission| &mission.nodes)
         .flat_map(|node| {
             node.agent_id.as_deref().into_iter().chain(
@@ -3524,7 +3565,16 @@ fn worker_records<'a, 'm>(
                     .filter_map(|checker| checker.agent_id.as_deref()),
             )
         })
-        .collect();
+        .collect()
+}
+
+/// The registrations of the workers and checkers `missions` name, read in
+/// one pass.
+fn worker_records<'a, 'm>(
+    ledger: Option<&'a crate::delivery::ledger::Ledger>,
+    missions: impl Iterator<Item = &'m Mission>,
+) -> HashMap<&'a str, &'a crate::coordination::AgentRecord> {
+    let wanted = named_agents(missions);
     let Some(ledger) = ledger.filter(|_| !wanted.is_empty()) else {
         return HashMap::new();
     };
