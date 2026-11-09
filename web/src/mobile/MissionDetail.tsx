@@ -8,7 +8,7 @@
 // them.
 
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon, Loader2Icon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { agentProductName } from "../agentAdapters";
 import { Elapsed } from "../components/elapsed";
 import { ProgressCells } from "../components/mission-tone";
@@ -21,7 +21,7 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { DECISION_VIEWS_SHOWN, attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
@@ -349,11 +349,14 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
  */
 function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
   const { t } = useInterfaceTranslation();
+  const [all, setAll] = useState(false);
+  const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
+  const more = views.length - shown.length;
   return (
     <div className="flex min-w-0 flex-col" data-phone-decision-views={views.length}>
       <span className="text-body text-muted-foreground">{t("mission.banner.looks", { count: views.length })}</span>
       <ul className="flex min-w-0 flex-col divide-y divide-border">
-        {views.map((view) => {
+        {shown.map((view) => {
           const pane = view.pane_id;
           const words = (
             <>
@@ -380,6 +383,13 @@ function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
             </li>
           );
         })}
+        {more > 0 ? (
+          <li>
+            <Button variant="text" size="inline" className="min-h-(--size-touch-target) text-body" data-phone-decision-views-more={more} onClick={() => setAll(true)}>
+              {t("mission.banner.more", { count: more })}
+            </Button>
+          </li>
+        ) : null}
       </ul>
     </div>
   );

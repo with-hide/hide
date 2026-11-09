@@ -344,3 +344,19 @@ it("lists the decision's Views, opening one from its agent's 볼 것, and with n
     await unmount();
   }
 });
+
+it("lists a decision's first three Views and folds the rest behind +N, as the desktop's card does", async () => {
+  const views = [1, 2, 3, 4, 5].map((n) => ({ device_id: "local", display_id: `d${n}`, kind: "file" as const, label: `view-${n}.md`, by: "conductor" as const, pane_id: "p-conductor" }));
+  const { container, click, unmount } = await connect([deciding({ decision_views: views })]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-turn"]');
+    const listed = () => [...container.querySelectorAll("[data-phone-decision-view]")].map((row) => row.getAttribute("data-phone-decision-view"));
+    expect(listed()).toEqual(["d1", "d2", "d3"]);
+    await click("[data-phone-decision-views-more]");
+    expect(listed()).toEqual(["d1", "d2", "d3", "d4", "d5"]);
+    expect(container.querySelector("[data-phone-decision-views-more]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});

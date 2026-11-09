@@ -9,14 +9,19 @@
 //!    a path as a View first and sends its id);
 //! 2. the Conductor opened it since the mission's question before was asked,
 //!    or since the mission was created, and it is still open when `decide`
-//!    runs: kept on the mission record, so a restart loses none and no agent
-//!    runtime has to report its turns;
+//!    runs: kept on the mission record, whoever conducts it, so a restart
+//!    or a take loses none and no agent runtime has to report its turns;
 //! 3. the stopped node's worker, or an agent under it, opened it in the
-//!    node's current attempt.
+//!    node's current attempt and it is still open when `decide` runs.
 //!
-//! The map lists the linked Views still open, seen or not; with none the
-//! operator can ask the Conductor for one page to look at (`자료 요청`),
-//! once per question, which never holds the answer back.
+//! The list is made when `decide` runs and kept on the question: the named
+//! Views first, then the opened ones newest first, at most
+//! [`VIEW_LINK_LIMIT`]; a View closed later leaves it, and nothing opened
+//! later joins it. Linking marks nothing seen or unseen and raises nothing:
+//! the decision's row, its read state and the Needs You count are the
+//! question's alone. The map lists the linked Views still open, seen or
+//! not; with none the operator can ask the Conductor for one page to look
+//! at (`자료 요청`), once per question, which never holds the answer back.
 
 use serde::Serialize;
 use serde_json::json;
@@ -24,7 +29,7 @@ use serde_json::json;
 use super::Runtime;
 use super::workspace_view::WorkspaceKey;
 use crate::delivery::Actor;
-use crate::missions::{Mission, ViewLink, WakeEvent, push_view_link};
+use crate::missions::{Mission, VIEW_LINK_LIMIT, ViewLink, WakeEvent, push_view_link};
 
 /// How deep an opener's parents are walked to find the node's worker.
 const LINEAGE_LIMIT: usize = 32;
@@ -63,7 +68,13 @@ impl Runtime {
     /// `view_id` of `key`: a mission's Conductor keeps it for its next
     /// question, and a node's worker, or an agent under it, links it to the
     /// node's attempt.
-    pub(super) fn link_mission_view(&mut self, key: &WorkspaceKey, view_id: &str, pane: &str) {
+    pub(super) fn link_mission_view(
+        &mut self,
+        key: &WorkspaceKey,
+        view_id: &str,
+        pane: &str,
+        now: u64,
+    ) {
         if self.missions.book.missions.is_empty() {
             return;
         }
@@ -80,6 +91,8 @@ impl Runtime {
             checkout_path: key.1.clone(),
             display_id: view_id.to_owned(),
             attempt: 0,
+            at_unix_ms: now,
+            worker: false,
         };
         let lineage = self.lineage_of(&actor);
         let mut changed = false;
@@ -138,19 +151,22 @@ impl Runtime {
         lineage
     }
 
-    /// The Views a question of mission `id` shows: the ones `--show` names
-    /// in the Conductor's checkout, then, for a new question (`fresh`), the
-    /// ones the Conductor opened since the question before that are still
-    /// open, which it takes off the mission. An id no View of that checkout
-    /// has is refused, and then nothing is taken.
+    /// The Views a question of mission `id` shows, made when `decide` runs
+    /// and kept on it: the ones `--show` names in the Conductor's checkout,
+    /// in their order, then, for a new question (`fresh`), the ones the
+    /// Conductor opened since the question before, which it takes off the
+    /// mission, and the ones the stopped `node`'s worker opened in its
+    /// current attempt, newest first and each only while it is open. An id
+    /// no View of that checkout has is refused, and then nothing is taken.
     pub(super) fn question_view_links(
         &mut self,
         id: &str,
         actor: &Actor,
         show: &[String],
+        node: Option<&str>,
         fresh: bool,
     ) -> Result<Vec<ViewLink>, String> {
-        let mut links = Vec::new();
+        let mut links: Vec<ViewLink> = Vec::new();
         if !show.is_empty() {
             // The checkout the Conductor's pane works in, else the one the
             // mission was created in.
@@ -162,34 +178,53 @@ impl Runtime {
                 })
                 .ok_or("mission_show_unknown")?;
             let layout = self.view_layout_of(&place).ok_or("mission_show_unknown")?;
+            let now = super::memory::now_ms();
             for view in show {
                 layout.display(view).ok_or("mission_show_unknown")?;
-                push_view_link(
-                    &mut links,
-                    ViewLink {
-                        device_id: place.0.clone(),
-                        checkout_path: place.1.clone(),
-                        display_id: view.clone(),
-                        attempt: 0,
-                    },
-                );
+                let link = ViewLink {
+                    device_id: place.0.clone(),
+                    checkout_path: place.1.clone(),
+                    display_id: view.clone(),
+                    attempt: 0,
+                    at_unix_ms: now,
+                    worker: false,
+                };
+                if !links.iter().any(|known| known.same_view(&link)) {
+                    links.push(link);
+                }
             }
         }
-        if fresh {
-            let opened = self
-                .missions
-                .book
-                .get_mut(id)
-                .map(|mission| std::mem::take(&mut mission.conductor_views))
-                .unwrap_or_default();
-            for link in opened {
-                let key = (link.device_id.clone(), link.checkout_path.clone());
-                let open = self
-                    .view_layout_of(&key)
-                    .is_some_and(|layout| layout.display(&link.display_id).is_some());
-                if open {
-                    push_view_link(&mut links, link);
-                }
+        if !fresh {
+            return Ok(links);
+        }
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return Ok(links);
+        };
+        let mut opened = std::mem::take(&mut mission.conductor_views);
+        if let Some(node) = node.and_then(|key| mission.node(key)) {
+            opened.extend(
+                node.views
+                    .iter()
+                    .filter(|link| link.attempt == node.attempts)
+                    .map(|link| ViewLink {
+                        attempt: 0,
+                        worker: true,
+                        ..link.clone()
+                    }),
+            );
+        }
+        // Newest first; on a tie the Conductor's, which came first.
+        opened.sort_by_key(|link| std::cmp::Reverse(link.at_unix_ms));
+        for link in opened {
+            if links.len() >= VIEW_LINK_LIMIT {
+                break;
+            }
+            let key = (link.device_id.clone(), link.checkout_path.clone());
+            let open = self
+                .view_layout_of(&key)
+                .is_some_and(|layout| layout.display(&link.display_id).is_some());
+            if open && !links.iter().any(|known| known.same_view(&link)) {
+                links.push(link);
             }
         }
         Ok(links)
@@ -217,55 +252,37 @@ impl Runtime {
             .map(|checkout| (actor.device_id.clone(), checkout.path.clone()))
     }
 
-    /// The Views `mission`'s open decision lists: the question's own, then
-    /// the stopped node's current attempt's, each once and only while it is
-    /// open.
+    /// The Views `mission`'s open decision lists: the ones linked when it
+    /// was asked, in that order, each only while it is open.
     pub(super) fn decision_views(&self, mission: &Mission) -> Vec<DecisionView> {
         let Some(question) = mission.decision.as_ref().and(mission.question.as_ref()) else {
             return Vec::new();
         };
-        let node = question.node.as_deref().and_then(|key| mission.node(key));
-        let links = question
+        question
             .views
             .iter()
-            .map(|link| (link, DecisionViewBy::Conductor))
-            .chain(node.into_iter().flat_map(|node| {
-                node.views
-                    .iter()
-                    .filter(move |link| link.attempt == node.attempts)
-                    .map(|link| (link, DecisionViewBy::Worker))
-            }));
-        let mut views: Vec<DecisionView> = Vec::new();
-        for (link, by) in links {
-            if views.iter().any(|view| {
-                view.device_id == link.device_id
-                    && view.checkout_path == link.checkout_path
-                    && view.display_id == link.display_id
-            }) {
-                continue;
-            }
-            let key = (link.device_id.clone(), link.checkout_path.clone());
-            let Some(display) = self
-                .view_layout_of(&key)
-                .and_then(|layout| layout.display(&link.display_id))
-            else {
-                continue;
-            };
-            views.push(DecisionView {
-                device_id: link.device_id.clone(),
-                checkout_path: link.checkout_path.clone(),
-                display_id: link.display_id.clone(),
-                kind: display.kind,
-                label: super::view_areas::display_label(display),
-                unseen: display.unseen.is_some(),
-                by,
-                pane_id: display
-                    .opener
-                    .as_ref()
-                    .and_then(|opener| self.view_opener_snapshot(opener).pane_id),
-            });
-        }
-        views
+            .filter_map(|link| {
+                let key = (link.device_id.clone(), link.checkout_path.clone());
+                let display = self.view_layout_of(&key)?.display(&link.display_id)?;
+                Some(DecisionView {
+                    device_id: link.device_id.clone(),
+                    checkout_path: link.checkout_path.clone(),
+                    display_id: link.display_id.clone(),
+                    kind: display.kind,
+                    label: super::view_areas::display_label(display),
+                    unseen: display.unseen.is_some(),
+                    by: if link.worker {
+                        DecisionViewBy::Worker
+                    } else {
+                        DecisionViewBy::Conductor
+                    },
+                    pane_id: display
+                        .opener
+                        .as_ref()
+                        .and_then(|opener| self.view_opener_snapshot(opener).pane_id),
+                })
+            })
+            .collect()
     }
 
     /// What a decision's card compares to know its Views moved: the View
@@ -274,14 +291,10 @@ impl Runtime {
     pub(super) fn decision_views_generation(&self) -> u64 {
         let linked = self.missions.book.missions.iter().any(|mission| {
             mission.decision.is_some()
-                && mission.question.as_ref().is_some_and(|question| {
-                    !question.views.is_empty()
-                        || question
-                            .node
-                            .as_deref()
-                            .and_then(|key| mission.node(key))
-                            .is_some_and(|node| !node.views.is_empty())
-                })
+                && mission
+                    .question
+                    .as_ref()
+                    .is_some_and(|question| !question.views.is_empty())
         });
         if !linked {
             return 0;

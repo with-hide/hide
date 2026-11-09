@@ -715,10 +715,18 @@ pub struct ViewLink {
     /// a question's own link keeps 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub attempt: u8,
+    /// When it was opened or named, which orders a question's opened Views
+    /// newest first.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub at_unix_ms: u64,
+    /// On a question: the stopped node's worker, or an agent under it,
+    /// opened it, where every other link is the Conductor's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worker: bool,
 }
 
 impl ViewLink {
-    fn same_view(&self, other: &Self) -> bool {
+    pub fn same_view(&self, other: &Self) -> bool {
         self.device_id == other.device_id
             && self.checkout_path == other.checkout_path
             && self.display_id == other.display_id
@@ -729,7 +737,10 @@ impl ViewLink {
 /// to the end, and the oldest goes past [`VIEW_LINK_LIMIT`]. Whether the
 /// list changed.
 pub fn push_view_link(links: &mut Vec<ViewLink>, link: ViewLink) -> bool {
-    if links.last() == Some(&link) {
+    if links
+        .last()
+        .is_some_and(|last| last.same_view(&link) && last.attempt == link.attempt)
+    {
         return false;
     }
     links.retain(|known| !known.same_view(&link));

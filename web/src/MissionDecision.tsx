@@ -13,6 +13,7 @@ import { cn } from "./lib/utils";
 import type { DecisionView, Mission } from "./snapshot";
 import { composingKey } from "./keys";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer, type PressedAnswer } from "./missionAnswer";
+import { DECISION_VIEWS_SHOWN } from "./missions";
 
 // The decision a mission waits on, answered where it is asked, first in the
 // page's 내 차례 (PRD mission-plan-visibility D-13, D-20, D-30, B25-B30, B39;
@@ -182,8 +183,6 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   );
 }
 
-/** The fewest linked Views the card shows before `+N` folds the rest. */
-const FIRST_VIEWS = 3;
 
 /**
  * The Views linked to the decision that are still open, seen or not: each
@@ -193,7 +192,7 @@ const FIRST_VIEWS = 3;
 function DecisionViews({ views, actions }: { views: DecisionView[]; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
-  const shown = all ? views : views.slice(0, FIRST_VIEWS);
+  const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
   const more = views.length - shown.length;
   return (
     <div className="flex min-w-0 flex-col" data-mission-banner-views={views.length}>

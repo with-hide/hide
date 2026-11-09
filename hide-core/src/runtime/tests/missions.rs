@@ -8842,8 +8842,17 @@ fn a_mission_workers_watch_is_quiet_while_its_node_waits_on_the_operator() {
 /// A File View opened in the project's checkout, by its id.
 fn project_view(runtime: &mut Runtime, path: &str) -> String {
     let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    view_in(runtime, &key, path)
+}
+
+/// A File View opened in the checkout `key` names, by its id.
+fn view_in(
+    runtime: &mut Runtime,
+    key: &crate::runtime::workspace_view::WorkspaceKey,
+    path: &str,
+) -> String {
     runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_view_layout(key, |layout, stamp| {
             let display =
                 layout.new_display(path, crate::view_layout::DisplayKind::File, None, false);
             let id = display.id.clone();
@@ -8936,15 +8945,22 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     };
 
     // Before it asks, the Conductor opens the page it will ask about, and
-    // one it closes again.
+    // one it closes again; linking marks nothing seen or unseen.
     let page = project_view(&mut runtime, "/checkouts/fixture/screens.html");
-    runtime.link_mission_view(&key, &page, "sender");
+    runtime.link_mission_view(&key, &page, "sender", 10);
+    let unseen = |runtime: &Runtime, view: &str| {
+        runtime
+            .view_layout_of(&key)
+            .and_then(|layout| layout.display(view))
+            .map(|display| display.unseen.is_some())
+    };
+    assert_eq!(unseen(&runtime, &page), Some(false));
     let gone = project_view(&mut runtime, "/checkouts/fixture/gone.md");
-    runtime.link_mission_view(&key, &gone, "sender");
+    runtime.link_mission_view(&key, &gone, "sender", 20);
     close(&mut runtime, &gone);
     // The worker's helper opens its notes in this attempt.
     let notes = project_view(&mut runtime, "/checkouts/fixture/notes.md");
-    runtime.link_mission_view(&key, &notes, "recipient");
+    runtime.link_mission_view(&key, &notes, "recipient", 30);
     let named = project_view(&mut runtime, "/checkouts/fixture/report.md");
     command(
         &mut runtime,
@@ -8952,23 +8968,24 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         json!({"op": "decide", "line": "Merge the screens?", "node": "fix", "show": [named]}),
     )
     .unwrap();
+    // The named one leads, then the opened ones newest first.
     assert_eq!(
         decision_views(&mut runtime),
         [
             (named.clone(), "conductor"),
-            (page.clone(), "conductor"),
-            (notes.clone(), "worker")
+            (notes.clone(), "worker"),
+            (page.clone(), "conductor")
         ]
     );
 
-    // Opened after asking, it waits for the next question.
+    // The list was made when it asked: what the Conductor or the worker
+    // opens after that waits for the next question.
     let after = project_view(&mut runtime, "/checkouts/fixture/after.md");
-    runtime.link_mission_view(&key, &after, "sender");
-    assert!(
-        !decision_views(&mut runtime)
-            .iter()
-            .any(|(id, _)| *id == after)
-    );
+    runtime.link_mission_view(&key, &after, "sender", 40);
+    let late = project_view(&mut runtime, "/checkouts/fixture/late.md");
+    runtime.link_mission_view(&key, &late, "recipient", 50);
+    let listed = decision_views(&mut runtime);
+    assert!(!listed.iter().any(|(id, _)| *id == after || *id == late));
 
     // A seen View stays; a closed one leaves.
     runtime.mark_view_unseen(&key, &page);
@@ -8981,27 +8998,26 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
             .any(|(id, _)| *id == page)
     );
 
-    // The node's next attempt lists only what it opens itself.
+    // The next question takes what the Conductor opened since this one and
+    // what the worker opened in the node's attempt now, not the one before.
     command(
         &mut runtime,
         "sender",
         json!({"op": "node", "node": "fix", "patch": {"attempts": 2}}),
     )
     .unwrap();
-    assert!(
-        !decision_views(&mut runtime)
-            .iter()
-            .any(|(id, _)| *id == notes)
-    );
-
-    // The next question takes what the Conductor opened since this one.
+    let retried = project_view(&mut runtime, "/checkouts/fixture/retried.md");
+    runtime.link_mission_view(&key, &retried, "recipient", 60);
     command(
         &mut runtime,
         "sender",
-        json!({"op": "decide", "line": "Merge them now?"}),
+        json!({"op": "decide", "line": "Merge them now?", "node": "fix"}),
     )
     .unwrap();
-    assert_eq!(decision_views(&mut runtime), [(after.clone(), "conductor")]);
+    assert_eq!(
+        decision_views(&mut runtime),
+        [(retried.clone(), "worker"), (after.clone(), "conductor")]
+    );
 
     // A View id no View of the checkout has is refused.
     assert_eq!(
@@ -9018,7 +9034,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         command(
             &mut runtime,
             "sender",
-            json!({"op": "decide", "line": null, "show": [after]}),
+            json!({"op": "decide", "line": null, "show": [retried]}),
         )
         .unwrap_err(),
         "mission_question_without_line"
@@ -9072,4 +9088,175 @@ fn asking_for_material_wakes_the_conductor_once_per_question() {
     assert!(!runtime.mission_material_event("mission-1", key));
     assert!(!runtime.mission_material_event("mission-1", key + 1));
     assert_eq!(asked(&runtime), 1);
+}
+
+/// A store of Views in a temporary folder, as the app keeps one.
+fn with_views(runtime: &mut Runtime) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0);
+    dir
+}
+
+/// A mission's first question takes what its Conductor opened since the
+/// mission began, newest first and at most `VIEW_LINK_LIMIT`, so the Views
+/// it opened long before, the likeliest to have nothing to do with the
+/// question, fall to the end and then out.
+#[test]
+fn a_first_decision_lists_the_newest_views_since_the_mission_began_up_to_the_cap() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    without_gate(&mut runtime);
+    running(&mut runtime);
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let mut opened = Vec::new();
+    for n in 1..=20u64 {
+        let id = project_view(&mut runtime, &format!("/checkouts/fixture/{n}.md"));
+        runtime.link_mission_view(&key, &id, "sender", n * 10);
+        opened.push(id);
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    let listed: Vec<String> = decision_views(&mut runtime)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let newest: Vec<String> = opened
+        .iter()
+        .rev()
+        .take(crate::missions::VIEW_LINK_LIMIT)
+        .cloned()
+        .collect();
+    assert_eq!(listed, newest);
+}
+
+/// A decision's Views moving tells the operator nothing new: a View the
+/// Conductor opens after asking, or a linked one closing, leaves its row's
+/// group, demand, read state and signals as they were, so no notice goes
+/// and the Needs You count stays; only the eye's count follows.
+#[test]
+fn a_decisions_views_moving_tell_the_operator_nothing_new() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let page = project_view(&mut runtime, "/checkouts/fixture/page.md");
+    runtime.link_mission_view(&key, &page, "sender", 10);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    let told = |row: &crate::model::SidebarAgentSnapshot| {
+        (
+            row.group.clone(),
+            row.demand.clone(),
+            row.unread,
+            row.state_change_seq,
+            row.laid_since_unix_ms,
+            row.descendant_signals.clone(),
+        )
+    };
+    let views = |row: &crate::model::SidebarAgentSnapshot| match &row.ask_subject {
+        Some(crate::model::AskSubject::MissionDecision { views, .. }) => *views,
+        other => panic!("the row asks the decision: {other:?}"),
+    };
+    let asked = conductor_shown(&mut runtime);
+    assert_eq!((asked.group.as_str(), views(&asked)), ("needs_you", 1));
+
+    let later = project_view(&mut runtime, "/checkouts/fixture/later.md");
+    runtime.link_mission_view(&key, &later, "sender", 20);
+    runtime
+        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
+        .unwrap();
+    let moved = conductor_shown(&mut runtime);
+    assert_eq!(told(&moved), told(&asked));
+    assert_eq!(views(&moved), 0);
+}
+
+/// What the Conductor opened belongs to the mission, not to one agent: a
+/// Conductor that takes the mission over asks with the Views its
+/// predecessor opened since the question before.
+#[test]
+fn a_taken_missions_next_decision_keeps_what_its_last_conductor_opened() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    without_gate(&mut runtime);
+    running(&mut runtime);
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let page = project_view(&mut runtime, "/checkouts/fixture/page.md");
+    runtime.link_mission_view(&key, &page, "sender", 10);
+
+    runtime.delivery_observations.remove("sender");
+    runtime.refresh_missions();
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "take", "mission": "mission-1"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    assert_eq!(decision_views(&mut runtime), [(page, "conductor")]);
+}
+
+/// A device's worker opening a View in that device's checkout is found as a
+/// mission command from that device finds its agent, and the View is
+/// linked by the device and its own View id, which the card opens there.
+#[test]
+fn a_device_workers_view_is_linked_by_that_devices_own_view_id() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let _views = with_views(&mut runtime);
+    running_criteria_mission(&mut runtime);
+    let (far, record) = far_agent("agent-9", "w2:p0");
+    register(&mut runtime, record);
+    connect_with_repository(&mut runtime, Vec::new());
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-9"}}),
+    )
+    .unwrap();
+    let mut seen = crate::runtime::delivery::tests::observed(&runtime, "recipient");
+    seen.actor = far.clone();
+    runtime
+        .delivery_observations
+        .insert(far.pane_id.clone(), seen);
+
+    let key = (DEVICE.to_owned(), DEVICE_ROOT.to_owned());
+    let page = view_in(&mut runtime, &key, "/Users/example/fixture/screens.html");
+    runtime.link_mission_view(&key, &page, "w2:p0", 10);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge the screens?", "node": "fix"}),
+    )
+    .unwrap();
+    runtime.refresh_missions();
+    let listed: Vec<_> = runtime.snapshot.missions.items[0]
+        .decision_views
+        .iter()
+        .map(|view| {
+            (
+                view.device_id.clone(),
+                view.checkout_path.clone(),
+                view.display_id.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(listed, [(DEVICE.to_owned(), DEVICE_ROOT.to_owned(), page)]);
 }

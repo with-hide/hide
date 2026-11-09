@@ -320,23 +320,32 @@ impl Runtime {
             if current.is_none() {
                 return Ok(false);
             }
-            let links = self.question_view_links(id, actor, show, false)?;
+            let links = self.question_view_links(id, actor, show, None, false)?;
             let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
             let question = target.question.as_mut().ok_or("mission_unknown")?;
-            let mut changed = false;
-            for link in links {
-                changed |= crate::missions::push_view_link(&mut question.views, link);
+            // Named ones lead the list; past the cap the oldest opened goes.
+            let named: Vec<_> = links
+                .into_iter()
+                .filter(|link| !question.views.iter().any(|known| known.same_view(link)))
+                .collect();
+            if named.is_empty() {
+                return Ok(false);
             }
-            if changed {
-                self.save_missions();
-            }
-            return Ok(changed);
+            let mut views = named;
+            views.append(&mut question.views);
+            views.truncate(crate::missions::VIEW_LINK_LIMIT);
+            question.views = views;
+            self.save_missions();
+            return Ok(true);
         }
-        // A new question takes the Views `--show` names and the ones the
-        // Conductor opened since the question before; a cleared one leaves
-        // those for the next.
+        // A new question takes the Views `--show` names, the ones the
+        // Conductor opened since the question before and the ones the
+        // stopped node's worker opened in its attempt; a cleared one leaves
+        // the Conductor's for the next.
         let views = match (&line, shown) {
-            (Some(_), Some((actor, show))) => self.question_view_links(id, actor, show, true)?,
+            (Some(_), Some((actor, show))) => {
+                self.question_view_links(id, actor, show, node.as_deref(), true)?
+            }
             _ => Vec::new(),
         };
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
