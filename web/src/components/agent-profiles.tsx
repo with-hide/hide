@@ -386,39 +386,6 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, location, inU
   );
 }
 
-/** What an option in a profile menu says under its name: what is left of its account, or why it would not start signed in, and the project default mark. */
-function pickDescription(profile: ProfileView, projectDefault: boolean, t: ReturnType<typeof useInterfaceTranslation>["t"]): string | undefined {
-  const state = profileState(profile);
-  const parts = [
-    projectDefault ? t("agentProfiles.projectDefault") : null,
-    state ? t(state.key as "agentProfiles.state.failed") : typeof profile.usageLeft === "number" ? t("agentProfiles.state.left", { percent: profile.usageLeft }) : profile.usageLeft === "shared" ? "—" : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(" · ") : undefined;
-}
-
-/**
- * The start panel's profile menu (B14): drawn right after the agent menu, only
- * when the agent has two profiles or more, with the one D-32 picked chosen.
- */
-export function ProfilePicker({ view, value, projectDefault, onChange, disabled = false, defaultOpen }: { view: AgentProfilesView; value: string; projectDefault: string | null; onChange?: (id: string) => void; disabled?: boolean; defaultOpen?: boolean }) {
-  const { t } = useInterfaceTranslation();
-  if (view.profiles.length < 2) return null;
-  return (
-    <Select value={value} disabled={disabled} onValueChange={onChange} defaultOpen={defaultOpen}>
-      <SelectTrigger variant="ghost" aria-label={t("agentProfiles.pick")} className="w-auto min-w-0" data-profile-pick={value}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {view.profiles.map((profile) => (
-          <SelectItem key={profile.id} value={profile.id} description={pickDescription(profile, profile.id === projectDefault, t)} data-profile-pick-option={profile.id}>
-            {profileName(profile, t)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 /** A project's chosen profile per agent: an id, or null to follow the agent default. */
 export type ProjectProfileChoice = { view: AgentProfilesView; chosen: string | null };
 

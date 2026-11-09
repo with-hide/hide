@@ -1,10 +1,9 @@
 import { CheckIcon, ChevronDownIcon, FolderIcon, GitBranchIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
-import { rememberedSelection, modelToSend, selectKind, type AgentSelection } from "./agentPicker";
+import { catalogFor, rememberedSelection, modelToSend, selectKind, takesModel, type AgentSelection } from "./agentPicker";
 import { AgentPicker } from "./components/agent-picker";
-import { ProfilePicker } from "./components/agent-profiles";
-import { ownAgentUsage, startProfiles } from "./agentProfiles";
+import { BUILT_IN_PROFILE, preselectedProfile, startItems } from "./agentProfiles";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
@@ -268,13 +267,23 @@ function StartPanel({ actions }: { actions: Actions }) {
     const start = useShellStore.getState().rest?.ui_state?.agent_start;
     return preset?.kind ? selectKind(preset.kind, start) : rememberedSelection(start);
   });
-  // The profile menu (PRD agent-profiles B14): what the core would pick is
-  // shown chosen, and only a profile the operator picked is sent.
+  // The agent menu lists (agent, profile) items (PRD agent-profiles-phase2
+  // D-01). What the core would pick is shown chosen (D-03) and the item shown
+  // is the item started, `default` included (D-02).
   const usage = useShellStore((s) => s.usage);
-  const profiles = target && selection.kind !== "terminal" ? startProfiles(rest, target.deviceId, target.workspaceId, selection.kind, usage?.nodes[0]?.node === target.deviceId ? ownAgentUsage(usage, selection.kind) : null) : null;
-  const profileKey = target && profiles ? `${target.deviceId}:${target.workspaceId}:${profiles.view.agent}` : null;
-  const [profilePick, setProfilePick] = useState<{ key: string; id: string } | null>(null);
-  const pickedProfile = profilePick && profilePick.key === profileKey && profiles?.view.profiles.some((row) => row.id === profilePick.id) ? profilePick.id : null;
+  const ai = useShellStore((s) => s.rest?.status?.background_ai);
+  const menu = useMemo(() => (target ? startItems(rest, target.deviceId, usage) : null), [rest, target, usage]);
+  const itemKey = target && selection.kind !== "terminal" ? `${target.deviceId}:${target.workspaceId}:${selection.kind}` : null;
+  const [itemPick, setItemPick] = useState<{ key: string; profile: string } | null>(null);
+  const picked = itemPick && itemPick.key === itemKey && menu?.items.some((item) => item.kind === selection.kind && item.profile === itemPick.profile) ? itemPick.profile : null;
+  const profile = target && selection.kind !== "terminal" && menu ? picked ?? (menu.items.some((item) => item.kind === selection.kind && item.profile === preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind)) ? preselectedProfile(rest, target.deviceId, target.workspaceId, selection.kind) : BUILT_IN_PROFILE) : BUILT_IN_PROFILE;
+  // A machine that lists no profile is started as before: the core picks (B1).
+  const profileToSend = menu?.listed && menu.showLeft && selection.kind !== "terminal" ? profile : null;
+  // A model remembered for the agent that the chosen item's list does not have opens on the item's own default (B5); only the
+  // core machine's list is read, so a device's choice is never swapped.
+  const catalog = selection.kind !== "terminal" && takesModel(selection.kind) ? catalogFor(ai, selection.kind, profile === BUILT_IN_PROFILE ? null : profile) : null;
+  const unlisted = menu?.showLeft === true && target?.deviceId === localDeviceId(rest) && selection.model !== null && catalog?.state === "ready" && !catalog.fromDefault && !catalog.models.includes(selection.model);
+  const effective: AgentSelection = unlisted ? { kind: selection.kind, model: null } : selection;
   const surface = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const previous = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -311,17 +320,17 @@ function StartPanel({ actions }: { actions: Actions }) {
     const id = startRequestId();
     useStartPanel.getState().begin(id, target.kind === "worktree" ? "worktree_create" : "agent_start");
     if (target.kind === "worktree") {
-      actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(selection), prompt: text.trim() || null, purpose: null, profile: pickedProfile });
+      actions.createWorktree({ requestId: id, deviceId: target.deviceId, repositoryRoot: target.repositoryRoot, branch: worktreeBranch.trim(), baseBranch: base || null, agentKind: selection.kind, model: modelToSend(effective), prompt: text.trim() || null, purpose: null, profile: profileToSend });
       return;
     }
     actions.startAgent({
       target: { checkoutPath: target.checkoutPath },
       deviceId: target.deviceId,
       provider: selection.kind,
-      model: modelToSend(selection),
+      model: modelToSend(effective),
       prompt: text.trim() || null,
       requestId: id,
-      profile: pickedProfile,
+      profile: profileToSend,
     });
   };
 
@@ -400,21 +409,29 @@ function StartPanel({ actions }: { actions: Actions }) {
         <AgentPicker
           variant="ghost"
           actions={actions}
-          value={selection}
+          value={effective}
           onChange={setSelection}
+          items={
+            menu
+              ? {
+                  list: menu.items,
+                  profile,
+                  showLeft: menu.showLeft,
+                  onItem: (item) => {
+                    setSelection(selectKind(item.kind, useShellStore.getState().rest?.ui_state?.agent_start));
+                    if (target) setItemPick({ key: `${target.deviceId}:${target.workspaceId}:${item.kind}`, profile: item.profile });
+                  },
+                }
+              : undefined
+          }
           disabled={working}
           kindNote={
-            <>
-              {profiles && profileKey ? (
-                <ProfilePicker view={profiles.view} value={pickedProfile ?? profiles.picked} projectDefault={profiles.projectDefault} disabled={working} onChange={(id) => setProfilePick({ key: profileKey, id })} />
-              ) : null}
-              {/* The provider probe describes the core machine, never a remote target's login (B23, B37). */}
-              {target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
-                <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
-                  <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
-                </span>
-              ) : null}
-            </>
+            /* The provider probe describes the core machine, never a remote target's login (B23, B37). */
+            target?.deviceId === localDeviceId(rest) && notSignedIn(selection.kind, rest?.status?.background_ai?.providers) ? (
+              <span className="flex shrink-0 items-center [&>span]:text-caption" data-start-not-signed-in={selection.kind}>
+                <Status tone="warn">{t("firstRun.tile.notSignedIn")}</Status>
+              </span>
+            ) : null
           }
         />
         <span className="flex-1" />

@@ -3,13 +3,13 @@
 // here. Changes go to the core as one `agent_profile_change` each, and the
 // screen reads only the answer that carries its own request id.
 
+import type { TFunction } from "i18next";
 import { agentAdapter } from "./agentAdapters";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
-import { projectSettings, settingsTarget } from "./projectSettings";
 import { kitPartNeedsReinstall } from "./settings";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
-import { catalogWorkspaces, type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
+import { type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
 import type { StartTarget, StartTargets } from "./startTargets";
 import { limitWindow, windowPercent } from "./usage";
 
@@ -65,6 +65,15 @@ function profileUsageLeft(usage: AgentUsage | null, id: string, now: number): Pr
   const row = usage?.profiles?.find((profile) => profile.id === id);
   if (!row) return null;
   return row.shared ? "shared" : weeklyLeft(row.limits, now);
+}
+
+/** The weekly percent left of the account an item runs in (D-11): a profile of the agent's default account reads the agent's own row, a profile of another account its own, which every profile of that account carries. */
+function itemLeft(usage: AgentUsage | null, id: string, now: number): number | null {
+  if (!usage) return null;
+  if (id === BUILT_IN_PROFILE) return weeklyLeft(usage.limits, now);
+  const row = usage.profiles?.find((profile) => profile.id === id);
+  if (!row) return null;
+  return weeklyLeft(row.shared ? (row.limits ?? usage.limits) : row.limits, now);
 }
 
 /** This machine's usage row of `agent`, which carries its profiles' accounts (B23); a device's profiles have none. */
@@ -234,29 +243,52 @@ export function sameDraft(a: ProfileDraft, b: ProfileDraft): boolean {
   return JSON.stringify(editChange("", a)) === JSON.stringify(editChange("", b));
 }
 
-/** The project's chosen profile for `agent` (`project_settings.agent_profiles`), by the catalog project a start target names. */
-export function projectProfile(rest: SnapshotRest | null, deviceId: string, workspaceId: string, agent: string): string | null {
-  const workspace = catalogWorkspaces(rest).find((row) => row.id === workspaceId && row.device_id === deviceId);
-  return workspace ? (projectSettings(rest, settingsTarget(workspace)).record?.agent_profiles?.[agent] ?? null) : null;
+/**
+ * An item's name on every screen that picks one (PRD agent-profiles-phase2
+ * D-01): its agent's name, then `· <profile>` for a profile other than the
+ * built-in default, which is the agent's name alone.
+ */
+export function itemName(t: TFunction<"translation">, agentLabel: string, profile?: string | null): string {
+  return profile ? t("agentProfiles.agentWithProfile", { agent: agentLabel, profile }) : agentLabel;
 }
 
+/** One item of the start panel's agent menu (D-01): an agent with one of its machine's profiles, `default` for the built-in one. */
+export type StartItem = {
+  kind: ProviderKind;
+  /** The profile's id, `default` for the agent's built-in one; what a start sends (D-02). */
+  profile: string;
+  /** The profile's name; null for the built-in profile. */
+  name: string | null;
+  /** The weekly percent left of the item's account; null when it is not known, which the menu draws `—` (D-11). */
+  left: number | null;
+};
+
 /**
- * The start panel's profile menu for a start of `kind` on a target (B14):
- * absent unless the machine lists another profile of that agent, else its
- * profiles with the one D-32 would pick.
+ * The start panel's agent menu on a machine (D-01, B2, B3): each agent with
+ * its built-in item first, then the profiles the machine lists for it, in its
+ * order. `showLeft` is false while the machine lists no profile of any agent,
+ * when the menu is the agent names alone as before (B1). `listed` says the
+ * machine's profiles were read, so a start may name the item it shows.
  */
-export function startProfiles(rest: SnapshotRest | null, deviceId: string, workspaceId: string, kind: string, usage: AgentUsage | null = null): { view: AgentProfilesView; projectDefault: string | null; picked: string } | null {
+export function startItems(rest: SnapshotRest | null, deviceId: string, usage: { nodes: { node: string; agents: AgentUsage[] }[] } | null = null, now = Date.now()): { items: StartItem[]; showLeft: boolean; listed: boolean } {
+  const listed = listedProfiles(rest?.navigator?.devices?.find((row) => row.id === deviceId));
+  // The usage read is this machine's alone: a device's items have no figure.
+  const own = usage?.nodes[0]?.node === deviceId ? usage : null;
+  const items = PROVIDER_KINDS.flatMap((kind): StartItem[] => {
+    const adapter = agentAdapter(kind);
+    const row = own ? ownAgentUsage(own, kind) : null;
+    const view = adapter && listed ? agentProfilesView(listed, adapter.id, adapter.label) : null;
+    if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null, left: row ? weeklyLeft(row.limits, now) : null }];
+    return view.profiles.map((profile) => ({ kind, profile: profile.id, name: profile.builtIn ? null : profile.name, left: itemLeft(row, profile.id, now) }));
+  });
+  return { items, showLeft: items.some((item) => item.name !== null), listed: listed !== null };
+}
+
+/** The profile a start of `kind` in the project `workspaceId` preselects: the core's one answer (D-03), `default` where it gave none. */
+export function preselectedProfile(rest: SnapshotRest | null, deviceId: string, workspaceId: string, kind: string): string {
   const adapter = agentAdapter(kind);
-  const device = rest?.navigator?.devices?.find((row) => row.id === deviceId);
-  const listed = listedProfiles(device);
-  if (!adapter || !listed) return null;
-  const view = agentProfilesView(listed, adapter.id, adapter.label, usage);
-  if (!view || view.profiles.length < 2) return null;
   const selection = rest?.status?.start_profiles?.[workspaceId];
-  const picked = selection?.device_id === deviceId ? selection.profiles[adapter.id] : undefined;
-  if (!picked) return null;
-  const projectDefault = projectProfile(rest, deviceId, workspaceId, adapter.id);
-  return { view, projectDefault, picked };
+  return (adapter && selection?.device_id === deviceId ? selection.profiles[adapter.id] : undefined) ?? BUILT_IN_PROFILE;
 }
 
 /**

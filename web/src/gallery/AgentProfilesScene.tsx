@@ -2,7 +2,7 @@
 // (PRD agent-profiles B1-B4, B10, B14, B15, B26-B28, B30): Settings › Agents
 // with each agent's profiles unfolded under its row and edited in a dialog,
 // the add form for each way an agent keeps accounts, every row state, the
-// start panel's profile menu, a project's Agent accounts and the two delete
+// start panel's agent items, a project's Agent accounts and the two delete
 // outcomes. Names, paths and numbers are invented; nothing is sent.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -11,7 +11,6 @@ import {
   InlineProfiles,
   ProfileDeleteDialog,
   ProfileFormDialog,
-  ProfilePicker,
   ProfilesMachineNote,
   ProjectAgentAccounts,
   type AgentProfilesView,
@@ -162,7 +161,18 @@ function Scene({ state, long, device }: { state: State; long: boolean; device: D
           <Textarea bare className="field-sizing-content min-h-(--size-control-lg) px-md pt-xs pb-sm" placeholder={t("shell.instructionPrompt")} />
           <div className="flex min-w-0 items-center gap-xs px-sm pt-xs pb-sm">
             <AgentPickerView variant="ghost" value={{ kind: "claude", model: null }} catalog={{ state: "ready", models: [] }} onKind={() => {}} onModel={() => {}}
-              kindNote={<ProfilePicker view={claude} value="side" projectDefault="side" defaultOpen />} />
+              items={{
+                list: [
+                  { kind: "claude", profile: "default", name: null, left: 40 },
+                  { kind: "claude", profile: "work", name: "work", left: 72 },
+                  { kind: "claude", profile: "gateway", name: "opengateway", left: null },
+                  { kind: "codex", profile: "default", name: null, left: 88 },
+                  { kind: "opencode", profile: "default", name: null, left: null },
+                ],
+                profile: "work",
+                showLeft: true,
+                onItem: () => {},
+              }} />
             <span className="flex-1" />
             <Button>{t("common.start")}<span aria-hidden="true" className="opacity-(--opacity-dimmed)">⏎</span></Button>
           </div>

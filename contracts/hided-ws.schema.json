@@ -492,7 +492,7 @@
           "type": "string"
         },
         "shared": {
-          "description": "Another profile listed before it, or the agent's default account, runs in the same account: drawn as a dash.",
+          "description": "Another profile listed before it, or the agent's default account, runs in the same account: Settings > Agents draws a dash for it.",
           "type": "boolean"
         },
         "limits": {

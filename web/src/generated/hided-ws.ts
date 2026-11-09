@@ -408,7 +408,7 @@ export interface UsageHideAiFeature {
 export interface ProfileUsage {
   id: string;
   /**
-   * Another profile listed before it, or the agent's default account, runs in the same account: drawn as a dash.
+   * Another profile listed before it, or the agent's default account, runs in the same account: Settings > Agents draws a dash for it.
    */
   shared?: boolean;
   limits?: LimitCell;

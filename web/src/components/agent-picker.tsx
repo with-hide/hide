@@ -2,7 +2,9 @@ import type { TFunction } from "i18next";
 import { useEffect, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
-import { catalogFor, modelToSend, selectKind, providerLabel, takesModel, PROVIDER_KINDS, type AgentKind, type AgentSelection, type ModelCatalog, type ProviderKind } from "../agentPicker";
+import { agentProductName } from "../agentAdapters";
+import { catalogFor, modelLabel, modelToSend, selectKind, providerLabel, takesModel, PROVIDER_KINDS, type AgentKind, type AgentSelection, type ModelCatalog, type ProviderKind } from "../agentPicker";
+import { BUILT_IN_PROFILE, itemName, type StartItem } from "../agentProfiles";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { cn } from "../lib/utils";
@@ -18,6 +20,15 @@ import { Hint } from "./ui/tooltip";
 
 /** Radix items cannot carry an empty value; this stands for the CLI's own default. */
 const DEFAULT_ITEM = "__cli_default";
+
+/**
+ * The agent menu as items (PRD agent-profiles-phase2 D-01): each agent with
+ * its machine's profiles, `profile` the chosen item's profile id for the
+ * chosen kind, `showLeft` whether each item shows its account's percent left.
+ */
+export type ItemMenu = { list: readonly StartItem[]; profile: string; showLeft: boolean; onItem: (item: StartItem) => void };
+
+const itemKey = (kind: ProviderKind | "terminal", profile: string) => `${kind}/${profile}`;
 
 /** Why the model menu has no list to open, for its tooltip; null while there is one. */
 function catalogReason(catalog: ModelCatalog, t: TFunction<"translation">): string | null {
@@ -39,6 +50,7 @@ export function AgentPicker({
   actions,
   value,
   onChange,
+  items,
   withTerminal = false,
   disabled = false,
   kindNote,
@@ -48,6 +60,8 @@ export function AgentPicker({
   actions: Actions;
   value: AgentSelection;
   onChange: (next: AgentSelection) => void;
+  /** The start panel's agent menu as items (D-01); the other surfaces list the agents alone. */
+  items?: ItemMenu;
   /** New worktree offers a tab with no agent as the kind menu's first item; it is never remembered. */
   withTerminal?: boolean;
   disabled?: boolean;
@@ -63,7 +77,8 @@ export function AgentPicker({
   return (
     <AgentPickerView
       value={value}
-      catalog={value.kind === "terminal" || !takesModel(value.kind) ? null : catalogFor(ai, value.kind)}
+      catalog={value.kind === "terminal" || !takesModel(value.kind) ? null : catalogFor(ai, value.kind, items && items.profile !== BUILT_IN_PROFILE ? items.profile : null)}
+      items={items}
       onKind={(kind) => onChange(selectKind(kind, start))}
       onModel={(model) => onChange({ kind: value.kind, model })}
       withTerminal={withTerminal}
@@ -79,6 +94,7 @@ export function AgentPicker({
 export function AgentPickerView({
   value,
   catalog,
+  items,
   onKind,
   onModel,
   withTerminal = false,
@@ -90,6 +106,7 @@ export function AgentPickerView({
   value: AgentSelection;
   /** The chosen kind's catalog; null for a terminal, which has no model. */
   catalog: ModelCatalog | null;
+  items?: ItemMenu;
   onKind: (kind: AgentKind) => void;
   onModel: (model: string | null) => void;
   withTerminal?: boolean;
@@ -102,19 +119,45 @@ export function AgentPickerView({
   const kinds: readonly AgentKind[] = withTerminal ? ["terminal", ...PROVIDER_KINDS] : PROVIDER_KINDS;
   return (
     <div className={cn("flex min-w-0 gap-xs", className)} data-agent-picker="true">
-      <Select value={value.kind} disabled={disabled} onValueChange={(next) => onKind(next as AgentKind)}>
-        <SelectTrigger variant={variant} aria-label={t("agentPicker.kind")} className="w-auto min-w-0" data-agent-kind={value.kind}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {kinds.map((kind) => (
-            <SelectItem key={kind} value={kind} data-agent-kind-option={kind}>
-              <AgentMark kind={kind === "terminal" ? null : kind} />
-              {kind === "terminal" ? t("agentPicker.terminalOnly") : providerLabel(kind)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {items ? (
+        <Select
+          value={itemKey(value.kind, items.profile)}
+          disabled={disabled}
+          onValueChange={(next) => {
+            const item = items.list.find((row) => itemKey(row.kind, row.profile) === next);
+            if (item) items.onItem(item);
+          }}
+        >
+          <SelectTrigger variant={variant} aria-label={t("agentPicker.kind")} className="w-auto min-w-0" data-agent-kind={value.kind} data-agent-item={itemKey(value.kind, items.profile)}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {items.list.map((item) => {
+              const key = itemKey(item.kind, item.profile);
+              return (
+                <SelectItem key={key} value={key} trailing={items.showLeft ? (item.left === null ? "—" : t("agentProfiles.state.left", { percent: item.left })) : undefined} data-agent-kind-option={item.kind} data-agent-item-option={key} data-agent-item-left={item.left ?? ""}>
+                  <AgentMark kind={item.kind} profile={item.name} />
+                  {itemName(t, items.showLeft ? agentProductName(item.kind) : providerLabel(item.kind), item.name)}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Select value={value.kind} disabled={disabled} onValueChange={(next) => onKind(next as AgentKind)}>
+          <SelectTrigger variant={variant} aria-label={t("agentPicker.kind")} className="w-auto min-w-0" data-agent-kind={value.kind}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {kinds.map((kind) => (
+              <SelectItem key={kind} value={kind} data-agent-kind-option={kind}>
+                <AgentMark kind={kind === "terminal" ? null : kind} />
+                {kind === "terminal" ? t("agentPicker.terminalOnly") : providerLabel(kind)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
       {kindNote}
       {value.kind === "terminal" || catalog === null ? null : (
         <ModelSelect kind={value.kind} catalog={catalog} disabled={disabled} model={modelToSend(value)} onChange={onModel} variant={variant} />
@@ -157,7 +200,7 @@ function ModelSelect({
         </SelectItem>
         {models.map((id) => (
           <SelectItem key={id} value={id} data-agent-model-option={id}>
-            {id}
+            {modelLabel(catalog, id)}
           </SelectItem>
         ))}
         {/* A remembered model the list does not have stays a selectable value, so the trigger names what a start sends. */}
