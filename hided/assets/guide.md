@@ -39,7 +39,7 @@ hide inbox
 ## Agents
 
 ```
-hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>]
+hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] [--profile <name>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>]
 hide ps [--all] [--here] [--json]
 hide agent list
 hide agent show <id|here|spawn id|intent>
@@ -63,6 +63,24 @@ hide agent end <id> [--actor <id>] [--keep-pane]
   `hide agent end <id>` instead ends its registration and closes its pane, which ends the agent and every program it started; its conversation waits under 보관됨, where 이어가기 resumes it, and `--keep-pane` ends only the registration.
   To end yourself, run `hide agent end <your id> --keep-pane`: without it your own pane closes, and the command never gets its answer.
 - `hide agent archive <id>` does what the screen's `세션 보관` does for that session: its conversation is saved, its panes close, and the operator resumes it from 보관됨; it answers `{"archived":"<id>","pane_id":"<pane>"}`, and refuses a session that is working with `archive_confirmation_required`, which only the operator confirms, from Hide's screen.
+
+## Agent profiles
+
+```
+hide agent profile list [--kind <kind>] [--machine <device id>]
+hide agent profile add <kind> <name> [--account <folder|name>] [--program <program>] [--env KEY=VALUE]... [--default] [--machine <device id>]
+hide agent profile edit <kind> <name> [--rename <name>] [--program <program> | --no-program] [--env KEY=VALUE]... [--unset-env KEY]... [--machine <device id>]
+hide agent profile default <kind> <name> [--machine <device id>]
+hide agent profile remove <kind> <name> [--machine <device id>]
+hide agent profile reinstall <kind> <name> [--machine <device id>]
+```
+
+- A profile is one way to start an agent on a machine: its own account folder (an omp profile name for omp), a program to run instead, and extra environment variables. Settings › Agents shows the same list and makes the same checks. Every agent also has the built-in `default` profile, its own folder, which is never edited or removed.
+- A start takes `--profile <name>` first, then the profile of a parent of the same kind, then the project's choice (Project settings › Working style › Agent accounts), then the agent's default (`hide agent profile default`). `--profile default` starts the built-in one; `--machine` looks the name up on that device.
+- Moving the operator's aliases, when they ask for it: read their shell's startup files (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, PowerShell's `$PROFILE`) for an alias or function that starts an agent with another account, such as `alias claude-b='CLAUDE_CONFIG_DIR=~/.claude-b claude'`. Register each one: its account folder goes in `--account` (`hide agent profile add claude b --account ~/.claude-b`), its other variables in `--env`, and a wrapper it runs in `--program`. The variable that moves the account is never an `--env`: the account field sets it, and `--env` refuses it. Then run `hide agent profile list` and report what you registered; leave the alias where it is unless the operator asks you to remove it.
+- Connecting a new account: `hide agent profile add <kind> <name> --account <new folder>` (Hide makes the folder, readable by the operator only, and installs its hooks there), then `hide agent spawn --parent here --profile <name> …`, and tell the operator to sign in in that pane: a new folder starts signed out. `hide agent profile list` shows whether the install succeeded.
+- Keep secrets out of `--env`: Hide stores those values as settings. A key belongs in the program run instead.
+- A refusal names its code and what to do: `profile_refused` (a field and why, such as the agent's own folder or a reserved variable), `profile_in_use` (the agents running or starting with the profile, sleeping ones too, which have to end first), `profile_gone`, `profile_builtin`, `profile_busy` (another change is running) and `profiles_unsupported` (a device whose Hide has no profiles).
 
 ## Panes
 

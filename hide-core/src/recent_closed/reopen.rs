@@ -221,10 +221,24 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
             let program = |kind: &str| {
                 crate::start_prompt::start_program_of(context.engine.as_ref(), node, kind)
             };
+            // An agent started again holds its profile while it starts
+            // (`launch::holds`), on this machine, whose node reopens it.
+            let hold = |request: crate::launch::Request| {
+                let runtime = context.runtime.upgrade();
+                let guard = runtime.as_ref().and_then(|runtime| runtime.lock().ok());
+                match guard {
+                    Some(guard) => guard.hold_profile_start(guard.node().as_str(), request),
+                    None => Err(crate::launch::Refusal {
+                        code: crate::launch::PROFILE_UNANSWERED,
+                        detail: "the core stopped before the agent was started again".to_owned(),
+                    }),
+                }
+            };
             let asks = ReopenNode {
                 link: Some(node),
                 folders: &folders,
                 program: &program,
+                hold: &hold,
             };
             let result = run_engine_reopen(context.engine.as_ref(), &asks, &request)
                 .map(FileReopenResultOrEngine::Engine);
@@ -298,6 +312,11 @@ struct ReopenNode<'a> {
     link: Option<&'a dyn crate::node_access::NodeLink>,
     /// Whether a closed pane's folder is still a directory there.
     folders: &'a dyn Fn(&str) -> bool,
+    /// The start, holding its profile while it starts
+    /// (`Runtime::hold_profile_start`).
+    hold: &'a dyn Fn(
+        crate::launch::Request,
+    ) -> Result<crate::launch::Request, crate::launch::Refusal>,
     /// The file a start of the agent of a kind names there
     /// (`start_prompt::start_program_of`).
     program: &'a dyn Fn(&str) -> Option<crate::engine::StartProgram>,
@@ -689,6 +708,7 @@ fn reopen_pane(
             start_or_degrade_agent(
                 engine,
                 node.link,
+                node.hold,
                 key,
                 0,
                 &restored_pane_id,
@@ -842,6 +862,7 @@ fn reopen_tab(
             agents.extend(start_or_degrade_agent(
                 engine,
                 node.link,
+                node.hold,
                 key,
                 index,
                 new_id,
@@ -907,6 +928,7 @@ fn restored_cwd(
 fn start_or_degrade_agent(
     engine: &dyn Engine,
     node: Option<&dyn crate::node_access::NodeLink>,
+    hold: &dyn Fn(crate::launch::Request) -> Result<crate::launch::Request, crate::launch::Refusal>,
     key: &str,
     index: usize,
     pane_id: &str,
@@ -941,9 +963,15 @@ fn start_or_degrade_agent(
     // The profile the agent ran with is asked once, before the pane is
     // touched: one that is gone keeps the shell and says so, rather than
     // reading as a resume that failed (PRD agent-profiles D-27, B20).
-    let request = crate::launch::Request::recorded(&agent.kind, agent.profile.as_ref());
-    let profile = match crate::launch::resolve(node, &request) {
-        Ok(profile) => profile,
+    let request = hold(crate::launch::Request::recorded(
+        &agent.kind,
+        agent.profile.as_ref(),
+    ));
+    let profile = match request.and_then(|request| {
+        crate::launch::resolve(node, &request).map(|profile| (request, profile))
+    }) {
+        // The start's values carry its hold from here.
+        Ok((_, profile)) => profile,
         Err(refusal) => {
             crate::diagnostic!(serde_json::json!({
                 "component": "recent_closed",
@@ -1125,6 +1153,7 @@ mod tests {
         let started = start_or_degrade_agent(
             fake.engine().as_ref(),
             None,
+            &Ok,
             "key",
             0,
             "pane",
@@ -1202,6 +1231,7 @@ mod tests {
         let started = start_or_degrade_agent(
             fake.engine().as_ref(),
             Some(&ProfileGone),
+            &Ok,
             "key",
             0,
             "pane",
@@ -1258,6 +1288,7 @@ mod tests {
             start_or_degrade_agent(
                 fake.engine().as_ref(),
                 None,
+                &Ok,
                 "key",
                 0,
                 "pane",
@@ -1409,6 +1440,7 @@ mod tests {
                 link: None,
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
+                hold: &Ok,
             },
             "nested-intent",
             &context,
@@ -1601,6 +1633,7 @@ mod tests {
                 link: None,
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
+                hold: &Ok,
             },
             "first-attempt",
             &context,

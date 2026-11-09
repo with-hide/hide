@@ -1325,11 +1325,19 @@ fn start_task_agent(
     let Some(runtime) = runtime.upgrade() else {
         return;
     };
+    // The start holds its profile from here (`launch::holds`): a removal
+    // planned meanwhile is refused, and one under way refuses the start.
     let pending = match runtime.lock() {
-        Ok(guard) => guard.pending_task_agent_start(id),
+        Ok(guard) => guard.pending_task_agent_start(id).map(|start| {
+            let held = guard.hold_profile_start(
+                &guard.task_agent_machine(id),
+                crate::launch::Request::new(&start.kind, start.profile.clone()),
+            );
+            (start, held)
+        }),
         Err(_) => return,
     };
-    let Some(start) = pending else {
+    let Some((start, held)) = pending else {
         return;
     };
     let generation = runtime
@@ -1344,9 +1352,12 @@ fn start_task_agent(
     // The node that runs the task's pane, this machine's or a device's, which
     // a long start line asks whether the pane's shell is reading.
     let pane_node = task_session_node(&runtime, id, &start.kind).ok();
-    let outcome = match reader {
-        Err(reason) => TaskAgentOutcome::Failed(AgentFailure::reason(reason)),
-        Ok(reader) => {
+    let outcome = match (reader, held) {
+        (_, Err(refusal)) => {
+            TaskAgentOutcome::Failed(AgentFailure::with_detail(refusal.code, refusal.detail))
+        }
+        (Err(reason), _) => TaskAgentOutcome::Failed(AgentFailure::reason(reason)),
+        (Ok(reader), Ok(held)) => {
             let expected = start.clone();
             let current_intent = || -> Result<Option<crate::start_claim::BoundPane>, String> {
                 current()?;
@@ -1400,6 +1411,7 @@ fn start_task_agent(
                 agent_node.is_some(),
                 id,
                 start,
+                held.hold(),
                 &current_start,
             )
         }
@@ -1435,6 +1447,7 @@ fn launch_with_prompt(
         agent_node.is_some(),
         id,
         start,
+        None,
         &|| Ok(()),
     )
 }
@@ -1447,6 +1460,7 @@ fn launch_with_prompt_checked(
     here: bool,
     id: u64,
     start: PendingAgentStart,
+    hold: Option<crate::launch::holds::Hold>,
     current: &dyn Fn() -> Result<(), String>,
 ) -> TaskAgentOutcome {
     let PendingAgentStart {
@@ -1497,7 +1511,7 @@ fn launch_with_prompt_checked(
         id,
         &pane_id,
         shell,
-        &crate::launch::Request::new(&kind, profile),
+        &crate::launch::Request::new(&kind, profile).held(hold),
         args,
         prompt.as_deref(),
         codex_daemon,
@@ -4521,6 +4535,7 @@ mod tests {
                 true,
                 7,
                 make(),
+                None,
                 &|| Err("session_resume_intent_changed".into())
             ),
             TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_intent_changed"))
@@ -4642,8 +4657,16 @@ mod tests {
         // A device start: no agent node (its engine answers for its PATH), a
         // pane node that is the device's.
         let server = server(vec![shell_ready(), started()]);
-        let outcome =
-            launch_with_prompt_checked(&*server, None, Some(&node), false, 7, make(), &|| Ok(()));
+        let outcome = launch_with_prompt_checked(
+            &*server,
+            None,
+            Some(&node),
+            false,
+            7,
+            make(),
+            None,
+            &|| Ok(()),
+        );
         assert!(
             matches!(outcome, TaskAgentOutcome::Started(_)),
             "{outcome:?}"
@@ -4659,7 +4682,7 @@ mod tests {
         // With no pane node the start refuses before the engine is asked.
         let server = self::server(vec![]);
         let TaskAgentOutcome::Failed(reason) =
-            launch_with_prompt_checked(&*server, None, None, false, 7, make(), &|| Ok(()))
+            launch_with_prompt_checked(&*server, None, None, false, 7, make(), None, &|| Ok(()))
         else {
             panic!("a start without the pane's machine went ahead")
         };

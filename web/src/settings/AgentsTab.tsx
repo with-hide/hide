@@ -11,6 +11,7 @@ import { useShellStore } from "../store";
 import { agentMachines, checkFailedReason, type AgentMachine } from "./agentRows";
 import { AgentRow, NotInstalledRow } from "./AgentRow";
 import { AgentFilesGroup } from "./AgentFilesGroup";
+import { useMachineProfiles } from "./AgentProfiles";
 import { IdleAgentsGroup } from "./IdleAgentsGroup";
 import { HideSkillsGroup } from "./HideSkillsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
@@ -70,6 +71,8 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
   // A refused switch or Reinstall: the core's `kit.` error after the press.
   const failure = useErrorSince(actedAt, ["kit."]);
   const act = () => setActedAt(Date.now());
+  // A machine that cannot answer keeps its profiles read-only (B30).
+  const profiles = useMachineProfiles(device, machine.blocked === null, actions, name);
 
   // B11: a device still connecting or switched off in Devices says so and offers no retry there does not;
   // one that cannot be reached shows one line and a way to try again, not its last list.
@@ -130,9 +133,14 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
           >
             {machine.installed.length === 0 ? <Row label={<Note>{t("agents.noneInstalled")}</Note>} /> : null}
             {machine.installed.map((agent) => (
-              <AgentRow key={agent.id} device={device} agent={agent} actions={actions} onAct={act} />
+              <div key={agent.id} data-agent-with-profiles={agent.id}>
+                <AgentRow device={device} agent={agent} actions={actions} onAct={act} />
+                {profiles.inline(agent)}
+              </div>
             ))}
           </Group>
+          {profiles.note}
+          {profiles.overlay}
           {checkFailed ? (
             <Note tone="error" data-agents-check-failed={checkFailed}>
               {t("agents.checkFailed", { reason: t(checkFailedReason(checkFailed)) })}

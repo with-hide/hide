@@ -98,6 +98,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
         )) => (code, Some(detail)),
         Some((code, detail))
             if crate::worktree_command::DETAILED.contains(&code)
+                || crate::agent_profiles::DETAILED.contains(&code)
                 || crate::links::session_command::DETAILED.contains(&code) =>
         {
             (code, Some(detail))

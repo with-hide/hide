@@ -43,6 +43,7 @@ pub mod page_forward;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
+pub mod profile_cli;
 mod project_open;
 
 mod hook_request;

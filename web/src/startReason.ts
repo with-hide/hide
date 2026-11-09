@@ -25,6 +25,7 @@ const REASON_KEYS = new Map<string, MessageKey>([
   ["profiles_unsupported", "coreError.startReason.profiles_unsupported"],
   ["profile_unanswered", "coreError.startReason.profile_unanswered"],
   ["profile_unconfirmed", "coreError.startReason.profile_unconfirmed"],
+  ["launch_records_full", "coreError.startReason.launch_records_full"],
   // Why waking a sleeping agent failed (`agent_sleep_engine::WAKE_*`).
   ["agent_wake.folder_missing", "taskReason.folderMissing"],
   ["agent_wake.not_resumed", "wakeReason.notResumed"],

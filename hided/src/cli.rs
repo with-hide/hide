@@ -28,6 +28,8 @@ pub enum CommandKind {
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
     Mission(crate::mission_cli::MissionCli),
     Plan(crate::plan_cli::PlanCli),
+    /// `hide agent profile …` (PRD agent-profiles D-33).
+    AgentProfile(hide_core::agent_profiles::ProfileCommand),
     /// `hide agent catalog [--machine <id>]`.
     AgentCatalog {
         machine: Option<String>,
@@ -381,6 +383,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::pane_cli::parse(&args[2..])
                 .map(CommandKind::Pane)
                 .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
+        }
+        Some("agent") if args.get(2).map(String::as_str) == Some("profile") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::profile_cli::USAGE)))?;
+            crate::profile_cli::parse(&args[3..])
+                .map(CommandKind::AgentProfile)
+                .map_err(|reason| wrong(reason, crate::profile_cli::USAGE))
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
@@ -844,6 +853,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Mission(_)
                     | CommandKind::Plan(_)
                     | CommandKind::AgentCatalog { .. }
+                    | CommandKind::AgentProfile(_)
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
@@ -881,6 +891,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Mission(command) => crate::mission_cli::run(&env, command),
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
+        CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),

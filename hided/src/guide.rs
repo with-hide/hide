@@ -37,6 +37,11 @@ mod tests {
     }
 
     #[test]
+    fn the_guide_spells_hide_agent_profile_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::profile_cli::USAGE));
+    }
+
+    #[test]
     fn the_guide_spells_hide_device_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::device_cli::USAGE));
     }

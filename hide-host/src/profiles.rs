@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use hide_agent_adapter::account::Refusal;
+use hide_agent_adapter::definition::By;
 use hide_agent_adapter::{AccountRef, NodeEnv, Profile, ProfileId};
 use hide_kit::{KitProfiles, ProfilePlace, ProfileReport, ProfileSource};
 use serde::{Deserialize, Serialize};
@@ -31,7 +32,7 @@ use crate::error::{ErrorCode, HostError, HostResult};
 use crate::serve::Env;
 use hide_node_link::profiles::{
     ListedProfile, MAX_PROFILES, ProfileApplied, ProfileField, ProfileLaunch, ProfileList,
-    ProfileOp, ProfileProgram, ProfileRefusal, ProfileStart,
+    ProfileOp, ProfileProgram, ProfileReason, ProfileRefusal, ProfileStart,
 };
 
 const FORMAT: u32 = 1;
@@ -515,11 +516,26 @@ struct Changed {
     install: bool,
 }
 
-fn refused(field: ProfileField, text: impl Into<String>) -> ProfileRefusal {
+fn refused(field: ProfileField, reason: ProfileReason, text: impl Into<String>) -> ProfileRefusal {
     ProfileRefusal {
         field,
         text: text.into(),
         env_key: None,
+        reason: Some(reason),
+        limit: None,
+    }
+}
+
+/// A refusal about a bound, which the screen names.
+fn over(
+    field: ProfileField,
+    reason: ProfileReason,
+    limit: usize,
+    text: impl Into<String>,
+) -> ProfileRefusal {
+    ProfileRefusal {
+        limit: Some(limit as u64),
+        ..refused(field, reason, text)
     }
 }
 
@@ -540,8 +556,10 @@ fn change(home: &Path, file: &File, op: ProfileOp) -> Result<Changed, ProfileRef
             let kind = agent(&kind)?;
             let name = named(&file, &kind, &name, None)?;
             if file.profiles.len() >= MAX_PROFILES {
-                return Err(refused(
+                return Err(over(
                     ProfileField::Profile,
+                    ProfileReason::ProfilesFull,
+                    MAX_PROFILES,
                     format!("This machine already keeps {MAX_PROFILES} profiles"),
                 ));
             }
@@ -555,8 +573,13 @@ fn change(home: &Path, file: &File, op: ProfileOp) -> Result<Changed, ProfileRef
                 version,
             };
             checked(home, &profile)?;
-            hide_kit::prepare_account(home, &profile)
-                .map_err(|text| refused(ProfileField::Account, text))?;
+            hide_kit::prepare_account(home, &profile).map_err(|text| {
+                refused(
+                    ProfileField::Account,
+                    ProfileReason::AccountUnprepared,
+                    text,
+                )
+            })?;
             if default {
                 file.defaults.insert(kind, profile.id.clone());
             }
@@ -595,6 +618,7 @@ fn change(home: &Path, file: &File, op: ProfileOp) -> Result<Changed, ProfileRef
                 if file.profiles[at].profile.kind != kind {
                     return Err(refused(
                         ProfileField::Profile,
+                        ProfileReason::ProfileOtherKind,
                         format!("{} is not a profile of {kind}", id.0),
                     ));
                 }
@@ -625,6 +649,7 @@ fn agent(kind: &str) -> Result<String, ProfileRefusal> {
         .ok_or_else(|| {
             refused(
                 ProfileField::Kind,
+                ProfileReason::KindUnknown,
                 format!("Hide keeps no profiles for an agent named {kind}"),
             )
         })
@@ -635,6 +660,7 @@ fn live(file: &File, id: &ProfileId) -> Result<usize, ProfileRefusal> {
     if id.is_default() {
         return Err(refused(
             ProfileField::Profile,
+            ProfileReason::ProfileBuiltin,
             "The built-in profile cannot be changed or removed",
         ));
     }
@@ -645,12 +671,14 @@ fn live(file: &File, id: &ProfileId) -> Result<usize, ProfileRefusal> {
         .ok_or_else(|| {
             refused(
                 ProfileField::Profile,
+                ProfileReason::ProfileMissing,
                 format!("This machine has no profile {}", id.0),
             )
         })?;
     if file.profiles[at].removing {
         return Err(refused(
             ProfileField::Profile,
+            ProfileReason::ProfileRemoving,
             "The profile is being removed",
         ));
     }
@@ -667,23 +695,31 @@ fn named(
 ) -> Result<String, ProfileRefusal> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(refused(ProfileField::Name, "A profile needs a name"));
-    }
-    if name.len() > MAX_NAME_BYTES {
         return Err(refused(
             ProfileField::Name,
+            ProfileReason::NameEmpty,
+            "A profile needs a name",
+        ));
+    }
+    if name.len() > MAX_NAME_BYTES {
+        return Err(over(
+            ProfileField::Name,
+            ProfileReason::NameLong,
+            MAX_NAME_BYTES,
             format!("A profile's name is at most {MAX_NAME_BYTES} bytes"),
         ));
     }
     if name.chars().any(char::is_control) {
         return Err(refused(
             ProfileField::Name,
+            ProfileReason::NameControl,
             "A profile's name cannot hold a control character",
         ));
     }
     if name.eq_ignore_ascii_case(&Profile::builtin_default(kind).name) {
         return Err(refused(
             ProfileField::Name,
+            ProfileReason::NameBuiltin,
             "The built-in profile already has that name",
         ));
     }
@@ -695,6 +731,7 @@ fn named(
     if taken {
         return Err(refused(
             ProfileField::Name,
+            ProfileReason::NameTaken,
             format!("{kind} already has a profile named {name}"),
         ));
     }
@@ -706,8 +743,10 @@ fn program_of(program: Option<String>) -> Result<Option<String>, ProfileRefusal>
         return Ok(None);
     };
     if program.len() > MAX_PROGRAM_BYTES || program.contains('\0') {
-        return Err(refused(
+        return Err(over(
             ProfileField::Program,
+            ProfileReason::ProgramLong,
+            MAX_PROGRAM_BYTES,
             format!("A program is at most {MAX_PROGRAM_BYTES} bytes, with no NUL"),
         ));
     }
@@ -737,6 +776,7 @@ fn checked(home: &Path, profile: &Profile) -> Result<(), ProfileRefusal> {
     let adapter = hide_agent_adapter::adapter(&profile.kind).ok_or_else(|| {
         refused(
             ProfileField::Kind,
+            ProfileReason::KindUnknown,
             format!("Hide keeps no profiles for an agent named {}", profile.kind),
         )
     })?;
@@ -745,29 +785,59 @@ fn checked(home: &Path, profile: &Profile) -> Result<(), ProfileRefusal> {
         .map(drop)
         .map_err(|refusal| {
             let text = refusal.to_string();
-            let (field, env_key) = match refusal {
-                Refusal::OtherAgent => (ProfileField::Kind, None),
+            let mut limit = None;
+            let (field, reason, env_key) = match refusal {
+                Refusal::OtherAgent => (ProfileField::Kind, ProfileReason::KindUnknown, None),
                 Refusal::NodeVariable { .. } | Refusal::NodeAccountName { .. } => {
-                    (ProfileField::Profile, None)
+                    (ProfileField::Profile, ProfileReason::NodeVariable, None)
                 }
-                Refusal::NoAccountHome
-                | Refusal::AccountUnsupported { .. }
-                | Refusal::AccountKind { .. }
-                | Refusal::AccountEmpty
-                | Refusal::AccountRelative
-                | Refusal::AccountIsDefault
-                | Refusal::AccountName => (ProfileField::Account, None),
-                Refusal::TooManyVariables { .. } | Refusal::VariableName => {
-                    (ProfileField::Env, None)
+                Refusal::NoAccountHome => (
+                    ProfileField::Account,
+                    ProfileReason::AccountHomeMissing,
+                    None,
+                ),
+                Refusal::AccountUnsupported { .. } => (
+                    ProfileField::Account,
+                    ProfileReason::AccountUnsupported,
+                    None,
+                ),
+                Refusal::AccountKind { by: By::Name } => {
+                    (ProfileField::Account, ProfileReason::AccountNeedsName, None)
                 }
-                Refusal::VariableReserved { key }
-                | Refusal::VariableRepeated { key }
-                | Refusal::VariableValue { key } => (ProfileField::Env, Some(key)),
+                Refusal::AccountKind { .. } => (
+                    ProfileField::Account,
+                    ProfileReason::AccountNeedsFolder,
+                    None,
+                ),
+                Refusal::AccountEmpty => (ProfileField::Account, ProfileReason::AccountEmpty, None),
+                Refusal::AccountRelative => {
+                    (ProfileField::Account, ProfileReason::AccountRelative, None)
+                }
+                Refusal::AccountIsDefault => {
+                    (ProfileField::Account, ProfileReason::AccountIsDefault, None)
+                }
+                Refusal::AccountName => (ProfileField::Account, ProfileReason::AccountName, None),
+                Refusal::TooManyVariables { limit: most } => {
+                    limit = Some(most as u64);
+                    (ProfileField::Env, ProfileReason::EnvTooMany, None)
+                }
+                Refusal::VariableName => (ProfileField::Env, ProfileReason::EnvName, None),
+                Refusal::VariableReserved { key } => {
+                    (ProfileField::Env, ProfileReason::EnvReserved, Some(key))
+                }
+                Refusal::VariableRepeated { key } => {
+                    (ProfileField::Env, ProfileReason::EnvRepeated, Some(key))
+                }
+                Refusal::VariableValue { key } => {
+                    (ProfileField::Env, ProfileReason::EnvValue, Some(key))
+                }
             };
             ProfileRefusal {
                 field,
                 text,
                 env_key,
+                reason: Some(reason),
+                limit,
             }
         })
 }
@@ -1006,39 +1076,65 @@ mod tests {
             false,
         );
         let mut cases = vec![
-            (add("gemini", "x", None), ProfileField::Kind, None),
-            (add("claude-code", "Work", None), ProfileField::Name, None),
+            (
+                add("gemini", "x", None),
+                ProfileField::Kind,
+                None,
+                ProfileReason::KindUnknown,
+            ),
+            (
+                add("claude-code", "Work", None),
+                ProfileField::Name,
+                None,
+                ProfileReason::NameTaken,
+            ),
             (
                 add("claude-code", "default", None),
                 ProfileField::Name,
                 None,
+                ProfileReason::NameBuiltin,
             ),
             (
                 add("claude-code", "rel", folder("accounts")),
                 ProfileField::Account,
                 None,
+                ProfileReason::AccountRelative,
             ),
             (
                 add("antigravity", "moved", folder("/tmp/agy")),
                 ProfileField::Account,
                 None,
+                ProfileReason::AccountUnsupported,
             ),
-            (reserved, ProfileField::Env, Some("CLAUDE_CONFIG_DIR")),
-            (forbidden, ProfileField::Env, Some("CODEX_SQLITE_HOME")),
+            (
+                reserved,
+                ProfileField::Env,
+                Some("CLAUDE_CONFIG_DIR"),
+                ProfileReason::EnvReserved,
+            ),
+            (
+                forbidden,
+                ProfileField::Env,
+                Some("CODEX_SQLITE_HOME"),
+                ProfileReason::EnvReserved,
+            ),
         ];
         if cfg!(unix) {
             cases.push((
                 add("claude-code", "open", folder(&shared.display().to_string())),
                 ProfileField::Account,
                 None,
+                ProfileReason::AccountUnprepared,
             ));
         }
         let before = node.list(false);
 
-        for (change, field, key) in cases {
+        for (change, field, key, reason) in cases {
             let applied = node.apply(change.clone());
             let refused = refusal(&applied);
             assert_eq!(refused.field, field, "{change:?}: {refused:?}");
+            // The screen words the reason; the text stays the CLI's.
+            assert_eq!(refused.reason, Some(reason), "{change:?}: {refused:?}");
             assert_eq!(refused.env_key.as_deref(), key, "{change:?}");
             assert_eq!(applied.list.version, before.version, "{change:?}");
         }
@@ -1072,6 +1168,8 @@ mod tests {
         let refused = refusal(&applied);
         assert_eq!(refused.field, ProfileField::Profile);
         assert!(refused.text.contains("64"), "{refused:?}");
+        assert_eq!(refused.reason, Some(ProfileReason::ProfilesFull));
+        assert_eq!(refused.limit, Some(64));
     }
 
     #[test]

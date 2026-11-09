@@ -4318,6 +4318,25 @@ impl Runtime {
             self.set_error("worktree.create_invalid_prompt", message, false);
             return true;
         }
+        // The profile is judged before anything is made, so a chosen one the
+        // machine no longer lists leaves no worktree behind (B16).
+        let profile = match self.new_start_profile(
+            device.as_deref().unwrap_or(self.node.as_str()),
+            payload.agent_kind.as_deref(),
+            Some(&payload.repository_root),
+            payload.profile.as_deref(),
+        ) {
+            Ok(profile) => profile,
+            Err(message) => {
+                self.set_request_error(
+                    "worktree.create_profile_gone",
+                    message,
+                    false,
+                    payload.request_id.as_deref(),
+                );
+                return true;
+            }
+        };
         let id = match self.begin_task_operation(
             "worktree_create",
             Some(payload.repository_root.clone()),
@@ -4338,10 +4357,6 @@ impl Runtime {
             .map_or_else(Default::default, |kind| {
                 self.agent_permission(device.as_deref().unwrap_or(self.node.as_str()), kind)
             });
-        let profile = self.new_start_profile(
-            device.as_deref().unwrap_or(self.node.as_str()),
-            payload.agent_kind.as_deref(),
-        );
         self.set_task_agent_launch(
             id,
             prompt,
@@ -4755,6 +4770,29 @@ impl Runtime {
             }
             None => None,
         };
+        // A new start's profile is judged before its tab is made, so a chosen
+        // one the machine no longer lists leaves nothing behind (B16).
+        let picked = if resume.is_none() && recorded.is_none() {
+            match self.new_start_profile(
+                &device,
+                agent_kind.as_deref(),
+                Some(&checkout_path),
+                payload.profile.as_deref(),
+            ) {
+                Ok(profile) => profile,
+                Err(message) => {
+                    self.set_request_error(
+                        "agent_start.profile_gone",
+                        message,
+                        false,
+                        request_id.as_deref(),
+                    );
+                    return true;
+                }
+            }
+        } else {
+            None
+        };
         let retry = (!payload.confirm_only)
             .then(|| {
                 self.snapshot
@@ -4799,7 +4837,7 @@ impl Runtime {
         let profile = match (&resume, recorded) {
             (_, Some(recorded)) => Some((recorded.id.clone(), recorded.name.clone())),
             (Some(_), None) => None,
-            (None, None) => self.new_start_profile(&device, agent_kind.as_deref()),
+            (None, None) => picked,
         };
         let mut arguments = resume.unwrap_or_default();
         let permission = agent_kind.as_deref().map_or_else(Default::default, |kind| {

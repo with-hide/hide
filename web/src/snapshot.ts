@@ -2142,6 +2142,59 @@ export type Kit = {
   codex_daemon_on?: boolean | null;
   /** The last turn-off of the shared server on this machine; absent until one was asked. */
   codex_daemon_off?: CodexDaemonOff | null;
+  /** The machine's agent profiles as its node lists them (PRD agent-profiles D-04); null until first read. */
+  profiles?: MachineAgentProfiles | null;
+};
+
+/** Whether a machine's profiles could be read (`contracts/snapshot-wire-enums.json`: `profiles_state`). */
+export type AgentProfilesState = "listed" | "unsupported" | "unreadable";
+/** Where a profile's pieces are (`profile_install`): the agent's own account, one of its own, or a state of removal. */
+export type AgentProfileInstall = "default" | "own" | "refused" | "removing" | "remove_failed";
+
+/** One profile as the core lists it (`ProfileSnapshot`): no variable's value. */
+export type AgentProfileWire = {
+  id: string;
+  /** The agent's id. */
+  kind: string;
+  name: string;
+  /** The folder or omp name it runs in; null for the agent's own account. */
+  account: string | null;
+  program: string | null;
+  env_keys: string[];
+  version: number;
+  /** Null until the kit judged this version. */
+  install: AgentProfileInstall | null;
+  folder: string | null;
+  hook: KitPiece | null;
+  skill: KitPiece | null;
+};
+
+export type MachineAgentProfiles = {
+  state: AgentProfilesState;
+  version: number;
+  profiles: AgentProfileWire[];
+  /** Each agent's default profile where it is not the built-in one, by agent id. */
+  defaults: Record<string, string>;
+};
+
+/** What Settings › Agents' last profile request came to (`status.agent_profile_answer`). */
+export type AgentProfileAnswer = {
+  request_id: string;
+  device_id: string;
+  state: "pending" | "done" | "refused";
+  code?: string;
+  field?: "kind" | "name" | "account" | "program" | "env" | "profile";
+  env_key?: string;
+  /** The machine's English words, for the log and the CLI; the screen words `reason`. */
+  text?: string;
+  reason?: "kind_unknown" | "profiles_full" | "name_empty" | "name_long" | "name_control" | "name_builtin" | "name_taken" | "program_long" | "profile_builtin" | "profile_missing" | "profile_removing" | "profile_other_kind" | "node_variable" | "account_home_missing" | "account_unsupported" | "account_needs_folder" | "account_needs_name" | "account_empty" | "account_relative" | "account_is_default" | "account_name" | "account_unprepared" | "env_too_many" | "env_name" | "env_reserved" | "env_repeated" | "env_value" | "other";
+  /** The bound a `*_long`, `profiles_full` or `env_too_many` reason crossed. */
+  limit?: number;
+  /** Agents running with it, and starts holding it with no pane yet (`starting`). */
+  in_use?: { pane_id: string; title: string; place: string; asleep: boolean; starting?: boolean }[];
+  projects?: string[];
+  values?: [string, string][];
+  added?: string;
 };
 
 /** One pane's rectangle in a remote tab, as fractions of the tab's area (`RemotePaneLayoutFrame`). */
@@ -3329,6 +3382,8 @@ export type SnapshotRest = {
     /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
     herdr_profiles?: MachineProfiles;
+    /** What Settings › Agents' last profile request came to; absent until one was made. */
+    agent_profile_answer?: AgentProfileAnswer;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     /** Bounded read-only hover text; never an attachment or a focus request. */

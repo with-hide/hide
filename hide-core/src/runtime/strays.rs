@@ -192,6 +192,7 @@ impl Runtime {
             resume_session_id: None,
             resume_session_path: None,
             stay_behind: true,
+            profile: None,
         });
         let refused = self
             .snapshot
