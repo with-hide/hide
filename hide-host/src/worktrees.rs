@@ -2262,7 +2262,9 @@ fn remove_worktree_stopping(
     }
     // What is on disk decides, so an answer cut short (a held pipe) after
     // Git removed the folder still reads as removed, and a failure whose
-    // readback also fails keeps Git's own reason.
+    // readback also fails keeps Git's own reason. Once Git said it removed
+    // the worktree, a listing that cannot be read (a full disk) leaves the
+    // folder to decide: gone is removed, never a worktree said to remain.
     let listed = registered(repository_root)
         .map(|rows| rows.iter().any(|row| Path::new(&row.path) == checkout));
     let unreadable = |message: String| Stopped {
@@ -2271,14 +2273,13 @@ fn remove_worktree_stopping(
     };
     let remains = match (listed, &answer) {
         (Ok(listed), Err(_)) => listed || checkout.try_exists().unwrap_or(true),
-        (Ok(listed), Ok(_)) => {
-            listed
+        (listed, Ok(_)) => {
+            listed.unwrap_or(false)
                 || checkout
                     .try_exists()
                     .map_err(|error| unreadable(error.to_string()))?
         }
         (Err(_), Err(_)) => true,
-        (Err(error), Ok(_)) => return Err(unreadable(error)),
     };
     match (answer, remains) {
         (_, false) => {

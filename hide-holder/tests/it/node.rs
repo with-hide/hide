@@ -32,8 +32,9 @@ use hide_node::terminal::holder::{HolderFolders, Holders, open_holder};
 use hide_node::terminal::protocol::SessionEvent;
 use hide_node::terminal::{Attacher, OutputSink, ReportSink, RetryPolicy, Service};
 use hide_node_link::holders::{
-    HolderError, HolderStart, NO_RULES_FOR_HOLDER, PaneFacts, PaneFactsSink, PaneHolders, RuleSet,
-    ScreenRead, ScreenRules, ScreenState, UNSUPPORTED_HOLDER, WATCH_LOST,
+    HolderError, HolderStart, NO_RULES_FOR_HOLDER, PANE_STARTING, PROOF_START_WAIT, PaneFacts,
+    PaneFactsSink, PaneHolders, RuleSet, ScreenRead, ScreenRules, ScreenState, UNSUPPORTED_HOLDER,
+    WATCH_LOST,
 };
 use hide_node_link::terminal::{
     GridSize, KeyTarget, TerminalControl, TerminalNode, TerminalReport,
@@ -614,6 +615,137 @@ fn an_engine_pane_attaches_before_its_holder_start_is_registered() {
             .states(pane)
             .iter()
             .any(|state| state == "unavailable")
+    );
+    engine.terminate(pane).unwrap();
+    service.close();
+}
+
+/// A pane's program runs before its holder writes that it does, and a
+/// `hide` it runs at once asks for its pane in that window
+/// (with-hide/hide-private#719). The record's proof says the pane is still
+/// starting, never that it is gone; the host's answer to a pane's caller,
+/// what `Call::PaneInspect` and the bootstrap prove a caller by, waits for
+/// that start: a start still held after the proof's own short wait is
+/// answered `pane_starting`, and one released while a proof waits is proved
+/// by the program its record then names.
+#[test]
+fn a_program_that_asks_before_its_record_says_running_is_proved_once_it_does() {
+    let _listening = diagnostics();
+    let folder = Folder::new();
+    let Node {
+        service,
+        holders,
+        screens: _screens,
+        reports: _reports,
+        owner,
+    } = Node::start(folder.home.path(), &folder.state);
+    drop(owner);
+    let service = Arc::new(service);
+    let holders = Arc::new(holders);
+    let engine = Arc::new(LocalPanes::new(
+        Arc::clone(&holders),
+        Arc::clone(&service),
+        PaneShell::Fixed(shell()),
+    ))
+    .own(Duration::from_secs(5))
+    .unwrap();
+    let pane = "w1:p1";
+    let release = folder.home.path().join("release-running");
+    let start = HolderStart {
+        pane: pane.to_owned(),
+        program: None,
+        cwd: hide_platform::path::to_wire(folder.home.path()).unwrap(),
+        env: vec![(
+            crate::support::HOLD_RUNNING.to_owned(),
+            release.to_string_lossy().into_owned(),
+        )],
+        rows: SIZE.rows,
+        cols: SIZE.cols,
+        notice: None,
+    };
+    let starting = {
+        let engine = Arc::clone(&engine);
+        thread::spawn(move || start_pane(&*engine, &start))
+    };
+    // The holder wrote itself in; until the test releases it, its record
+    // says `preparing` whatever its program does.
+    wait_until("the holder to write itself in", || {
+        holders
+            .record(pane)
+            .unwrap()
+            .is_some_and(|record| record.holder.is_some())
+    });
+    match engine.proof(pane) {
+        Err(HolderError::Refused { code, .. }) => assert_eq!(code, PANE_STARTING),
+        other => panic!("a starting pane was answered {other:?}"),
+    }
+    let bridges = layout::workspace_bridges(&folder.state);
+    let panes = hide_host::panes::Panes::new();
+    let output = Mutex::new(Vec::<u8>::new());
+    let proved = thread::scope(|scope| {
+        panes
+            .start(
+                scope,
+                &output,
+                &bridges,
+                hide_host::pane_holders::PaneSlot::holding(Arc::clone(&engine)),
+            )
+            .unwrap();
+        // Ends the service's threads on every way out, so a failed check
+        // fails the test rather than leaving the scope waiting for them.
+        struct Stopping<'a>(&'a hide_host::panes::Panes);
+        impl Drop for Stopping<'_> {
+            fn drop(&mut self) {
+                self.0.stop();
+            }
+        }
+        let _stopping = Stopping(&panes);
+        // A holder that does not write `running` costs the caller the
+        // proof's own wait, not the start's limit.
+        let asked = Instant::now();
+        let held = panes.inspect(pane);
+        let waited = asked.elapsed();
+        assert_eq!(
+            held.map_err(|error| error.message),
+            Err(PANE_STARTING.to_owned())
+        );
+        assert!(
+            waited >= PROOF_START_WAIT && waited < hide_kit::panes::START_LIMIT,
+            "the held start was waited for {waited:?}"
+        );
+        let proving = scope.spawn(|| panes.inspect(pane));
+        // This ask's first proof read the pane starting and went to wait for
+        // it (the first ask logged the first such record); only then is the
+        // holder let write that its program runs.
+        wait_until("the second ask to wait for the start", || {
+            DIAGNOSTICS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|record| {
+                    record["kind"] == "pane.proof.start_wait" && record["pane_id"] == pane
+                })
+                .count()
+                >= 2
+        });
+        std::fs::write(&release, b"").unwrap();
+        proving.join().unwrap()
+    });
+    panes.remove_folder();
+    let proved = proved.expect("the pane released while its caller waited is proved");
+    starting.join().unwrap().unwrap();
+    let record = holders.record(pane).unwrap().unwrap();
+    assert_eq!(record.phase, Phase::Running);
+    let program = record
+        .program
+        .expect("the running record names its program");
+    assert_eq!(
+        (
+            proved.terminal_id.as_str(),
+            i64::from(proved.shell_pid),
+            proved.shell_started
+        ),
+        (pane, i64::from(program.pid), program.started)
     );
     engine.terminate(pane).unwrap();
     service.close();

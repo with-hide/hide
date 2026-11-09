@@ -20,6 +20,24 @@ use serde::{Deserialize, Serialize};
 /// answers a spawn refused this way with the same code.
 pub const HOLDER_CAP_REFUSAL: &str = "holder_cap";
 
+/// [`PaneHolders::proof`]'s refusal of a pane whose holder has not yet
+/// written that its program runs: the same ask succeeds once it has.
+pub const PANE_STARTING: &str = "pane_starting";
+
+/// [`PaneHolders::proof`]'s refusal of a pane whose program no longer runs,
+/// or is closing.
+pub const PANE_NOT_RUNNING: &str = "pane_not_running";
+
+/// How long a process that runs in a pane and asks for it waits for that
+/// pane's start to settle ([`PaneHolders::proof_once_started`]). The holder
+/// writes that its program runs right after starting it, so the window a
+/// program that calls `hide` at once can meet is far shorter. Every hook
+/// asks through this proof, so the wait stays well under the shortest budget
+/// a hook gives its call (`hide-agent-hooks`' `MEMORY_BUDGET`, 1.25 s): a
+/// pane whose holder never writes that its program runs costs a call this
+/// much, not the start's own limit.
+pub const PROOF_START_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// One pane to start, under the id the core chose for it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderStart {
@@ -520,9 +538,23 @@ pub trait PaneHolders: Send + Sync {
     /// pane's record says (PRD engine-bundle-3-core-owns D-9): what a
     /// process that names the pane is proved against. Read from the record
     /// alone, never from the holder, so a holder that does not answer cannot
-    /// vouch for anything; a pane whose program has not started or has ended
-    /// is refused `pane_not_running`.
+    /// vouch for anything; a pane whose holder is still starting its program
+    /// is refused [`PANE_STARTING`], one whose program has ended
+    /// [`PANE_NOT_RUNNING`].
     fn proof(&self, pane: &str) -> Result<HolderProof, HolderError>;
+    /// [`Self::proof`] for a process that runs in the pane and asks for it:
+    /// the holder starts the program before its record names it, so a
+    /// program that calls `hide` at once can find its pane still starting
+    /// (with-hide/hide-private#719). A start under way is waited for, by its
+    /// settling rather than a time, until `within`, and a pane still
+    /// starting then is refused [`PANE_STARTING`].
+    fn proof_once_started(
+        &self,
+        pane: &str,
+        _within: std::time::Duration,
+    ) -> Result<HolderProof, HolderError> {
+        self.proof(pane)
+    }
     /// Types `input` into the pane through the connection that holds its
     /// screen, in order with every other key typed there; a pane whose
     /// screen was let go is attached again for it. It is the engine's
