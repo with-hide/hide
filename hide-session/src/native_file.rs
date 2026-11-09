@@ -281,10 +281,10 @@ fn below(root: &Root, path: &Path) -> std::result::Result<(), RootRefusal> {
     let canonical_anchor = hide_platform::fs::identity::canonical(&root.anchor)
         .map_err(|_| RootRefusal::Unreadable)?;
     let suffix = root.suffix();
-    let relative = hide_platform::path::relative(&root.place, path)
-        .or_else(|_| hide_platform::path::relative(&canonical_anchor.join(suffix), path))
+    let relative = hide_platform::path::strip_prefix(&root.place, path)
+        .or_else(|_| hide_platform::path::strip_prefix(&canonical_anchor.join(suffix), path))
         .map_err(|_| RootRefusal::Outside)?;
-    if relative.is_root() {
+    if relative.as_os_str().is_empty() {
         return Err(RootRefusal::Outside);
     }
     Ok(())
@@ -312,9 +312,8 @@ pub(crate) fn checked_path_under(
 ) -> std::result::Result<PathBuf, RootRefusal> {
     let canonical_home =
         hide_platform::fs::identity::canonical(home).map_err(|_| RootRefusal::Unreadable)?;
-    let relative = hide_platform::path::relative(&home.join(suffix), path)
-        .or_else(|_| hide_platform::path::relative(&canonical_home.join(suffix), path))
-        .and_then(|relative| relative.to_native())
+    let relative = hide_platform::path::strip_prefix(&home.join(suffix), path)
+        .or_else(|_| hide_platform::path::strip_prefix(&canonical_home.join(suffix), path))
         .map_err(|_| RootRefusal::Outside)?;
     let mut checked = canonical_home;
     for component in suffix.components().chain(relative.components()) {

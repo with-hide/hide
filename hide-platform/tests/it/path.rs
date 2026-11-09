@@ -49,6 +49,24 @@ fn a_root_spelled_with_the_long_path_prefix_relates_to_its_short_spelling() {
 }
 
 #[test]
+fn a_native_remainder_keeps_parent_components_for_its_reader_to_refuse() {
+    let (_dir, root) = checkout();
+    let resolved = fs::canonicalize(&root).unwrap();
+    let remainder = Path::new("src").join("..").join("src").join("main.rs");
+    let requested = root.join(&remainder);
+    for anchor in [&root, &resolved] {
+        assert_eq!(
+            path::strip_prefix(anchor, &requested),
+            Ok(remainder.as_path())
+        );
+        assert_eq!(
+            path::relative(anchor, &requested),
+            Err(PathError::NotNormal)
+        );
+    }
+}
+
+#[test]
 fn a_path_that_climbs_out_is_absolute_where_it_should_not_be_or_is_elsewhere_is_refused() {
     let (_dir, root) = checkout();
     assert_eq!(
