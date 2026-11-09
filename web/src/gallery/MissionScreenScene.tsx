@@ -2,8 +2,7 @@
 // invented data: the sidebar with its `미션` row, and the screen in each state
 // it carries. `table` is the device's missions in their four groups over two
 // projects; `filtered` narrows them to one project's chip; `detail` is the list
-// beside a mission's detail; `from-pane` is the head opened from a pane's
-// mission chip, with `← <pane>`; `closed-all` opens 끝남 whole; `empty`,
+// beside a mission's detail; `closed-all` opens 끝남 whole; `empty`,
 // `loading` and `failed` stand in for the rows; `offline` is a device that does
 // not answer. `window` sets the window's width, so a narrow one stacks the list above
 // the detail. No daemon is used.
@@ -19,7 +18,7 @@ import { missionScreenMissions } from "./missionScreenSceneData";
 import { OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["table", "filtered", "detail", "from-pane", "closed-all", "empty", "loading", "failed", "offline"] as const;
+const STATES = ["table", "filtered", "detail", "closed-all", "empty", "loading", "failed", "offline"] as const;
 type MissionScreenState = (typeof STATES)[number];
 
 /** The second project the missions spread over, so the table shows its chips. */
@@ -46,13 +45,11 @@ export function MissionScreenScene({ theme, scale, content, state, window }: Mis
     const missions = missionScreenMissions(hide.id, hide.checkouts[0]!.path, other.id, other.checkouts[0]!.path, now).map((mission) => ({ ...mission, device_id: device, stale: state === "offline" }));
     scene.rest.missions = state === "empty" ? { items: [] } : state === "failed" ? { items: [], failed: "mission book: unreadable" } : { items: missions };
     if (state === "loading") delete scene.rest.missions;
-    const pane = scene.agents.find((agent) => agent.pane_id === "a1") ?? scene.agents[0]!;
     const place: MissionPlace = {
       ...MISSION_ENTRY,
       deviceId: device,
       projectId: state === "filtered" ? hide.id : null,
-      selected: state === "detail" || state === "from-pane" ? "mission-41" : null,
-      returnPane: state === "from-pane" ? pane.pane_id : null,
+      selected: state === "detail" ? "mission-41" : null,
       closedAll: state === "closed-all",
     };
     return { scene, place };

@@ -21,7 +21,7 @@
 import type { ProjectTasksScope } from "../../agentScope";
 import type { MessageKey } from "../../i18n/catalogs";
 import { clientI18n } from "../../i18n/translator";
-import { nextSidebarLens, type AgentChip, type AgentRow, type AgentState, type MemorySection, type Mission, type MissionNode, type PaneFocusRequest, type PaneHeader, type SidebarLens } from "../../snapshot";
+import { nextSidebarLens, type AgentChip, type AgentRow, type AgentState, type MemorySection, type Mission, type MissionNode, type PaneFocusRequest, type PaneHeader, type SidebarLens, type DetailItem } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
 import { agent, applyDesk, counted, deskSnapshot, focusedPane, hideAiOn, keyText, shellScreen, typed, withLineage, withTasks, type DeskModel, type PracticePlace } from "./kit";
 
@@ -92,8 +92,10 @@ export type MissionModel = {
   noted: string[];
   /** Whether the answer drops password sign-in, which adds the part that takes it out. */
   drop: boolean;
-  /** The mission the page's mission screen shows (`mission_shown`), none once it leaves it. */
-  shown: string | null;
+  /** Whether the mission's card stands in front in the Conductor tab's 보기 slot, as `detail_open` puts it there and ✕ or ← takes it away. */
+  card: boolean;
+  /** How many times the lane was called to the 보기 slot, as the core numbers a lane call. */
+  laneCalls: number;
   /** Which list the sidebar shows (`sidebar_lens_set`). */
   lens: SidebarLens;
   /** The lane's tool: the Project's Memory. */
@@ -110,11 +112,11 @@ export const showsMemory = (model: MissionModel) => model.tool === "memory";
 /** The pane holding the keyboard. */
 export const focusedOn = (model: MissionModel) => focusedPane(model.desk);
 
-/** Whether the mission screen shows this chapter's mission. */
-export const missionShown = (model: MissionModel) => model.shown === MISSION_ID;
+/** Whether the 보기 slot shows this chapter's mission as a card beside the pane. */
+export const missionShown = (model: MissionModel) => model.card;
 
-/** Whether the page has left the mission screen for a pane again. */
-export const missionLeft = (model: MissionModel) => model.shown === null;
+/** Whether the mission's card was put away again. */
+export const missionLeft = (model: MissionModel) => !model.card;
 
 const since = (model: MissionModel, stage: MissionStage) => model.times[stage] ?? Date.now();
 
@@ -216,7 +218,7 @@ function initial(): MissionModel {
     operations: [],
   };
   // The sidebar starts on its 태스크 list, where a question lands in 내 차례.
-  return { desk, stage: 0, times: { 0: Date.now() }, draft: "", said: [], noted: [], drop: false, shown: null, lens: "tasks", tool: null, looked: false, focus: null };
+  return { desk, stage: 0, times: { 0: Date.now() }, draft: "", said: [], noted: [], drop: false, card: false, laneCalls: 0, lens: "tasks", tool: null, looked: false, focus: null };
 }
 
 /** The desk with a tab for each worker that has started and has none yet. */
@@ -371,11 +373,17 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
     }
     case "focus_pane":
       return focused(model, event);
-    // The page says which mission its mission screen shows, as it tells the core (PRD mission-screen D-16).
-    case "mission_shown": {
-      const shown = typeof p.mission === "string" ? p.mission : null;
-      return shown === model.shown ? null : { ...model, shown };
+    // The mission's card in the 보기 slot, opened as a lane call the way the core numbers one; a card of anything else this world keeps none of.
+    case "detail_open": {
+      const item = p.item as DetailItem;
+      return item.kind === "mission" && item.mission === MISSION_ID ? { ...model, card: true, laneCalls: model.laneCalls + 1 } : null;
     }
+    // ✕, or ← with nothing before the card, empties the slot; the rail's 보기 button folds or brings it back.
+    case "detail_close":
+    case "detail_back":
+      return model.card ? { ...model, card: false } : null;
+    case "detail_show":
+      return p.shown === model.card ? null : { ...model, card: p.shown === true };
     case "sidebar_lens_set": {
       const lens = (p.lens as SidebarLens | undefined) ?? nextSidebarLens(model.lens);
       return lens === model.lens ? null : { ...model, lens };
@@ -383,12 +391,13 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
     // The Memory tool shown, by ⇧⌘L, its rail icon or from elsewhere.
     case "project_memory_navigate":
       return p.workspace_id === PLACE.project && model.tool !== "memory" ? { ...model, tool: "memory" } : null;
-    // The Memory tool shown or taken down, or the lane put away with what it showed.
+    // The Memory tool shown or taken down, or the lane put away with what it showed, the mission's card too.
     case "workspace_view": {
       let tool = model.tool;
       if ("tool" in p) tool = p.tool === "memory" ? p.tool : null;
+      const card = p.open === false ? false : model.card;
       if (p.open === false) tool = null;
-      return tool === model.tool ? null : { ...model, tool };
+      return tool === model.tool && card === model.card ? null : { ...model, tool, card };
     }
     default: {
       const desk = applyDesk(model.desk, event);
@@ -449,7 +458,7 @@ function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
       navigator: { ...navigator, workspaces, changes_root_path: ROOT },
       missions: { items: current ? [current] : [] },
       workspace_view: viewOf(model, base.workspace_view!),
-      ui_state: { ...base.ui_state!, sidebar_lens: model.lens },
+      ui_state: { ...base.ui_state!, sidebar_lens: model.lens, detail: { items: model.card ? [{ kind: "mission", mission: MISSION_ID }] : [], shown: model.card } },
       terminal: { headers },
       // Hide AI on, so the Memory tool reads as it does for an operator who keeps one; the relationship focus answered.
       status: { ...base.status, pane_focus_request: model.focus, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
@@ -460,9 +469,9 @@ function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
 
 // --- The lane ------------------------------------------------------------------------------
 
-/** The lane as the core draws it: open on the Project's Memory once the learner asks for it. */
+/** The lane as the core draws it: open on the mission's card while the 보기 slot holds it, and on the Project's Memory once the learner asks for it. */
 function viewOf(model: MissionModel, view: NonNullable<WorldSnapshot["rest"]["workspace_view"]>): NonNullable<WorldSnapshot["rest"]["workspace_view"]> {
-  return { ...view, open: model.tool !== null, tool: model.tool };
+  return { ...view, open: model.card || model.tool !== null, tool: model.tool, lane_called: model.laneCalls, lane_calls: model.laneCalls, lane_called_side: "view" };
 }
 
 // --- The Project's Memory ------------------------------------------------------------------

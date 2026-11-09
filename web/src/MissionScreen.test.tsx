@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The mission screen (PRD mission-screen B2-B14, B22, D-16): what it shows of
+// The mission screen (PRD mission-screen B2-B13, B22, D-16): what it shows of
 // the device's missions in each state of the record, where a press takes it,
 // and the one event that tells the core which mission the detail shows.
 import { act } from "react";
@@ -183,21 +183,6 @@ describe("a project chip while a mission shows (B10)", () => {
   });
 });
 
-describe("the head's way back (B14)", () => {
-  it("names the pane a chip opened it from and goes back to it", async () => {
-    const agent = { pane_id: "w1:p4", identity_label: "hide-private P0", device_id: "mac" } as unknown as AgentRow;
-    const { q, press, events } = await mount({ place: { selected: "mission-1", returnPane: "w1:p4" }, agents: [agent] });
-    expect(q("[data-mission-screen-back]")?.textContent).toBe("hide-private P0");
-    await press(q("[data-mission-screen-back]"));
-    expect(events.some((event) => JSON.stringify(event.payload).includes("w1:p4") && event.kind !== "mission_shown")).toBe(true);
-  });
-
-  it("draws none when the screen was not opened from a pane", async () => {
-    const { q } = await mount({ place: { selected: "mission-1" } });
-    expect(q("[data-mission-screen-back]")).toBeNull();
-  });
-});
-
 describe("what the detail opens in the 보기 slot (D-09)", () => {
   it("leaves the screen for the Workspace in front, where the slot draws a node's plan or a worker's record", async () => {
     const { actions, events } = await mount({ place: { selected: "mission-1" } });
@@ -225,11 +210,11 @@ describe("the turn pill (B5)", () => {
     expect(row("mission-4").querySelector("[data-mission-takeover]")?.textContent).toBe("Resume command");
     expect(row("mission-1").querySelector("[data-mission-row-pill]")?.textContent).toBe("Answer");
     for (const id of ["mission-1", "mission-4"]) expect(row(id).textContent).not.toContain("!");
-    const open = vi.spyOn(actions, "openMission");
+    const open = vi.spyOn(actions, "showMissionOnScreen");
     await press(row("mission-4").querySelector<HTMLElement>('[data-slot="row-overlay-button"]'));
     expect(open).toHaveBeenCalledWith("mission-4");
     // The narrow list beside a detail marks a turn as every other row, with the mission mark and the action under the title, and no `!`.
-    act(() => actions.openMission("mission-1"));
+    act(() => actions.showMissionOnScreen("mission-1"));
     const list = q('[data-mission-list-row="mission-4"]')!;
     expect(list.textContent).toContain("Resume command");
     expect(list.textContent).not.toContain("!");
@@ -237,13 +222,25 @@ describe("the turn pill (B5)", () => {
   });
 });
 
-describe("opening a mission from anywhere (B2, B12, B13, D-04)", () => {
-  it("opens the screen on the mission, brings another device forward first, and keeps the pane a chip opened it from", async () => {
+describe("opening a mission (B2, B13, D-04; operator decision 2026-11-09)", () => {
+  it("opens a mission pressed outside the screen as a card in the 보기 slot, leaving the screen for the Workspace in front", async () => {
+    const { actions, events } = await mount({ place: { selected: "mission-2" } });
+    act(() => useShellStore.setState((state) => ({
+      rest: { ...state.rest!, workspace_view: {}, navigator: { ...state.rest!.navigator!, focused_checkout_id: "c1", workspaces: [{ id: "w", label: "herdr-ide", device_id: "mac", checkouts: [{ id: "c1", path: "/repo" }] }] } } as unknown as SnapshotRest,
+    })));
+    act(() => actions.openMission("mission-1"));
+    expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+    expect(events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" } }]);
+    // The screen's own detail is left as it was, for the sidebar row to come back to.
+    expect(useUiStore.getState().missions.selected).toBe("mission-2");
+  });
+
+  it("opens a row of the screen on the screen, bringing another device forward first", async () => {
     const { actions, events } = await mount();
     act(() => useUiStore.setState({ screen: { kind: "workspace" } }));
-    act(() => actions.openMission("mission-9", { paneId: "w1:p4" }));
+    act(() => actions.showMissionOnScreen("mission-9"));
     expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
-    expect(useUiStore.getState().missions).toMatchObject({ deviceId: "mini", selected: "mission-9", returnPane: "w1:p4" });
+    expect(useUiStore.getState().missions).toMatchObject({ deviceId: "mini", selected: "mission-9" });
     expect(events.filter((event) => event.kind === "focus_device").map((event) => event.payload)).toEqual([{ device_id: "mini" }]);
     // The sidebar row always opens the table on the device in front, every project and 끝남 folded.
     act(() => useUiStore.getState().setMissions({ projectId: "w2", closedAll: true }));
@@ -253,12 +250,12 @@ describe("opening a mission from anywhere (B2, B12, B13, D-04)", () => {
 
   it("lets go of a chip that leaves the mission out, so the list beside it holds the mission (B10)", async () => {
     const { actions, q } = await mount({ place: { projectId: "w2" } });
-    act(() => actions.openMission("mission-1"));
+    act(() => actions.showMissionOnScreen("mission-1"));
     expect(useUiStore.getState().missions.projectId).toBeNull();
     expect(q('[data-mission-list-row="mission-1"]')?.getAttribute("aria-current")).toBe("true");
-    act(() => actions.openMission("mission-3"));
+    act(() => actions.showMissionOnScreen("mission-3"));
     act(() => useUiStore.getState().setMissions({ projectId: "w2" }));
-    act(() => actions.openMission("mission-3"));
+    act(() => actions.showMissionOnScreen("mission-3"));
     expect(useUiStore.getState().missions.projectId).toBe("w2");
   });
 });

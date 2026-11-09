@@ -2,8 +2,8 @@
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
-// from the pane's mission chip on the mission screen, goes back to the pane with
-// the screen's `← <pane>` and approves it in the terminal; the pane head's
+// from the pane's mission chip as a card in the lane's 보기 slot, the pane
+// staying beside it, and approves it in the terminal; the pane head's
 // second row lists the child agents the Conductor starts; when it has a question
 // it lands in the sidebar's 내 차례, where the learner opens it and answers on the
 // map. What the work left is the Conductor's report and a new memory in the
@@ -18,14 +18,14 @@ const CHIP = `${PANE} [data-pane-mission-chip]`;
 const ANSWER = `[data-mission-recommended], body:not(:has([data-mission-recommended])) ${CHIP}`;
 /** The sign-in screen's worker, the one that runs longest: the list holds it once the survey is done. */
 const SCREEN = "ui";
-/** The mission screen's way back to the pane its chip was pressed in. */
-const BACK = "[data-mission-screen-back]";
+/** The 보기 slot's ✕, which puts the mission's card away. */
+const CLOSE = '[data-lane="detail"] [data-detail-close]';
 
 export default chapter<MissionModel>({
   id: "mission",
   number: 4,
   next: "overview",
-  version: 15,
+  version: 16,
   world: MISSION_WORLD,
   quest: true,
   preview: "mission",
@@ -34,11 +34,9 @@ export default chapter<MissionModel>({
     // The screen is seen alone a moment first, since it is the first a newcomer meets.
     { id: "intro", quest: true, target: PANE, side: "center", scene: 2400, gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
     { id: "thinking", target: PANE, side: "center", wait: true, done: (model) => model.stage >= 2 },
-    // The chip opens the whole plan on the mission screen; a first plan also opens the chip's popover once.
+    // The chip opens the whole plan as a card in the 보기 slot, beside the pane; a first plan also opens the chip's popover once.
     { id: "chip", quest: true, target: CHIP, side: "right", gesture: { click: true }, done: missionShown },
     { id: "plan", target: "[data-mission]", side: "left" },
-    // The screen's head goes back to the pane the chip was pressed in, its terminal as it was.
-    { id: "back", quest: true, target: BACK, side: "bottom", gesture: { click: true }, done: missionLeft },
     // The go is said to the Conductor in the terminal, because Hide has no button that starts a mission.
     { id: "approve", quest: true, target: PANE, side: "center", gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.approve" } }, done: (model) => model.stage >= 3 },
     // The pane head's second row is the Conductor's child agents: it opens the list of the workers started.
@@ -51,8 +49,8 @@ export default chapter<MissionModel>({
     { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
     // What the answer changed runs to the end by itself: the workers finish and the Conductor reports.
     { id: "finishing", target: "[data-mission]", side: "left", wait: true, done: (model) => model.stage >= 9 },
-    // Back to the Conductor's pane, where the lane is.
-    { id: "leave", quest: true, target: BACK, side: "bottom", gesture: { click: true }, done: missionLeft },
+    // The card has shown what the mission did; its ✕ puts it away, the pane as it was.
+    { id: "leave", quest: true, target: CLOSE, side: "left", gesture: { click: true }, done: missionLeft },
     // ⇧⌘L opens Hide AI on its Memory tab; the rail icon would open it on 제안.
     { id: "memory", quest: true, target: '[data-lane-tool="memory"]', side: "left", command: "open_project_memory", done: showsMemory },
     // What Memory is, on the card the decision became; the last bubble says what to do next.

@@ -153,13 +153,12 @@ it("shows its popover on focus or pointing without taking the keyboard, and a pr
     expect(view.popover()).not.toBeNull();
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(view.popover()).toBeNull();
-    // A press (Enter and Space on the focused button are presses too) opens the mission screen, coming back to this pane, and closes the popover.
+    // A press (Enter and Space on the focused button are presses too) opens the mission's card in the 보기 slot beside the pane, and closes the popover.
     await point("pointerover", null);
     expect(view.popover()).not.toBeNull();
     await act(async () => view.chip()!.click());
-    expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
-    expect(useUiStore.getState().missions).toMatchObject({ selected: "mission-1", returnPane: "p1" });
-    expect(view.events.some((event) => event.kind === "detail_open")).toBe(false);
+    expect(useUiStore.getState().screen).not.toEqual({ kind: "missions" });
+    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" } }]);
     expect([useUiStore.getState().planPane, view.popover()]).toEqual([null, null]);
     expect(view.chip()!.hasAttribute("aria-pressed")).toBe(false);
   } finally { await view.unmount(); }
