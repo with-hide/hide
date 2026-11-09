@@ -695,7 +695,7 @@ const GROUP_GLYPH_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-icon-sm) + var(-
  * sidebar-agent-row.tsx is the same rule for an agent row, which has no menu.
  */
 const ROW_REVEALED =
-  "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[state=open]:opacity-100 focus-visible:opacity-100 hoverless:opacity-100";
+  "opacity-0 group-hover:opacity-100 group-has-focus-visible:opacity-100 group-data-[state=open]:opacity-100 focus-visible:opacity-100 hoverless:opacity-100";
 
 /** A row's time and fold slot, a step apart as on an agent row, so every row's time ends on one column. */
 function RowEnd({ children }: { children: ReactNode }) {
@@ -810,7 +810,7 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
       <span className={cn("pointer-events-none relative flex h-full items-center gap-xxs bg-linear-to-l from-70% to-transparent pl-md [&_button]:pointer-events-auto", fill, menuOpen ? "opacity-100" : ROW_REVEALED)} data-row-actions={workspace.id}>
         <Hint label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")}>
           <Button variant="row-action" size="icon-sm" aria-label={t(workspace.pinned ? "workspace.menu.unpin" : "workspace.menu.pin")} aria-pressed={workspace.pinned} data-row-pin={workspace.id} onClick={() => onSelect(workspace.pinned ? "unpin" : "pin")}>
-            <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "text-foreground")} />
+            <PinIcon aria-hidden="true" className={cn("size-(--size-icon-sm)", workspace.pinned && "fill-current text-foreground")} />
           </Button>
         </Hint>
         <Hint label={t("sidebar.startAgentIn", { name: workspace.label })}>
@@ -829,6 +829,7 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
             <SettingsIcon aria-hidden="true" className="size-(--size-icon-sm)" />
           </Button>
         </Hint>
+        {children}
         <EntryDropdown
           label={t("common.entryActions", { name: workspace.label })}
           items={items}
@@ -843,7 +844,6 @@ function RowActions({ workspace, items, onSelect, fill, children }: { workspace:
             </Button>
           }
         />
-        {children}
       </span>
     </span>
   );
@@ -949,14 +949,14 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             <ProjectMark workspace={workspace} />
             <ProjectName workspace={workspace} label />
             {/* A folded project still says what runs and asks inside it; open, its own rows say it. */}
-            {expanded ? null : <StatusBadge counts={sumMarks(workspace.checkouts.map((checkout) => checkout.agent_summary?.marks))} className="group-hover:hidden group-focus-within:hidden" data-project-status={workspace.id} />}
+            {expanded ? null : <StatusBadge counts={sumMarks(workspace.checkouts.map((checkout) => checkout.agent_summary?.marks))} className="group-hover:hidden group-has-focus-visible:hidden" data-project-status={workspace.id} />}
           </button>
           <RowEnd>
             <RowActions
               workspace={workspace}
               items={() => projectMenu(workspace, menuHost(), t, issueSource)}
               onSelect={(item) => runProjectItem(actions, workspace, item)}
-              fill={hiding === "project" ? "from-secondary" : "from-sidebar group-hover:from-accent group-focus-within:from-accent"}
+              fill={hiding === "project" ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
             >
               <RepositoryMark workspace={workspace} actions={actions} />
             </RowActions>
@@ -1241,7 +1241,7 @@ const FolderRowView = memo(function FolderRowView({
                 workspace={workspace}
                 items={() => folderMenu(workspace, checkout, menuHost(), t, issueSource)}
                 onSelect={(item) => (FOLDER_CHECKOUT_ITEMS.has(item) ? runCheckoutItem(actions, workspace, checkout, item) : runProjectItem(actions, workspace, item))}
-                fill={focused ? "from-secondary" : "from-sidebar group-hover:from-accent group-focus-within:from-accent"}
+                fill={focused ? "from-secondary" : "from-sidebar group-hover:from-accent group-has-focus-visible:from-accent"}
               />
               {foldable ? (
                 <FoldToggle
