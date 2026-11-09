@@ -210,6 +210,26 @@ fn a_removal_is_refused_while_an_agent_runs_with_the_profile_and_names_the_proje
     let checked = answer(&runtime);
     assert!(checked.in_use.is_empty());
     assert_eq!(checked.projects, ["blog"]);
+    assert!(!checked.hide_ai, "Hide AI names no profile yet");
+    // Hide AI's fallback list naming it is named too, and the delete leaves
+    // it there as a missing profile (PRD agent-profiles-phase2 B22).
+    let mut settings = hide_ai::AiSettings::default();
+    settings
+        .add_fallback(
+            hide_ai::Item::of(
+                hide_ai::ProviderId::CLAUDE,
+                Some(ProfileId("p-work".into())),
+            ),
+            None,
+        )
+        .unwrap();
+    runtime.ingest_ai_settings(settings, None);
+    change(
+        &mut runtime,
+        "check-3",
+        serde_json::json!({"op": "remove_check", "id": "p-work"}),
+    );
+    assert!(answer(&runtime).hide_ai);
     // A sleeping agent counts as one that runs with it (D-11).
     let mut sleeping = project_agents(
         serde_json::from_value(serde_json::json!({"agents": [

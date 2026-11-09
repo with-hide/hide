@@ -298,7 +298,7 @@ it("names profile items, says which answers while Runs on steps aside, and dims 
     ],
     refusal: { provider: "claude", profile: "p-work", reason: "needs_login", retry_at_ms: null, using: "claude", using_profile: "p-gw" },
   });
-  next.rest.navigator.devices[0] = { ...next.rest.navigator.devices[0], kit: { agents: [], profiles } } as never;
+  next.rest.navigator.devices[0] = { id: "local", machine_name: "Mac mini", kit: { agents: [], profiles } };
   const view = await mount(next);
   try {
     expect(view.q("[data-ai-provider]")?.textContent).toBe("Claude Code · work");

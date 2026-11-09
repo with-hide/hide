@@ -2262,6 +2262,10 @@ export type AgentProfileAnswer = {
   /** Agents running with it, and starts holding it with no pane yet (`starting`). */
   in_use?: { pane_id: string; title: string; place: string; asleep: boolean; starting?: boolean }[];
   projects?: string[];
+  /** How many of Settings › Mission's candidates name the profile (PRD agent-profiles-phase2 B22). */
+  candidates?: number;
+  /** Hide AI's Runs on or fallback list names the profile (PRD agent-profiles-phase2 B22). */
+  hide_ai?: boolean;
   values?: [string, string][];
   added?: string;
 };

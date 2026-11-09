@@ -354,6 +354,11 @@ pub struct ProfileAnswer {
     /// The names of the projects that start with the profile.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<String>,
+    /// Hide AI's Runs on or fallback list names the profile, which a delete
+    /// leaves as a missing profile Hide AI passes over (PRD
+    /// agent-profiles-phase2 B21, B22).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_ai: bool,
     /// The profile's variables with their values, for a `values` request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<(String, String)>>,
@@ -401,6 +406,7 @@ impl ProfileAnswer {
             limit: None,
             in_use: Vec::new(),
             projects: Vec::new(),
+            hide_ai: false,
             values: None,
             added: None,
         }
