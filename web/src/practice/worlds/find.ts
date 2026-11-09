@@ -1,4 +1,4 @@
-// Chapter 6's world: one invented project with an agent at work, two
+// Flow 4's world: one invented project with an agent at work, two
 // finished tasks in the sidebar's 태스크 list, and a session from yesterday
 // that only search still finds, with the pull request it made. It answers
 // ⌘K's session search, the record and the card the lane's 보기 slot shows,

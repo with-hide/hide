@@ -1,4 +1,4 @@
-// Chapter 7's world: one invented project with an agent at work beside the
+// Flow 5's world: one invented project with an agent at work beside the
 // right lane. It answers the lane opening and closing, showing a tool and
 // its pin, as the core's `workspace_view` does, and the Explorer's folds,
 // and sends what the lane's tools read: the project's 현황 and 할 일 with two

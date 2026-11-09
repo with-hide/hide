@@ -1,4 +1,4 @@
-// The mission flow (flow 4), where the first run and the sidebar's invitation land: one job
+// The mission flow (flow 3), where the first run and the sidebar's invitation land: one job
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
@@ -23,7 +23,7 @@ const CLOSE = '[data-lane="detail"] [data-detail-close]';
 
 export default chapter<MissionModel>({
   id: "mission",
-  number: 4,
+  number: 3,
   next: "overview",
   version: 16,
   world: MISSION_WORLD,

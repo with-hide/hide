@@ -1,4 +1,4 @@
-// Chapter 7: the right lane beside the agent: the project's counts and its week,
+// Flow 5: the right lane beside the agent: the project's counts and its week,
 // the checkout's files and what changed in them, and the project's Memory.
 
 import { chapter } from "../chapter";
@@ -6,7 +6,7 @@ import { laneDrawn, PROJECT_WORLD, showsTool, type ProjectModel } from "../world
 
 export default chapter<ProjectModel>({
   id: "project",
-  number: 6,
+  number: 5,
   version: 3,
   world: PROJECT_WORLD,
   quest: true,

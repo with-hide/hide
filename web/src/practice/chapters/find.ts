@@ -1,4 +1,4 @@
-// Chapter 6: finding a session from yesterday with ⌘K, reading what was asked
+// Flow 4: finding a session from yesterday with ⌘K, reading what was asked
 // of it, opening the pull request it made, and keeping a task to look at again.
 
 import { chapter } from "../chapter";
@@ -13,7 +13,7 @@ const PR = { type: { input: FIELD, text: `#${PR_NUMBER}` } };
 // words is the palette's own ⏎, which opens the row it highlights.
 export default chapter<FindModel>({
   id: "find",
-  number: 5,
+  number: 4,
   version: 2,
   world: FIND_WORLD,
   quest: true,
