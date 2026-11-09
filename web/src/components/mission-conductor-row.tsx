@@ -6,7 +6,7 @@ import { AgentMark } from "../AgentMark";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { RunText, useRunWords } from "../missionParts";
-import { conductorState, conductorUnanswered, type ConductorState } from "../missions";
+import { conductorState, type ConductorState } from "../missions";
 import { allAgents, agentsByPane } from "../paneAgents";
 import type { Mission } from "../snapshot";
 import { useShellStore } from "../store";
@@ -72,7 +72,6 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
       >
         {terminal}
       </Button>
-      {conductorUnanswered(mission) ? <MissionTakeOver mission={mission} actions={actions} /> : null}
     </div>
   );
 }

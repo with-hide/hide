@@ -36,7 +36,7 @@ import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { allAgents, boardProjects } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
-import { conductorUnanswered, missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
+import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
 import { backlogIntent } from "./overviewBacklog";
 import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
@@ -152,12 +152,7 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
  * paste goes through `clipboard`, the system one unless the screen gives its
  * own (the practice window keeps its copies off the operator's clipboard).
  */
-/** Takeover starts whose handover token a confirmation may still ask for. */
-const HANDOVER_TOKENS_KEPT = 8;
-
 export function createActions(send: DispatchFn, clipboard?: Clipboard) {
-  /** The handover token each takeover start was made with, by its request id, so a confirmation of that start names the same one. */
-  const handoverTokens = new Map<string, string>();
   const dispatch: DispatchFn = (event) => {
     if (laneCalled(event)) {
       // A stacked lane draws the column the call is for (PRD lane-two-columns B19).
@@ -2018,31 +2013,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
-      // A Conductor still there is handed over once, to the session this start makes (PRD mission-node-simple B15): the core keeps the token, and only this prompt names it. A confirmation of the same start keeps its token.
-      let handover: string | undefined;
-      const key = request?.requestId ?? "";
-      if (request?.confirmOnly) {
-        // A confirmation is the start's last use of its token.
-        handover = handoverTokens.get(key);
-        handoverTokens.delete(key);
-      } else if (conductorUnanswered(mission)) {
-        handover = globalThis.crypto.randomUUID();
-        if (key) {
-          handoverTokens.set(key, handover);
-          // Starts that were never confirmed leave at most a few behind.
-          for (const old of handoverTokens.keys()) {
-            if (handoverTokens.size <= HANDOVER_TOKENS_KEPT) break;
-            handoverTokens.delete(old);
-          }
-        }
-        dispatch({ schema_version: 2, kind: "mission_handover", payload: { mission: missionId, token: handover } });
-      }
       this.startAgent({
         target: { checkoutPath: mission.checkout_path },
         ...(mission.device_id !== localDeviceId(rest()) ? { deviceId: mission.device_id } : {}),
         provider,
         model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
-        prompt: takeOverPrompt(mission, handover),
+        prompt: takeOverPrompt(mission),
         ...request,
       });
     },
