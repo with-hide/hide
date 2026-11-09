@@ -1195,12 +1195,14 @@ fn the_catalog_lists_each_profile_as_an_item_with_its_own_models_and_its_account
     claude.profile_models = vec![
         BackgroundAiProfileModels {
             profile: "p-work".to_owned(),
+            version: 1,
             models: vec!["opus".to_owned()],
             model_labels: BTreeMap::from([("opus".to_owned(), "glm-4.6".to_owned())]),
             ..BackgroundAiProfileModels::default()
         },
         BackgroundAiProfileModels {
             profile: "p-side".to_owned(),
+            version: 1,
             models_unavailable_reason: Some("models_not_read".to_owned()),
             ..BackgroundAiProfileModels::default()
         },
@@ -1293,6 +1295,28 @@ fn the_catalog_lists_each_profile_as_an_item_with_its_own_models_and_its_account
         "models_unread"
     );
     assert_eq!(catalog["models_read_pending"], true);
+
+    // `work` is edited: the list read before the edit is not its list, and
+    // a read is asked for again.
+    runtime
+        .kit_states
+        .get_mut(&node)
+        .unwrap()
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles[0]
+        .version = 2;
+    let edited = runtime.agent_catalog(&node, None, false).unwrap();
+    let edited_work = edited["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["profile"] == "work")
+        .unwrap();
+    assert!(edited_work["models"].is_null(), "{edited_work}");
+    assert_eq!(edited_work["models_unavailable_reason"], "models_unread");
+    assert_eq!(edited["models_read_pending"], true);
 
     let late = runtime.agent_catalog(&node, None, true).unwrap();
     assert_eq!(late["models_read_pending"], false);

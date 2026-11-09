@@ -184,7 +184,7 @@ impl AiReader {
                     // Drop the routers with the screen: a Codex child is a
                     // process, and nothing is reading its answers.
                     guard.clear();
-                    items.backends.clear();
+                    items.keep(request);
                     return BackgroundAiSnapshot::unread();
                 }
                 // A device no longer asked releases its agents' backends.
@@ -252,13 +252,14 @@ impl AiReader {
 }
 
 impl ItemReads {
-    /// Drops the backends of every item the request no longer reads: all of
-    /// them while no screen reads model lists, else those of a machine or a
-    /// profile no longer asked. Dropping one releases its node's backend,
-    /// which ends a resident process.
+    /// Drops the backends of every item the request no longer reads, and
+    /// what was logged of them: all of them while no screen reads model
+    /// lists, else those of a machine or a profile no longer asked. Dropping
+    /// a backend releases its node's, which ends a resident process.
     fn keep(&mut self, request: &AiRequest) {
         if !request.observing {
             self.backends.clear();
+            self.logged.clear();
             return;
         }
         let asked = |machine: &Option<String>| -> &[ItemAsk] {
@@ -271,12 +272,16 @@ impl ItemReads {
                     .map_or(&[], |device| device.items.as_slice()),
             }
         };
-        self.backends.retain(|(machine, provider, profile), _| {
+        let still_asked = |(machine, provider, profile): &ItemKey| {
             asked(machine)
                 .iter()
                 .take(MAX_ITEM_READS)
                 .any(|ask| ask.provider == *provider && ask.profile == *profile)
-        });
+        };
+        self.backends.retain(|key, _| still_asked(key));
+        // An item's failure is forgotten with it: a profile removed, a
+        // device gone, or past the cap, where no backend reads it.
+        self.logged.retain(|key, _| still_asked(key));
     }
 
     /// Reads the model list of each item `asks` names on `machine` and puts
@@ -311,6 +316,7 @@ impl ItemReads {
             row.profile_models
                 .push(crate::model::BackgroundAiProfileModels {
                     profile: ask.profile.0.clone(),
+                    version: ask.version,
                     models,
                     model_labels,
                     models_fixed: catalog.is_fixed(),
@@ -1304,6 +1310,10 @@ mod tests {
         );
         let gateway = &claude.profile_models[0];
         assert_eq!(gateway.profile, "p-gw");
+        assert_eq!(
+            gateway.version, 1,
+            "the list says which version it was read for"
+        );
         assert_eq!(gateway.models, ["opus"], "a start passes the value");
         assert_eq!(
             gateway.model_labels,
@@ -1343,6 +1353,70 @@ mod tests {
         items.keep(&request);
         assert!(items.backends.is_empty());
         assert!(node.released.lock().unwrap().contains(&rebuilt[1]));
+    }
+
+    /// Engineering 14, 15: an item's backend and what was logged of its
+    /// failure leave with the item, a profile removed, a device gone or the
+    /// screen closed, so making, failing and removing profiles again and
+    /// again keeps no more of either than the items asked now.
+    #[test]
+    fn an_items_backend_and_its_logged_failure_leave_with_the_item() {
+        let node = Arc::new(ProfilesNode::default());
+        let machines = AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>);
+        let mut items = ItemReads::default();
+        let ask = |profile: &str| ItemAsk {
+            provider: ProviderId::CLAUDE,
+            profile: ProfileId(profile.to_owned()),
+            version: 1,
+        };
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows);
+            for device in &request.devices {
+                items.read(&machines, Some(&device.id), &device.items, &mut rows);
+            }
+        };
+
+        for round in 0..20 {
+            // A profile that cannot be read is made, read and removed.
+            request.items = vec![ask("p-gw"), ask(&format!("p-gone-{round}"))];
+            read(&mut items, &request);
+            assert_eq!(items.backends.len(), 2);
+            assert_eq!(items.logged.len(), 1, "its failure is logged once");
+            request.items = vec![ask("p-gw")];
+            read(&mut items, &request);
+            assert_eq!(items.backends.len(), 1, "round {round}");
+            assert!(items.logged.is_empty(), "round {round}");
+        }
+
+        // A device's profile, unreadable while the device has no link,
+        // leaves with the device.
+        request.devices = vec![DeviceAsk {
+            id: "mini".to_owned(),
+            items: vec![ask("p-dev")],
+            ..DeviceAsk::default()
+        }];
+        read(&mut items, &request);
+        assert_eq!(items.backends.len(), 2);
+        assert_eq!(items.logged.len(), 1);
+        request.devices.clear();
+        read(&mut items, &request);
+        assert_eq!(items.backends.len(), 1);
+        assert!(items.logged.is_empty());
+
+        // The screen closes: nothing of any item stays.
+        request.items.push(ask("p-gone"));
+        read(&mut items, &request);
+        assert_eq!(items.logged.len(), 1);
+        request.observing = false;
+        items.keep(&request);
+        assert!(items.backends.is_empty() && items.logged.is_empty());
     }
 
     /// Past the cap a profile's list is a reported failure, never another

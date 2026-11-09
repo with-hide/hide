@@ -56,8 +56,12 @@ export type ModelCatalog =
 
 type Listed = { models: readonly string[]; labels?: Readonly<Record<string, string>> };
 
-/** The lists seen so far by item, kept for the page's life so a second open shows one at once. */
-const lastLists = new Map<string, Listed>();
+/**
+ * The agents' own lists seen so far, kept for the page's life so a second open shows one at once; one per
+ * agent kind. A profile's list is never kept here: the snapshot keeps its last read until the next lands, and
+ * a list of a removed profile or of its version before an edit is not its list.
+ */
+const lastLists = new Map<ProviderKind, Listed>();
 
 const ready = (listed: Listed): ModelCatalog => ({
   state: "ready",
@@ -65,34 +69,29 @@ const ready = (listed: Listed): ModelCatalog => ({
   ...(listed.labels && Object.keys(listed.labels).length > 0 ? { labels: listed.labels } : {}),
 });
 
+/** A profile of the chosen machine, as the start surfaces name it: its id and its version now. */
+export type ProfileItem = { id: string; version: number };
+
 /**
- * The model list of `kind`'s item `profile` (a profile id; omitted or null is
- * the agent's built-in default), as the core read it in that profile's own
- * environment (PRD agent-profiles-phase2 D-09, B9).
+ * The model list of `kind`'s item `profile` (omitted or null is the agent's built-in default), as the core
+ * read it in that profile's own environment (PRD agent-profiles-phase2 D-09, B9). A profile's list counts only
+ * when it was read at the profile's version now: its list, or, when that read failed, the agent's own list
+ * marked `fromDefault`. Before such a read it is loading while the agent's list is in, and otherwise fails
+ * with the agent's.
  */
-export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind, profile?: string | null): ModelCatalog {
+export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind, profile?: ProfileItem | null): ModelCatalog {
   // A start names the agent by its engine kind (`agy`); its Hide AI row is joined by the kit's adapter id (`antigravity`).
   const agent = AGENT_ADAPTERS.find((row) => row.can_start && row.herdr_kind === kind)?.id;
   const provider: AiProvider | undefined = ai?.providers.find((row) => row.agent === agent);
   if (profile) {
-    const key = `${kind}\u0000${profile}`;
-    const own = provider?.profile_models?.find((row) => row.profile === profile);
-    if (own && own.models.length > 0) {
-      const listed = { models: own.models, labels: own.model_labels };
-      lastLists.set(key, listed);
-      return ready(listed);
-    }
-    const kept = lastLists.get(key);
-    if (kept) return ready(kept);
-    // The profile's list could not be read: the agent's own is offered, the reason is in the log.
-    if (own) {
-      const agentList = catalogFor(ai, kind);
-      return agentList.state === "ready" ? { ...agentList, fromDefault: true } : agentList;
-    }
-    // Not read yet while its agent's list is: the core reads every startable profile while a screen observes
-    // the lists. Otherwise the profile's list waits on, or fails with, its agent's.
-    if (provider && provider.models.length > 0) return { state: "loading" };
-    return catalogFor(ai, kind);
+    const own = provider?.profile_models?.find((row) => row.profile === profile.id && row.version === profile.version);
+    if (own && own.models.length > 0) return ready({ models: own.models, labels: own.model_labels });
+    const agentList = catalogFor(ai, kind);
+    // Its read at this version failed: the agent's own list stands in, and the reason is in the log.
+    if (own) return agentList.state === "ready" ? { ...agentList, fromDefault: true } : agentList;
+    // Not read at this version yet: the core reads every startable profile while a screen observes the lists,
+    // unless the agent itself cannot answer.
+    return agentList.state === "unavailable" ? agentList : { state: "loading" };
   }
   if (provider && provider.models.length > 0) {
     const listed = { models: provider.models, labels: provider.model_labels };

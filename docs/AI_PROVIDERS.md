@@ -230,6 +230,7 @@ It never imports the coding-agent harness, a user model module, settings loader 
 `discoverAuthStorage` and `storage.keys.getWithCredential` own login discovery, refresh and authorization; Hide does not parse, export, copy or log credentials.
 The child receives the platform's restricted login environment and the variables of the agent item it reads for, so a profile's `OMP_PROFILE` selects that omp profile's own stored login; inherited API-key variables are not logins to it.
 The model list is omp's bundled providers that have a stored login there, never a `models.yml` provider ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+A profile that runs omp through a wrapper is refused before anything starts, its list, availability and requests alike, with `omp_wrapper_not_supported`: the SDK runs no program, so the environment the wrapper makes would not reach it, and a list read without it would be another account's.
 Auth config values beginning with `!` are refused rather than executed; custom credential commands, model aliases, extension providers and `models.yml` overrides are outside this contract.
 The public SDK's native addon loader remains part of the trusted user installation, not an operating-system sandbox.
 Compiled-mode and native-directory dotenv overrides are refused before the eager native root import; normal official native loading and its platform cache remain SDK-owned.
@@ -388,10 +389,15 @@ Each profile is read on a backend of its own (`NodeBackend` with the profile's i
 The node resolves the profile from its own profile file as a start would (`hide_host::profiles::ai_run`): the account's variables, then the profile's own, and its wrapper, found on the account's search; the core never names an account's folder.
 A profile the node cannot run is refused before it takes a backend's place.
 Every backend reads with that `ItemRun` (`hide-ai/src/program.rs`): a child gets its variables on top of its usual environment, and a wrapper is started in the agent's program's place with the agent's own arguments, a Windows batch file through `cmd.exe` as any found batch program.
-Codex still runs under Hide's private `CODEX_HOME`, linking the `auth.json` of the profile's own account, so a profile's `config.toml` is not read there.
+Codex still runs under Hide's private `CODEX_HOME`, linking the `auth.json` of the profile's own account, so a profile's `config.toml` is not read there; omp refuses a profile with a wrapper (see [Oh My Pi](#oh-my-pi)).
+A read starts the agent's CLI, so the state that CLI updates on its own at every start may change: Claude Code's `.claude.json`, its plugin cache and its telemetry queue in the account's folder.
+What the operator edits (`settings.json`, the sign-in, `CLAUDE.md`, the hooks) and the conversations do not.
 A list that cannot be read is answered with its reason, which the core logs once per change (`ai.models.unavailable` with the provider, profile and machine), and the screens and `hide agent catalog` offer the agent's own list in its place (`models_from_default`); nothing is shown as a banner.
+What was logged of an item goes with its backend: when the screen closes, the profile is removed or its device is gone.
+Each list says the profile version it was read for, and a list counts only at the profile's version now: after an edit, the list read before is no list of it until the next read lands.
 Which agents list a custom or gateway model a profile configures is the support table's ([INSTALL.md](INSTALL.md#what-each-system-supports)).
-The snapshot carries each list beside its agent's row (`BackgroundAiProviderSnapshot::profile_models`, with `model_labels` for the names Claude Code shows), and the web shell reads an item's list with `catalogFor(ai, kind, profile)`.
+The snapshot carries each list beside its agent's row (`BackgroundAiProviderSnapshot::profile_models`, with `model_labels` for the names Claude Code shows), and the web shell reads an item's list with `catalogFor(ai, kind, { id, version })` of the chosen machine's profile.
+The web shell keeps no profile's list of its own: the snapshot keeps the last read until the next lands, and only an agent's own list is kept for the page's life.
 The connection protocol moved to 94 with `BackendSpec::profile`, so a device helper that predates it never answers a profile's read as the default account: a device's helper is replaced by this build's on its next connection.
 
 ### What leaves the machine
