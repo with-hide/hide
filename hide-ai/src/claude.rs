@@ -227,6 +227,17 @@ impl ClaudeCliBackend {
     /// `/cost` text instead, so "logged out" is the caller's reading of the
     /// text, not a class this function can name.
     pub fn usage_text(&self, cancel: &CancelToken) -> Result<String, UsageError> {
+        self.usage_text_in(&[], cancel)
+    }
+
+    /// [`Self::usage_text`] of the account the variables `set` name (a
+    /// profile's `CLAUDE_CONFIG_DIR`, PRD agent-profiles B23), set on the
+    /// child alone.
+    pub fn usage_text_in(
+        &self,
+        set: &[(&str, String)],
+        cancel: &CancelToken,
+    ) -> Result<String, UsageError> {
         let binary = self.resolved_binary().ok_or(UsageError::NotInstalled)?;
         let run = runner::run(
             &Spec {
@@ -235,7 +246,7 @@ impl ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: None,
                 environment: Environment::Login,
-                set: &[],
+                set,
                 deadline: USAGE_TIMEOUT,
             },
             cancel,

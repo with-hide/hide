@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use hide_agent_adapter::{Account, AccountKey, AccountPath};
 use hide_ai::{CancelToken, ClaudeCliBackend, ClaudeConfig};
 use hide_node_link::usage::{
     FailureDisposition, LimitFailure, LimitFetch, LimitSource, SessionLimits,
@@ -21,7 +22,7 @@ const CLAUDE_BINARY: &str = hide_agent_adapter::AgentId::ClaudeCode
     .executables[0];
 /// The keychain item Claude Code keeps its login in, under the login
 /// account's name, for its default configuration folder.
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 /// Scopes per-model rows; the endpoint names at most a handful today.
 const CLAUDE_SCOPED_LIMIT: usize = 16;
@@ -29,20 +30,36 @@ const CLAUDE_SCOPED_LIMIT: usize = 16;
 /// string never leaves the node.
 const CLAUDE_TEXT_LIMIT: usize = 64;
 
-/// One read per declared source, regardless of how many windows it serves.
-pub fn fetch(source: LimitSource, root: &Path, report: &mut dyn FnMut() -> bool) -> LimitFetch {
+/// One read per declared source and account, regardless of how many
+/// windows it serves. `account` is a profile's own account, as this node
+/// resolved it from its profile file (PRD agent-profiles B23); `None` reads
+/// the agent's default account, `root` being Claude's working folder or the
+/// default Codex home the core named.
+pub fn fetch(
+    source: LimitSource,
+    root: &Path,
+    account: Option<&Account>,
+    report: &mut dyn FnMut() -> bool,
+) -> LimitFetch {
     match source {
         LimitSource::ClaudeUsage => LimitFetch {
-            result: claude_usage(claude_usage_api, || claude_usage_text(root, report)),
+            result: claude_usage(
+                || claude_usage_api(account),
+                || claude_usage_text(root, account, report),
+            ),
             fallback: None,
         },
         LimitSource::CodexUsage => {
-            let result = codex_usage(root);
+            // A profile's Codex home is its account's own state folder.
+            let home = account
+                .and_then(|account| account.path(AccountPath::State))
+                .unwrap_or(root);
+            let result = codex_usage(home);
             let fallback = result
                 .as_ref()
                 .err()
                 .filter(|failure| failure.disposition != FailureDisposition::Schema)
-                .and_then(|_| codex_session_usage(root));
+                .and_then(|_| codex_session_usage(home));
             LimitFetch { result, fallback }
         }
         LimitSource::AntigravityUsage => LimitFetch {
@@ -288,13 +305,11 @@ fn claude_usage(
 /// Deliberately private and not serializable or printable.
 struct ClaudeToken(String);
 
-fn claude_usage_api() -> Result<Value, LimitFailure> {
-    let home = hide_platform::host::home_dir()
-        .map_err(|_| LimitFailure::new(FailureDisposition::Authentication, "home_unknown"))?;
+fn claude_usage_api(account: Option<&Account>) -> Result<Value, LimitFailure> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as u64);
-    let token = claude_token(&claude_login(&home)?, now_ms)?;
+    let token = claude_token(&claude_login(account)?, now_ms)?;
     let value = get_json(
         CLAUDE_USAGE_URL,
         &[
@@ -307,29 +322,60 @@ fn claude_usage_api() -> Result<Value, LimitFailure> {
     safe_claude_body(&value)
 }
 
-/// The bytes of Claude Code's login: on macOS the keychain item it keeps,
-/// and otherwise, or on macOS when there is no such item, the
-/// `.credentials.json` Claude Code writes in its default account's folder
-/// (`AccountPath::Usage`).
-fn claude_login(home: &Path) -> Result<Vec<u8>, LimitFailure> {
+/// The bytes of Claude Code's login in `account` (the default one for
+/// `None`): on macOS the keychain item it keeps, and otherwise, or on macOS
+/// when there is no such item, the `.credentials.json` Claude Code writes in
+/// the account's folder (`AccountPath::Usage`).
+fn claude_login(account: Option<&Account>) -> Result<Vec<u8>, LimitFailure> {
     #[cfg(target_os = "macos")]
-    if let Some(bytes) = claude_keychain_item()? {
-        return Ok(bytes);
+    {
+        let key = account.map_or(AccountKey::Default, |account| account.key.clone());
+        if let Some(bytes) = claude_keychain_item(&claude_keychain_service(&key), true)? {
+            return Ok(bytes);
+        }
     }
-    read_credentials(
-        &hide_agent_adapter::AgentId::ClaudeCode
-            .adapter()
-            .place_in(home, hide_agent_adapter::AccountPath::Usage),
-    )
+    let file = match account {
+        Some(account) => account.path(AccountPath::Usage).map(Path::to_path_buf),
+        None => hide_platform::host::home_dir().ok().map(|home| {
+            hide_agent_adapter::AgentId::ClaudeCode
+                .adapter()
+                .place_in(&home, AccountPath::Usage)
+        }),
+    }
+    .ok_or_else(|| LimitFailure::new(FailureDisposition::Authentication, "home_unknown"))?;
+    read_credentials(&file)
 }
 
-/// Claude Code's keychain item for the login account, read through
-/// `/usr/bin/security`: Claude Code writes the item with that program, and
-/// its access list lets only that program read it without asking, so the
-/// read never shows a prompt that names Hide, whatever Hide's own signature.
-/// Claude Code names the item's account by `USER`.
+/// The keychain item Claude Code keeps an account's login in: the bare
+/// service name for its default folder, and for a folder set in
+/// `CLAUDE_CONFIG_DIR` that name with the first eight hex digits of the
+/// SHA-256 of the folder exactly as set, a final `/` included, as Claude
+/// Code 2.1.319 names it. Claude Code names the item's account by `USER`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn claude_keychain_service(account: &AccountKey) -> String {
+    use sha2::Digest;
+    match account {
+        AccountKey::Folder(folder) => {
+            let digest = sha2::Sha256::digest(folder.as_bytes());
+            let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+            format!("{CLAUDE_KEYCHAIN_SERVICE}-{hex}")
+        }
+        _ => CLAUDE_KEYCHAIN_SERVICE.to_owned(),
+    }
+}
+
+/// Claude Code's keychain item `service` for the login account, read
+/// through `/usr/bin/security`: Claude Code writes the item with that
+/// program, and its access list lets only that program read it without
+/// asking, so the read never shows a prompt that names Hide, whatever
+/// Hide's own signature. With `secret` false only whether the item is
+/// there is asked, and its password is never read. `None` when there is no
+/// such item, or no `USER` to name its account by.
 #[cfg(target_os = "macos")]
-fn claude_keychain_item() -> Result<Option<Vec<u8>>, LimitFailure> {
+pub(crate) fn claude_keychain_item(
+    service: &str,
+    secret: bool,
+) -> Result<Option<Vec<u8>>, LimitFailure> {
     /// `security`'s exit status for a missing item (`errSecItemNotFound`).
     const ITEM_NOT_FOUND: i32 = 44;
     let Some(account) = std::env::var_os("USER").filter(|account| !account.is_empty()) else {
@@ -337,12 +383,18 @@ fn claude_keychain_item() -> Result<Option<Vec<u8>>, LimitFailure> {
     };
     let mut command = std::process::Command::new("/usr/bin/security");
     command
-        .args(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-a"])
-        .arg(account)
-        .arg("-w");
+        .args(["find-generic-password", "-s", service, "-a"])
+        .arg(account);
+    if secret {
+        command.arg("-w");
+    }
     let stop = std::sync::atomic::AtomicBool::new(false);
     match hide_platform::process::run_to_end(&mut command, Duration::from_secs(5), &stop) {
-        Ok(finished) if finished.succeeded() => Ok(Some(finished.stdout.into_bytes())),
+        Ok(finished) if finished.succeeded() => Ok(Some(if secret {
+            finished.stdout.into_bytes()
+        } else {
+            Vec::new()
+        })),
         Ok(finished) if finished.code == Some(ITEM_NOT_FOUND) => Ok(None),
         _ => Err(LimitFailure::new(
             FailureDisposition::Offline,
@@ -428,17 +480,31 @@ fn safe_claude_body(value: &Value) -> Result<Value, LimitFailure> {
     }))
 }
 
-fn claude_usage_text(cwd: &Path, report: &mut dyn FnMut() -> bool) -> Result<String, LimitFailure> {
+fn claude_usage_text(
+    cwd: &Path,
+    account: Option<&Account>,
+    report: &mut dyn FnMut() -> bool,
+) -> Result<String, LimitFailure> {
     let backend = ClaudeCliBackend::new(ClaudeConfig {
         binary: PathBuf::from(CLAUDE_BINARY),
         cwd: cwd.to_path_buf(),
         ..ClaudeConfig::default()
     });
+    // The account's own variables, set on the CLI alone.
+    let set: Vec<(String, String)> = account
+        .map(|account| account.env.clone())
+        .unwrap_or_default();
     let cancel = CancelToken::new();
     let running = cancel.clone();
     crate::reporting::run_reporting(
         "hide-node-claude-usage",
-        move || backend.usage_text(&running),
+        move || {
+            let set: Vec<(&str, String)> = set
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone()))
+                .collect();
+            backend.usage_text_in(&set, &running)
+        },
         &|| cancel.cancel(),
         report,
     )
@@ -513,6 +579,22 @@ mod tests {
         assert_eq!(
             refused.map_err(|f| (f.disposition, f.kind)),
             Err((FailureDisposition::Schema, "response_shape".to_owned()))
+        );
+    }
+    #[test]
+    fn a_claude_account_keeps_its_login_under_the_digest_of_its_folder_as_set() {
+        assert_eq!(
+            claude_keychain_service(&AccountKey::Default),
+            "Claude Code-credentials"
+        );
+        // The final `/` is part of the name Claude Code hashes.
+        assert_eq!(
+            claude_keychain_service(&AccountKey::Folder("/accounts/claude-a/".into())),
+            "Claude Code-credentials-2599e4eb"
+        );
+        assert_eq!(
+            claude_keychain_service(&AccountKey::Folder("/accounts/claude-a".into())),
+            "Claude Code-credentials-994fdcb4"
         );
     }
     #[test]
@@ -641,6 +723,7 @@ mod tests {
             let call = hide_node_link::protocol::Call::UsageLimitFetch {
                 source,
                 root: "/fixture".into(),
+                profile: None,
             };
             assert!(!call.answered_by_device());
         }

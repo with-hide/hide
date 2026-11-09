@@ -382,7 +382,15 @@ use crate::error::HostError;
 /// helper on 88 keeps profiles but would refuse the call, so it upgrades,
 /// and a node the core still admits on an older protocol keeps no profile,
 /// which the core reads as the default account.
-pub const PROTOCOL_VERSION: u32 = 89;
+/// 91: a hook's session-start report carries the account variables its
+/// agent runs with (`panes::HookStatusReport::account`, PRD agent-profiles
+/// D-03, D-35), which a node passes on to the core inside the hook request
+/// the report is; a core on 90 refuses a report with a field it does not
+/// know, so a helper upgrades with its core. The same step lists each
+/// profile's sign-in and account variables (`profiles::ListedProfile`) and
+/// lets a usage read name a profile (`Call::UsageLimitFetch`), both optional
+/// fields an older side leaves out.
+pub const PROTOCOL_VERSION: u32 = 91;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -986,10 +994,16 @@ pub enum Call {
     },
     /// A declared subscription source, fetched on the core's own node.
     /// `root` is the Claude working directory or Codex home for that source.
-    /// Devices refuse it; credentials never cross the link (`usage::LimitFetch`).
+    /// `profile` reads the account of one of the node's profiles instead of
+    /// the agent's default one (PRD agent-profiles B23), as the node resolves
+    /// it from its own profile file, so the core never names an account's
+    /// folder. Devices refuse it; credentials never cross the link
+    /// (`usage::LimitFetch`).
     UsageLimitFetch {
         source: crate::usage::LimitSource,
         root: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<hide_agent_adapter::ProfileId>,
     },
     /// One bounded public price-table read (`usage::PriceFetch`).
     /// No caller-selected URL or payload; devices refuse it.
@@ -1671,6 +1685,27 @@ pub struct RevisionNow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A usage read of the default account is written as an older core
+    /// wrote it, and an older core's read is one of the default account.
+    #[test]
+    fn a_usage_read_names_a_profile_only_when_it_reads_one() {
+        let default = Call::UsageLimitFetch {
+            source: crate::usage::LimitSource::ClaudeUsage,
+            root: "/hide".into(),
+            profile: None,
+        };
+        let written = serde_json::to_value(&default).unwrap();
+        assert!(!written.to_string().contains("profile"), "{written}");
+        assert_eq!(serde_json::from_value::<Call>(written).unwrap(), default);
+        let profile = Call::UsageLimitFetch {
+            source: crate::usage::LimitSource::CodexUsage,
+            root: "/hide".into(),
+            profile: Some(hide_agent_adapter::ProfileId("p-a".into())),
+        };
+        let written = serde_json::to_value(&profile).unwrap();
+        assert_eq!(serde_json::from_value::<Call>(written).unwrap(), profile);
+    }
 
     /// An older caller's `reinstall` has no `codex_daemon_off` and means
     /// "leave the shared server alone"; the request is on the wire only when

@@ -42,6 +42,24 @@ pub struct AgentUsage {
     pub agent: String,
     pub limits: Cell<LimitReading>,
     pub consumption: Cell<Consumption>,
+    /// The limits of each of this machine's profiles of the agent, in the
+    /// list's order (PRD agent-profiles B23); absent with none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileUsage>,
+}
+
+/// One profile's limits: its account's, read for the first profile in it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProfileUsage {
+    /// The profile's id.
+    pub id: String,
+    /// Another profile listed before it, or the agent's default account,
+    /// runs in the same account, whose figure is that one's: drawn `—`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
+    /// Its account's limits; absent where `shared`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Cell<LimitReading>>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -124,6 +142,7 @@ impl AgentUsage {
                     Support::Unsupported(_) => Cell::Unsupported,
                     Support::Supported(_) => Cell::Loading,
                 },
+                profiles: Vec::new(),
             })
             .collect()
     }

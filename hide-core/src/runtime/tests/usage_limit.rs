@@ -29,6 +29,7 @@ fn weekly(provider: &str, used: Option<f64>, resets_at_ms: u64) -> crate::usage:
             },
         },
         consumption: Cell::Unsupported,
+        profiles: Vec::new(),
     }
 }
 

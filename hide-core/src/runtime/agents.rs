@@ -1193,7 +1193,38 @@ impl Runtime {
             } else {
                 Vec::new()
             },
+            profiles: self.usage_profiles(),
         }
+    }
+
+    /// This machine's profiles of the agents whose limits Hide reads, in the
+    /// list's order (PRD agent-profiles B23); none being removed.
+    fn usage_profiles(&self) -> Vec<crate::usage::UsageProfile> {
+        let Some(profiles) = self.machine_profiles(self.node.as_str()) else {
+            return Vec::new();
+        };
+        profiles
+            .profiles
+            .iter()
+            .filter(|profile| {
+                !matches!(
+                    profile.install,
+                    Some(
+                        crate::model::ProfileInstall::Removing
+                            | crate::model::ProfileInstall::RemoveFailed
+                    )
+                )
+            })
+            .filter_map(|profile| {
+                let row = hide_agent_adapter::adapter(&profile.kind)?;
+                row.usage.limit_sources().next()?;
+                Some(crate::usage::UsageProfile {
+                    agent: row.engine_kind.to_owned(),
+                    id: hide_agent_adapter::ProfileId(profile.id.clone()),
+                    account: profile.account_key.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Stamps when an agent last worked or waited on the operator, the clock

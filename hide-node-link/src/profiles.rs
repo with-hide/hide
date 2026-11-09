@@ -82,6 +82,30 @@ pub struct ListedProfile {
     /// `None` when the kit could not be asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<ProfilePlace>,
+    /// Whether its account is signed in, as the node found it when it
+    /// listed (D-16, B10); `None` for a profile that runs a program of its
+    /// own, one in the agent's default account, and an agent whose sign-in
+    /// the node has no way to look at. A node that predates it sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<ProfileLogin>,
+    /// The account variables a start of it sets, each folder compared as a
+    /// hook reports it (`hide_agent_hooks::account::compared_folder`): the
+    /// core reads a pane whose hook reported these in this account (D-03).
+    /// Empty for a profile in the agent's default account.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub account_variables: Vec<(String, String)>,
+}
+
+/// What a node found of a profile account's sign-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileLogin {
+    SignedIn,
+    /// The account holds no sign-in: it is new, or was signed out.
+    SignedOut,
+    /// The sign-in could not be looked at (a keychain or file that did not
+    /// answer); why is in the node's log.
+    Unknown,
 }
 
 /// A machine's profiles.
@@ -240,4 +264,50 @@ pub struct ProfileProgram {
     pub file: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub leading: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listed(login: Option<ProfileLogin>, variables: Vec<(String, String)>) -> ListedProfile {
+        ListedProfile {
+            id: ProfileId("p-a".into()),
+            kind: "claude-code".into(),
+            name: "a".into(),
+            account: Some(AccountRef::Folder("/accounts/claude-a".into())),
+            program: None,
+            env_keys: Vec::new(),
+            env: None,
+            version: 1,
+            removing: false,
+            place: None,
+            login,
+            account_variables: variables,
+        }
+    }
+
+    /// A profile from a node that predates sign-in and account variables
+    /// reads as one with neither, and a profile with neither is written as
+    /// that node wrote it, so either side reads the other's list.
+    #[test]
+    fn a_listed_profile_reads_across_nodes_with_and_without_sign_in_and_variables() {
+        let older = serde_json::json!({
+            "id": "p-a", "kind": "claude-code", "name": "a",
+            "account": {"folder": "/accounts/claude-a"}, "version": 1,
+        });
+        let read: ListedProfile = serde_json::from_value(older.clone()).unwrap();
+        assert_eq!(read, listed(None, Vec::new()));
+        assert_eq!(serde_json::to_value(&read).unwrap(), older);
+        let newer = listed(
+            Some(ProfileLogin::SignedOut),
+            vec![("CLAUDE_CONFIG_DIR".into(), "/accounts/claude-a".into())],
+        );
+        let written = serde_json::to_value(&newer).unwrap();
+        assert_eq!(written["login"], "signed_out");
+        assert_eq!(
+            serde_json::from_value::<ListedProfile>(written).unwrap(),
+            newer
+        );
+    }
 }

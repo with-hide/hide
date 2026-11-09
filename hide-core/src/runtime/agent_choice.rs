@@ -14,6 +14,7 @@
 //! default.
 
 use super::*;
+use hide_agent_adapter::AccountKey;
 
 /// The model a start names, trimmed, with an empty one meaning the CLI's own
 /// default. It is checked by the adapter's one rule: a kind that starts no
@@ -366,16 +367,40 @@ impl Runtime {
 
     /// The profile `agent` runs with, when its pane's record describes it;
     /// otherwise the built-in default (`None`).
+    ///
+    /// An agent whose hook reported another account than its record names,
+    /// or that Hide did not start, runs with the profile of the account it
+    /// reported (D-03, D-35): that is the account a wake or a reopen starts
+    /// it in again, with the agent's default profile there among several.
     pub(crate) fn launch_profile_of(
         &self,
         agent: &SidebarAgentSnapshot,
     ) -> Option<crate::launch::LaunchProfile> {
-        self.snapshot
+        let recorded = self
+            .snapshot
             .ui_state
             .pane_launches
             .get(&agent.pane_id)
             .filter(|launch| describes(launch, agent))
-            .and_then(|launch| launch.profile.clone())
+            .and_then(|launch| launch.profile.clone());
+        let Some(reported) = self.reported_account(&agent.pane_id, &agent.agent_kind) else {
+            return recorded;
+        };
+        if recorded
+            .as_ref()
+            .map_or(AccountKey::Default, |p| p.account.clone())
+            == reported.key
+        {
+            return recorded;
+        }
+        reported
+            .start
+            .as_ref()
+            .map(|(id, name)| crate::launch::LaunchProfile {
+                id: id.clone(),
+                name: name.clone(),
+                account: reported.key.clone(),
+            })
     }
 
     /// The account the `kind` agent started under `name` (none for one that
@@ -391,6 +416,11 @@ impl Runtime {
         name: Option<&str>,
         session: Option<&str>,
     ) -> hide_agent_adapter::AccountKey {
+        // The account its hook reported is the one it runs in, whatever
+        // started it (D-03, D-35).
+        if let Some(reported) = self.reported_account(pane_id, kind) {
+            return reported.key.clone();
+        }
         self.snapshot
             .ui_state
             .pane_launches
@@ -569,8 +599,17 @@ impl Runtime {
     /// record describes it and the profile is not the built-in default (PRD
     /// agent-profiles B17); the row's title stays as it is. One map lookup a
     /// row.
-    fn lay_profiles(&self, agents: &mut [SidebarAgentSnapshot]) {
+    ///
+    /// An agent in an account several profiles share, as its hook reported
+    /// it, is named by its agent alone (B24).
+    pub(crate) fn lay_profiles(&self, agents: &mut [SidebarAgentSnapshot]) {
         for agent in agents {
+            let shared = self
+                .reported_account(&agent.pane_id, &agent.agent_kind)
+                .is_some_and(|reported| !reported.key.is_default() && reported.named.is_none());
+            if shared {
+                continue;
+            }
             if let Some(profile) = self.launch_profile_of(agent) {
                 agent.profile = Some(profile.name);
             }

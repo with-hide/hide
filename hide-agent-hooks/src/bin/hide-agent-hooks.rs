@@ -1293,6 +1293,13 @@ fn report_pane(
                     }),
                     session_start: starts,
                     waiting: speaks.then(|| applied.waiting.clone()),
+                    account: starts
+                        .then(|| {
+                            hide_agent_hooks::account::reported_variables(agent, |name| {
+                                std::env::var_os(name)
+                            })
+                        })
+                        .flatten(),
                 },
                 deadline,
             )
