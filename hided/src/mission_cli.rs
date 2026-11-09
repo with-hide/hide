@@ -636,10 +636,7 @@ pub fn run(env: &Env, command: MissionCli) -> Result<(), String> {
             }
             return print_answer(answer);
         }
-        MissionCli::Command(command) => match shown_as_views(env, command) {
-            Ok(command) => command,
-            Err(reason) => return Err(reason),
-        },
+        MissionCli::Command(command) => shown_as_views(env, command)?,
         MissionCli::PlanFile { mission, path } => {
             let plan = match read_file(&path).and_then(|text| plan_input(&text)) {
                 Ok(plan) => plan,

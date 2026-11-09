@@ -198,15 +198,19 @@ impl Runtime {
     /// The checkout the Conductor's pane works in, whose Views `--show`
     /// names, while the catalog holds that pane.
     fn conductor_checkout(&self, actor: &Actor) -> Option<WorkspaceKey> {
-        let pane = crate::address::named_pane_id(self.node.as_str(), &actor.device_id, &actor.pane_id);
+        let pane =
+            crate::address::named_pane_id(self.node.as_str(), &actor.device_id, &actor.pane_id);
         self.catalog_workspaces()
             .filter(|workspace| workspace.device_id == actor.device_id)
             .flat_map(|workspace| &workspace.checkouts)
             .find(|checkout| {
                 checkout.tabs.iter().any(|tab| {
                     tab.panes.iter().any(|known| {
-                        crate::address::named_pane_id(self.node.as_str(), &actor.device_id, &known.id)
-                            == pane
+                        crate::address::named_pane_id(
+                            self.node.as_str(),
+                            &actor.device_id,
+                            &known.id,
+                        ) == pane
                     })
                 })
             })
@@ -220,10 +224,7 @@ impl Runtime {
         let Some(question) = mission.decision.as_ref().and(mission.question.as_ref()) else {
             return Vec::new();
         };
-        let node = question
-            .node
-            .as_deref()
-            .and_then(|key| mission.node(key));
+        let node = question.node.as_deref().and_then(|key| mission.node(key));
         let links = question
             .views
             .iter()
@@ -298,7 +299,10 @@ impl Runtime {
         if !mission.status.open() || mission.decision.is_none() {
             return Err("mission_decision_changed".into());
         }
-        let question = mission.question.as_ref().ok_or("mission_decision_changed")?;
+        let question = mission
+            .question
+            .as_ref()
+            .ok_or("mission_decision_changed")?;
         if question.key != key {
             return Err("mission_decision_changed".into());
         }

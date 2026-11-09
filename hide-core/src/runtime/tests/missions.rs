@@ -8649,10 +8649,14 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    runtime.workspace_views = Some(
-        WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0,
-    );
-    command(&mut runtime, "sender", json!({"op": "create", "title": "Screens"})).unwrap();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Screens"}),
+    )
+    .unwrap();
     without_gate(&mut runtime);
     command(&mut runtime, "sender", plan()).unwrap();
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
@@ -8726,14 +8730,22 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     // Opened after asking, it waits for the next question.
     let after = project_view(&mut runtime, "/checkouts/fixture/after.md");
     runtime.link_mission_view(&key, &after, "sender");
-    assert!(!decision_views(&mut runtime).iter().any(|(id, _)| *id == after));
+    assert!(
+        !decision_views(&mut runtime)
+            .iter()
+            .any(|(id, _)| *id == after)
+    );
 
     // A seen View stays; a closed one leaves.
     runtime.mark_view_unseen(&key, &page);
     assert!(runtime.mark_view_seen(&key, &page));
     assert!(decision_views(&mut runtime).contains(&(page.clone(), "conductor")));
     close(&mut runtime, &page);
-    assert!(!decision_views(&mut runtime).iter().any(|(id, _)| *id == page));
+    assert!(
+        !decision_views(&mut runtime)
+            .iter()
+            .any(|(id, _)| *id == page)
+    );
 
     // The node's next attempt lists only what it opens itself.
     command(
@@ -8742,7 +8754,11 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         json!({"op": "node", "node": "fix", "patch": {"attempts": 2}}),
     )
     .unwrap();
-    assert!(!decision_views(&mut runtime).iter().any(|(id, _)| *id == notes));
+    assert!(
+        !decision_views(&mut runtime)
+            .iter()
+            .any(|(id, _)| *id == notes)
+    );
 
     // The next question takes what the Conductor opened since this one.
     command(
@@ -8782,7 +8798,12 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
 fn asking_for_material_wakes_the_conductor_once_per_question() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    command(&mut runtime, "sender", json!({"op": "create", "title": "Screens"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Screens"}),
+    )
+    .unwrap();
     command(
         &mut runtime,
         "sender",

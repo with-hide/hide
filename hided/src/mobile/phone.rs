@@ -2590,7 +2590,11 @@ mod tests {
         let phone = paired(&mobile);
         let first = ask_mission_material(&mobile, &phone, &material(json!({}))).await;
         assert_eq!(
-            (first["type"].as_str(), first["request_id"].as_str(), first["ok"].as_bool()),
+            (
+                first["type"].as_str(),
+                first["request_id"].as_str(),
+                first["ok"].as_bool()
+            ),
             (Some("mission_result"), Some("m"), Some(true)),
             "{first}"
         );
@@ -2604,7 +2608,10 @@ mod tests {
         gone["request_id"] = json!("g");
         let refused = ask_mission_material(&mobile, &phone, &gone).await;
         assert_eq!(reason(&refused), Some("gone"));
-        assert!(matches!(mobile.reserve_input(&phone, "g"), Reservation::Write));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "g"),
+            Reservation::Write
+        ));
     }
 
     /// A phone with the one pull request list the PR requests are checked against.
