@@ -1,7 +1,9 @@
 //! Who may read a letter through `hide request show`: its sender and its
 //! recipient, and, beyond them, the worker of a mission node reading a letter
 //! one of that node's checkers wrote to the Conductor (docs/delivery.md, Who
-//! may read a letter). The reads run through the store, as a pane's command does.
+//! may read a letter), and which sends under one intent are a retry of a
+//! letter (docs/delivery.md, Commands and caller identity). The commands run through the
+//! store, as a pane's command does.
 
 use super::*;
 use crate::delivery::worker::Worker;
@@ -346,5 +348,54 @@ fn a_node_lists_its_checkers_letters_to_the_conductor_by_id() {
     assert_eq!(
         ids(&show("neighbor", "docs")["checker_letters"]),
         Vec::<String>::new()
+    );
+}
+
+/// An intent names one letter: sending it again to the agent it went to,
+/// by name or by registration id, returns that letter, while sending it to
+/// another agent, or as another kind or body, is refused `intent_conflict`
+/// and makes no letter, so the sender is never told a letter went out that
+/// did not.
+#[test]
+fn a_reused_letter_intent_is_a_retry_only_for_the_same_recipient_kind_and_body() {
+    let mission = Fixture::start();
+    let send = |target: &str, kind: &str, body: &str| {
+        mission.run(
+            "conductor",
+            Command::Send {
+                target: target.into(),
+                intent: "status".into(),
+                body: body.into(),
+                kind: kind.into(),
+                now: false,
+                force: false,
+            },
+        )
+    };
+    let first = send("worker", "progress", "1/2").unwrap();
+    for target in ["worker", mission.ids["worker"].as_str()] {
+        let again = send(target, "progress", "1/2").unwrap();
+        assert_eq!(again["id"], first["id"], "{target}");
+    }
+    for (target, kind, body) in [
+        ("neighbor", "progress", "1/2"),
+        ("worker", "progress", "2/2"),
+        ("worker", "request", "1/2"),
+    ] {
+        assert_eq!(
+            send(target, kind, body).unwrap_err(),
+            "intent_conflict",
+            "{target} {kind} {body}"
+        );
+    }
+    let kept = mission
+        .show("worker", first["id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(kept["body"], "1/2");
+    assert_eq!(
+        mission
+            .show("neighbor", first["id"].as_str().unwrap())
+            .unwrap_err(),
+        "letter_unavailable"
     );
 }
