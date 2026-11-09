@@ -140,6 +140,68 @@ pub(crate) struct SessionFacts {
     /// Where each Claude Code subagent file was read up to.
     #[serde(default)]
     pub(crate) subagents: BTreeMap<String, ConversationCheckpoint>,
+    /// The request a read saw last, which the agent's next words answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reply_to: Option<u64>,
+    /// The head of the agent's last message after the operator's last
+    /// request and after the newest request, at most those two, oldest
+    /// first: the turn card shows the answer to the request it shows
+    /// (`docs/UI_BEHAVIOR.md`, the turn card). Each is keyed by the offset
+    /// of the request it answers, so a new request never shows an old
+    /// answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) replies: Vec<Reply>,
+}
+
+/// The agent's last message after one request: its first lines, its whole
+/// length and when it was written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Reply {
+    /// The offset of the request it answers.
+    pub(crate) request_offset: u64,
+    /// Its first [`REPLY_HEAD_LINES`] lines with words, each cut at
+    /// [`REPLY_LINE_CHARS`] characters.
+    pub(crate) head: String,
+    /// The whole message's length in bytes, which picks it out of the
+    /// turn's text when it is read in full (`label_transcript::WorkTurn`).
+    pub(crate) bytes: u64,
+    /// The message says more than its head.
+    pub(crate) more: bool,
+    pub(crate) at_unix_ms: u64,
+}
+
+/// The lines of a reply the turn card shows under its summary.
+pub(crate) const REPLY_HEAD_LINES: usize = 2;
+/// The longest line of a reply's head.
+const REPLY_LINE_CHARS: usize = 160;
+/// A head longer than this wraps past the card's two lines, so the card
+/// offers the whole message.
+const REPLY_SHOWN_CHARS: usize = 80;
+
+impl Reply {
+    fn of(request_offset: u64, text: &str, at_unix_ms: u64) -> Self {
+        let mut lines = text
+            .lines()
+            .filter_map(|line| crate::display_text::one_line(line, usize::MAX));
+        let mut cut = false;
+        let head: Vec<String> = lines
+            .by_ref()
+            .take(REPLY_HEAD_LINES)
+            .map(|line| {
+                cut |= line.chars().count() > REPLY_LINE_CHARS;
+                line.chars().take(REPLY_LINE_CHARS).collect()
+            })
+            .collect();
+        let head = head.join("\n");
+        let more = cut || lines.next().is_some() || head.chars().count() > REPLY_SHOWN_CHARS;
+        Self {
+            request_offset,
+            head,
+            bytes: text.len() as u64,
+            more,
+            at_unix_ms,
+        }
+    }
 }
 
 type Shown = (
@@ -149,6 +211,7 @@ type Shown = (
     Option<Request>,
     Option<u64>,
     usize,
+    Vec<Reply>,
 );
 
 /// What the requester judgement knows about the pane's input.
@@ -203,9 +266,17 @@ impl SessionFacts {
         }
         for event in read.events {
             match event.kind {
-                LabelEventKind::Human => self.request(event, &mut input, log),
+                LabelEventKind::Human => {
+                    self.request(event, &mut input, log);
+                    if is_request(event) {
+                        self.reply_to = Some(event.offset);
+                    }
+                }
                 LabelEventKind::Assistant if !event.text.trim().is_empty() => {
                     self.last_reply_at_unix_ms = Some(event.at_unix_ms);
+                    if let Some(request) = self.reply_to {
+                        self.note_reply(Reply::of(request, &event.text, event.at_unix_ms));
+                    }
                 }
                 _ => {}
             }
@@ -281,9 +352,27 @@ impl SessionFacts {
         }
     }
 
+    /// Keeps `reply` as its request's answer, and only the answers to the
+    /// operator's last request and to the newest one.
+    fn note_reply(&mut self, reply: Reply) {
+        self.replies
+            .retain(|kept| kept.request_offset != reply.request_offset);
+        self.replies.push(reply);
+        let operator = self
+            .operator_request
+            .as_ref()
+            .and_then(|request| request.offset);
+        let newest = self.reply_to;
+        self.replies.retain(|kept| {
+            Some(kept.request_offset) == operator || Some(kept.request_offset) == newest
+        });
+    }
+
     /// A rewritten conversation: the offsets the requesters were kept by no
     /// longer name the same messages.
     pub(crate) fn forget_offsets(&mut self) {
+        self.reply_to = None;
+        self.replies.clear();
         self.verdicts.clear();
         self.first_request_offset = None;
         // A sender category may have disappeared from the rewritten file.
@@ -302,6 +391,7 @@ impl SessionFacts {
             self.other_request.clone(),
             self.last_reply_at_unix_ms,
             self.sightings.len(),
+            self.replies.clone(),
         )
     }
 
@@ -565,6 +655,60 @@ mod tests {
             Vec::from(facts.prompt_digests),
             [hide_agent_hooks::delivery::prompt_digest(typed)]
         );
+    }
+
+    fn assistant(text: &str, at: u64, offset: u64) -> LabelEvent {
+        LabelEvent {
+            kind: LabelEventKind::Assistant,
+            ..human(text, at, offset)
+        }
+    }
+
+    /// The turn card's answer is the agent's last message after the
+    /// operator's request: later letters' turns keep their own answers beside
+    /// it without pushing it out, and a rewritten conversation forgets both.
+    #[test]
+    fn the_operators_answer_stays_beside_the_newest_and_each_is_its_last_message() {
+        let mut facts = SessionFacts::default();
+        let mut claimed = None;
+        let long = "네, 생길 수 있습니다.\n\n다만 흔하지 않습니다.\n| 상황 | 예 |";
+        fold(
+            &mut facts,
+            &[
+                human("기본 폴더 없이 프로필만 있을 수 있어?", 10_400, 1),
+                assistant("확인해 볼게요", 10_500, 2),
+                assistant(long, 10_600, 3),
+            ],
+            &[submit(1, 10_000, false)],
+            &mut claimed,
+        );
+        let answer = &facts.replies[0];
+        assert_eq!(answer.request_offset, 1);
+        assert_eq!(answer.head, "네, 생길 수 있습니다.\n다만 흔하지 않습니다.");
+        assert_eq!(answer.bytes, long.len() as u64);
+        assert!(answer.more, "a third line is not in the head");
+        for (offset, at) in [(4, 11_000), (6, 12_000)] {
+            fold(
+                &mut facts,
+                &[
+                    human("🦉 reviewer 보고: 승인", at, offset),
+                    assistant("다음 단계로 갑니다", at + 1, offset + 1),
+                ],
+                &[],
+                &mut claimed,
+            );
+        }
+        assert_eq!(
+            facts
+                .replies
+                .iter()
+                .map(|reply| reply.request_offset)
+                .collect::<Vec<_>>(),
+            vec![1, 6]
+        );
+        assert!(!facts.replies[1].more);
+        facts.forget_offsets();
+        assert!(facts.replies.is_empty());
     }
 
     #[test]

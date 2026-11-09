@@ -308,7 +308,8 @@ mod tests {
     }
 
     /// The request view's words (the operator's request, its summary and
-    /// the earlier turns', the agent's reply) stay on the desktop: the
+    /// the earlier turns', the agent's reply, the turn card's answer, letters
+    /// and questions) stay on the desktop: the
     /// phone's rows carry none of them (PRD overview-request-view Risks,
     /// pane-last-request D-13).
     #[test]
@@ -321,6 +322,9 @@ mod tests {
             "recent_turns": [{"request": "secret earlier summary", "sender": {"kind": "operator"}, "end": "done", "line": "secret earlier line", "at_unix_ms": 0}],
             "reply": {"text": "secret reply words", "cut": false, "at_unix_ms": 2},
             "later_by": null, "pull_requests": [],
+            "answer": {"offset": 1, "end": "done", "line": "secret answer line", "head": "secret answer head", "whole": true, "at_unix_ms": 2},
+            "letters": {"total": 1, "progress": 0, "recent": [{"direction": "received", "peer": {"kind": "named", "name": "secret peer"}, "mark": "block", "line": "secret letter line", "at_unix_ms": 3}]},
+            "asked": [{"line": "secret question", "at_unix_ms": 4, "current": false}],
         });
         let projection = project(&rest, "local");
         let sent = serde_json::to_string(&projection.groups).unwrap();

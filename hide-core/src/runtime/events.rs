@@ -1205,6 +1205,10 @@ pub(super) struct PrOpenPayload {
     /// sidebar-task-lens B17). Otherwise the screen stays where it is.
     #[serde(default)]
     pub(super) open_workspace: bool,
+    /// Which pane's 보기 slot the card opens in: where it was pressed
+    /// (operator decision 2026-11-09).
+    #[serde(default)]
+    pub(super) at: super::detail::DetailPlace,
 }
 
 /// `pr_delegate`: an agent started on a pull request's branch with the
@@ -1816,6 +1820,9 @@ pub(super) enum Event {
     MissionAttention(super::mission_health::MissionAttentionPayload),
     /// `mission_brief_read`: the operator opened the folded brief of a node.
     MissionBriefRead(super::mission_brief::BriefReadPayload),
+    /// `turn_answer_read`: the operator opened the whole answer on a turn
+    /// card.
+    TurnAnswerRead(super::turn_answer::TurnAnswerReadPayload),
     /// `mission_shown`: the mission the page's mission screen shows in its
     /// detail, or none (PRD mission-screen D-16).
     MissionShown(super::mission_events::MissionShownPayload),
@@ -2183,6 +2190,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             MissionAttention
         ),
         "mission_brief_read" => decode!(super::mission_brief::BriefReadPayload, MissionBriefRead),
+        "turn_answer_read" => decode!(super::turn_answer::TurnAnswerReadPayload, TurnAnswerRead),
         "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
@@ -4146,6 +4154,7 @@ impl Runtime {
             }
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
+            Event::TurnAnswerRead(payload) => self.turn_answer_read(payload),
             Event::MissionShown(payload) => self.mission_shown(payload),
             Event::MissionReopen(payload) => self.mission_reopen_event(&payload.mission),
             Event::MissionHandover(payload) => {
@@ -4394,10 +4403,7 @@ impl Runtime {
             Event::PracticeInviteClose => self.close_practice_invite(),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
-            Event::DetailOpen(payload) if payload.in_owner_tab => {
-                self.open_detail_in_owner_tab(payload.item)
-            }
-            Event::DetailOpen(payload) => self.open_detail(payload.item),
+            Event::DetailOpen(payload) => self.open_detail_at(payload.item, payload.at),
             Event::DetailBack => self.detail_back(),
             Event::DetailClose => self.close_detail(),
             Event::DetailShow(payload) => self.show_detail(payload.shown),
@@ -4480,8 +4486,8 @@ impl Runtime {
                     practice: current.practice,
                     practice_invite_closed: current.practice_invite_closed,
                     detail: current.detail,
-                    detail_home: current.detail_home,
-                    detail_tabs: current.detail_tabs,
+                    detail_pane: current.detail_pane,
+                    detail_panes: current.detail_panes,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the

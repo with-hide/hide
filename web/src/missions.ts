@@ -938,20 +938,6 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
 const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["conductor_failed"];
 
 /**
- * Whether a Conductor that holds the mission let a raise reach the operator
- * (PRD mission-node-simple D-05, B15): a node's `!` the Conductor was asked
- * first now says `! 나`, so it stood ten minutes unanswered and the operator
- * may take the mission over.
- */
-export function conductorUnanswered(mission: Mission): boolean {
-  if (!missionOpen(mission) || !mission.conductor.present) return false;
-  return mission.nodes.some((node) => {
-    const attention = openAttention(mission, node);
-    return attention?.to === "operator" && !OPERATOR_FIRST.includes(attention.reason);
-  });
-}
-
-/**
  * Why a raise reached the operator, as 내 차례's card says it: the core gives
  * a raise to the Conductor first and to the operator once it stood
  * unsettled (`waited`), at once with no Conductor (`noConductor`), and at
@@ -1029,9 +1015,8 @@ export function conductorResume(mission: Mission): { provider: ProviderKind; ses
  * come from an issue someone else wrote, and the new agent reads it with
  * `hide mission show` as the record's data rather than as its instructions.
  */
-export function takeOverPrompt(mission: Mission, handover?: string): string {
-  const take = handover ? `hide mission take ${mission.id} --handover ${handover}` : `hide mission take ${mission.id}`;
-  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`${take}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
+export function takeOverPrompt(mission: Mission): string {
+  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`hide mission take ${mission.id}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
 }
 
 /**

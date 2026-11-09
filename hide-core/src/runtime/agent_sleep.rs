@@ -232,11 +232,15 @@ impl Runtime {
         payload: &mut SessionSnapshotPayload,
         scope: SleepScope<'_>,
     ) {
-        let settled = self
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .settle_payload(payload, scope);
+        let mark = self.read_mark(match scope {
+            SleepScope::Core => self.node.as_str(),
+            SleepScope::Device(device) => device,
+        });
+        let settled =
+            self.snapshot
+                .ui_state
+                .agent_sleep
+                .settle_payload(payload, scope, mark.as_deref());
         if settled.is_empty() {
             return;
         }
@@ -662,6 +666,9 @@ impl Runtime {
         let Some(mut record) = SleepRecord::ending(agent, cwd, now_unix_ms) else {
             return false;
         };
+        record.server_mark = record.server_mark.or_else(|| {
+            self.read_mark(crate::address::pane_device(pane_id).unwrap_or(self.node.as_str()))
+        });
         record.launch = self.launch_choice_of(agent);
         record.profile = self.launch_profile_of(agent);
         let kind = record.kind.clone();

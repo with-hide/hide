@@ -2960,8 +2960,8 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's card on top of the front Agent
-/// tab's 보기 slot sends its events while the slot is drawn; the mission
+/// Operator decision 2026-11-09: a mission's card on top of the front pane's
+/// 보기 slot sends its events while the slot is drawn; the mission
 /// screen's detail, when the page names one, wins; the card goes with its
 /// mission.
 #[test]
@@ -3023,11 +3023,11 @@ fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
     assert_eq!(runtime.snapshot.mission_events.mission, None);
 }
 
-/// Operator decision 2026-11-09: a mission pressed outside the slot opens
-/// in its Conductor's tab, the Conductor's pane coming forward with it, and
-/// leaves the focus where it was while no Conductor holds it.
+/// Operator decision 2026-11-09: a mission's row opens its map in the slot
+/// of its Conductor's pane, which comes forward with it, and leaves the focus
+/// where it was while no Conductor holds it.
 #[test]
-fn a_mission_opens_in_its_conductors_tab() {
+fn a_mission_opens_in_its_conductors_slot() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
@@ -3035,18 +3035,16 @@ fn a_mission_opens_in_its_conductors_tab() {
     let open = |runtime: &mut Runtime| {
         assert!(runtime.dispatch_json(&explorer_event(
             "detail_open",
-            json!({"item": {"kind": "mission", "mission": "mission-1"}, "in_owner_tab": true}),
+            json!({"item": {"kind": "mission", "mission": "mission-1"}, "at": "owner"}),
         )));
+    };
+    let map = DetailItem::Mission {
+        mission: "mission-1".into(),
     };
     assert!(runtime.dispatch_json(&operator_focus_event("recipient")));
     open(&mut runtime);
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail.items.last(),
-        Some(&DetailItem::Mission {
-            mission: "mission-1".into()
-        })
-    );
+    assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&map));
 
     // Its Conductor's pane is gone: the pane in front stays.
     runtime.missions.book.missions[0].conductor.actor.pane_id = "gone".into();
@@ -8603,6 +8601,242 @@ fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
         2,
         "each question has its own entry: {raised:?}"
     );
+}
+
+/// with-hide/hide#2301, #2302: `show <mission id>` reads that mission, as
+/// Hide's own letters tell a Conductor to run it; a node's worker and its
+/// checker read their mission without naming it, and the worker sets its
+/// own node's pull request, branch and line; anything else, and any other
+/// node, stays the Conductor's.
+#[test]
+fn a_nodes_worker_and_checker_use_the_mission_commands_of_their_own_node() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-3"}}),
+    )
+    .unwrap();
+
+    for pane in ["sender", "recipient", "reviewer"] {
+        let (whole, changed) = command(
+            &mut runtime,
+            pane,
+            json!({"op": "show", "node": "mission-1"}),
+        )
+        .unwrap();
+        assert!(!changed);
+        assert_eq!(whole["mission"]["id"], "mission-1", "{pane}");
+        assert!(whole.get("node").is_none(), "{pane}");
+    }
+    for pane in ["recipient", "reviewer"] {
+        let (mission, _) = command(&mut runtime, pane, json!({"op": "show"})).unwrap();
+        assert_eq!(mission["mission"]["id"], "mission-1", "{pane}");
+        let (node, _) = command(&mut runtime, pane, json!({"op": "show", "node": "fix"})).unwrap();
+        assert_eq!(node["node"]["key"], "fix", "{pane}");
+    }
+
+    let (attached, changed) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 9, "branch": "fix/parser", "line": "PR #9 열림"}}),
+    )
+    .unwrap();
+    assert!(changed);
+    let fix = &attached["mission"]["nodes"][0];
+    assert_eq!(fix["key"], "fix");
+    assert_eq!(fix["prs"][0]["number"], 9);
+    assert_eq!(fix["branch"], "fix/parser");
+    assert_eq!(fix["line"], "PR #9 열림");
+    for (pane, node, patch) in [
+        ("recipient", "fix", json!({"status": "done"})),
+        ("recipient", "fix", json!({"base_pr": 8})),
+        ("recipient", "fix", json!({"reviewer": "agent-3"})),
+        ("recipient", "docs", json!({"pr": 10})),
+        ("reviewer", "fix", json!({"pr": 11})),
+    ] {
+        assert_eq!(
+            command(
+                &mut runtime,
+                pane,
+                json!({"op": "node", "node": node, "patch": patch})
+            )
+            .unwrap_err(),
+            "mission_not_conductor",
+            "{pane} {node} {patch}"
+        );
+    }
+    let fix = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .node("fix")
+        .unwrap();
+    assert_eq!(fix.prs, [9]);
+    assert_eq!(fix.status, NodeStatus::Working);
+}
+
+/// A command that names no mission means the open mission the caller
+/// conducts, else the one open mission whose node it works or checks: a
+/// worker of two open missions is told to name one, and a Conductor whose
+/// own mission ended reads the open mission it now works in.
+#[test]
+fn a_caller_in_two_open_missions_names_the_one_it_means() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    for (conductor, worker) in [("sender", "agent-2"), ("reviewer", "agent-2")] {
+        command(
+            &mut runtime,
+            conductor,
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        command(&mut runtime, conductor, criteria_plan()).unwrap();
+        command(&mut runtime, conductor, json!({"op": "start"})).unwrap();
+        command(
+            &mut runtime,
+            conductor,
+            json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": worker}}),
+        )
+        .unwrap();
+    }
+
+    for unnamed in [
+        json!({"op": "show"}),
+        json!({"op": "show", "node": "fix"}),
+        json!({"op": "node", "node": "fix", "patch": {"pr": 9}}),
+        record_of("fix", "c1", json!({})),
+    ] {
+        assert_eq!(
+            command(&mut runtime, "recipient", unnamed.clone()).unwrap_err(),
+            "mission_ambiguous",
+            "{unnamed}"
+        );
+    }
+    let (named, _) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "node", "mission": "mission-2", "node": "fix", "patch": {"pr": 9}}),
+    )
+    .unwrap();
+    assert_eq!(named["mission"]["id"], "mission-2");
+    assert_eq!(named["mission"]["nodes"][0]["prs"][0]["number"], 9);
+    let (shown, _) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "show", "mission": "mission-1"}),
+    )
+    .unwrap();
+    assert_eq!(shown["mission"]["id"], "mission-1");
+    let (lettered, _) = command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "show", "node": "mission-2"}),
+    )
+    .unwrap();
+    assert_eq!(lettered["mission"]["id"], "mission-2");
+
+    command(
+        &mut runtime,
+        "reviewer",
+        json!({"op": "node", "node": "docs", "patch": {"status": "working", "agent_id": "agent-1"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    let (taken, _) = command(&mut runtime, "sender", json!({"op": "show"})).unwrap();
+    assert_eq!(taken["mission"]["id"], "mission-2");
+    let (docs, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"line": "가이드 작성 중"}}),
+    )
+    .unwrap();
+    assert_eq!(docs["mission"]["id"], "mission-2");
+    let (worker, _) = command(&mut runtime, "recipient", json!({"op": "show"})).unwrap();
+    assert_eq!(worker["mission"]["id"], "mission-2");
+}
+
+/// with-hide/hide#2300: a worker's watch reads it as busy while its node
+/// waits on someone else, by the rule its quiet warning reads: a pull
+/// request merged or waiting on CI, a review or the merge, or the
+/// Conductor's question to the operator about the node; a failed CI is the
+/// worker's to run again.
+#[test]
+fn a_mission_workers_watch_is_quiet_while_its_node_waits_on_the_operator() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let node = crate::node::TEST_NODE;
+    let read = |runtime: &mut Runtime, answer: GithubSnapshot| {
+        runtime.note_mission_pulls(node, &answer);
+        runtime.github = answer;
+    };
+    read(
+        &mut runtime,
+        checked(7, "c3", PullRequestChecks::Pending, &[]),
+    );
+    assert!(runtime.mission_worker_waits(&worker), "CI runs");
+    read(
+        &mut runtime,
+        checked(7, "c3", PullRequestChecks::Failed, &["verify"]),
+    );
+    assert!(
+        !runtime.mission_worker_waits(&worker),
+        "a failed CI is the worker's"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "첫 줄 캡처가 괜찮나요?", "why": "화면이 바뀜", "options": ["OK", "고침"], "node": "fix"}),
+    )
+    .unwrap();
+    assert!(
+        runtime.mission_worker_waits(&worker),
+        "the operator is asked"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert!(!runtime.mission_worker_waits(&worker));
+    read(
+        &mut runtime,
+        github(vec![pull(7, "c3", PullRequestBadge::Merged, None)], false),
+    );
+    assert!(runtime.mission_worker_waits(&worker), "merged");
 }
 
 /// A File View opened in the project's checkout, by its id.

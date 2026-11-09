@@ -626,6 +626,9 @@ mod tests {
             recent_turns: Vec::new(),
             later_by: None,
             pull_requests: Vec::new(),
+            answer: None,
+            letters: None,
+            asked: Vec::new(),
         });
         request.pull_requests.push(AgentPullRequestSnapshot {
             number: pull.number,

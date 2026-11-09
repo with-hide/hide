@@ -509,7 +509,7 @@ fn pr_ready(pull: &PullRequestSnapshot) -> bool {
 /// Whether a mission worker's open pull request waits on CI, a review or
 /// the merge with nothing for the worker to do (D-06, B22): nothing failed,
 /// no conflict and no changes asked for.
-pub(crate) fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
+fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
     !pull.badge.is_settled() && !pull.is_draft && needs(pull).is_empty()
 }
 
@@ -579,7 +579,7 @@ pub(crate) fn warn_acts(
             None if works
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
-                && worker_waits(node, pulls) == Some(false) =>
+                && quiet_waits(mission, node, pulls) == Some(false) =>
             {
                 acts.push(WarnAct::Raise {
                     node: at,
@@ -620,6 +620,30 @@ fn worker_waits(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> Op
     };
     let pull = find(pulls?, number)?;
     Some(pull.badge == PullRequestBadge::Merged || waits_on_others(pull))
+}
+
+/// Whether `node`'s worker, quiet, waits on someone else now, so neither
+/// the quiet warning nor its parent's watch calls anyone about it (D-06,
+/// B22, with-hide/hide#2300): the node waits on an answer to a raise on it
+/// or to the Conductor's question about it (`hide mission decide --node`),
+/// or its pull request waits on CI, a review or the merge with nothing for
+/// the worker to do (`worker_waits`). A failed CI is its worker's to run
+/// again or fix, so it is no wait. None while GitHub's answer does not hold
+/// the pull request.
+pub(crate) fn quiet_waits(
+    mission: &Mission,
+    node: &MissionNode,
+    pulls: Option<&GithubProjectSnapshot>,
+) -> Option<bool> {
+    let asked = mission.decision.is_some()
+        && mission
+            .question
+            .as_ref()
+            .is_some_and(|question| question.node.as_deref() == Some(node.key.as_str()));
+    if node.attention.is_some() || asked {
+        return Some(true);
+    }
+    worker_waits(node, pulls)
 }
 
 #[cfg(test)]
@@ -1227,6 +1251,40 @@ mod tests {
         assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
         assert_eq!(warn_acts(&m, Some(&waiting), late).len(), 1);
+    }
+
+    /// with-hide/hide#2300: a node that waits on the operator's answer, to
+    /// its Conductor's question about it or to a raise on it, is no quiet
+    /// worker's, whatever its pull request needs; the same failed CI with
+    /// nothing asked still warns, since running it again is its worker's.
+    #[test]
+    fn a_node_waiting_on_the_operator_raises_no_quiet_warning() {
+        let mut m = reviewed();
+        m.nodes[0].prs = vec![7];
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
+        let late = 120 * MINUTE;
+        let mut failing = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
+        failing.pull_requests[0].checks = PullRequestChecks::Failed;
+        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        m.decision = Some("첫 줄 캡처가 괜찮나요?".into());
+        m.question = Some(crate::missions::Question {
+            key: 1,
+            why: None,
+            options: Vec::new(),
+            recommend: None,
+            node: Some("a".into()),
+            asked_at_unix_ms: 100 * MINUTE,
+            views: Vec::new(),
+            material_asked: false,
+        });
+        assert!(warn_acts(&m, Some(&failing), late).is_empty());
+        // A question about another node, or about none, leaves it its worker's.
+        m.question.as_mut().unwrap().node = None;
+        assert_eq!(warn_acts(&m, Some(&failing), late).len(), 1);
+        m.decision = None;
+        m.question = None;
+        m.nodes[0].attention = Some(attention(AttentionReason::PrClosed, Some(7)));
+        assert!(warn_acts(&m, Some(&failing), late).is_empty());
     }
 
     /// with-hide/hide-private#552: only a node at work in a running mission

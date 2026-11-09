@@ -21,6 +21,72 @@ use crate::model::{
     CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestSnapshot,
 };
 
+/// How an agent takes part in a mission (`Runtime::part_in`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Part {
+    Conductor,
+    Worker,
+    Checker,
+}
+
+type Records<'a> = std::collections::HashMap<&'a str, &'a crate::coordination::AgentRecord>;
+
+/// The agent a mission command came from, with what the command reads of
+/// the ledger's agents, read in one pass for the whole command, since the
+/// ledger keeps every agent there ever was: the caller's own registrations,
+/// ended ones too, and those of every worker and checker the book names,
+/// which the command's answer draws (`Runtime::mission_view_for`).
+pub(super) struct Caller<'a> {
+    pub actor: &'a Actor,
+    pub ledger: Option<&'a crate::delivery::ledger::Ledger>,
+    registrations: Vec<&'a str>,
+    named: Records<'a>,
+}
+
+impl<'a> Caller<'a> {
+    pub(super) fn of(
+        actor: &'a Actor,
+        ledger: Option<&'a crate::delivery::ledger::Ledger>,
+        missions: &[Mission],
+    ) -> Self {
+        let wanted = super::missions::named_agents(missions.iter());
+        let mut registrations = Vec::new();
+        let mut named = Records::new();
+        for record in ledger.into_iter().flat_map(|ledger| &ledger.agents) {
+            if record.actor.same_identity(actor) {
+                registrations.push(record.id.as_str());
+            }
+            if wanted.contains(record.id.as_str()) {
+                named.insert(record.id.as_str(), record);
+            }
+        }
+        Self {
+            actor,
+            ledger,
+            registrations,
+            named,
+        }
+    }
+
+    /// Whether registration `id` is the caller's.
+    pub(super) fn owns(&self, id: Option<&str>) -> bool {
+        id.is_some_and(|id| self.registrations.contains(&id))
+    }
+
+    /// The registrations of `mission`'s workers and checkers, from those
+    /// read with the caller's.
+    pub(super) fn records_of(&self, mission: &Mission) -> Records<'a> {
+        super::missions::named_agents(std::iter::once(mission))
+            .into_iter()
+            .filter_map(|id| {
+                self.named
+                    .get_key_value(id)
+                    .map(|(id, record)| (*id, *record))
+            })
+            .collect()
+    }
+}
+
 /// Whether `pull` is merged, so its head is the work that reached main.
 fn merged(pull: &PullRequestSnapshot) -> bool {
     pull.badge == PullRequestBadge::Merged
@@ -304,37 +370,71 @@ impl Runtime {
         Ok(next)
     }
 
-    /// Whether registration `id` is `actor`'s.
-    fn registration_is(&self, id: Option<&str>, actor: &Actor) -> bool {
-        let Some(id) = id else { return false };
-        self.delivery_state().is_ok_and(|ledger| {
-            ledger
-                .agents
+    /// How `caller` takes part in `mission` at its node `node`, or at any of
+    /// its nodes with none (B5, with-hide/hide#2302): as its Conductor, as
+    /// the node's worker, or as one of its checkers. The one rule every
+    /// command that names no mission finds a worker's or a checker's by.
+    pub(super) fn part_in(
+        mission: &Mission,
+        caller: &Caller<'_>,
+        node: Option<&str>,
+    ) -> Option<Part> {
+        if mission.conductor.actor.same_identity(caller.actor) {
+            return Some(Part::Conductor);
+        }
+        let mine = |id: Option<&str>| caller.owns(id);
+        let rows = || {
+            mission
+                .nodes
                 .iter()
-                .any(|record| record.id == id && record.actor.same_identity(actor))
-        })
+                .filter(|row| node.is_none_or(|key| row.key == key))
+        };
+        if rows().any(|row| mine(row.agent_id.as_deref())) {
+            return Some(Part::Worker);
+        }
+        rows()
+            .any(|row| {
+                row.criteria.iter().any(|line| {
+                    line.checkers
+                        .iter()
+                        .any(|checker| mine(checker.agent_id.as_deref()))
+                })
+            })
+            .then_some(Part::Checker)
     }
 
-    /// The mission a line command from `actor` acts on (B5): the one it
-    /// names, or the open mission it conducts or whose node `node` it works
-    /// or checks.
+    /// The mission a command from `caller` that names none means, by one
+    /// rule for every such command (B5, with-hide/hide#2302): the open
+    /// mission it conducts; else the one open mission whose node it works
+    /// or checks (`part_in`), two of them being ambiguous
+    /// (`mission_ambiguous`); else the newest done mission it conducts,
+    /// which a change refuses as closed. None when it takes part in none.
+    pub(super) fn mission_meant(&self, caller: &Caller<'_>) -> Result<Option<&Mission>, String> {
+        if let Some(mission) = self.missions.book.conducted_open(caller.actor) {
+            return Ok(Some(mission));
+        }
+        let mut taken = self.missions.book.missions.iter().filter(|mission| {
+            mission.status.open() && Self::part_in(mission, caller, None).is_some()
+        });
+        if let Some(mission) = taken.next() {
+            if taken.next().is_some() {
+                return Err("mission_ambiguous".into());
+            }
+            return Ok(Some(mission));
+        }
+        Ok(self.missions.book.conducted(caller.actor))
+    }
+
+    /// The mission a line command from `caller` acts on (B5): the one it
+    /// names, or the one it means (`mission_meant`), where it conducts the
+    /// mission or works or checks its node `node`.
     fn line_mission(
         &self,
-        actor: &Actor,
+        caller: &Caller<'_>,
         named: Option<&str>,
         node: &str,
     ) -> Result<String, String> {
-        let concerns = |mission: &Mission| {
-            mission.conductor.actor.same_identity(actor)
-                || mission.node(node).is_some_and(|row| {
-                    self.registration_is(row.agent_id.as_deref(), actor)
-                        || row.criteria.iter().any(|line| {
-                            line.checkers.iter().any(|checker| {
-                                self.registration_is(checker.agent_id.as_deref(), actor)
-                            })
-                        })
-                })
-        };
+        let concerns = |mission: &Mission| Self::part_in(mission, caller, Some(node)).is_some();
         let open = || {
             self.missions
                 .book
@@ -344,7 +444,7 @@ impl Runtime {
         };
         let mission = match named {
             Some(id) => self.missions.book.get(id).ok_or("mission_unknown")?,
-            None => match open().find(|mission| concerns(mission)) {
+            None => match self.mission_meant(caller)? {
                 Some(mission) => mission,
                 // A node another agent owns is someone else's line.
                 None if open().any(|mission| mission.node(node).is_some()) => {
@@ -382,7 +482,9 @@ impl Runtime {
         }
         let evidence = Some(evidence);
         let summary = crate::missions::summary_line(summary)?;
-        let id = self.line_mission(actor, named, node)?;
+        let ledger = self.delivery_state().ok();
+        let caller = Caller::of(actor, ledger.as_deref(), &self.missions.book.missions);
+        let id = self.line_mission(&caller, named, node)?;
         let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         let index = mission
             .nodes
@@ -397,7 +499,7 @@ impl Runtime {
             .ok_or("mission_criterion_unknown")?;
         let line = &row.criteria[at];
         let conductor = mission.conductor.actor.same_identity(actor);
-        let worker = self.registration_is(row.agent_id.as_deref(), actor);
+        let worker = caller.owns(row.agent_id.as_deref());
         // The Conductor certifies a node it works itself: one that never
         // had a worker (D-23 as the mission's Conductor read it).
         let never_worked = row.agent_id.is_none()
@@ -417,7 +519,7 @@ impl Runtime {
                 let slot = line
                     .checkers
                     .iter()
-                    .position(|checker| self.registration_is(checker.agent_id.as_deref(), actor))
+                    .position(|checker| caller.owns(checker.agent_id.as_deref()))
                     .ok_or("mission_criterion_not_yours")?;
                 let agent_id = line.checkers[slot].agent_id.clone();
                 // The head an answer is for is the one the checker names: a
@@ -481,7 +583,10 @@ impl Runtime {
             }
         };
         if !effect.changed {
-            return Ok((json!({"mission": self.mission_view_of(&id)}), false));
+            return Ok((
+                json!({"mission": self.mission_view_for(&id, &caller)}),
+                false,
+            ));
         }
         let mut events = Vec::new();
         // A check failing again on the commit its rerun was for sends the
@@ -506,7 +611,10 @@ impl Runtime {
             "mission": id, "node": node, "line": key, "pass": pass,
         }));
         self.record_mission_events(&id, events);
-        Ok((json!({"mission": self.mission_view_of(&id)}), true))
+        Ok((
+            json!({"mission": self.mission_view_for(&id, &caller)}),
+            true,
+        ))
     }
 
     /// `hide mission skip` (B11, B12): the Conductor goes past a line with
@@ -521,7 +629,9 @@ impl Runtime {
         (reason, decision): (String, Option<u64>),
         now: u64,
     ) -> Result<(Value, bool), String> {
-        let id = self.line_mission(actor, named, node)?;
+        let ledger = self.delivery_state().ok();
+        let caller = Caller::of(actor, ledger.as_deref(), &self.missions.book.missions);
+        let id = self.line_mission(&caller, named, node)?;
         let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
         if !mission.conductor.actor.same_identity(actor) {
             return Err("mission_not_conductor".into());
@@ -568,7 +678,10 @@ impl Runtime {
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
         let changed = target.nodes[index].criteria[at].skip(reason.clone(), decision, by);
         if !changed {
-            return Ok((json!({"mission": self.mission_view_of(&id)}), false));
+            return Ok((
+                json!({"mission": self.mission_view_for(&id, &caller)}),
+                false,
+            ));
         }
         target.updated_at_unix_ms = now;
         let mut event = MissionEvent::new(now, EventKind::Skipped)
@@ -576,7 +689,10 @@ impl Runtime {
             .line(Some(&reason));
         event.criterion = Some(key.to_owned());
         self.record_mission_events(&id, vec![event]);
-        Ok((json!({"mission": self.mission_view_of(&id)}), true))
+        Ok((
+            json!({"mission": self.mission_view_for(&id, &caller)}),
+            true,
+        ))
     }
 
     /// `hide mission defect` (B21): a later node found a defect in `node`,

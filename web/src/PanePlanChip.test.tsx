@@ -139,7 +139,7 @@ it("opens a checklist in the order the steps wait on, never a map or a record fo
     expect(popover.querySelector("[data-plan-count]")?.textContent).toBe("1/3");
     expect(popover.querySelector("[data-plan-summary-when]")?.textContent).toBe("updated 5m ago");
     await act(async () => popover.querySelector<HTMLButtonElement>("[data-pane-plan-large]")!.click());
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session: SESSION }, in_owner_tab: true } });
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session: SESSION }, at: "owner" } });
   } finally { await view.unmount(); }
 });
 

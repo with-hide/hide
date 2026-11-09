@@ -1580,9 +1580,10 @@ impl Runtime {
         notices
     }
 
-    /// Whether the mission worker `target` waits on its pull request's CI,
-    /// review or merge with nothing to do (D-06, B22): its watch then reads
-    /// it as active, so its quiet is counted from when the wait ends.
+    /// Whether the mission worker `target` waits on someone else now
+    /// (`mission_health::quiet_waits`, D-06, B22, with-hide/hide#2300): its
+    /// watch then reads it as active, so its quiet is counted from when the
+    /// wait ends. The rule its node's quiet warning reads too.
     pub(crate) fn mission_worker_waits(&self, target: &crate::delivery::Actor) -> bool {
         let Ok(ledger) = self.delivery_state() else {
             return false;
@@ -1601,19 +1602,14 @@ impl Runtime {
             .iter()
             .filter(|mission| mission.status.open())
             .any(|mission| {
-                let Some(pulls) = self.mission_pulls(mission) else {
-                    return false;
-                };
                 mission.nodes.iter().any(|node| {
                     node.status == NodeStatus::Working
                         && node.agent_id.as_deref() == Some(agent.id.as_str())
-                        && node.current_pr().is_some_and(|number| {
-                            pulls
-                                .pull_requests
-                                .iter()
-                                .find(|pull| pull.number == number)
-                                .is_some_and(crate::mission_health::waits_on_others)
-                        })
+                        && crate::mission_health::quiet_waits(
+                            mission,
+                            node,
+                            self.mission_pulls(mission),
+                        ) == Some(true)
                 })
             })
     }

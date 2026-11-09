@@ -1090,9 +1090,13 @@ fn run(
             }
         }
         if saved.is_ok() && changed {
+            // The turn cards' letter index is built here, off the runtime
+            // lock, from the ledger just saved (`correspondence`).
+            let index = Arc::new(super::correspondence::Correspondence::of(&candidate));
             match runtime.lock() {
                 Ok(mut guard) => {
-                    let published = guard.publish_delivery(Arc::new(candidate), transitions);
+                    let published =
+                        guard.publish_delivery_indexed(Arc::new(candidate), index, transitions);
                     drop(guard);
                     if published {
                         notifier.notify();

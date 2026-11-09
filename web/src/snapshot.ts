@@ -250,7 +250,54 @@ export type AgentRequest = {
   later_by: RequestSender | null;
   /** The chip first (D-46), then the other live ones, then settled ones. */
   pull_requests: AgentPullRequest[];
+  /** The agent's answer to the shown request once its turn is over (`TurnAnswerSnapshot`), for the turn card. */
+  answer?: TurnAnswer;
+  /** The letters and started agents since the shown request (`LettersSinceSnapshot`). */
+  letters?: LettersSince;
+  /** The questions later turns put to the operator since the shown request, oldest first (`AskedSnapshot`). */
+  asked?: AskedTurn[];
 };
+
+/** The agent's answer to the shown request: the label's line and the head of its last message. */
+export type TurnAnswer = {
+  /** The shown request's offset, which names the turn when the whole answer is read (`turn_answer_read`). */
+  offset: number;
+  end?: LabelEnd;
+  line?: string;
+  head?: string;
+  /** The message says more than `head` and can be read whole. */
+  whole: boolean;
+  at_unix_ms: number;
+};
+
+/** Which way a card line went, seen from the row's pane (`LetterDirection`). */
+export type LetterDirection = "sent" | "received" | "started";
+
+/** What a card line is marked with (`LetterMark`). */
+export type LetterMark = "waiting_answer" | "reply" | "block" | "report" | "question" | "progress";
+
+/** One line of the turn card's letter list (`LetterLineSnapshot`). */
+export type LetterLine = { direction: LetterDirection; peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number };
+
+/**
+ * One agent the pane worked with since the request (`PeerLineSnapshot`): what
+ * it last said that matters, or what the pane last sent it, with how many
+ * blocks went between them and whether the pane started it.
+ */
+export type PeerLine = { peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number; blocks?: number; started?: boolean };
+
+/**
+ * The letters since the shown request: a line per agent (at most six, the
+ * rest counted), and for the whole list the newest eight lines oldest first,
+ * interim reports only counted.
+ */
+export type LettersSince = { total: number; progress: number; letters: number; recent: LetterLine[]; peers: PeerLine[]; more_peers: number };
+
+/** A question a later turn put to the operator (`AskedSnapshot`); `current` when it ended the newest turn. */
+export type AskedTurn = { line: string; at_unix_ms: number; current: boolean };
+
+/** The whole answer the operator opened on a turn card (`turn_answer`), one at a time. */
+export type TurnAnswerRead = { pane_id: string | null; offset: number | null; phase: "reading" | "ready" | "failed" | null; text: string | null };
 
 /** A turn before the shown request (`TurnSnapshot`): the label's summary of its request and how it ended. */
 export type AgentTurn = {
@@ -1304,6 +1351,15 @@ export type DetailItem =
   | { kind: "plan"; session: WorkSession }
   /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
+
+/**
+ * Which agent's 보기 slot an item opens in, where it was pressed (operator
+ * decision 2026-11-09): `here` the slot in front, over what it shows, for
+ * what a card opens inside the slot; `{ pane }` the slot of the agent whose
+ * row, head or chip was pressed, that pane taking the keyboard; `owner` the
+ * slot of the agent that owns the item, pressed where no agent is.
+ */
+export type DetailPlace = "here" | "owner" | { pane: string };
 
 /** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
 export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {
@@ -3259,6 +3315,8 @@ export type SnapshotRest = {
   mission_events?: MissionEventsSnapshot;
   /** The brief of the one node whose folded box was opened; `text` is null when it holds none. */
   mission_brief?: MissionBriefSnapshot;
+  /** The whole answer the operator opened on a turn card (`runtime/turn_answer.rs`). */
+  turn_answer?: TurnAnswerRead;
   /** Each pane's own plan (PRD hide-plan). */
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;

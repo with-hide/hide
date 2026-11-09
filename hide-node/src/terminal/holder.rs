@@ -862,7 +862,7 @@ impl Holders {
     /// before the close ends nothing.
     pub fn renew(
         &self,
-        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
         service: &Service,
         intent: &HolderIntent,
         request: impl FnOnce() -> Result<StartRequest, String>,
@@ -870,7 +870,7 @@ impl Holders {
         let pane = intent.pane.as_str();
         let turn = self.turns.take(pane, RENEW_TURN_WAIT);
         let renewal = match &turn {
-            Ok(_) => self.renew_in_turn(owner, service, intent, request),
+            Ok(_) => self.renew_in_turn(guard, service, intent, request),
             Err(TurnRefused::Full) => {
                 Renewal::Busy(format!("pane {pane}'s holder has too many changes waiting"))
             }
@@ -1021,7 +1021,7 @@ impl Holders {
     /// replaced; anything else is [`Renewal::Unsettled`].
     fn renew_in_turn(
         &self,
-        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
         service: &Service,
         intent: &HolderIntent,
         request: impl FnOnce() -> Result<StartRequest, String>,
@@ -1043,7 +1043,7 @@ impl Holders {
             pane: pane.to_owned(),
             closing: true,
         });
-        let renewal = self.replace(owner, intent, &record, request, socket);
+        let renewal = self.replace(guard, intent, &record, request, socket);
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
             closing: false,
@@ -1054,7 +1054,7 @@ impl Holders {
     /// Ends `record`'s holder and starts `request` in its place.
     fn replace(
         &self,
-        owner: &hide_kit::panes::Owner,
+        guard: &hide_kit::panes::Request<'_>,
         intent: &HolderIntent,
         record: &PaneRecord,
         request: StartRequest,
@@ -1065,7 +1065,7 @@ impl Holders {
         // The earlier holder's watch ends here, so its end changes nothing
         // of the pane, whose rules the next watch takes up.
         self.watches.retire(pane);
-        let ended = match self.panes.close(owner, &holder) {
+        let ended = match self.panes.close(guard.owner(), &holder) {
             Ok(ended) => ended,
             Err(error) => {
                 let now = self.panes.record(&holder);
@@ -1089,40 +1089,31 @@ impl Holders {
         // Until the new holder runs, an open of the pane waits for it.
         self.known.remove(pane);
         self.known.starting(pane);
-        let started = owner.issue(&holder, &intent.digest).map(|guard| {
-            let started = self
-                .reserve(&guard, intent, Some(ended.incarnation))
-                .and_then(|reserved| {
-                    self.panes.start_reserved(
-                        &guard,
-                        &holder,
-                        reserved.incarnation,
-                        &intent.digest,
-                        &self.source,
-                        || Ok(request),
-                    )
-                });
-            if !matches!(started, Err(StartRefusal::Uncertain(_))) {
-                let _ = owner.retire(owner.incarnation(), guard.number());
-            }
-            started
-        });
+        let started = self
+            .reserve(guard, intent, Some(ended.incarnation))
+            .and_then(|reserved| {
+                self.panes.start_reserved(
+                    guard,
+                    &holder,
+                    reserved.incarnation,
+                    &intent.digest,
+                    &self.source,
+                    || Ok(request),
+                )
+            });
         let renewed = match started {
-            Ok(Ok(Started::Started(record) | Started::Existing(record)))
-                if record.end.is_none() =>
-            {
+            Ok(Started::Started(record) | Started::Existing(record)) if record.end.is_none() => {
                 record
             }
             failed => {
                 self.known.not_started(pane);
                 self.watches.forget(pane);
                 return match failed {
-                    Ok(Err(StartRefusal::Uncertain(why))) => Renewal::Unsettled(why),
-                    Ok(Ok(Started::Started(record) | Started::Existing(record))) => {
+                    Err(StartRefusal::Uncertain(why)) => Renewal::Unsettled(why),
+                    Ok(Started::Started(record) | Started::Existing(record)) => {
                         Renewal::Lost(format!("the new holder ended: {:?}", record.end))
                     }
-                    Ok(Err(refusal)) => Renewal::Lost(refusal.to_string()),
-                    Err(why) => Renewal::Lost(why),
+                    Err(refusal) => Renewal::Lost(refusal.to_string()),
                 };
             }
         };

@@ -308,30 +308,30 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
-    // The 보기 slots of the Agent tabs not in front, by tab id, and the tab
-    // the front slot belongs to.
-    (CORE_STATE, "/detail_home", Mechanism::Owned, Moves::Tab),
+    // The pane the front 보기 slot belongs to, and the slots of the panes
+    // not in front.
+    (CORE_STATE, "/detail_pane", Mechanism::Owned, Moves::Pane),
     (
         CORE_STATE,
-        "/detail_tabs/{key}",
+        "/detail_panes/*/pane",
         Mechanism::Owned,
-        Moves::Tab,
+        Moves::Pane,
     ),
     (
         CORE_STATE,
-        "/detail_tabs/*/items/*/workspace_id",
+        "/detail_panes/*/slot/items/*/workspace_id",
         Mechanism::Owned,
         Moves::Registration,
     ),
     (
         CORE_STATE,
-        "/detail_tabs/*/items/*/checkout_id",
+        "/detail_panes/*/slot/items/*/checkout_id",
         Mechanism::Owned,
         Moves::Checkout,
     ),
     (
         CORE_STATE,
-        "/detail_tabs/*/items/*/session/device_id",
+        "/detail_panes/*/slot/items/*/session/device_id",
         Mechanism::Rewritten,
         Moves::Device,
     ),
@@ -1559,12 +1559,12 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
     for row in each(value, "home_retire") {
         changed |= rewrite(row.get_mut("device_id"), node);
     }
-    // The front tab's slot and each other tab's.
+    // The front slot and each other pane's.
     if let Some(detail) = value.get_mut("detail") {
         changed |= rewrite_slot_devices(detail, node);
     }
-    if let Some(tabs) = value.get_mut("detail_tabs").and_then(Value::as_object_mut) {
-        for slot in tabs.values_mut() {
+    for held in each(value, "detail_panes") {
+        if let Some(slot) = held.get_mut("slot") {
             changed |= rewrite_slot_devices(slot, node);
         }
     }
@@ -1957,14 +1957,14 @@ mod tests {
                 "device_add_project_folders",
                 json!({"mini": "/home/me/projects"}),
             )
-            .tap_insert("detail_home", json!("w1:t1"))
+            .tap_insert("detail_pane", json!("w1:p1"))
             .tap_insert(
-                "detail_tabs",
-                json!({"w1:t2": {"items": [
+                "detail_panes",
+                json!([{"pane": "w1:p2", "slot": {"items": [
                     {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
                     {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
                     {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
-                ], "shown": false}}),
+                ], "shown": false}}]),
             )
             .tap_insert("agent_permissions", json!({"codex": {"mode": "ask"}}))
             .tap_insert(

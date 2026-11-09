@@ -150,7 +150,7 @@ describe("the Project tool", () => {
     expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "remains", workspace_id: "p", checkout_id: "w" } });
     await render(snapshot(status({ strays: [stray({ changed_files: 0, failed_pr: 1815 })], strays_total: 1 })));
     await press('[data-stray-open="w"]');
-    expect(sent("pr_open").at(-1)).toEqual({ workspace_id: "p", pr_number: 1815, checkout_id: "w" });
+    expect(sent("pr_open").at(-1)).toEqual({ workspace_id: "p", pr_number: 1815, checkout_id: "w", at: "owner" });
   });
 
   it("hands a row off once, showing progress and no 놔두기 while it sends (B11, B12)", async () => {
@@ -292,7 +292,7 @@ describe("the Project tool", () => {
     expect(container.querySelectorAll("[data-task-row]")).toHaveLength(1);
     expect(container.querySelector('[data-task-row="b"]')?.textContent).toContain("Gave up on the flaky test");
     await press('[data-task-conversation="s-b"]');
-    expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-b" } }, in_owner_tab: true });
+    expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-b" } }, at: "owner" });
     await act(async () => useUiStore.getState().showTaskTable("mission", null));
     expect(container.querySelector('[data-task-table-empty="mission"]')).not.toBeNull();
   });

@@ -399,6 +399,9 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
         recent_turns: Vec::new(),
         later_by: None,
         pull_requests: Vec::new(),
+        answer: None,
+        letters: None,
+        asked: Vec::new(),
     });
     let summary = Some(header::TurnRequest {
         text: Some("제안대로 진행".into()),
@@ -928,4 +931,57 @@ fn a_lineage_past_the_walk_is_logged_when_its_only_pull_request_lies_beyond() {
     assert_eq!(crossings[0]["pane_id"], "lead");
     assert_eq!(crossings[0]["lineage_capped"], true);
     assert_eq!(crossings[0]["omitted"], 0);
+}
+
+/// A letter to a pane lays its turn card's letters on the row as the ledger
+/// is published, and a delivery step that changes no card line lays nothing
+/// again (`delivery::correspondence`).
+#[test]
+fn a_published_letter_reaches_the_rows_turn_card_and_a_step_of_it_does_not_move_the_row() {
+    let mut runtime = with_status("idle");
+    runtime.snapshot.navigator.agents[0].row_facts = Some(crate::request_view::RowFacts {
+        operator_request: Some(crate::labels::facts::Request {
+            text: "리뷰 맡겨".into(),
+            offset: Some(1),
+            cut: false,
+            images: 0,
+            at_unix_ms: 1_000,
+            requester: crate::labels::facts::Requester::Operator,
+            first: true,
+        }),
+        ..Default::default()
+    });
+    assert!(runtime.sync_request_rows());
+    let letters = |runtime: &Runtime| {
+        runtime.snapshot.navigator.agents[0]
+            .request
+            .as_ref()
+            .and_then(|request| request.letters.clone())
+    };
+    assert_eq!(letters(&runtime), None);
+    let mut letter: crate::delivery::ledger::Letter = serde_json::from_value(json!({
+        "id": "letter-1", "intent": "review", "kind": "block", "body": "막혔습니다\n자세히",
+        "sender": {"pane_id": "child", "name": "reviewer", "kind": "claude", "device_id": "d", "session": "s"},
+        "recipient": {"pane_id": "session", "name": "lead", "kind": "codex", "device_id": "d", "session": "t"},
+        "state": "pending", "waiting_answer": true, "reply_to": null,
+        "created_at_unix_ms": 2_000, "finished_at_unix_ms": null, "bell_errors": 0, "bell_sent": false
+    }))
+    .unwrap();
+    let mut ledger = crate::delivery::ledger::Ledger {
+        next_id: 2,
+        letters: vec![letter.clone()],
+        ..Default::default()
+    };
+    assert!(runtime.publish_delivery(std::sync::Arc::new(ledger.clone()), false));
+    let shown = letters(&runtime).expect("the letter came after the request");
+    assert_eq!(
+        (shown.total, shown.recent[0].line.as_deref()),
+        (1, Some("막혔습니다"))
+    );
+    // Its delivery moves no line of the card.
+    letter.state = crate::delivery::ledger::State::Delivered;
+    ledger.letters = vec![letter];
+    let before = runtime.snapshot.navigator.agents.clone();
+    runtime.publish_delivery(std::sync::Arc::new(ledger), false);
+    assert_eq!(runtime.snapshot.navigator.agents, before);
 }

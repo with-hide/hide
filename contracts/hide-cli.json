@@ -5856,6 +5856,7 @@
             "refusals": [
                 "mission_node_unknown",
                 "mission_not_conductor",
+                "mission_ambiguous",
                 "mission_closed",
                 "mission_criteria_unmet",
                 "mission_checker_is_worker",
@@ -5950,6 +5951,7 @@
                 "mission_node_unknown",
                 "mission_criterion_unknown",
                 "mission_criterion_not_yours",
+                "mission_ambiguous",
                 "mission_commit_required",
                 "mission_rerun_spent",
                 "mission_evidence_missing",
@@ -6009,6 +6011,7 @@
                 "mission_not_conductor",
                 "mission_node_unknown",
                 "mission_criterion_unknown",
+                "mission_ambiguous",
                 "mission_skip_reason_missing",
                 "mission_criteria_protected"
             ],
@@ -6343,7 +6346,8 @@
                 }
             ],
             "refusals": [
-                "mission_node_unknown"
+                "mission_node_unknown",
+                "mission_ambiguous"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6547,7 +6551,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:d2fd6336ff0a0044fc491224862382a14118bf1fe0b6936eda2fbd35523dc6ed",
+    "digest": "sha256:38dad52e8bcf39a31459db6b86045b8408899a69ae0dc3e76748d230f795fb08",
     "envelopes": {
         "agent": {
             "answer": "value",

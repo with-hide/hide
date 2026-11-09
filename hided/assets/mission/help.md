@@ -30,7 +30,9 @@ hide agent catalog [--machine <device id>]
 ```
 
 Every command prints one JSON line: `{"ok":true,"result":…}` or `{"ok":false,"reason":…,"next_action":…}`; `hide mission show` without `--json` is the one that prints text, and a refusal is still that JSON line.
-A command that names no `--mission` acts on the mission you conduct.
+A command that names no `--mission` acts on the open mission you conduct, else the one open mission whose node you work or check (section 9), else the mission you conducted that was last closed as done.
+Working or checking nodes of two open missions, such a command is refused as `mission_ambiguous`: name the one you mean with `--mission <id>`.
+`hide mission show <mission id>`, the command Hide's letters name, reads that whole mission; a key that is also a node of the mission you mean reads that node.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
 
 `hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review failures in a row, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
@@ -248,9 +250,10 @@ What is not certain is raised on the node to you first, with a letter naming the
 Settle it by recording the line, skipping it with its reason, attaching the pull request with `--pr`, setting the node's status or dropping it; that takes the raise off the operator's turn too.
 A raise you have not settled in ten minutes, or any raise while no Conductor holds the mission, reaches the operator, who can settle it from the map; you then get a letter saying what they did.
 The same cause is raised once.
-CI, review and merge waits call no one, and a worker waiting on them is not warned for being quiet.
+CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, is not warned for being quiet, neither by the no-push warning nor by its watch's no-activity letter.
+A failed CI is its worker's to run again or fix, so it is no wait: put a wait on the operator that is not a merge on the map with `decide --node`, or the quiet worker is warned.
 
-Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge is not quiet).
+Two signs that a worker is stuck are told to you alone, never raised and never sent to the operator: a node whose review failed twice in a row, and a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet).
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review or a new push takes it off, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
 The two thresholds are fixed: two failed reviews in a row and 90 minutes with no push.
@@ -322,8 +325,6 @@ Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read th
 When you hand the mission over, leave a handover note in a file beside your plan file: each node's state and what it waits on, the open decisions, and your next step.
 The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.
 Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).
-When a raise that Conductor was asked first stood ten minutes and reached the operator, the operator may hand the mission to a new session from the map: that session's prompt names `--handover <token>`, the take passes once with it, and the old Conductor's commands are refused from then on.
-What reached the operator because the old Conductor did not answer comes to you first, with your own ten minutes.
 
 ## 9. For workers and checkers
 
@@ -336,4 +337,7 @@ A worker or checker of a mission records its own lines from its own pane; the Co
   The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`), and names the commit it read with `--commit <sha>` when the node has a pull request.
 - Recording the same result on the same commit again changes nothing.
+- `hide mission show` and `hide mission show <node>` read your mission without `--mission`, as they do for its Conductor; while you work or check nodes of two open missions, every such command names one with `--mission <id>` (`mission_ambiguous` otherwise).
+- A worker attaches its own node's pull request, branch and one line itself: `hide mission node <its node> --pr <n> | --no-pr`, `--branch <name>` and `--line <text>`.
+  Anything else on a node (its status, stack base, agents, checkers and verdicts), and any other node, is refused as the Conductor's (`mission_not_conductor`).
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.

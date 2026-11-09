@@ -403,7 +403,12 @@ use crate::error::HostError;
 /// which the core compares accounts by instead of keying one itself; a
 /// helper on 91 lists none, so it is not admitted and upgrades with its
 /// core.
-pub const PROTOCOL_VERSION: u32 = 92;
+/// 93: holder renewal carries
+/// the connection's numbered creation request,
+/// just like reserve/start/cancel. An earlier node issues a separate number
+/// during replacement and could retire the next tab's request, so it must
+/// upgrade before any renewal.
+pub const PROTOCOL_VERSION: u32 = 93;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

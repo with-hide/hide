@@ -1361,7 +1361,7 @@ fn bell_sender(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter) -> Stri
         .iter()
         .rev()
         .find(|record| record.actor.same_identity(about))
-        .and_then(|record| record.name.clone());
+        .and_then(|record| record.screen_name().map(str::to_owned));
     registered
         .or_else(|| {
             owner
@@ -4188,6 +4188,12 @@ mod tests {
         // A registration with no name of its own is called by the title, not
         // by its registration id, which the letter's envelope carries.
         ledger.agents[0].name = None;
+        assert_eq!(
+            line(&ledger, &letter),
+            "🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"
+        );
+        // A name Hide made up for the pane only spells it: the title again.
+        ledger.agents[0].name = Some(crate::fork::task_agent_name("codex", "sender"));
         assert_eq!(
             line(&ledger, &letter),
             "🦉 라벨 제목 보고: 리뷰 끝났습니다 · 외 1통 · hide inbox"

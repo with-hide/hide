@@ -161,7 +161,7 @@ function WorkerWays({ mission, node, actions }: { mission: Mission; node: Missio
     <>
       {node.pr != null && card ? (
         <Hint label={card}>
-          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card={node.pr}>
+          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! }, "here")} data-node-pr-card={node.pr}>
             <MissionPrMark number={node.pr} state={node.pr_state} stale={mission.github_stale} />
           </Button>
         </Hint>
@@ -312,7 +312,7 @@ function PlanPart({ plan, planned, folded, actions }: { plan: PlanView; planned:
             <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
           </Button>
         ) : null}
-        <Button variant="text" size="inline" className="ml-auto shrink-0 text-caption" onClick={() => actions.openPlan(plan.session, false)} data-panel-plan-large="true">
+        <Button variant="text" size="inline" className="ml-auto shrink-0 text-caption" onClick={() => actions.openPlan(plan.session, "here")} data-panel-plan-large="true">
           {t("plan.large")}
           <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </Button>

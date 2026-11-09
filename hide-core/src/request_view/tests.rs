@@ -111,6 +111,7 @@ fn run(rows: &mut [SidebarAgentSnapshot], branches: &[(&str, &str)], github: &Gi
             })
         },
         github,
+        &Default::default(),
         &mut BTreeMap::new(),
         2_000_000,
     );
@@ -613,6 +614,7 @@ fn an_opened_result_rests_until_another_pull_request_settles() {
                 })
             },
             github,
+            &Default::default(),
             verbs,
             now,
         );
@@ -868,6 +870,7 @@ fn a_verbs_time_holds_while_the_verb_holds_and_starts_over_when_it_moves() {
         &mut idle,
         |_| None,
         &GithubSnapshot::default(),
+        &Default::default(),
         &mut verbs,
         10
     ));
@@ -875,6 +878,7 @@ fn a_verbs_time_holds_while_the_verb_holds_and_starts_over_when_it_moves() {
         &mut idle,
         |_| None,
         &GithubSnapshot::default(),
+        &Default::default(),
         &mut verbs,
         20
     ));
@@ -884,6 +888,7 @@ fn a_verbs_time_holds_while_the_verb_holds_and_starts_over_when_it_moves() {
         &mut working,
         |_| None,
         &GithubSnapshot::default(),
+        &Default::default(),
         &mut verbs,
         30
     ));
@@ -911,6 +916,7 @@ fn a_merged_pull_request_of_a_reused_branch_name_is_not_a_rows_result() {
                 })
             },
             &github(vec![merged.clone()]),
+            &Default::default(),
             &mut BTreeMap::new(),
             2_000_000,
         );
@@ -931,6 +937,7 @@ fn turn(offset: u64, request: &str, end: Option<LabelEnd>) -> RecentTurn {
         end,
         line: format!("{request} 결과"),
         at_unix_ms: offset,
+        witness: None,
     }
 }
 
@@ -985,5 +992,225 @@ fn the_shown_request_reads_as_its_summary_or_its_own_first_line() {
             // A turn judged only while it ran says nothing of how it ended.
             (Some("둘째 요청 요약"), None),
         ]
+    );
+}
+
+fn letter_between(
+    id: u64,
+    from: &str,
+    to: &str,
+    kind: &str,
+    body: &str,
+    at: u64,
+) -> crate::delivery::ledger::Letter {
+    let actor = |pane: &str| {
+        serde_json::json!({
+            "pane_id": pane, "name": format!("agent {pane}"), "kind": "claude",
+            "device_id": "device", "session": "s",
+        })
+    };
+    serde_json::from_value(serde_json::json!({
+        "id": format!("letter-{id}"), "intent": format!("intent-{id}"),
+        "sender": actor(from), "recipient": actor(to), "kind": kind, "body": body,
+        "state": "delivered", "waiting_answer": false, "reply_to": null,
+        "created_at_unix_ms": at, "finished_at_unix_ms": null,
+        "bell_errors": 0, "bell_sent": false
+    }))
+    .unwrap()
+}
+
+/// The turn card's later half (`docs/UI_BEHAVIOR.md`, the turn card): the
+/// answer to the operator's request once its turn is over, the letters since
+/// it, and the questions letter turns put to the operator since it, on this
+/// machine's row and a device's alike.
+#[test]
+fn the_card_shows_the_answer_the_letters_and_the_questions_since_the_request() {
+    const LEAD: &str = "w1:p1";
+    const DEVICE: &str = "remote:mini:pane:w2:p1";
+    let mut shown = rows(&[(LEAD, "idle"), (DEVICE, "idle")]);
+    for row in &mut shown {
+        let facts = row.row_facts.as_mut().unwrap();
+        facts.operator_request.as_mut().unwrap().offset = Some(10);
+        // A letter began a later turn, which the lead's header does not show.
+        facts.other_request = Some(Request {
+            offset: Some(50),
+            ..request(
+                "🦉 리뷰어 보고",
+                Requester::Named("reviewer".into()),
+                ASKED + 3_000,
+                false,
+            )
+        });
+        facts.recent_turns = vec![RecentTurn {
+            witness: Some("w".repeat(64)),
+            ..turn(10, "프로필 폴더 질문", Some(LabelEnd::Done))
+        }];
+        facts.replies = vec![crate::labels::facts::Reply {
+            request_offset: 10,
+            head: "네, 실제로 생길 수 있습니다.\n다만 흔한 경우는 아닙니다.".into(),
+            bytes: 900,
+            more: true,
+            at_unix_ms: ASKED + 500,
+        }];
+        facts.asked = vec![
+            crate::labels::store::AskedTurn {
+                offset: 5,
+                line: "요청 전 질문".into(),
+                at_unix_ms: ASKED - 1,
+            },
+            crate::labels::store::AskedTurn {
+                offset: 30,
+                line: "닫은 탭 결함 어떻게 할지 정해 주세요".into(),
+                at_unix_ms: ASKED + 2_000,
+            },
+            crate::labels::store::AskedTurn {
+                offset: 50,
+                line: "머지할까요?".into(),
+                at_unix_ms: ASKED + 3_500,
+            },
+        ];
+    }
+    let ledger = crate::delivery::ledger::Ledger {
+        letters: vec![
+            letter_between(1, LEAD, "w1:p9", "report", "요청 전 편지", ASKED - 10),
+            letter_between(2, "w1:p9", LEAD, "block", "디스크가 찼습니다", ASKED + 100),
+            letter_between(3, LEAD, "w1:p9", "progress", "중간 보고", ASKED + 200),
+            letter_between(4, "w1:p9", DEVICE, "report", "기기에서 보고", ASKED + 300),
+        ],
+        ..Default::default()
+    };
+    let index = crate::delivery::correspondence::Correspondence::of(&ledger);
+    apply(
+        &mut shown,
+        |_| None,
+        &GithubSnapshot::default(),
+        &index,
+        &mut BTreeMap::new(),
+        ASKED + 4_000,
+    );
+
+    let lead = shown[0].request.as_ref().unwrap();
+    let answer = lead.answer.as_ref().expect("the request's turn is over");
+    assert_eq!(answer.offset, 10);
+    assert_eq!(answer.end, Some(LabelEnd::Done));
+    assert_eq!(answer.line.as_deref(), Some("프로필 폴더 질문 결과"));
+    assert_eq!(
+        answer.head.as_deref(),
+        Some("네, 실제로 생길 수 있습니다.\n다만 흔한 경우는 아닙니다.")
+    );
+    assert!(answer.whole);
+    let letters = lead.letters.as_ref().unwrap();
+    assert_eq!((letters.total, letters.progress), (1, 1));
+    assert_eq!(letters.recent[0].line.as_deref(), Some("디스크가 찼습니다"));
+    assert_eq!(
+        lead.asked
+            .iter()
+            .map(|asked| (asked.line.as_str(), asked.current))
+            .collect::<Vec<_>>(),
+        vec![
+            ("닫은 탭 결함 어떻게 할지 정해 주세요", false),
+            ("머지할까요?", true)
+        ]
+    );
+    // A device's agent is read from the same ledger by its scoped pane id.
+    let device = shown[1].request.as_ref().unwrap();
+    assert_eq!(
+        device.letters.as_ref().unwrap().recent[0].line.as_deref(),
+        Some("기기에서 보고")
+    );
+}
+
+/// A letter's other side goes by its screen name: the name it registered
+/// under unless Hide made it up for its pane, else its pane's title on these
+/// rows, else its runtime's name; an unnamed agent's registration id, its wire
+/// name, never shows.
+#[test]
+fn a_letters_peer_goes_by_its_registered_name_then_its_title_then_its_runtime() {
+    const LEAD: &str = "w1:p1";
+    let mut shown = rows(&[(LEAD, "idle"), ("w1:p2", "idle")]);
+    shown[1].identity_label = "리뷰 반영하기".to_owned();
+    let mut ledger = crate::delivery::ledger::Ledger {
+        letters: vec![
+            letter_between(1, "w1:p2", LEAD, "report", "제목으로", ASKED + 100),
+            letter_between(2, "w1:p3", LEAD, "report", "이름으로", ASKED + 200),
+            letter_between(3, "w1:p9", LEAD, "report", "런타임으로", ASKED + 300),
+        ],
+        ..Default::default()
+    };
+    // `w1:p2` registered under the name Hide made for its pane, which reads as none.
+    let made = crate::fork::task_agent_name("claude", "w1:p2");
+    for (id, pane, name) in [
+        ("agent-2", "w1:p2", made.as_str()),
+        ("agent-3", "w1:p3", "reviewer"),
+    ] {
+        ledger.agents.push(
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": name, "machine": "device", "host_scope": "scope",
+                "native_machine": "device", "session": "s", "instance": "i",
+                "terminal_id": null, "pane": pane, "parent": null, "project": null,
+                "actor": {"pane_id": pane, "name": name, "kind": "claude", "device_id": "device", "session": "s"},
+                "ended": false
+            }))
+            .unwrap(),
+        );
+    }
+    apply(
+        &mut shown,
+        |_| None,
+        &GithubSnapshot::default(),
+        &crate::delivery::correspondence::Correspondence::of(&ledger),
+        &mut BTreeMap::new(),
+        ASKED + 1_000,
+    );
+    let peers: Vec<_> = shown[0]
+        .request
+        .as_ref()
+        .unwrap()
+        .letters
+        .as_ref()
+        .unwrap()
+        .recent
+        .iter()
+        .map(|line| line.peer.clone())
+        .collect();
+    assert_eq!(
+        peers,
+        vec![
+            RequestSender::Named("리뷰 반영하기".into()),
+            RequestSender::Named("reviewer".into()),
+            RequestSender::Named(crate::sidebar::provider_name(Some("claude"))),
+        ]
+    );
+}
+
+/// While the request's own turn still works there is no answer yet, and an
+/// answer whose turn was never judged offers no whole read.
+#[test]
+fn a_working_turn_has_no_answer_and_an_unjudged_one_reads_no_whole() {
+    let mut shown = rows(&[("p", "working"), ("q", "idle")]);
+    for row in &mut shown {
+        let facts = row.row_facts.as_mut().unwrap();
+        facts.operator_request.as_mut().unwrap().offset = Some(10);
+        facts.replies = vec![crate::labels::facts::Reply {
+            request_offset: 10,
+            head: "먼저 확인해 볼게요".into(),
+            bytes: 30,
+            more: true,
+            at_unix_ms: ASKED + 1,
+        }];
+    }
+    apply(
+        &mut shown,
+        |_| None,
+        &GithubSnapshot::default(),
+        &Default::default(),
+        &mut BTreeMap::new(),
+        ASKED + 10,
+    );
+    assert_eq!(shown[0].request.as_ref().unwrap().answer, None);
+    let answer = shown[1].request.as_ref().unwrap().answer.as_ref().unwrap();
+    assert_eq!(
+        (answer.line.as_deref(), answer.head.as_deref(), answer.whole),
+        (None, Some("먼저 확인해 볼게요"), false)
     );
 }

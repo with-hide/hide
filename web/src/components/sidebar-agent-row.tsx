@@ -131,8 +131,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   remote?: { label: string; reachable: boolean } | null;
   selected: boolean;
   onOpen: (paneId: string) => void;
-  /** Opens a PR from the PR icon's card; `external` asks for the default browser. */
-  onOpenPullRequest: (url: string, external: boolean) => void;
+  /** Opens a PR of the row's mark from its card or list; `external` asks for the default browser. */
+  onOpenPullRequest: (pull: SessionPull, external: boolean) => void;
   /** Where a root's first column starts. */
   inset: string;
   /** False where the row above already names the row's checkout. */
@@ -155,6 +155,12 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
   const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
   const pulls = listed ?? rowPulls(agent, "own");
+  // The card and the list name a PR by its URL; the row hands on the PR its mark drew.
+  const openPull = (url: string, external: boolean) => {
+    const pull = pulls.find((entry) => entry.url === url);
+    if (!pull) throw new Error("PR card names a pull request outside its row");
+    onOpenPullRequest(pull, external);
+  };
   const line = tree ? projectTreeLine(agent) : sidebarLine(agent);
   const branch = branchShown ? branchChip(agent) : null;
   const attention = agent.state.attention;
@@ -264,7 +270,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
           ) : null}
           {placeInHead && place ? <span aria-hidden="true" data-agent-place-head={place} className="pointer-events-none min-w-0 max-w-2/5 shrink truncate text-caption text-muted-foreground">{place.split(" › ")[0]}</span> : null}
-          {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
+          {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={openPull}>{icon}</PrHoverCard>} />}
           {agent.letters_waiting ? <RowLetterMark /> : null}
           {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
           {onOpenMission && (!ask || agent.state.ask?.subject?.cause === "mission_decision") ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}
