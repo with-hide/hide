@@ -723,8 +723,8 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
       <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
-            aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
-            title={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
+            aria-label={[child.identity_label, forkLabel(t, child), agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
+            title={[child.identity_label, agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">

@@ -2,7 +2,7 @@ import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge,
 import { ChevronsDownUpIcon, GitBranchIcon, MailIcon } from "lucide-react";
 import { useId } from "react";
 import { AgentMark } from "./AgentMark";
-import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
+import { agentWithProfile, badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { AskLine } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
@@ -127,7 +127,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
     <Ports />
     <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null, branch].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
       {/* A delegated session is the same circle, smaller (its size comes from data-root). */}
-      <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} /></span></span>
+      <span className="og-orb og-session-drag" title={[t("overviewGraph.dragSession", { session: row.agent.identity_label }), row.agent.profile ? agentWithProfile(t, row.agent) : null].filter(Boolean).join("\n")}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} /></span></span>
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
       {branch ? <span className="og-session-branch" aria-hidden="true"><GitBranchIcon aria-hidden="true" /><span>{branch}</span></span> : null}
