@@ -2719,7 +2719,18 @@ mod tests {
         saved: &mut Saved,
         focused: Option<&str>,
     ) -> Vec<SidebarAgentSnapshot> {
-        let mut agents = projected(rows);
+        pass_payload(payload(rows), connection, saved, focused)
+    }
+
+    /// [`pass`] over a payload the caller laid something on first, such as
+    /// the label worker's overlay.
+    fn pass_payload(
+        payload: SessionSnapshotPayload,
+        connection: &mut ReadConnection,
+        saved: &mut Saved,
+        focused: Option<&str>,
+    ) -> Vec<SidebarAgentSnapshot> {
+        let mut agents = project_agents(payload).agents;
         apply_completions(&mut agents, &mut saved.completions, connection);
         apply_lineage(&mut agents, &[], &[]);
         apply_read_state(
@@ -2901,6 +2912,79 @@ mod tests {
                 assert!(rows[0].unread, "{what}");
             }
         }
+    }
+
+    /// The restart of 2026-11-09: three panes the operator had read came back
+    /// unread. Their labels ended on a question, which no row showed while
+    /// Hide AI was paused at its usage limit, so each was read with no demand.
+    /// A started daemon does not know the pause until its first usage read,
+    /// so the label summary, and with it the question, was laid on the
+    /// restored pane's first settled state and taken away a moment later at
+    /// the same sequence. That first state is not what the pane rests on: once
+    /// the question is gone again the row is read, and the record says so.
+    #[test]
+    fn a_restored_pane_is_read_by_what_it_rests_on_not_its_first_settled_state() {
+        let session = "17443306-e203-4f7c-b761-14363dfd8df1";
+        let label = crate::labels::store::PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", session),
+            native_session_id: Some(session.to_owned()),
+            end: Some(crate::labels::analysis::LabelEnd::Question),
+            line: "덱 본문에 넣을 위치를 골라 주세요".to_owned(),
+            ..Default::default()
+        };
+        let labeled = |status: &str, seq: u64, completion: Option<u64>, summaries: bool| {
+            let mut payload = payload(json!([pane("a", status, seq, completion, session)]));
+            crate::labels::overlay::LabelOverlay::of_records(
+                [(&"a".to_owned(), &label)],
+                true,
+                summaries,
+            )
+            .apply(&mut payload);
+            payload
+        };
+        let mut saved = Saved::default();
+        let rows = pass_payload(
+            labeled("done", 13, Some(13), false),
+            &mut connection(),
+            &mut saved,
+            Some("a"),
+        );
+        assert_eq!(rows[0].demand, "none", "read while summaries were paused");
+        assert_eq!(rows[0].session_id.as_deref(), Some(session));
+
+        let mut restored = ReadConnection::new("server-2".to_owned());
+        pass_payload(
+            labeled("idle", 0, None, true),
+            &mut restored,
+            &mut saved,
+            None,
+        );
+        let rows = pass_payload(
+            labeled("idle", 14, None, true),
+            &mut restored,
+            &mut saved,
+            None,
+        );
+        assert_eq!(rows[0].demand, "question", "the first settled state asks");
+        let rows = pass_payload(
+            labeled("idle", 14, None, false),
+            &mut restored,
+            &mut saved,
+            None,
+        );
+        assert_eq!(rows[0].demand, "none");
+        assert!(!rows[0].unread, "the pane rests on what the operator read");
+        assert_eq!(rows[0].group, "seen");
+        assert!(!saved.records["a"].unread, "and the saved verdict is read");
+        assert_eq!(saved.records["a"].server.as_deref(), Some("server-2"));
+
+        let rows = pass_payload(
+            labeled("working", 15, None, false),
+            &mut restored,
+            &mut saved,
+            None,
+        );
+        assert!(rows[0].unread, "work after the restore is news");
     }
 
     /// A record saved before servers were named is judged by sequence as it
