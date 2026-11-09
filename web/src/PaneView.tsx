@@ -4,7 +4,8 @@ import { useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
 import { CircleAlertIcon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
+import { useOutsidePressSurface } from "./components/ui/layer";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
 import { agentDrag, referenceLands } from "./agentReference";
@@ -185,6 +186,12 @@ export const PaneView = memo(function PaneView({
 }) {
   const { t } = useInterfaceTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
+  // A press on the terminal closes an open popover, though the terminal stops its `mousedown`.
+  const outsideSurface = useOutsidePressSurface();
+  const setHost = useCallback((node: HTMLDivElement | null) => {
+    hostRef.current = node;
+    outsideSurface(node);
+  }, [outsideSurface]);
   const viewGeneration = useShellStore((s) => s.viewGeneration);
   const refusal = useShellStore((s) => s.attachmentRefusal);
   const setRefusal = useShellStore((s) => s.setAttachmentRefusal);
@@ -489,7 +496,7 @@ export const PaneView = memo(function PaneView({
       </header>
       <div className="h-[var(--size-hairline)] shrink-0 bg-border" />
       <div className="relative min-h-0 flex-1">
-        <div ref={hostRef} className="absolute inset-0 overflow-hidden" data-terminal-host={paneId} onContextMenu={openTerminalMenu} />
+        <div ref={setHost} className="absolute inset-0 overflow-hidden" data-terminal-host={paneId} onContextMenu={openTerminalMenu} />
         {refusal?.pane_id === paneId ? (
           <div className="absolute inset-x-0 top-0 flex items-center gap-sm bg-card px-sm py-xxs text-caption text-destructive" data-pane-attachment-refusal="true">
             <span className="min-w-0 flex-1 truncate">{refusalText(refusal.reason, t)}</span>
