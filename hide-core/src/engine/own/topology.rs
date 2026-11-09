@@ -1921,7 +1921,7 @@ impl Topology {
         &mut self,
         pane: &str,
         mut agent: PaneAgent,
-        attempt: Option<String>,
+        attempt: Option<crate::launch::ExecAttempt>,
     ) -> Result<AgentStart, EngineError> {
         let held = self.pane_mut(pane)?;
         let now = Instant::now();
@@ -1935,7 +1935,7 @@ impl Topology {
         }
         let claim = Arc::new(());
         agent.live.start_claim = Some(Arc::clone(&claim));
-        held.live.attempt = attempt.map(|id| Attempt::new(id, Arc::clone(&claim)));
+        held.live.attempt = attempt.map(|checked| Attempt::new(checked, Arc::clone(&claim)));
         let previous = AgentStart {
             claim,
             // An expired provisional record must not regain its old claim
@@ -1971,6 +1971,21 @@ impl Topology {
             .and_then(|held| held.live.attempt.as_mut())
             .ok_or(crate::engine::ATTEMPT_UNKNOWN)?
             .report(report)
+    }
+
+    /// What the executor of the attempt `id` of `pane` is answered from when
+    /// it asks for its profile ([`Attempt::asked`]): refused once the pane is
+    /// gone, keeps another attempt, or the attempt ended or is `Ready`.
+    pub(super) fn asked_attempt(
+        &self,
+        pane: &str,
+        id: &str,
+    ) -> Result<crate::launch::ExecAttempt, &'static str> {
+        self.pane(pane)
+            .ok()
+            .and_then(|held| held.live.attempt.as_ref())
+            .ok_or(crate::engine::ATTEMPT_UNKNOWN)?
+            .asked(id)
     }
 
     /// What the attempt `id` of `pane` is now; `None` once the pane is gone

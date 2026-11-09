@@ -382,7 +382,15 @@ use crate::error::HostError;
 /// helper on 88 keeps profiles but would refuse the call, so it upgrades,
 /// and a node the core still admits on an older protocol keeps no profile,
 /// which the core reads as the default account.
-pub const PROTOCOL_VERSION: u32 = 89;
+/// 90: a profile's start line names only its attempt, in a shorter shape,
+/// and the agent's own words, and its executor asks for the profile's
+/// variables and program just before it runs
+/// (`panes::AgentExecEvent::Profile`), answered at the version its start
+/// was checked with. An executor of 88 or 89 would read the new line as a
+/// start with no variables, and refuses its attempt's shape instead; a
+/// helper on 88 or 89 is not admitted, so it upgrades before the core types
+/// a profile's start there.
+pub const PROTOCOL_VERSION: u32 = 90;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
