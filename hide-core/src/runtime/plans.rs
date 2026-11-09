@@ -1405,8 +1405,6 @@ impl Runtime {
         device: &str,
         parent: Option<&str>,
         plan_node: Option<&str>,
-        kind: &str,
-        launch: &hide_agent_adapter::LaunchChoice,
         conducting: bool,
     ) -> Result<Option<PlanAdmission>, String> {
         let ledger = self.delivery_state()?;
@@ -1476,14 +1474,6 @@ impl Runtime {
                 &format!("{key} waits on {blocked}"),
             ));
         }
-        let candidates = &self.snapshot.ui_state.conductor_settings.candidates;
-        if !candidates.is_empty()
-            && !candidates
-                .iter()
-                .any(|candidate| candidate.admits(kind, launch))
-        {
-            return Err("plan_candidate_refused".into());
-        }
         let id = plan.id();
         // The attempt the step is on: the same while its child works or has
         // reported, the next once it is blocked, closed or taken back. A
@@ -1521,6 +1511,23 @@ impl Runtime {
             },
             asleep,
         }))
+    }
+
+    /// A plan step's child is held to Settings › Mission's worker
+    /// candidates as they are now (I-2.9), by the item it starts with,
+    /// picked into `pick` as a mission's worker is
+    /// (`outside_candidates`).
+    pub(crate) fn plan_candidates_admit(
+        &self,
+        actor: &crate::delivery::Actor,
+        worker: &crate::runtime::missions::SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
+    ) -> Result<(), String> {
+        let candidates = &self.snapshot.ui_state.conductor_settings.candidates;
+        match self.outside_candidates(actor, worker, pick, candidates)? {
+            Some(started) => Err(refusal("plan_candidate_refused", &started)),
+            None => Ok(()),
+        }
     }
 
     /// The children `session`'s plans handed steps to that are asleep or

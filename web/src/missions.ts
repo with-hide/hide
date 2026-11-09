@@ -7,12 +7,13 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
+import { listedProfiles } from "./agentProfiles";
 import { agentsByPane } from "./paneAgents";
 import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodeLaunch, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -112,12 +113,29 @@ export type RunWords = { words: string; planned: boolean };
  * model and effort are shown marked as planned (`자동` for an effort the
  * Conductor will choose), or nothing.
  */
-export function runWords(launch: Pick<LaunchSession, "launch_model" | "launch_effort"> | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
-  if (launch && (launch.launch_model || launch.launch_effort)) return { words: [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·"), planned: false };
+export function runWords(launch: (Pick<LaunchSession, "launch_model" | "launch_effort"> & { profile?: string | null }) | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
+  if (launch && (launch.profile || launch.launch_model || launch.launch_effort)) {
+    // A profile's name leads, so the item reads before its model (PRD agent-profiles-phase2 B12); the built-in default names none.
+    const choice = [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·");
+    return { words: launch.profile ? `${launch.profile} · ${choice}` : choice, planned: false };
+  }
   if (!plan) return null;
   const effort = plan.effort ?? (plan.effort_auto ? words.auto : null);
   const planned = [plan.model, effort].filter(Boolean).join("·");
   return planned ? { words: planned, planned: true } : null;
+}
+
+/**
+ * The name of the profile a node's worker started with, as the operator
+ * reads it now (PRD agent-profiles-phase2 B12, B23): its machine's profile of
+ * that id while the machine lists it, so a rename shows, else the name it
+ * started with; null for the built-in default.
+ */
+export function launchedProfileName(devices: readonly Device[] | undefined, machine: string | null, launch: MissionNodeLaunch | null | undefined): string | null {
+  const profile = launch?.profile;
+  if (!profile) return null;
+  const listed = listedProfiles(devices?.find((device) => device.id === machine));
+  return listed?.profiles.find((row) => row.id === profile.id)?.name ?? profile.name;
 }
 
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */

@@ -99,7 +99,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   const kind = KIND_SHORT[node.kind];
   const parts: ReactNode[] = [
     ...(kind ? [<span key="kind" className="shrink-0 font-semibold text-subtle-foreground" data-panel-kind={node.kind}>{t(kind)}</span>] : []),
-    ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} /> : null}<RunText run={worker.run} /></span>] : []),
+    ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} profile={worker.profile} /> : null}<RunText run={worker.run} /></span>] : []),
     ...(device ? [<MissionDevice key="device" name={device} />] : []),
     ...facts.map((fact) => <span key={fact} className="shrink-0 tabular-nums" data-panel-fact="true">{fact}</span>),
     ...(replan

@@ -478,6 +478,7 @@ mod tests {
             },
         }
         let spawn = |profile: Option<&str>| crate::coordination::Command::Spawn {
+            pick: None,
             parent: None,
             machine: None,
             name: "worker".into(),

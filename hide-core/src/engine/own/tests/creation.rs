@@ -61,6 +61,7 @@ impl Placement {
             &Mutation::Reserve {
                 parent,
                 command: Command::Spawn {
+                    pick: None,
                     mission: None,
                     plan_node: None,
                     plan: None,

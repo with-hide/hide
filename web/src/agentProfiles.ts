@@ -3,6 +3,7 @@
 // here. Changes go to the core as one `agent_profile_change` each, and the
 // screen reads only the answer that carries its own request id.
 
+import type { TFunction } from "i18next";
 import { agentAdapter } from "./agentAdapters";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
@@ -232,6 +233,32 @@ export function editChange(id: string, draft: ProfileDraft): ProfileChange {
 /** Whether two drafts would save the same profile. */
 export function sameDraft(a: ProfileDraft, b: ProfileDraft): boolean {
   return JSON.stringify(editChange("", a)) === JSON.stringify(editChange("", b));
+}
+
+/**
+ * An item's name on every screen that picks one (PRD agent-profiles-phase2
+ * D-01): its agent's name, then `· <profile>` for a profile other than the
+ * built-in default, which is the agent's name alone.
+ */
+export function itemName(t: TFunction<"translation">, agentLabel: string, profile?: string | null): string {
+  return profile ? t("agentProfiles.agentWithProfile", { agent: agentLabel, profile }) : agentLabel;
+}
+
+/** What an item whose profile the machine no longer lists is called: the agent and `Missing profile`, never a guessed name (D-12). */
+export function missingItemName(t: TFunction<"translation">, agentLabel: string): string {
+  return itemName(t, agentLabel, t("agentProfiles.itemGone"));
+}
+
+/** One item of an agent's list on a machine (D-01): `profile` is its id, `default` for the built-in one, and `name` the profile's name, null for the built-in one. */
+export type AgentItem = { kind: ProviderKind; profile: string; name: string | null };
+
+/** The items of `kind` on `device`: the built-in one first, then the profiles its list holds, in order; the built-in one alone where the machine lists none. */
+export function agentItems(device: Device | undefined, kind: ProviderKind): AgentItem[] {
+  const adapter = agentAdapter(kind);
+  const listed = listedProfiles(device);
+  const view = adapter && listed ? agentProfilesView(listed, adapter.id, adapter.label) : null;
+  if (!view) return [{ kind, profile: BUILT_IN_PROFILE, name: null }];
+  return view.profiles.map((row) => ({ kind, profile: row.id, name: row.builtIn ? null : row.name }));
 }
 
 /** The project's chosen profile for `agent` (`project_settings.agent_profiles`), by the catalog project a start target names. */

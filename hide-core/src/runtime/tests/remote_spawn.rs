@@ -503,6 +503,7 @@ impl Spawner {
             authority(&self.actor),
             self.actor.clone(),
             Command::Spawn {
+                pick: None,
                 mission: None,
                 plan_node: None,
                 plan: None,
@@ -531,6 +532,7 @@ impl Spawner {
             authority(&self.actor),
             self.actor.clone(),
             Command::Spawn {
+                pick: None,
                 mission: None,
                 plan_node: None,
                 plan: None,
@@ -614,6 +616,7 @@ fn desk_ask(spawner: &Spawner, intent: &str) -> Result<Value, String> {
 fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, String> {
     let command = crate::delivery::Command::Agents {
         command: Command::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,
@@ -1296,6 +1299,7 @@ fn a_spawn_whose_agent_never_takes_input_answers_within_its_answer_time() {
         authority(&spawner.actor),
         spawner.actor.clone(),
         Command::Spawn {
+            pick: None,
             mission: None,
             plan_node: None,
             plan: None,
@@ -1776,6 +1780,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
             authority(&actor),
             actor.clone(),
             Command::Spawn {
+                pick: None,
                 mission: None,
                 plan_node: None,
                 plan: None,

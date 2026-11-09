@@ -359,6 +359,40 @@ impl Runtime {
         .profile())
     }
 
+    /// What a `hide agent spawn` of `kind` from `actor` starts (D-32): the
+    /// profile it names by name (`profile`, refused when the child's machine
+    /// lists none of that name), else its caller's when the caller is the
+    /// same agent on the same machine, else the project's at `repo`, else
+    /// the agent's default on the child's machine. The one answer the spawn
+    /// starts with and a mission's or plan's admission judges (PRD
+    /// agent-profiles-phase2 D-05, D-08), so the two can never differ.
+    pub(crate) fn spawn_request(
+        &self,
+        actor: &crate::delivery::Actor,
+        machine: Option<&str>,
+        kind: &str,
+        profile: Option<&str>,
+        repo: &str,
+    ) -> Result<crate::launch::Request, String> {
+        let child_machine = machine.unwrap_or(&actor.device_id);
+        let profiles = self.machine_profiles(child_machine);
+        let parent = if machine.is_none() {
+            self.caller_launch_profile(actor, kind)
+        } else {
+            crate::launch::Parent::None
+        };
+        Ok(crate::launch::pick(
+            kind,
+            profile
+                .map(|name| crate::launch::chosen(kind, name, profiles))
+                .transpose()?,
+            &parent,
+            self.project_agent_profile(child_machine, repo, kind)
+                .as_ref(),
+            profiles,
+        ))
+    }
+
     /// The profile Project settings choose for `kind` in the project that
     /// holds `path` on `device` (D-31): its root, or one of its worktrees.
     pub(crate) fn project_agent_profile(

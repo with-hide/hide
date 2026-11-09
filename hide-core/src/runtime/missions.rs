@@ -442,6 +442,21 @@ pub struct AttentionView {
     pub unmet_nodes: u32,
 }
 
+/// The spawn an admission judges: the machine its child starts on (none
+/// for the caller's own), its agent, the profile it names by name, the
+/// project it starts in, the model and effort it starts with, and whether
+/// it retries a spawn that finished, which answers with the child it
+/// started and is judged by what it did (engineering 11).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SpawnWorker<'a> {
+    pub(crate) machine: Option<&'a str>,
+    pub(crate) kind: &'a str,
+    pub(crate) profile: Option<&'a str>,
+    pub(crate) repo: &'a str,
+    pub(crate) launch: &'a hide_agent_adapter::LaunchChoice,
+    pub(crate) finished: bool,
+}
+
 /// A spawn admitted as one of a mission's workers: its cap is checked in
 /// the ledger, with the workers it already has.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -1948,10 +1963,11 @@ impl Runtime {
                     .collect();
                 Ok((json!({"items": items}), false))
             }
-            MissionCommand::Settings => Ok((
-                json!({"settings": self.snapshot.ui_state.conductor_settings}),
-                false,
-            )),
+            MissionCommand::Settings => {
+                let mut settings = json!(self.snapshot.ui_state.conductor_settings);
+                settings["candidates"] = self.candidate_items().into();
+                Ok((json!({ "settings": settings }), false))
+            }
         }
     }
 
@@ -2358,12 +2374,12 @@ impl Runtime {
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
-        machine: Option<&str>,
-        kind: &str,
-        launch: &hide_agent_adapter::LaunchChoice,
+        worker: &SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
         intent: &str,
         briefed: bool,
     ) -> Result<Option<MissionAdmission>, String> {
+        let machine = worker.machine;
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return Ok(None);
         };
@@ -2386,18 +2402,111 @@ impl Runtime {
         }
         // The candidates the mission was created with: a Settings edit
         // applies from the next mission (B48).
-        let candidates = &mission.candidates;
-        if !candidates.is_empty()
-            && !candidates
-                .iter()
-                .any(|candidate| candidate.admits(kind, launch))
-        {
-            return Err("mission_candidate_refused".into());
+        if let Some(started) = self.outside_candidates(actor, worker, pick, &mission.candidates)? {
+            return Err(crate::coordination::refusal(
+                "mission_candidate_refused",
+                &started,
+            ));
         }
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
             closed: self.closed_registration_ids().into_iter().collect(),
+        }))
+    }
+
+    /// Settings › Mission's candidates as `hide mission settings` names
+    /// them (PRD agent-profiles-phase2 B11, B15): each row's agent item as
+    /// the operator reads it (`item`, `Claude · work`) and the `--profile`
+    /// value that starts it (`profile`, `default` for the built-in), from
+    /// this machine's profiles, which the rows name; a row whose profile this
+    /// machine no longer lists has neither and says `profile_gone`, since no
+    /// worker can start as it.
+    fn candidate_items(&self) -> Vec<Value> {
+        let profiles = self.machine_profiles(self.node.as_str());
+        self.snapshot
+            .ui_state
+            .conductor_settings
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let mut row = json!({
+                    "agent": candidate.agent,
+                    "model": candidate.model,
+                    "effort": candidate.effort,
+                    "purpose": candidate.purpose,
+                });
+                let named = match &candidate.profile {
+                    None => Some(None),
+                    Some(id) => profiles
+                        .and_then(|profiles| {
+                            profiles.profiles.iter().find(|profile| {
+                                profile.id == id.0
+                                    && hide_agent_adapter::adapter(&candidate.agent)
+                                        .is_some_and(|adapter| adapter.id == profile.kind)
+                            })
+                        })
+                        .map(|profile| Some(profile.name.clone())),
+                };
+                match named {
+                    Some(name) => {
+                        let request = crate::launch::Request::new(
+                            &candidate.agent,
+                            candidate.profile.clone().zip(name.clone()),
+                        );
+                        row["item"] = request.shown().into();
+                        row["profile"] = name.unwrap_or_else(|| "default".to_owned()).into();
+                    }
+                    None => row["profile_gone"] = true.into(),
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// What the spawn `worker` would start, in the operator's words
+    /// (`Claude · work (opus, high)`), when it is none of `candidates`;
+    /// `None` when it is one, when there are none to hold it to, or when it
+    /// retries a spawn that finished. The item judged is the one the spawn
+    /// starts with: the one it names, else its caller's, the project's or
+    /// the agent's default, never the name alone (PRD agent-profiles-phase2
+    /// D-08, B13), picked once into `pick` (`spawn_request`), which the
+    /// start then takes, so every admission and the start see one item.
+    pub(crate) fn outside_candidates(
+        &self,
+        actor: &Actor,
+        worker: &SpawnWorker<'_>,
+        pick: &mut Option<crate::launch::Request>,
+        candidates: &[crate::missions::Candidate],
+    ) -> Result<Option<String>, String> {
+        if candidates.is_empty() || worker.finished {
+            return Ok(None);
+        }
+        let request = match pick {
+            Some(request) => request,
+            None => pick.insert(self.spawn_request(
+                actor,
+                worker.machine,
+                worker.kind,
+                worker.profile,
+                worker.repo,
+            )?),
+        };
+        if candidates
+            .iter()
+            .any(|candidate| candidate.admits(&request.target, worker.launch))
+        {
+            return Ok(None);
+        }
+        let choice = [&worker.launch.model, &worker.launch.effort]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        Ok(Some(if choice.is_empty() {
+            request.shown()
+        } else {
+            format!("{} ({})", request.shown(), choice.join(", "))
         }))
     }
 
@@ -2980,10 +3089,13 @@ impl Runtime {
     /// a mission already planned keeps its own. The cleanup switch applies
     /// to every mission: turned on, the merged worktrees are looked at now.
     pub(super) fn set_conductor_settings(&mut self, settings: ConductorSettings) -> bool {
-        if let Err(code) = settings.validate() {
-            self.set_error(&code, "Mission settings were not saved", false);
-            return true;
-        }
+        let settings = match settings.edited() {
+            Ok(settings) => settings,
+            Err(code) => {
+                self.set_error(&code, "Mission settings were not saved", false);
+                return true;
+            }
+        };
         if self.snapshot.ui_state.conductor_settings == settings {
             return false;
         }
@@ -3653,6 +3765,13 @@ fn proven_launch(
     Some(crate::missions::NodeLaunch {
         agent_id: record.id.clone(),
         agent: launch.kind.clone(),
+        profile: launch
+            .profile
+            .as_ref()
+            .map(|profile| crate::missions::NodeProfile {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+            }),
         model: launch.choice.model.clone(),
         effort: launch.choice.effort.clone(),
     })

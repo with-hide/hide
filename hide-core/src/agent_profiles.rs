@@ -354,12 +354,22 @@ pub struct ProfileAnswer {
     /// The names of the projects that start with the profile.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<String>,
+    /// How many of Settings › Mission's candidates name the profile, which
+    /// a delete leaves naming a profile that is gone (PRD
+    /// agent-profiles-phase2 B22, D-16); only a profile of the core's own
+    /// machine, whose profiles the candidates name.
+    #[serde(skip_serializing_if = "is_none_counted")]
+    pub candidates: usize,
     /// The profile's variables with their values, for a `values` request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<Vec<(String, String)>>,
     /// The profile an `add` made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<String>,
+}
+
+fn is_none_counted(count: &usize) -> bool {
+    *count == 0
 }
 
 /// Whether the request is still running (`contracts/snapshot-wire-enums.json`:
@@ -401,6 +411,7 @@ impl ProfileAnswer {
             limit: None,
             in_use: Vec::new(),
             projects: Vec::new(),
+            candidates: 0,
             values: None,
             added: None,
         }
