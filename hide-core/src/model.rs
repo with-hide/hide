@@ -7197,6 +7197,10 @@ pub struct StatusSnapshot {
     pub ssh_hosts: SshHostsSnapshot,
     #[serde(rename = "herdr_profiles")]
     pub machine_profiles: MachineProfilesSnapshot,
+    /// What Settings › Agents' last profile request came to (PRD
+    /// agent-profiles B2-B13); absent until one was made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer>,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -7951,6 +7955,7 @@ impl Snapshot {
                 background_ai: BackgroundAiSnapshot::unread(),
                 ssh_hosts: SshHostsSnapshot::default(),
                 machine_profiles: MachineProfilesSnapshot::default(),
+                agent_profile_answer: None,
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),

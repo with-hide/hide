@@ -871,6 +871,21 @@ impl Core {
         lock_recover(&self.runtime).agent_catalog(device, machine, timed_out)
     }
 
+    /// `hide agent profile` for a caller on `device`: the change planned
+    /// under the lock, which the daemon then runs off this thread
+    /// (`agent_profiles::Prepared::run`). A refusal is a delivery refusal
+    /// string (`coordination::split_refusal`).
+    pub fn prepare_agent_profile(
+        &self,
+        device: &str,
+        command: crate::agent_profiles::ProfileCommand,
+    ) -> Result<crate::agent_profiles::Prepared, String> {
+        if !check_owner_thread(self, "agent_profile.prepare") {
+            return Err(crate::agent_profiles::UNANSWERED.into());
+        }
+        lock_recover(&self.runtime).prepare_agent_profile_command(device, command)
+    }
+
     /// A read of the operator's agent definition folder in `home`, made off
     /// the lock by the daemon with the development switch on (PRD
     /// engine-bundle-3-core-owns D-17); the first one turns the definitions

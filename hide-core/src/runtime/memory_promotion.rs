@@ -2668,6 +2668,7 @@ pub(super) mod tests {
                 auto_fetch: None,
                 link_scopes: Default::default(),
                 guardrails: None,
+                agent_profiles: Default::default(),
                 unknown: Default::default(),
             };
             runtime

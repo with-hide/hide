@@ -8,6 +8,7 @@ mod agent_areas;
 mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
+mod agent_profiles;
 mod agent_definitions;
 pub(crate) use agent_definitions::settle_and_hand_off;
 mod add_project;
@@ -1644,6 +1645,9 @@ pub struct Runtime {
     base_push_work: base_push::BasePushWork,
     editor_tab_history: Vec<String>,
     worker_context: Option<RuntimeWorkerContext>,
+    /// A change of a machine's agent profiles is under way
+    /// (`runtime/agent_profiles.rs`): one at a time, for every machine.
+    agent_profile_busy: bool,
     /// When an agent last worked or waited on the operator; 0 until one has.
     agent_worked_at_unix_ms: u64,
     /// What the operator looks at: this machine's chosen pane, the device in
@@ -2530,6 +2534,7 @@ impl Runtime {
             base_push_work: Default::default(),
             editor_tab_history: Vec::new(),
             worker_context: None,
+            agent_profile_busy: false,
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),

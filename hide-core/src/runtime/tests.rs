@@ -10,6 +10,8 @@ type Fake = Arc<FakeEngine<'static>>;
 #[path = "tests/add_project.rs"]
 mod add_project;
 mod agent_areas;
+#[path = "tests/agent_profiles.rs"]
+mod agent_profiles;
 #[path = "tests/agent_connection.rs"]
 mod agent_connection;
 #[path = "tests/agent_definitions.rs"]

@@ -827,6 +827,7 @@ impl Runtime {
                 resume_session_id: None,
                 resume_session_path: None,
                 stay_behind: payload.stay_behind,
+                profile: None,
             }),
             None => self.start_answered_worktree_task(
                 CreateWorktreePayload {
@@ -841,6 +842,7 @@ impl Runtime {
                     prompt,
                     model: payload.model,
                     stay_behind: payload.stay_behind,
+                    profile: None,
                 },
                 true,
             ),

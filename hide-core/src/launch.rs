@@ -440,6 +440,38 @@ pub(crate) fn chosen(
         })
 }
 
+/// The profile `id` of `kind` as a start that names it by id (the start
+/// panel's `▾`) takes it: the built-in default, or one the machine lists
+/// and is not removing; refused otherwise with why, the caller's to word
+/// under [`PROFILE_GONE`] (B16).
+pub(crate) fn chosen_id(
+    kind: &str,
+    id: &str,
+    profiles: Option<&ProfilesSnapshot>,
+) -> Result<(ProfileId, String), String> {
+    let agent = hide_agent_adapter::adapter(kind).map_or(kind, |adapter| adapter.id);
+    let builtin = hide_agent_adapter::Profile::builtin_default(agent);
+    if builtin.id.0 == id {
+        return Ok((builtin.id, builtin.name));
+    }
+    profiles
+        .into_iter()
+        .flat_map(|profiles| &profiles.profiles)
+        .find(|profile| {
+            profile.kind == agent
+                && profile.id == id
+                && profile.install != Some(crate::model::ProfileInstall::Removing)
+                && profile.install != Some(crate::model::ProfileInstall::RemoveFailed)
+        })
+        .map(|profile| (ProfileId(profile.id.clone()), profile.name.clone()))
+        .ok_or_else(|| {
+            format!(
+                "{} has no such profile on this machine; choose another",
+                label(kind)
+            )
+        })
+}
+
 /// The profile `id` of `kind` as `profiles` lists it, with its name.
 fn listed(
     kind: &str,

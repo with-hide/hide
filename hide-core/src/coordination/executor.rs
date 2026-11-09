@@ -311,6 +311,23 @@ fn caller_profile(
         .caller_launch_profile(actor, kind))
 }
 
+/// The profile Project settings choose for `kind` in the project of `repo`
+/// on `device` (D-31), when they choose one.
+fn project_profile(
+    client: &Client,
+    device: &str,
+    repo: &str,
+    kind: &str,
+) -> Result<Option<hide_agent_adapter::ProfileId>, String> {
+    Ok(client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .project_agent_profile(device, repo, kind))
+}
+
 pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
     client
         .runtime
@@ -1312,7 +1329,8 @@ fn spawn(
     })?;
     // The profile the child runs with (PRD agent-profiles D-32, B16): the
     // one named, else its caller's, the built-in default included, when the
-    // caller is the same agent on the same machine, else the agent's
+    // caller is the same agent on the same machine, else the default Project
+    // settings choose for the repository's project there, else the agent's
     // default there.
     let agent = crate::launch::pick(
         kind,
@@ -1325,7 +1343,7 @@ fn spawn(
         } else {
             crate::launch::Parent::None
         },
-        None,
+        project_profile(client, &child_device, &repo, kind)?.as_ref(),
         profiles.as_ref(),
     );
     // The child's machine answers for its profile before the spawn makes

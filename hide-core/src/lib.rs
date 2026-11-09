@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod agent_adapter_contract_tests;
+pub mod agent_profiles;
 mod agent_find;
 /// The one spelling of an id the core scopes to a device.
 pub use hide_node_link::address;

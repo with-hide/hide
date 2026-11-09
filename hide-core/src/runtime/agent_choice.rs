@@ -254,23 +254,56 @@ impl Runtime {
         self.kit_states.get(device)?.profiles.as_ref()
     }
 
-    /// The profile a new start of `kind` on `device` that names none and has
-    /// no parent runs with (D-32): the project's default once Project
-    /// settings choose one, else the agent's default there; `None` for the
-    /// built-in default and for a start of no agent.
+    /// The profile a new start of `kind` on `device` with no parent runs
+    /// with (D-32): the one the start panel's `▾` chose (`chosen`, by id),
+    /// else the default of the project at `root` that Project settings
+    /// choose, else the agent's default there; `None` for the built-in
+    /// default and for a start of no agent. A chosen profile the machine
+    /// does not list is refused (B16).
     pub(crate) fn new_start_profile(
         &self,
         device: &str,
         kind: Option<&str>,
-    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
-        crate::launch::pick(
-            kind?,
-            None,
+        root: Option<&str>,
+        chosen: Option<&str>,
+    ) -> Result<Option<(hide_agent_adapter::ProfileId, String)>, String> {
+        let Some(kind) = kind else {
+            return Ok(None);
+        };
+        let profiles = self.machine_profiles(device);
+        let chosen = chosen
+            .map(|id| crate::launch::chosen_id(kind, id, profiles))
+            .transpose()?;
+        let project = root.and_then(|root| self.project_agent_profile(device, root, kind));
+        Ok(crate::launch::pick(
+            kind,
+            chosen,
             &crate::launch::Parent::None,
-            None,
-            self.machine_profiles(device),
+            project.as_ref(),
+            profiles,
         )
-        .profile()
+        .profile())
+    }
+
+    /// The profile Project settings choose for `kind` in the project that
+    /// holds `path` on `device` (D-31): its root, or one of its worktrees.
+    pub(crate) fn project_agent_profile(
+        &self,
+        device: &str,
+        path: &str,
+        kind: &str,
+    ) -> Option<hide_agent_adapter::ProfileId> {
+        let agent = hide_agent_adapter::adapter(kind)?.id;
+        let root = self
+            .catalog_project_of(device, path)
+            .map_or(path, |project| project.root_path.as_str());
+        crate::project_settings::agent_profile(
+            &self.snapshot.ui_state.project_settings,
+            device,
+            root,
+            agent,
+        )
+        .map(|id| hide_agent_adapter::ProfileId(id.to_owned()))
     }
 
     /// The profile `agent` runs with, when its pane's record describes it;

@@ -1,4 +1,5 @@
 pub mod agent_cli;
+pub mod profile_cli;
 pub mod agent_exec;
 pub mod attach;
 pub mod attachments;

@@ -31,6 +31,9 @@ const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
 /// The catalog's own wait for a model-list read is 10 seconds; the exchange
 /// outlives it.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
+/// A profile change reads the list, then installs or takes out Hide's
+/// pieces in its account (`hide_core::agent_profiles`, its node's wait).
+const PROFILE_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// An auto-bootstrapped direct CLI owns its reference even if transport fails.
 struct OneShotReference(PathBuf);
@@ -468,6 +471,28 @@ pub fn request_agent_catalog(
             &request_id,
             false,
             CATALOG_TIMEOUT,
+            after,
+        )
+    })
+}
+
+/// `hide agent profile`: a change of a machine's agent profiles, which
+/// installs or takes out Hide's pieces in the account it touches. Never sent
+/// again on its own: a lost answer is read back with `list`.
+pub fn request_agent_profile(
+    credential: &mut Credential,
+    command: &hide_core::agent_profiles::ProfileCommand,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"agent_profile","request_id":request_id,"command":command}),
+            &request_id,
+            true,
+            PROFILE_TIMEOUT,
             after,
         )
     })

@@ -950,6 +950,10 @@ pub(super) struct AgentStartInCheckoutPayload {
     /// tab, keyboard focus and the engine's focus stay where they are.
     #[serde(default)]
     pub(super) stay_behind: bool,
+    /// The profile the start panel's `▾` chose, by id on the checkout's
+    /// machine (PRD agent-profiles B14); absent picks it (`launch::pick`).
+    #[serde(default)]
+    pub(super) profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -987,6 +991,10 @@ pub(super) struct CreateWorktreePayload {
     /// keyboard focus and the engine's focus stay where they are.
     #[serde(default)]
     pub(super) stay_behind: bool,
+    /// The profile the start panel's `▾` chose, by id on the repository's
+    /// machine (PRD agent-profiles B14); absent picks it (`launch::pick`).
+    #[serde(default)]
+    pub(super) profile: Option<String>,
 }
 
 /// `issue_source_set`: a project's issue source chosen in Settings › Issues;
@@ -1790,6 +1798,7 @@ pub(super) enum Event {
     CreateWorktree(CreateWorktreePayload),
     IssueSourceSet(IssueSourceSetPayload),
     ProjectSettingsSet(super::project_settings::SetPayload),
+    AgentProfileChange(super::agent_profiles::ProfileChangePayload),
     IssueSettingsSet(IssueSettingsSetPayload),
     ConductorSettingsSet(ConductorSettingsSetPayload),
     MissionAnswer(MissionAnswerPayload),
@@ -2150,6 +2159,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "create_worktree" => decode!(CreateWorktreePayload, CreateWorktree),
         "issue_source_set" => decode!(IssueSourceSetPayload, IssueSourceSet),
         "project_settings_set" => decode!(super::project_settings::SetPayload, ProjectSettingsSet),
+        "agent_profile_change" => decode!(
+            super::agent_profiles::ProfileChangePayload,
+            AgentProfileChange
+        ),
         "issue_settings_set" => decode!(IssueSettingsSetPayload, IssueSettingsSet),
         "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
@@ -4093,6 +4106,7 @@ impl Runtime {
             Event::SetCheckoutIssue(payload) => self.set_checkout_issue(payload),
             Event::IssueSourceSet(payload) => self.set_issue_source(payload),
             Event::ProjectSettingsSet(payload) => self.set_project_settings(payload),
+            Event::AgentProfileChange(payload) => self.change_agent_profile(payload),
             Event::IssueSettingsSet(payload) => self.set_issue_settings(payload),
             Event::ConductorSettingsSet(payload) => {
                 let mut settings = self.snapshot.ui_state.conductor_settings.clone();
