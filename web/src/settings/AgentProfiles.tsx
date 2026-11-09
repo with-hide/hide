@@ -13,6 +13,7 @@ import {
   answerRefusal,
   editChange,
   listedProfiles,
+  ownAgentUsage,
   profileAnswer,
   profileDraft,
   profileRequestId,
@@ -54,6 +55,8 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
   const machine = profilesMachine(device, live);
   // The folder chooser is this computer's, so only its own machine offers it (B30).
   const native = useShellStore((s) => hostWays(device.id, s.rest?.navigator?.devices, hostBridge() !== null).native);
+  // Limits are read on this machine alone, for its own profiles (B23).
+  const ownUsage = useShellStore((s) => (s.usage?.nodes[0]?.node === device.id ? s.usage : null));
   const [open, setOpen] = useState<Open | null>(null);
   const [sent, setSent] = useState<Sent | null>(null);
   const answer = useShellStore((s) => profileAnswer(s.rest, sent?.id ?? null));
@@ -103,7 +106,7 @@ export function useMachineProfiles(device: Device, live: boolean, actions: Actio
 
   function view(agent: string) {
     const kit = device.kit?.agents.find((row) => row.id === agent);
-    return agentProfilesView(listed, agent, kit?.label ?? agent);
+    return agentProfilesView(listed, agent, kit?.label ?? agent, ownUsage ? ownAgentUsage(ownUsage, agent) : null);
   }
 
   const refusal = answerRefusal(answer);

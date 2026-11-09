@@ -7,7 +7,9 @@ import { agentAdapter } from "./agentAdapters";
 import type { AgentProfilesView, ProfileAccountWay, ProfileDraft, ProfileInstall, ProfileRefusal, ProfileView, ProfilesMachine, ProjectProfileChoice } from "./components/agent-profiles";
 import { projectSettings, settingsTarget } from "./projectSettings";
 import { kitPartNeedsReinstall } from "./settings";
+import type { AgentUsage, LimitCell } from "./generated/hided-ws";
 import { catalogWorkspaces, type AgentProfileAnswer, type AgentProfileWire, type Device, type MachineAgentProfiles, type SnapshotRest } from "./snapshot";
+import { limitWindow, windowPercent } from "./usage";
 
 /** The built-in profile's id on every machine (`ProfileId::default_profile`). */
 export const BUILT_IN_PROFILE = "default";
@@ -50,16 +52,35 @@ function install(profile: AgentProfileWire): ProfileInstall | null {
   }
 }
 
+/** The weekly percent left of an account's limits, rounded; null with no open weekly window. */
+function weeklyLeft(cell: LimitCell | null | undefined, now: number): number | null {
+  const used = windowPercent(limitWindow(cell ?? undefined, "weekly"), now);
+  return used === null ? null : Math.max(0, Math.round(100 - used));
+}
+
+/** What a profile's row says of its account's usage (B23): the weekly percent left, or a dash where another row already shows that account. */
+function profileUsageLeft(usage: AgentUsage | null, id: string, now: number): ProfileView["usageLeft"] {
+  const row = usage?.profiles?.find((profile) => profile.id === id);
+  if (!row) return null;
+  return row.shared ? "shared" : weeklyLeft(row.limits, now);
+}
+
+/** This machine's usage row of `agent`, which carries its profiles' accounts (B23); a device's profiles have none. */
+export function ownAgentUsage(usage: { nodes: { agents: AgentUsage[] }[] } | null | undefined, agent: string): AgentUsage | null {
+  const kind = agentAdapter(agent)?.herdr_kind ?? agent;
+  return usage?.nodes[0]?.agents.find((row) => row.agent === kind) ?? null;
+}
+
 /**
- * An agent's profiles on one machine, its built-in profile first (B2, B28).
- * Sign-in, usage and the program warning are another change's (B10, B23,
- * B25): until then each is left out rather than drawn unknown.
+ * An agent's profiles on one machine, its built-in profile first (B2, B28),
+ * each with its sign-in (B10), its account's usage left (B23, `usage`, this
+ * machine's row; none for a device) and its program's folder warning (B25).
  */
-export function agentProfilesView(profiles: MachineAgentProfiles | null, agent: string, label: string): AgentProfilesView | null {
+export function agentProfilesView(profiles: MachineAgentProfiles | null, agent: string, label: string, usage: AgentUsage | null = null, now = Date.now()): AgentProfilesView | null {
   const way = accountWay(agent);
   if (!way) return null;
   const chosen = profiles?.defaults[agent] ?? BUILT_IN_PROFILE;
-  const builtIn: ProfileView = { id: BUILT_IN_PROFILE, builtIn: true, name: "", isDefault: chosen === BUILT_IN_PROFILE, account: null, program: null, envKeys: [], install: null, login: null, usageLeft: null, wrapperFolder: false };
+  const builtIn: ProfileView = { id: BUILT_IN_PROFILE, builtIn: true, name: "", isDefault: chosen === BUILT_IN_PROFILE, account: null, program: null, envKeys: [], install: null, login: null, usageLeft: usage ? weeklyLeft(usage.limits, now) : null, wrapperFolder: false };
   const own = (profiles?.profiles ?? [])
     .filter((profile) => profile.kind === agent)
     .map((profile): ProfileView => ({
@@ -71,9 +92,9 @@ export function agentProfilesView(profiles: MachineAgentProfiles | null, agent: 
       program: profile.program,
       envKeys: profile.env_keys,
       install: install(profile),
-      login: null,
-      usageLeft: null,
-      wrapperFolder: false,
+      login: profile.login ?? null,
+      usageLeft: profileUsageLeft(usage, profile.id, now),
+      wrapperFolder: profile.wrapper_folder === true,
     }));
   return { agent, label, way, program: agentAdapter(agent)?.program ?? agent, profiles: [builtIn, ...own] };
 }
@@ -230,12 +251,12 @@ export function projectProfile(rest: SnapshotRest | null, deviceId: string, work
  * absent unless the machine lists another profile of that agent, else its
  * profiles with the one D-32 would pick.
  */
-export function startProfiles(rest: SnapshotRest | null, deviceId: string, workspaceId: string, kind: string): { view: AgentProfilesView; projectDefault: string | null; picked: string } | null {
+export function startProfiles(rest: SnapshotRest | null, deviceId: string, workspaceId: string, kind: string, usage: AgentUsage | null = null): { view: AgentProfilesView; projectDefault: string | null; picked: string } | null {
   const adapter = agentAdapter(kind);
   const device = rest?.navigator?.devices?.find((row) => row.id === deviceId);
   const listed = listedProfiles(device);
   if (!adapter || !listed) return null;
-  const view = agentProfilesView(listed, adapter.id, adapter.label);
+  const view = agentProfilesView(listed, adapter.id, adapter.label, usage);
   if (!view || view.profiles.length < 2) return null;
   const projectDefault = projectProfile(rest, deviceId, workspaceId, adapter.id);
   return { view, projectDefault, picked: pickedProfile(listed, adapter.id, projectDefault) };

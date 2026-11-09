@@ -4,7 +4,7 @@ import type { Actions } from "./actions";
 import { rememberedSelection, modelToSend, selectKind, type AgentSelection } from "./agentPicker";
 import { AgentPicker } from "./components/agent-picker";
 import { ProfilePicker } from "./components/agent-profiles";
-import { startProfiles } from "./agentProfiles";
+import { ownAgentUsage, startProfiles } from "./agentProfiles";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer } from "./components/ui/layer";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
@@ -270,7 +270,8 @@ function StartPanel({ actions }: { actions: Actions }) {
   });
   // The profile menu (PRD agent-profiles B14): what the core would pick is
   // shown chosen, and only a profile the operator picked is sent.
-  const profiles = target && selection.kind !== "terminal" ? startProfiles(rest, target.deviceId, target.workspaceId, selection.kind) : null;
+  const usage = useShellStore((s) => s.usage);
+  const profiles = target && selection.kind !== "terminal" ? startProfiles(rest, target.deviceId, target.workspaceId, selection.kind, usage?.nodes[0]?.node === target.deviceId ? ownAgentUsage(usage, selection.kind) : null) : null;
   const profileKey = target && profiles ? `${target.deviceId}:${target.workspaceId}:${profiles.view.agent}` : null;
   const [profilePick, setProfilePick] = useState<{ key: string; id: string } | null>(null);
   const pickedProfile = profilePick && profilePick.key === profileKey && profiles?.view.profiles.some((row) => row.id === profilePick.id) ? profilePick.id : null;

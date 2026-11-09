@@ -1595,6 +1595,25 @@ None, which every record a build before profiles saved holds, is the built-in de
 A Desk job waiting in its queue keeps the profile its spawn names beside the spawn rather than in it (`desk::QueuedJob`), since Desk 1.2.4 reads a spawn that names no field it does not know and starts empty on a store it cannot read.
 A restart asks again by id, so a renamed profile still starts and a removed one refuses the restart rather than starting the agent in another account.
 
+#### A profile account's usage, sign-in and the account a hook reports
+
+Each account's limits are read on their own (PRD agent-profiles B23).
+The core's usage driver keeps the agent's default reads as they were and, beside them, one read per source for each account of this machine's profiles, made for the first profile in that account in the list's order (`usage::UsageDriver::follow_profiles`); a read names the profile (`Call::UsageLimitFetch::profile`), never a folder, and the node resolves it from its own profile file (`hide_host::profiles::usage_account`), so a read stays inside an account the node keeps.
+Claude Code's login in a profile account is its keychain item named by the account's folder exactly as set (`Claude Code-credentials-` and the first eight hex digits of its SHA-256), else the account's `.credentials.json`, and its `/usage` fallback runs with the account's variables set on the CLI alone; a Codex profile reads its own `CODEX_HOME`.
+A usage row carries each profile's limits (`AgentUsage::profiles`), and a profile in an account a profile before it or the agent's default already shows (a wrapper or variables-only profile, a second profile of one folder) is `shared`, which the screen draws as `—`; with no profile the row is on the wire as before.
+A profile account's reads run only while its agent's usage row is shown; Memory and the usage limit ask for the default account alone.
+Limits are read on the core's own machine, so a device's profiles show none.
+
+A machine's node lists each profile's sign-in with the list (`ListedProfile::login`, B10): signed in, signed out, or unknown when the place that says so did not answer, by the agent's own check (`hide_host::login`: Claude Code's keychain item, asked whether it is there and never read, or its credentials file; the sign-in file Codex, Pi and Grok write).
+A profile that runs a program of its own, one in the agent's default account, and an agent whose sign-in Hide has no way to look at (omp's database, OpenCode, agy) show none.
+Each answer stands for 30 seconds (`login::LOGIN_TTL`), so a list asked as Settings opens and after each change starts at most one `/usr/bin/security` per profile in that time; no session sync or usage read asks for one.
+
+A hook's session-start report carries the account variables its agent runs with (`HookStatusReport::account`, `hide_agent_hooks::account::reported_variables`; an empty list is the default account), and the node lists the variables each profile's start sets (`ListedProfile::account_variables`), each folder spelled by one function on both sides (`account::compared_folder`: links followed, no final separator), so the core compares the two and never looks at a path, which may be a device's (`runtime/account_reports.rs`, D-03).
+Claude Code drops its variables from a hook's environment under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`; its hook then reads the folder above the session's `CLAUDE_ENV_FILE`, which Claude Code keeps at `<folder>/session-env/`.
+A pane whose report matches one profile's account is read in that account and its row names that profile (B24); an account several profiles share is read there and the row names the agent alone; the default account, and variables no profile sets (an unregistered folder, the node's own default), read as before.
+A pane the core started with a profile whose hook reports another of the machine's accounts is read where it runs, its sleep and reopen records take that account's profile, and the profile it started with is marked `wrapper_folder` until a later start of it reports its own account (D-35, B25); the mark is the core's and is laid again on each list the node sends.
+The report is kept with the hook facts across a restart, and the answer per pane is worked out again only when a report, a list or the saved facts come in, so a projection reads one map entry a row.
+
 ## The platform layer
 
 `hide-platform` is the one place code that depends on the operating system is written, so that macOS, Linux and Windows differ in one small crate rather than in every crate that touches a socket, a process or a file.

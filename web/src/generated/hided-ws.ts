@@ -242,6 +242,10 @@ export interface AgentUsage {
   agent: string;
   limits: LimitCell;
   consumption: ConsumptionCell;
+  /**
+   * The limits of each of this machine's profiles of the agent, in the list's order (PRD agent-profiles B23); absent with none.
+   */
+  profiles?: ProfileUsage[];
 }
 export interface LimitReading {
   /**
@@ -400,6 +404,14 @@ export interface UsageHideAiFeature {
    * @maxItems 8
    */
   providers: string[];
+}
+export interface ProfileUsage {
+  id: string;
+  /**
+   * Another profile listed before it, or the agent's default account, runs in the same account: drawn as a dash.
+   */
+  shared?: boolean;
+  limits?: LimitCell;
 }
 export interface UsageHistory {
   /**
