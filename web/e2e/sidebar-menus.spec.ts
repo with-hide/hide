@@ -126,7 +126,7 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
       // the registered project's, so these contracts start from it.
       const menu = await openMenu(page, projectRow, "repo actions");
       await menu.locator('[data-menu-item="pin"]').click();
-      await expect(project.locator("[data-project-pin]")).toHaveCount(1);
+      await expect(project).toHaveAttribute("data-project-pinned", "true");
     }
     return { engine, daemon, opened, worktreePane, project, projectRow, main, feature, agentRow, stop: () => { daemon.stop(); engine.stop(); } };
   } catch (error) {
@@ -138,7 +138,7 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
 test("the project row's menu lists the board's items, and Pin pins it", async ({ page }) => {
   const { project, projectRow, stop } = await startMenus(page);
   try {
-    await expect(project.locator("[data-project-pin]")).toHaveCount(0);
+    await expect(project).not.toHaveAttribute("data-project-pinned", "true");
     // B1, B3: in the board's order. A browser tab has no OS file manager, so
     // its reveal is absent; the row offers both Pin and removal. Project Settings B4 adds the settings
     // entry to this same project menu without removing its existing actions,
@@ -149,7 +149,7 @@ test("the project row's menu lists the board's items, and Pin pins it", async ({
     await menu.locator('[data-menu-item="pin"]').click();
     await expect(menu).toHaveCount(0);
     // Pin pinned the row: it now wears the pin mark in place of its folder icon, once.
-    await expect(project.locator("[data-project-pin]")).toHaveCount(1);
+    await expect(project).toHaveAttribute("data-project-pinned", "true");
     await expect(page.locator("[data-project-row]", { hasText: /^repo/ })).toHaveCount(1);
     menu = await openMenu(page, projectRow, "repo actions");
     await expect(menu.locator('[data-menu-item="unpin"]')).toHaveText(/Unpin/);

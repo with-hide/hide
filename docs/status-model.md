@@ -665,7 +665,7 @@ Collapsing does not change the selected pane, tab, agent read state, running pro
 `collapsed_checkout_ids` persists across launches.
 The web shell starts every checkout open and keeps explicit collapses in `session_collapsed_checkout_ids`, changed by `checkout_agents_toggle` and the admitted `focus_checkout` event.
 The older `expanded_checkout_ids` and `collapsed_checkout_ids` records do not determine web checkout disclosure.
-Inside an open checkout, actual tabs group complete root subtrees as segments of one list: every root stands on one status axis, a guide per tab marks the boundary, and the tab line at a segment's head appears only when the tab has a sidebar root and either holds at least two recognized agent panes or carries a manual name.
+Inside an open checkout, actual tabs group complete root subtrees as segments of one list: every root stands on one status axis, a guide per tab marks the boundary, and the tab line at a segment's head appears only when the tab has a sidebar root and holds no recognized agent pane.
 The glyph's count describes physical agents in that tab, independently of root ownership or child disclosure; raised groups and sleeping sessions retain their existing positions.
 Tab names use the core's explicit manual-name and stable-number metadata rather than an automatic task label, and no tab fold is saved.
 Raised Needs You and Done rows remain available, while number shortcuts skip hidden tree rows.
