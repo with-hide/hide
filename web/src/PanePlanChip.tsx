@@ -89,8 +89,8 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
  * The popover's body (B3, B7), headed as the plan's page is: its state pill,
  * a cell per step and `n/m`; then the checklist, a foot with the direct
  * children no step is handed to and when the plan last moved, or how long a
- * finished one took, and the last row, `크게 보기 ›`, which opens the page as
- * a mission's popover opens its map.
+ * finished one took, and the last row, `지도 열기 ›`, the same row a mission's
+ * popover ends in.
  */
 export function PlanPopoverBody({ paneId, plan, onLarge, openPane }: { paneId: string; plan: PlanView; onLarge: () => void; openPane: (paneId: string) => void }) {
   const { t } = useInterfaceTranslation();
