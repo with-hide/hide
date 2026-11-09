@@ -108,7 +108,7 @@ impl StartHook {
 /// What `kit`, one machine's last kit report, says about starting `kind`
 /// there; `None` is a machine the kit never ran on in this process. The
 /// agent's hook is judged by [`piece_start`].
-pub(crate) fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
+fn judge_profile(kit: Option<&KitSnapshot>, kind: &str, profile: Option<&str>) -> StartHook {
     let Some(kit) = kit else {
         return StartHook::Ready;
     };
@@ -136,7 +136,9 @@ pub(crate) fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
         // The machine's first pass is still running: its answer is the one
         // to judge by. A report without agents is a helper that predates
         // them.
-        return if kit.agents.is_empty() && kit.busy {
+        return if profile.is_some() {
+            StartHook::Pass(HookRefusal::Unchecked)
+        } else if kit.agents.is_empty() && kit.busy {
             StartHook::Pass(HookRefusal::Unconfirmed)
         } else {
             StartHook::Ready
@@ -145,7 +147,60 @@ pub(crate) fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
     if !agent.enabled {
         return StartHook::Refused(HookRefusal::Off);
     }
-    agent.hook.as_ref().map_or(StartHook::Ready, piece_start)
+    let hook = if let Some(id) = profile {
+        let Some(profile) = kit
+            .profiles
+            .as_ref()
+            .filter(|list| list.state == crate::model::ProfilesState::Listed)
+            .and_then(|list| {
+                list.profiles
+                    .iter()
+                    .find(|profile| profile.id == id && profile.kind == agent.id)
+            })
+        else {
+            return StartHook::Pass(HookRefusal::Unchecked);
+        };
+        match profile.account_key.as_ref() {
+            Some(account) if account.is_default() => agent.hook.as_ref(),
+            Some(_) => {
+                return profile.hook.as_ref().map_or_else(
+                    || {
+                        if hide_agent_adapter::adapter(kind).is_some_and(|adapter| {
+                            adapter.hook == hide_agent_adapter::HookInstall::None
+                        }) {
+                            StartHook::Ready
+                        } else {
+                            StartHook::Pass(HookRefusal::Unchecked)
+                        }
+                    },
+                    piece_start,
+                );
+            }
+            None => return StartHook::Pass(HookRefusal::Unchecked),
+        }
+    } else {
+        agent.hook.as_ref()
+    };
+    hook.map_or(StartHook::Ready, piece_start)
+}
+
+#[cfg(test)]
+fn judge(kit: Option<&KitSnapshot>, kind: &str) -> StartHook {
+    judge_profile(kit, kind, None)
+}
+
+/// The profile generation whose account's hook was judged, so the node's
+/// eventual launch answer cannot silently switch to another generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProfileHook {
+    account: hide_agent_adapter::AccountKey,
+    version: u64,
+}
+
+impl ProfileHook {
+    pub(crate) fn matches(&self, launch: &crate::launch::Launch) -> bool {
+        launch.profile_facts() == Some((&self.account, self.version))
+    }
 }
 
 /// What one piece of an agent on a machine, its hook or its skill, needs
@@ -202,11 +257,11 @@ pub(super) type StartPassLedger = BTreeMap<String, StartPasses>;
 
 impl Runtime {
     /// What a start of `kind` on `machine` needs from that machine's kit now.
-    pub(crate) fn start_hook(&self, machine: &str, kind: &str) -> StartHook {
+    pub(crate) fn start_hook(&self, machine: &str, kind: &str, profile: Option<&str>) -> StartHook {
         if machine != self.node.as_str() && self.device_kit_declined(machine).is_some() {
             return StartHook::Ready;
         }
-        judge(self.kit_states.get(machine), kind)
+        judge_profile(self.kit_states.get(machine), kind, profile)
     }
 
     /// The answer for a start of `kind` on `machine` once the pass it asked
@@ -218,8 +273,9 @@ impl Runtime {
         &self,
         machine: &str,
         kind: &str,
+        profile: Option<&str>,
     ) -> Result<(), HookRefusal> {
-        let hook = self.start_hook(machine, kind);
+        let hook = self.start_hook(machine, kind, profile);
         let failed = self
             .kit_states
             .get(machine)
@@ -229,6 +285,24 @@ impl Runtime {
             _ if failed => Err(HookRefusal::Unchecked),
             hook => hook.after_pass(),
         }
+    }
+
+    pub(crate) fn start_hook_proof(
+        &self,
+        machine: &str,
+        profile: Option<&str>,
+    ) -> Result<Option<ProfileHook>, HookRefusal> {
+        let Some(id) = profile else {
+            return Ok(None);
+        };
+        let row = self
+            .machine_profiles(machine)
+            .and_then(|list| list.profiles.iter().find(|row| row.id == id))
+            .ok_or(HookRefusal::Unchecked)?;
+        Ok(Some(ProfileHook {
+            account: row.account_key.clone().ok_or(HookRefusal::Unchecked)?,
+            version: row.version,
+        }))
     }
 
     /// Queues one automatic pass on `machine`'s kit for a start and answers
@@ -458,6 +532,102 @@ mod tests {
         assert_eq!(
             judge(Some(&KitSnapshot::default()), "claude"),
             StartHook::Ready
+        );
+    }
+    #[test]
+    fn a_selected_account_starts_even_when_the_default_account_is_not_set_up() {
+        let mut report = kit(ComponentState::Absent, Some(PartCause::AgentAbsent), true);
+        let mut profile =
+            crate::model::ProfilesSnapshot::from_list(&hide_node_link::profiles::ProfileList {
+                version: 1,
+                profiles: vec![hide_node_link::profiles::ListedProfile {
+                    id: hide_agent_adapter::ProfileId("p-work".into()),
+                    kind: "codex".into(),
+                    name: "work".into(),
+                    account: Some(hide_agent_adapter::AccountRef::Folder(
+                        "/accounts/work".into(),
+                    )),
+                    account_key: Some(hide_agent_adapter::AccountKey::Folder(
+                        "/accounts/work".into(),
+                    )),
+                    program: None,
+                    env_keys: Vec::new(),
+                    env: None,
+                    version: 1,
+                    removing: false,
+                    place: None,
+                    login: None,
+                    account_variables: Vec::new(),
+                }],
+                defaults: BTreeMap::new(),
+                unjudged: None,
+            });
+        profile.profiles[0].hook = Some(KitPieceSnapshot {
+            state: ComponentState::Installed,
+            why: None,
+            location: None,
+        });
+        report.profiles = Some(profile);
+        let account = hide_agent_adapter::AccountKey::Folder("/accounts/work".into());
+        let proof = ProfileHook {
+            account: account.clone(),
+            version: 1,
+        };
+        let answer = |version, account| {
+            crate::launch::Launch::answered(
+                "codex",
+                "p-work",
+                hide_node_link::profiles::ProfileStart {
+                    name: "work".into(),
+                    account,
+                    version,
+                    env: Vec::new(),
+                    program: None,
+                    exec: "/bin/hide".into(),
+                },
+            )
+        };
+        assert!(proof.matches(&answer(1, account.clone())));
+        assert!(!proof.matches(&answer(2, account)));
+        assert!(!proof.matches(&answer(1, hide_agent_adapter::AccountKey::Default)));
+        assert_eq!(
+            judge_profile(Some(&report), "codex", Some("p-work")),
+            StartHook::Ready
+        );
+        report.agents[0].hook.as_mut().unwrap().state = ComponentState::Installed;
+        report.profiles.as_mut().unwrap().profiles[0]
+            .hook
+            .as_mut()
+            .unwrap()
+            .state = ComponentState::NotInstalled;
+        assert_eq!(
+            judge_profile(Some(&report), "codex", Some("p-work")),
+            StartHook::Pass(HookRefusal::Missing)
+        );
+        report.profiles.as_mut().unwrap().profiles[0].hook = None;
+        assert_eq!(
+            judge_profile(Some(&report), "codex", Some("p-work")),
+            StartHook::Pass(HookRefusal::Unchecked)
+        );
+        report.profiles.as_mut().unwrap().profiles[0].account_key =
+            Some(hide_agent_adapter::AccountKey::Default);
+        assert_eq!(
+            judge_profile(Some(&report), "codex", Some("p-work")),
+            StartHook::Ready
+        );
+        report.agents[0].hook.as_mut().unwrap().state = ComponentState::NotInstalled;
+        assert_eq!(
+            judge_profile(Some(&report), "codex", Some("p-work")),
+            StartHook::Pass(HookRefusal::Missing)
+        );
+        assert_eq!(
+            judge_profile(Some(&report), "codex", None),
+            StartHook::Pass(HookRefusal::Missing)
+        );
+        report.profiles.as_mut().unwrap().profiles[0].account_key = None;
+        assert_eq!(
+            judge_profile(Some(&report), "codex", Some("p-work")),
+            StartHook::Pass(HookRefusal::Unchecked)
         );
     }
 }

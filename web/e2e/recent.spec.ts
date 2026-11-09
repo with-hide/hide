@@ -70,7 +70,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     const display = await displayLocator.getAttribute("data-display");
 
     // Then beta's terminal, from the sidebar.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(canvas).toHaveAttribute("data-canvas", betaTab);
 
     // ⌥` once, held: the previous surface is the other checkout's display.
@@ -141,10 +141,10 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     // The Agent area's ⌥` crosses projects: the keyboard in beta's Codex,
     // then in the pane the fixture opens on, and the first candidate is
     // beta's pane, which one focus_pane brings back with its project.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "beta" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(canvas).toHaveAttribute("data-canvas", betaTab);
     await page.locator(`[data-pane-view="${betaPane}"]`).click();
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(canvas).not.toHaveAttribute("data-canvas", betaTab);
     const fixturePane = (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!;
     // The fixture's View panel stays open over the agents' right side.

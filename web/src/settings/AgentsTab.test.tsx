@@ -203,7 +203,7 @@ it("turns an agent on or off on the machine the list is for, and not while the m
   await busy.unmount();
 });
 
-it("lists one machine at a time under a switch that appears only with a device, and shows an unreachable device as one line with Try again (B11)", async () => {
+it("lists one machine at a time under a switch that appears only with a device, and keeps an unreachable device read-only with Try again (B11, B30)", async () => {
   const studio = device("studio", { kit: kit([agent("claude-code", { sessions: 0 }), agent("codex", { availability: "not_installed", enabled: false })]) });
   // The core's own machine is named as its system names it.
   const { q, all, click, unmount } = await mount(state([device("local", { host: { platform: "windows x86_64" } as Device["host"] }), studio]));
@@ -216,7 +216,8 @@ it("lists one machine at a time under a switch that appears only with a device, 
   const down = await mount(state([device("local"), { ...studio, state: "unavailable" }]));
   await click(down.q('[data-agents-machine="studio"]'));
   expect(down.q("[data-agents-unreachable]")?.textContent).toBe("Studio can't be reached right now.");
-  expect(down.all("[data-agent-row]")).toHaveLength(0);
+  expect(down.all("[data-agent-row]").map((row) => row.getAttribute("data-agent-row"))).toEqual(["studio:claude-code:read-only"]);
+  expect(down.all("[data-agent-switch], [data-agent-permission-select], [data-agent-install]")).toHaveLength(0);
   await click(down.q('[data-agents-retry="studio"]'));
   expect(sent(down.events, "retry_connect")[0]?.payload).toEqual({ target_id: "studio" });
   await down.unmount();

@@ -468,6 +468,7 @@ pub(crate) fn start_within(
     name_release_wait: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
+    let finish = start.launch().launch.finish();
     let started = Instant::now();
     let deadline = started + wait;
     let name_deadline = started + name_release_wait;
@@ -495,6 +496,7 @@ pub(crate) fn start_within(
         check().map_err(StartError::refused)?;
         // The engine's start ends by the caller's own deadline: a start with a
         // profile waits within it for what came of its attempt.
+        finish.submitted(start.launch());
         match engine.start_agent(Wait::By(deadline), start) {
             // The engine refused before typing anything: something besides the
             // shell runs in the pane. A prompt hook can take the terminal
@@ -507,6 +509,7 @@ pub(crate) fn start_within(
             // 2026-10-22: 5,613 refusals in 30 s held the spawn lock and
             // slowed every other engine call).
             Err(EngineError::Refused { code, message }) if code == PANE_BUSY => {
+                finish.not_started();
                 busy += 1;
                 let now = Instant::now();
                 if now >= deadline {
@@ -528,6 +531,7 @@ pub(crate) fn start_within(
             Err(EngineError::Refused { code, .. })
                 if code == NAME_TAKEN && Instant::now() < name_deadline =>
             {
+                finish.not_started();
                 thread::sleep(POLL_INTERVAL);
             }
             // The engine may still hold the name for an earlier start whose agent
@@ -535,6 +539,7 @@ pub(crate) fn start_within(
             // only when the name is read: read it once, and send the start
             // again when that let it go.
             Err(EngineError::Refused { code, message }) if code == NAME_TAKEN && !settled => {
+                finish.not_started();
                 settled = true;
                 if !shell.settle_name(&start.launch().name) {
                     return Err(StartError::Engine(EngineError::Refused { code, message }));
@@ -550,8 +555,8 @@ pub(crate) fn start_within(
                     Err(EngineError::Refused { code, .. })
                         if code != crate::launch::PROFILE_UNCONFIRMED
                 );
-                if !ran_nothing {
-                    start.launch().launch.typed(pane_id);
+                if ran_nothing {
+                    finish.not_started();
                 }
                 return answer.map_err(StartError::Engine);
             }

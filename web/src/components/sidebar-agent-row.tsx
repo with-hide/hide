@@ -4,7 +4,7 @@ import { AgentRowMark } from "../AgentRowMark";
 import { agentClosing, treeCloseProgress } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
-import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, treeLine } from "../agentRow";
+import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, projectTreeLine } from "../agentRow";
 import { agentWithProfile, recordWords } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
@@ -155,7 +155,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
   const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
   const pulls = listed ?? rowPulls(agent, "own");
-  const line = tree ? treeLine(agent) : sidebarLine(agent);
+  const line = tree ? projectTreeLine(agent) : sidebarLine(agent);
   const branch = branchShown ? branchChip(agent) : null;
   const attention = agent.state.attention;
   const unreachable = remote !== null && !remote.reachable;
@@ -171,6 +171,19 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // Only a root in the project tree draws a resolved row (it carries `tree`); the raised lists leave it out and a child keeps its own look.
   const resting = tree && depth === 0 && agent.resolved;
   const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  // The hint reads as a card: the title, one muted line of what and how it stands, the summary cut at three lines, and the place.
+  // A project tree's row keeps to one line, so what it is waiting on is said here.
+  const sentence = offline ? null : rowSentence(t, agent);
+  const facts = [agentWithProfile(t, agent), recordWords(t, agent), offline ?? markWords(t, agent)].filter(Boolean).join(" · ");
+  const hintBody = (
+    <span className="flex flex-col gap-xxs text-left">
+      <span className="font-medium text-foreground">{resting ? t("sidebar.resolvedHint", { label: title }) : title}</span>
+      {facts ? <span className="text-muted-foreground">{facts}</span> : null}
+      {sentence ? <span className="text-muted-foreground">{sentence}</span> : null}
+      {agent.record_summary ? <span className="line-clamp-3 text-muted-foreground">{agent.record_summary}</span> : null}
+      {place ? <span className="text-micro text-subtle-foreground">{place}</span> : null}
+    </span>
+  );
   const staleness = ask ? undefined : pullsStaleness(pulls);
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -206,7 +219,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       className={cn("group/row relative flex rounded-sm text-body", tree ? "items-stretch pr-xs" : "items-start gap-xs py-xs pr-xs", selected ? tree ? "bg-secondary" : "bg-selected" : "hover:bg-accent", (unreachable || rowDimmed(agent) || resting) && "opacity-(--opacity-dimmed)")}
       style={{ paddingLeft: inset }}
     >
-      <Hint label={hint} reveals>
+      <Hint label={hint} content={hintBody} reveals>
         <button
           ref={main}
           type="button"

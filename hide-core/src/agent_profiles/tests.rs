@@ -49,6 +49,9 @@ fn list(version: u64, env: Option<Vec<(&str, &str)>>) -> ProfileList {
             place: None,
             login: None,
             account_variables: Vec::new(),
+            account_key: Some(hide_agent_adapter::AccountKey::Folder(
+                "/home/me/accounts/work".into(),
+            )),
         }],
         defaults: Default::default(),
         unjudged: None,

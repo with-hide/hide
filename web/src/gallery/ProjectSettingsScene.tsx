@@ -85,7 +85,7 @@ const GUARD_STATES: Record<string, ProjectSettings["guardrails"]> = {
 
 const installed: KitPiece = { state: "installed", why: null, location: null };
 
-const profile = (id: string, name: string): AgentProfileWire => ({ id, kind: "claude-code", name, account: `~/accounts/claude-${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: installed, skill: installed });
+const profile = (id: string, name: string): AgentProfileWire => ({ id, kind: "claude-code", name, account: `~/accounts/claude-${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: installed, skill: installed, startable: true });
 /** Claude Code's two profiles on this machine, `side` its default; Codex and Grok keep none. */
 const SCENE_PROFILES: MachineAgentProfiles = { state: "listed", version: 2, profiles: [profile("p-work", "work"), profile("p-side", "side")], defaults: { "claude-code": "p-side" } };
 

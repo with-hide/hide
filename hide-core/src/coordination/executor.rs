@@ -301,22 +301,6 @@ pub(crate) fn mutate(
         STORE_TIMEOUT,
     )
 }
-/// What the caller hands a child of `kind` it starts on its own machine
-/// (D-32): the profile it runs with when it is an agent of `kind` too.
-fn caller_profile(
-    client: &Client,
-    actor: &Actor,
-    kind: &str,
-) -> Result<crate::launch::Parent, String> {
-    Ok(client
-        .runtime
-        .upgrade()
-        .ok_or("delivery_unavailable")?
-        .lock()
-        .map_err(|_| "delivery_unavailable")?
-        .caller_launch_profile(actor, kind))
-}
-
 /// `request` holding its profile on `device` while it starts
 /// (`launch::holds`).
 fn hold_start(
@@ -332,23 +316,6 @@ fn hold_start(
         .map_err(|_| "delivery_unavailable")?
         .hold_profile_start(device, request)
         .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))
-}
-
-/// The profile Project settings choose for `kind` in the project of `repo`
-/// on `device` (D-31), when they choose one.
-fn project_profile(
-    client: &Client,
-    device: &str,
-    repo: &str,
-    kind: &str,
-) -> Result<Option<hide_agent_adapter::ProfileId>, String> {
-    Ok(client
-        .runtime
-        .upgrade()
-        .ok_or("delivery_unavailable")?
-        .lock()
-        .map_err(|_| "delivery_unavailable")?
-        .project_agent_profile(device, repo, kind))
 }
 
 pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
@@ -1058,7 +1025,13 @@ fn check_target(
 /// the machine's own kit worker, off the runtime lock, and the spawn judges
 /// again from its answer.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Result<(), String> {
+fn check_hook(
+    client: &Client,
+    machine: &str,
+    kind: &str,
+    profile: Option<&str>,
+    intent: &str,
+) -> Result<Option<crate::runtime::start_hook::ProfileHook>, String> {
     use crate::runtime::start_hook::{HookRefusal, StartHook};
     let refused = |refusal: HookRefusal, stage: &str| {
         crate::diagnostic!(json!({
@@ -1070,8 +1043,12 @@ fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Resul
     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
     let asked = {
         let mut locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
-        match locked.start_hook(machine, kind) {
-            StartHook::Ready => return Ok(()),
+        match locked.start_hook(machine, kind, profile) {
+            StartHook::Ready => {
+                return locked
+                    .start_hook_proof(machine, profile)
+                    .map_err(|refusal| refused(refusal, "report"));
+            }
             StartHook::Refused(refusal) => return Err(refused(refusal, "report")),
             StartHook::Pass(_) => locked.ask_start_pass(machine)?,
         }
@@ -1082,7 +1059,8 @@ fn check_hook(client: &Client, machine: &str, kind: &str, intent: &str) -> Resul
             let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
             if locked.start_pass_answered(machine, asked) {
                 return locked
-                    .start_hook_after_pass(machine, kind)
+                    .start_hook_after_pass(machine, kind, profile)
+                    .and_then(|()| locked.start_hook_proof(machine, profile))
                     .map_err(|refusal| refused(refusal, "pass"));
             }
             if !locked.kit_reachable(machine) {
@@ -1263,15 +1241,34 @@ fn spawn(
             )?;
         }
     }
-    // A profile named by a name its machine does not list is refused before
-    // anything is reserved, so the same command with the right name is the
-    // same intent (B16).
-    if let Some(name) = profile.as_deref() {
+    // Pick once before judging hooks, then keep that same request through
+    // admission and node resolution. Completed retries need no new choice.
+    let agent = if earlier.as_ref().is_some_and(|record| record.completed) {
+        None
+    } else {
         let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
         let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
         let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
-        crate::launch::chosen(kind, name, locked.machine_profiles(child_machine))?;
-    }
+        let profiles = locked.machine_profiles(child_machine);
+        let parent = if machine.is_none() {
+            locked.caller_launch_profile(actor, kind)
+        } else {
+            crate::launch::Parent::None
+        };
+        Some(crate::launch::pick(
+            kind,
+            profile
+                .as_deref()
+                .map(|name| crate::launch::chosen(kind, name, profiles))
+                .transpose()?,
+            &parent,
+            locked
+                .project_agent_profile(child_machine, repo, kind)
+                .as_ref(),
+            profiles,
+        ))
+    };
+    let mut hook_proof = None;
     // The child's hook is judged before anything is made for it, on every
     // attempt that has not typed its start yet: one that has is past what a
     // hook changes (with-hide/hide-private#661, #662).
@@ -1281,7 +1278,14 @@ fn spawn(
     {
         let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
         let hook_started = Instant::now();
-        check_hook(client, child_machine, kind, intent)?;
+        let profile = agent.as_ref().and_then(|request| request.profile());
+        hook_proof = check_hook(
+            client,
+            child_machine,
+            kind,
+            profile.as_ref().map(|(id, _)| id.0.as_str()),
+            intent,
+        )?;
         // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
         answer_by += hook_started.elapsed();
     }
@@ -1342,7 +1346,6 @@ fn spawn(
         permissions,
         on_node,
         node,
-        profiles,
     } = context(client, &child_device).map_err(|reason| {
         if reserved.machine.is_some() {
             "machine_unavailable".to_owned()
@@ -1350,33 +1353,23 @@ fn spawn(
             reason
         }
     })?;
-    // The profile the child runs with (PRD agent-profiles D-32, B16): the
-    // one named, else its caller's, the built-in default included, when the
-    // caller is the same agent on the same machine, else the default Project
-    // settings choose for the repository's project there, else the agent's
-    // default there.
-    let agent = crate::launch::pick(
-        kind,
-        profile
-            .as_deref()
-            .map(|name| crate::launch::chosen(kind, name, profiles.as_ref()))
-            .transpose()?,
-        &if reserved.machine.is_none() {
-            caller_profile(client, actor, kind)?
-        } else {
-            crate::launch::Parent::None
-        },
-        project_profile(client, &child_device, repo, kind)?.as_ref(),
-        profiles.as_ref(),
-    );
+    let agent = agent.expect("an incomplete spawn has a launch choice");
     // The start holds its profile from here, so a removal planned
     // meanwhile is refused, and one under way refuses it (B27).
-    let agent = hold_start(client, &child_device, agent)?;
+    let agent = hold_start(client, &child_device, agent.with_choice(&reserved.launch))?;
     // The child's machine answers for its profile before the spawn makes
     // its pane, so a profile that is gone or a program that cannot run
     // leaves no pane behind (PRD agent-profiles B20, B22).
     let launch = crate::launch::resolve(node.as_deref(), &agent)
         .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))?;
+    if hook_proof
+        .as_ref()
+        .is_some_and(|proof| !proof.matches(&launch))
+    {
+        return Err(crate::runtime::start_hook::HookRefusal::Unchecked
+            .code()
+            .to_owned());
+    }
     // A device that stops answering partway leaves the spawn reserved and
     // resumable: the caller is told the device is unavailable, and the same
     // command continues once it answers again.
@@ -1907,7 +1900,9 @@ fn spawn(
         // it was started under. It is kept before the agent shows its
         // session, which an agent that reports it only at its first turn
         // does later, so the record binds to that session when it arrives.
-        if let Some(runtime) = client.runtime.upgrade() {
+        if reserved.started_profile.is_none()
+            && let Some(runtime) = client.runtime.upgrade()
+        {
             let pane_id = if on_node {
                 pane.to_owned()
             } else {

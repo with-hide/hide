@@ -523,6 +523,22 @@ pub struct AccountRule {
     pub paths: Vec<(AccountPath, PathRule)>,
     /// Variables a profile's own environment may not set.
     pub forbid: Vec<String>,
+    pub login: Option<LoginRule>,
+}
+
+/// Nonblank credential values that say this account has signed in.
+/// `/*/` visits each provider or scope in a JSON object.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoginRule {
+    pub at: AccountPath,
+    pub any: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginFile {
+    at: String,
+    any: Vec<String>,
 }
 
 impl AccountRule {
@@ -551,6 +567,8 @@ pub struct AccountFile {
     paths: PathsFile,
     #[serde(default)]
     forbid: Option<ForbidFile>,
+    #[serde(default)]
+    login: Option<LoginFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -742,12 +760,33 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         };
         paths.push((feature, rule));
     }
+    let login = file.login.map(|login| {
+        let at = match login.at.as_str() {
+            "login" => AccountPath::Login,
+            "usage" => AccountPath::Usage,
+            _ => return Err(fail(".login.at must name login or usage".into())),
+        };
+        if matches!(paths.iter().find(|(feature, _)| *feature == at), Some((_, PathRule::Absent))) {
+            return Err(fail(".login.at names an absent account path".into()));
+        }
+        if login.any.is_empty() || login.any.len() > 16 || login.any.iter().any(|pointer| {
+            !pointer.starts_with('/') || pointer.len() > 256
+                || pointer.split('/').count() > 9
+                || pointer.chars().any(char::is_control)
+                || pointer.strip_prefix("/*/").unwrap_or(pointer).contains('*')
+                || pointer.split('~').skip(1).any(|part| !part.starts_with(['0', '1']))
+        }) {
+            return Err(fail(".login.any needs 1 to 16 JSON pointers, at most 8 parts and 256 bytes each; only an initial /*/ may be a wildcard".into()));
+        }
+        Ok(LoginRule { at, any: login.any })
+    }).transpose()?;
     Ok(AccountRule {
         by: file.by,
         reason: file.reason,
         vars,
         paths,
         forbid,
+        login,
     })
 }
 

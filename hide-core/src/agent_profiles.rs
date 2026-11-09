@@ -672,7 +672,7 @@ impl Prepared {
             .runtime
             .upgrade()
             .ok_or_else(|| Refusal::code(UNANSWERED))?;
-        let runtime = runtime.lock().map_err(|_| Refusal::code(UNANSWERED))?;
+        let mut runtime = runtime.lock().map_err(|_| Refusal::code(UNANSWERED))?;
         runtime.recheck_removal(&self.machine, id, version)
     }
 

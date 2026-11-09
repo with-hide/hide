@@ -508,7 +508,12 @@ async fn conversation_step(
                 Err(error) => conversation_failed(&error.to_string()),
             }
         }
-        match Transcript::open(&reader.session_accounts(), &pane_id, source) {
+        // The core says which account the pane's agent runs in; until a row
+        // shows the agent, there is nothing to open yet.
+        let Some(account) = reader.core().pane_account(&pane_id) else {
+            return (None, None);
+        };
+        match Transcript::open(&reader.session_accounts(), &account, &pane_id, source) {
             Ok((open, page)) => (Some(open), Some((page.messages, page.before, "reset"))),
             // Reported, and nothing written yet.
             Err(hide_session::SessionError::SessionFileMissing) => (None, None),

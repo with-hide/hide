@@ -16,6 +16,7 @@ pub mod account;
 pub mod antigravity;
 pub mod antigravity_trust;
 pub mod basic;
+mod claude_account;
 pub mod codex_daemon;
 pub mod codex_trust;
 pub mod counters;

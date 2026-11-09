@@ -11,7 +11,7 @@ import { performance } from "node:perf_hooks";
 import { openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import { connectControl, type HidedControl } from "../../web/e2e/hided-control.mjs";
 import { chord } from "../../web/e2e/chords";
-import { chooseExpand, countSent, enterWorkspace, keyboardFocus, pinState, rest, sendEvent, setLanePinned, showExplorer, showProjectRow } from "../../web/e2e/wire";
+import { chooseExpand, countSent, enterWorkspace, keyboardFocus, pinState, projectOpener, rest, sendEvent, setLanePinned, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { deviceHome, proveDeviceHome, resetDeviceHome, stageBuild, writeSshConfig } from "./device-home";
 import { isolate, launchShell, nodeOf, startStack, test } from "./fixture";
 import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
@@ -598,6 +598,8 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
     await page.reload();
     await enterWorkspace(page, "fixture");
     await bodyWidth(app, page, 1600);
+    // A project that is not open is opened from its own row; its main checkout's row is drawn once it holds the focus.
+    const opener = (label: string) => projectOpener(page.locator("[data-project]", { hasText: label }));
     const row = (label: string) => page.locator("[data-project]", { hasText: label }).locator("[data-checkout]").first();
     const openNotes = async () => {
       await showExplorer(page);
@@ -606,11 +608,11 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
       await setLanePinned(page, true);
       await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
     };
-    await (await showProjectRow(page, row("beta"))).click();
+    await (await showProjectRow(page, opener("beta"))).click({ position: { x: 12, y: 8 } });
     await expect(row("beta")).toHaveAttribute("aria-current", "true");
     await openNotes();
     for (const theme of ["dark", "light"] as const) {
-      await (await showProjectRow(page, row("fixture"))).click();
+      await (await showProjectRow(page, opener("fixture"))).click({ position: { x: 12, y: 8 } });
       await expect(row("fixture")).toHaveAttribute("aria-current", "true");
       await openNotes();
       await page.locator("[data-open-settings]").click();
@@ -629,7 +631,7 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
       const before = sent.get("workspace_view") ?? 0;
       // Invoke the candidate's Workspace control while capture is held, as a
       // keyboard Workspace switch can do without releasing the divider.
-      await row("beta").evaluate((element: HTMLElement) => element.click());
+      await opener("beta").evaluate((element: HTMLElement) => element.click());
       await expect(row("beta")).toHaveAttribute("aria-current", "true");
       await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
       await expect(page.locator("html")).not.toHaveAttribute("data-view-drag");
