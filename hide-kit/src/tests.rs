@@ -20,6 +20,8 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::*;
+#[cfg(windows)]
+use crate::stand_ins;
 #[cfg(unix)]
 use stand_ins::program;
 
@@ -155,6 +157,32 @@ fn kit_program(kit: &Path, name: &str) {
         std::fs::create_dir_all(kit).unwrap();
         std::fs::write(kit.join(format!("{name}.exe")), "").unwrap();
     }
+}
+
+/// The same app-server on every system: Windows starts Python through its
+/// batch launcher, and Unix uses the script's first line.
+fn trust_codex() -> PathBuf {
+    let name = if cfg!(windows) {
+        "fake-codex.cmd"
+    } else {
+        "fake-codex.py"
+    };
+    let codex = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../hide-agent-hooks/tests/fixtures")
+        .join(name);
+    stand_ins::ready(&codex);
+    codex
+}
+
+/// A private account whose Codex is the stand-in app-server.
+fn with_codex() -> Fixture {
+    let mut fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
+    fixture.target.codex = Some(hide_platform::programs::Program::named(
+        trust_codex(),
+        hide_platform::programs::cli_path_with(fixture.home(), None).unwrap(),
+    ));
+    fixture
 }
 
 const OTHER_TOOL: &str = r#"{

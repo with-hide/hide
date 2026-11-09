@@ -1698,7 +1698,8 @@ fn isolated_plugin_registry(test: &str) -> bool {
         )
         .unwrap();
     assert!(
-        output.status.success(),
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -1709,7 +1710,7 @@ fn isolated_plugin_registry(test: &str) -> bool {
 #[test]
 fn a_long_home_with_no_daemon_socket_finishes_retirement_and_converges() {
     if isolated_plugin_registry(
-        "tests::a_long_home_with_no_daemon_socket_finishes_retirement_and_converges",
+        "tests::kit_cases::a_long_home_with_no_daemon_socket_finishes_retirement_and_converges",
     ) {
         return;
     }
@@ -1901,9 +1902,9 @@ fn exercise_external_state_override(key: &str) {
                 selected_parent
             };
             let test = if key == "HIDE_STATE_DIR" {
-                "tests::external_hide_state_override_keeps_its_ancestor_authority"
+                "tests::kit_cases::external_hide_state_override_keeps_its_ancestor_authority"
             } else {
-                "tests::external_xdg_state_override_keeps_its_ancestor_authority"
+                "tests::kit_cases::external_xdg_state_override_keeps_its_ancestor_authority"
             };
             let result = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", test, "--nocapture"])
@@ -1915,7 +1916,9 @@ fn exercise_external_state_override(key: &str) {
                 .env(key, selected)
                 .output()
                 .unwrap();
-            if !result.status.success() {
+            if !result.status.success()
+                || !String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed")
+            {
                 failures.push(format!(
                     "{key}, {case}: {}{}",
                     String::from_utf8_lossy(&result.stdout),

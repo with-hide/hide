@@ -552,7 +552,7 @@ fn moving_a_link_takes_out_the_old_accounts_pieces_and_keeps_the_new_ones() {
     assert!(hide_hooks(&first.join("settings.json")) > 0);
     assert!(hide_hooks(&second.join("settings.json")) > 0);
 
-    std::fs::remove_file(&link).unwrap();
+    hide_platform::fs::link::remove_link(&link).unwrap();
     symlink(&second, &link);
     let report = apply(&fixture.target, &Scope::automatic());
 
@@ -675,26 +675,20 @@ fn a_link_on_any_layer_of_a_profile_account_leads_no_write_or_removal_out_of_it(
         ),
     ];
     for (kind, linked_at, linked) in rows {
-        // Codex's rows need its stand-in app-server, a script started by its
-        // first line, which only Unix does (`codex_trust_cases`).
-        if cfg!(not(unix)) && kind == "codex" {
-            continue;
-        }
         let row = match &linked_at {
             Some((at, to)) => format!("{kind}: {at} -> ~/{to}"),
             None => format!("{kind}: no link"),
         };
         let mut fixture = match kind {
-            #[cfg(unix)]
             "codex" => {
-                let fixture = super::codex_trust_cases::with_codex();
+                let fixture = with_codex();
                 let home = fixture.home();
                 std::fs::write(home.join(".codex/config.toml"), "model = \"kept\"\n").unwrap();
                 std::fs::create_dir_all(home.join("elsewhere")).unwrap();
                 std::fs::write(home.join("elsewhere/config.toml"), "model = \"outside\"\n")
                     .unwrap();
                 // Codex is installed: its program is what says so.
-                executable(&home.join(".local/bin/codex"), "#!/bin/sh\n");
+                installed(&home.join(".local/bin"), "codex");
                 fixture
             }
             _ => Fixture::new(),
