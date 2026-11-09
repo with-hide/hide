@@ -2048,7 +2048,7 @@ impl Topology {
                 .as_ref()
                 .is_some_and(|claim| Arc::ptr_eq(claim, &attempt.claim))
         });
-        let withdrawn = matches!(outcome, Outcome::Failed { .. })
+        let withdrawn = matches!(outcome, Outcome::Failed { .. } | Outcome::NotStarted { .. })
             && owned
             && held.agent.as_ref().is_some_and(|agent| !agent.live.shown);
         if withdrawn {

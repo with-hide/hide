@@ -5148,6 +5148,14 @@ impl Runtime {
             .unwrap_or_else(|| self.node.as_str().to_owned())
     }
 
+    pub(crate) fn task_agent_choice(&self, id: u64) -> hide_agent_adapter::LaunchChoice {
+        self.task_agent_launch
+            .as_ref()
+            .filter(|launch| launch.task == id)
+            .map(|launch| launch.launch.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn pending_task_agent_start(
         &self,
         id: u64,
@@ -5268,7 +5276,9 @@ impl Runtime {
                     Some((pane_id, kind, name))
                 })
         {
-            self.record_pane_launch(&pane_id, &kind, &name, launch, profile.as_ref(), None);
+            if profile.is_none() {
+                self.record_pane_launch(&pane_id, &kind, &name, launch, None, None);
+            }
         }
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;
@@ -6874,6 +6884,7 @@ impl Runtime {
     }
 
     pub(crate) fn set_republish_waker(&mut self, waker: session_sync::RepublishWaker) {
+        self.profile_holds.set_waker(waker.clone());
         self.republish_waker = Some(waker);
     }
 

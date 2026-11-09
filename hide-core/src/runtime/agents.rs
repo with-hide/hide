@@ -3375,7 +3375,9 @@ impl Runtime {
         // appeared and nothing else happened.
         match result {
             Ok(forked_pane_id) => {
-                if let Some(pending) = &pending {
+                if let Some(pending) = &pending
+                    && pending.profile.is_none()
+                {
                     self.record_pane_launch(
                         &forked_pane_id,
                         &pending.kind,

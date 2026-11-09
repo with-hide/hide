@@ -212,10 +212,7 @@ pub(crate) fn settle_pane_launches(
             continue;
         }
         if describes(launch, agent) {
-            if agent.session_id.is_some() && agent.session_id != launch.session {
-                launch.session = agent.session_id.clone();
-                changed = true;
-            }
+            changed |= observe_launch(launch, agent);
             continue;
         }
         let another = hide_agent_adapter::canonical_kind(&agent.agent_kind) != launch.kind
@@ -225,6 +222,22 @@ pub(crate) fn settle_pane_launches(
             launches.remove(&agent.pane_id);
             changed = true;
         }
+    }
+    changed
+}
+
+/// Incorporates a matching observation without inferring that an attempt ended.
+pub(super) fn observe_launch(
+    launch: &mut crate::model::PaneLaunch,
+    agent: &SidebarAgentSnapshot,
+) -> bool {
+    if !describes(launch, agent) {
+        return false;
+    }
+    let mut changed = std::mem::replace(&mut launch.pending, false);
+    if agent.session_id.is_some() && agent.session_id != launch.session {
+        launch.session = agent.session_id.clone();
+        changed = true;
     }
     changed
 }
@@ -261,6 +274,7 @@ impl Runtime {
         profile: Option<&crate::launch::LaunchProfile>,
         session: Option<&str>,
     ) -> bool {
+        self.finish_profile_starts();
         let moved = self.write_pane_launch(pane_id, kind, name, choice, profile, session);
         if moved {
             self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
@@ -284,8 +298,11 @@ impl Runtime {
         } else {
             self.profile_holds.unrecorded()
         };
+        let order = self.profile_holds.record_order();
         let launches = &mut self.snapshot.ui_state.pane_launches;
-        if !launches.contains_key(pane_id) && launches.len() + held >= PANE_LAUNCH_LIMIT {
+        if order.is_none()
+            || (!launches.contains_key(pane_id) && launches.len() + held >= PANE_LAUNCH_LIMIT)
+        {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_choice", "kind": "pane_launch.limit",
                 "pane_id": pane_id, "limit": PANE_LAUNCH_LIMIT,
@@ -293,6 +310,8 @@ impl Runtime {
             false
         } else {
             let launch = crate::model::PaneLaunch {
+                pending: false,
+                start: order.expect("the launch clock was admitted"),
                 kind: hide_agent_adapter::canonical_kind(kind).to_owned(),
                 name: name.to_owned(),
                 choice: choice.clone(),
@@ -300,10 +319,6 @@ impl Runtime {
                 profile: profile.cloned(),
             };
             let moved = launches.insert(pane_id.to_owned(), launch.clone()) != Some(launch);
-            if let Some(profile) = profile {
-                let (machine, pane) = crate::address::split_pane(self.node.as_str(), pane_id);
-                self.profile_holds.recorded(machine, pane, &profile.id);
-            }
             moved
         }
     }
@@ -451,7 +466,7 @@ impl Runtime {
 
     /// [`pane_run`] for the `kind` agent in `pane_id`, whose launch record
     /// describing it is `recorded`.
-    fn run_in(
+    pub(super) fn run_in(
         &self,
         pane_id: &str,
         kind: &str,
@@ -537,11 +552,7 @@ impl Runtime {
                 actor.session.as_deref(),
             ) || launch_describes(launch, &actor.kind, None, actor.session.as_deref())
         });
-        if described.is_none()
-            && self
-                .reported_account(&actor.pane_id, &actor.kind)
-                .is_none()
-        {
+        if described.is_none() && self.reported_account(&actor.pane_id, &actor.kind).is_none() {
             crate::diagnostic!(serde_json::json!({
                 "component": "agent_choice",
                 "kind": "agent_profile.parent_unknown",
@@ -551,10 +562,7 @@ impl Runtime {
             }));
             return crate::launch::Parent::Unknown;
         }
-        crate::launch::Parent::recorded(
-            self.run_in(&actor.pane_id, &actor.kind, described)
-                .profile,
-        )
+        crate::launch::Parent::recorded(self.run_in(&actor.pane_id, &actor.kind, described).profile)
     }
 
     /// The choice `agent` was started with, when its pane's record describes
@@ -593,6 +601,7 @@ impl Runtime {
         scope: crate::agent_state::ReadRecordScope<'_>,
         live_pane_ids: Option<&HashSet<String>>,
     ) {
+        self.finish_profile_starts();
         if settle_pane_launches(
             &mut self.snapshot.ui_state.pane_launches,
             agents,
@@ -602,7 +611,6 @@ impl Runtime {
             self.missions.launches_edit = self.missions.launches_edit.wrapping_add(1);
             self.persist_ui_state();
         }
-        self.settle_profile_holds(agents, scope, live_pane_ids);
         // A mission worker's launch is proven once its record names the
         // worker's conversation (a settle, a wake or a resume writes it) and
         // the worker is bound to its node.

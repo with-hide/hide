@@ -144,6 +144,8 @@ fn a_wrapper_that_runs_another_account_is_read_there_and_warns_on_its_profile() 
     runtime.snapshot.ui_state.pane_launches.insert(
         "p1".to_owned(),
         crate::model::PaneLaunch {
+            pending: false,
+            start: 0,
             kind: "claude".to_owned(),
             name: "p1-agent".to_owned(),
             choice: Default::default(),
@@ -274,6 +276,8 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
         runtime.snapshot.ui_state.pane_launches.insert(
             pane.to_owned(),
             crate::model::PaneLaunch {
+                pending: false,
+                start: 0,
                 kind: "claude".to_owned(),
                 name: format!("{pane}-agent"),
                 choice: Default::default(),
@@ -335,6 +339,35 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
             elsewhere_last,
             "p2 again: {elsewhere_last}"
         );
+        // The newest pane closes. Its older sibling must not restore the
+        // warning that the newest start just cleared (or clear its warning).
+        let mut payload = serde_json::from_value(serde_json::json!({"agents": []})).unwrap();
+        runtime
+            .hook_facts
+            .lock()
+            .unwrap()
+            .lay(&mut payload, str::to_owned, |pane| pane == "p1");
+        runtime.snapshot.ui_state.pane_launches.remove("p1");
+        runtime.refresh_reported_accounts();
+        assert_eq!(warned(&runtime), elsewhere_last, "latest pane closed");
+        // A new start is newer even after the pane that held the highest
+        // sequence was removed. It may change the warning again.
+        launched(&mut runtime, "p3");
+        started(&mut runtime, "p3", "s-3", first);
+        assert_eq!(warned(&runtime), !elsewhere_last, "next start after close");
+        // Authoritative removal owns the warning's lifetime. A surviving
+        // old pane's report must not recreate the removed profile's entry.
+        runtime.ingest_profiles(
+            crate::node::TEST_NODE,
+            crate::runtime::kit::ProfilesRead::Listed(hide_node_link::profiles::ProfileList {
+                version: 2,
+                profiles: Vec::new(),
+                defaults: Default::default(),
+                unjudged: None,
+            }),
+        );
+        runtime.refresh_reported_accounts();
+        assert!(runtime.wrapper_folders.is_empty());
     }
 }
 
@@ -377,7 +410,10 @@ fn a_child_of_a_parent_started_with_an_alias_starts_in_the_parents_account() {
         .map(|(id, _)| id.0)
     };
     started(&mut runtime, "p1", "s-1", Some("/accounts/claude-a"));
-    assert_eq!(child(&runtime, &parent("p1", "s-1")).as_deref(), Some("p-a"));
+    assert_eq!(
+        child(&runtime, &parent("p1", "s-1")).as_deref(),
+        Some("p-a")
+    );
     started(&mut runtime, "p2", "s-2", None);
     assert_eq!(
         runtime.caller_launch_profile(&parent("p2", "s-2"), "claude"),
@@ -388,5 +424,8 @@ fn a_child_of_a_parent_started_with_an_alias_starts_in_the_parents_account() {
         runtime.caller_launch_profile(&parent("p3", "s-3"), "claude"),
         crate::launch::Parent::Unknown
     );
-    assert_eq!(child(&runtime, &parent("p3", "s-3")).as_deref(), Some("p-b"));
+    assert_eq!(
+        child(&runtime, &parent("p3", "s-3")).as_deref(),
+        Some("p-b")
+    );
 }

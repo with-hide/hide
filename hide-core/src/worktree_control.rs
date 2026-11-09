@@ -1328,10 +1328,13 @@ fn start_task_agent(
     // The start holds its profile from here (`launch::holds`): a removal
     // planned meanwhile is refused, and one under way refuses the start.
     let pending = match runtime.lock() {
-        Ok(guard) => guard.pending_task_agent_start(id).map(|start| {
+        Ok(mut guard) => guard.pending_task_agent_start(id).map(|start| {
+            let machine = guard.task_agent_machine(id);
+            let choice = guard.task_agent_choice(id);
             let held = guard.hold_profile_start(
-                &guard.task_agent_machine(id),
-                crate::launch::Request::new(&start.kind, start.profile.clone()),
+                &machine,
+                crate::launch::Request::new(&start.kind, start.profile.clone())
+                    .with_choice(&choice),
             );
             (start, held)
         }),

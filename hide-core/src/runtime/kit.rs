@@ -569,6 +569,9 @@ impl Runtime {
         let mut state = self.kit_state(device_id);
         let profiles = match read {
             ProfilesRead::Listed(list) => {
+                self.wrapper_folders.retain(|(machine, id), _| {
+                    machine != device_id || list.profiles.iter().any(|profile| profile.id.0 == *id)
+                });
                 if let Some(reason) = &list.unjudged {
                     crate::diagnostic!(serde_json::json!({
                         "component": "kit",

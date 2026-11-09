@@ -82,6 +82,7 @@ pub(crate) struct Request {
     /// ([`holds`]); none for the built-in default and for a start that
     /// brings back an agent whose record already holds the profile.
     hold: Option<holds::Hold>,
+    choice: hide_agent_adapter::LaunchChoice,
 }
 
 impl Request {
@@ -98,7 +99,17 @@ impl Request {
             },
             name: profile.map(|(_, name)| name),
             hold: None,
+            choice: Default::default(),
         }
+    }
+
+    pub(crate) fn with_choice(mut self, choice: &hide_agent_adapter::LaunchChoice) -> Self {
+        self.choice = choice.clone();
+        self
+    }
+
+    pub(crate) fn choice(&self) -> &hide_agent_adapter::LaunchChoice {
+        &self.choice
     }
 
     /// The start's hold on its profile.
@@ -152,12 +163,8 @@ impl Launch {
         &self.kind
     }
 
-    /// The start was typed into `pane`: its hold on the profile stays until
-    /// the runtime sees what came of it ([`holds`]).
-    pub(crate) fn typed(&self, pane: &str) {
-        if let Some(hold) = &self.hold {
-            hold.typed(pane);
-        }
+    pub(crate) fn finish(&self) -> holds::Finish {
+        holds::Finish::new(self.hold.clone())
     }
 
     /// What the profile's machine answered for it, `None` for the built-in
@@ -389,7 +396,8 @@ fn profile_start(
         // older protocol that cannot read it.
         Err(LinkError::Refused(error))
             if error.code == ErrorCode::Unsupported
-                || (error.code == ErrorCode::InvalidRequest && node.predates_current_protocol()) =>
+                || (error.code == ErrorCode::InvalidRequest
+                    && node.predates_current_protocol()) =>
         {
             crate::diagnostic!(serde_json::json!({
                 "component": "launch",

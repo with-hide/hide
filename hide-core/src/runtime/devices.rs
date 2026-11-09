@@ -997,6 +997,9 @@ impl Runtime {
         self.forget_device_views(device_id);
         self.forget_device_sleep(device_id);
         self.forget_device_launches(device_id);
+        self.profile_holds.forget(device_id);
+        self.wrapper_folders
+            .retain(|(machine, _), _| machine != device_id);
         self.forget_recent_checkouts(|held| held.device_id == device_id);
         self.rebuild_device_rows();
         self.rebuild_tab_strips();

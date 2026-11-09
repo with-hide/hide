@@ -5097,6 +5097,13 @@ pub struct PaneCompletion {
 /// started it with.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PaneLaunch {
+    /// The start may run but no matching agent row has been observed yet.
+    /// Its record protects the account until that observation or pane removal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+    /// In-process ordering of profile attempts; restored records precede all.
+    #[serde(skip)]
+    pub start: u64,
     /// The agent kind, in the engine's spelling.
     pub kind: String,
     /// The engine name Hide started the agent under (a task's, a wake's, a

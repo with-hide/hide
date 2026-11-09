@@ -88,7 +88,7 @@ impl Runtime {
         // account: its program set a folder of its own. The profile's last
         // start decides, whatever its pane is called: one that reports its
         // own account again lifts the warning.
-        let mut last: BTreeMap<(String, String), (u64, bool)> = BTreeMap::new();
+        let mut wrapper = self.wrapper_folders.clone();
         for (pane, account) in &reported {
             let Some(profile) = self
                 .snapshot
@@ -106,23 +106,24 @@ impl Runtime {
                 continue;
             };
             let device = crate::address::pane_device(pane).unwrap_or(self.node.as_str());
+            // A removed profile keeps no warning, even while an old pane
+            // still reports the account it was started with.
+            if !self
+                .machine_profiles(device)
+                .is_some_and(|list| list.profiles.iter().any(|listed| listed.id == profile.id.0))
+            {
+                continue;
+            }
             let start = starts.get(pane).copied().unwrap_or(0);
             let elsewhere = profile.account != account.key;
-            last.entry((device.to_owned(), profile.id.0.clone()))
+            wrapper
+                .entry((device.to_owned(), profile.id.0.clone()))
                 .and_modify(|kept| {
                     if start > kept.0 {
                         *kept = (start, elsewhere);
                     }
                 })
                 .or_insert((start, elsewhere));
-        }
-        let mut wrapper = self.wrapper_folders.clone();
-        for (at, (_, elsewhere)) in last {
-            if elsewhere {
-                wrapper.insert(at);
-            } else {
-                wrapper.remove(&at);
-            }
         }
         let rows_moved = reported != self.reported_accounts;
         if rows_moved {
@@ -172,8 +173,8 @@ impl Runtime {
         let warned: BTreeSet<&str> = self
             .wrapper_folders
             .iter()
-            .filter(|(machine, _)| machine == device)
-            .map(|(_, id)| id.as_str())
+            .filter(|((machine, _), (_, warning))| machine == device && *warning)
+            .map(|((_, id), _)| id.as_str())
             .collect();
         let Some(mut state) = self.kit_states.get(device).cloned() else {
             return false;

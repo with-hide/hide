@@ -86,6 +86,8 @@ fn running(runtime: &mut Runtime, pane: &str, id: &str, title: &str) {
     runtime.snapshot.ui_state.pane_launches.insert(
         pane.to_owned(),
         crate::model::PaneLaunch {
+            pending: false,
+            start: 0,
             kind: "claude".to_owned(),
             name: format!("{pane}-agent"),
             choice: Default::default(),
@@ -311,12 +313,47 @@ fn the_command_and_the_screen_refuse_the_same_profiles_by_the_same_codes() {
 
 /// A start of Claude with `id` on the runtime's own machine, holding its
 /// profile as every start path takes it.
-fn hold(runtime: &Runtime, id: &str) -> Result<crate::launch::Request, crate::launch::Refusal> {
+fn hold(runtime: &mut Runtime, id: &str) -> Result<crate::launch::Request, crate::launch::Refusal> {
     let node = runtime.node.to_string();
     runtime.hold_profile_start(
         &node,
         crate::launch::Request::new("claude", Some((ProfileId(id.into()), id.into()))),
     )
+}
+
+/// The worker submits the resolved profile and completes its attempt. The
+/// guard hands it off on success, unknown, and unwind alike.
+fn submitted(
+    request: &crate::launch::Request,
+    pane: &str,
+    id: &str,
+) -> crate::launch::holds::Finish {
+    let finish = crate::launch::holds::Finish::new(request.hold());
+    let launch = crate::engine::AgentLaunch {
+        pane_id: pane.into(),
+        name: format!("{pane}-agent"),
+        launch: crate::launch::Launch::answered(
+            "claude",
+            id,
+            hide_node_link::profiles::ProfileStart {
+                name: id.into(),
+                account: AccountKey::Folder(format!(
+                    "/home/me/accounts/{}",
+                    id.trim_start_matches("p-")
+                )),
+                version: 1,
+                env: Vec::new(),
+                program: None,
+                exec: "/opt/hide".into(),
+            },
+        ),
+        args: Vec::new(),
+        codex_daemon: Default::default(),
+        wakes: false,
+        program: None,
+    };
+    finish.submitted(&launch);
+    finish
 }
 
 /// What the removal's check finds on `p-work`: (starting, running) agents.
@@ -382,7 +419,7 @@ fn a_start_and_a_removal_of_one_profile_refuse_each_other_in_either_order() {
     let node = runtime.node.to_string();
     // A start resolving its profile: the removal's check lists it, with no
     // pane to show, and the removal is refused (B27).
-    let start = hold(&runtime, "p-work").unwrap();
+    let start = hold(&mut runtime, "p-work").unwrap();
     assert_eq!(in_use(&mut runtime), (1, 0));
     change(
         &mut runtime,
@@ -391,7 +428,7 @@ fn a_start_and_a_removal_of_one_profile_refuse_each_other_in_either_order() {
     );
     assert_eq!(answer(&runtime).code.as_deref(), Some(profiles::IN_USE));
     // Another profile is free, and the built-in default holds nothing.
-    assert!(hold(&runtime, "p-side").is_ok());
+    assert!(hold(&mut runtime, "p-side").is_ok());
     // A start that ended before anything was typed lets the profile go.
     drop(start);
     assert_eq!(in_use(&mut runtime), (0, 0));
@@ -402,75 +439,232 @@ fn a_start_and_a_removal_of_one_profile_refuse_each_other_in_either_order() {
         .remove(&node, &ProfileId("p-work".into()), 3)
         .unwrap();
     assert_eq!(
-        hold(&runtime, "p-work").unwrap_err().code,
+        hold(&mut runtime, "p-work").unwrap_err().code,
         crate::launch::PROFILE_GONE
     );
     // A node that did not answer may still make it: still refused.
     let (job, outcome) = removal(&runtime, Err(profiles::UNANSWERED));
     runtime.settle_agent_profiles(&job, &outcome);
-    assert!(hold(&runtime, "p-work").is_err());
+    assert!(hold(&mut runtime, "p-work").is_err());
     // A node that refused it leaves the profile to its starts.
     let (job, outcome) = removal(&runtime, Err(profiles::REFUSED));
     runtime.settle_agent_profiles(&job, &outcome);
-    assert!(hold(&runtime, "p-work").is_ok());
+    assert!(hold(&mut runtime, "p-work").is_ok());
 }
 
 #[test]
-fn a_typed_start_holds_its_profile_until_its_agent_shows_and_frees_it_once_the_agent_ends() {
+fn a_completed_start_transfers_to_a_record_before_the_next_removal_check() {
     let mut runtime = listed();
-    let live: std::collections::HashSet<String> = ["w1:p1".to_owned()].into();
-    let scope = crate::agent_state::ReadRecordScope::Local(&crate::herdr_import::Held::Nothing);
-    let start = hold(&runtime, "p-work").unwrap();
-    start.hold().unwrap().typed("w1:p1");
-    drop(start);
-    // Typed, with no record and no row yet: it may run, so it holds.
-    runtime.apply_pane_launches(&mut [], scope, Some(&live));
+    let start = hold(&mut runtime, "p-work").unwrap();
+    let finish = submitted(&start, "w1:p1", "p-work");
     assert_eq!(in_use(&mut runtime), (1, 0));
-    // Its record is written before its row shows: still held, never a gap.
-    running(&mut runtime, "w1:p1", "p-work", "fix-bell");
-    let rows = std::mem::take(&mut runtime.snapshot.navigator.agents);
-    runtime.apply_pane_launches(&mut [], scope, Some(&live));
-    assert_eq!(in_use(&mut runtime), (1, 0));
-    // Its row shows, described by the record: the row carries the use.
-    runtime.snapshot.navigator.agents = rows.clone();
-    runtime.apply_pane_launches(&mut rows.clone(), scope, Some(&live));
+    drop(finish);
+    // No publish or row is needed: removal admission drains completion.
     assert_eq!(in_use(&mut runtime), (0, 1));
-    // The agent ends and its pane keeps the shell: the record stays, and
-    // the profile is free to remove without closing the pane.
-    runtime.snapshot.navigator.agents.clear();
-    runtime.apply_pane_launches(&mut [], scope, Some(&live));
-    assert!(
-        runtime
-            .snapshot
-            .ui_state
-            .pane_launches
-            .contains_key("w1:p1")
+    assert_eq!(runtime.profile_holds.unrecorded(), 0);
+    assert!(runtime.snapshot.ui_state.pane_launches["w1:p1"].pending);
+    // A matching agent takes over the record, then can finish in its pane.
+    let record = runtime.snapshot.ui_state.pane_launches["w1:p1"].clone();
+    running(&mut runtime, "w1:p1", "p-work", "fix-bell");
+    runtime
+        .snapshot
+        .ui_state
+        .pane_launches
+        .insert("w1:p1".into(), record);
+    let mut rows = runtime.snapshot.navigator.agents.clone();
+    let live = ["w1:p1".to_owned()].into();
+    runtime.apply_pane_launches(
+        &mut rows,
+        crate::agent_state::ReadRecordScope::Local(&crate::herdr_import::Held::Nothing),
+        Some(&live),
     );
+    assert_eq!(in_use(&mut runtime), (0, 1));
+    runtime.snapshot.navigator.agents.clear();
     assert_eq!(in_use(&mut runtime), (0, 0));
 }
 
 #[test]
-fn an_unconfirmed_start_holds_its_profile_until_its_pane_is_seen_gone() {
+fn an_unknown_result_keeps_its_record_until_its_pane_is_seen_gone() {
     let mut runtime = listed();
-    let local = crate::agent_state::ReadRecordScope::Local(&crate::herdr_import::Held::Nothing);
-    let start = hold(&runtime, "p-work").unwrap();
-    start.hold().unwrap().typed("w1:p2");
-    drop(start);
-    // A pass that does not hold the whole topology proves nothing gone.
+    let start = hold(&mut runtime, "p-work").unwrap();
+    drop(submitted(&start, "w1:p2", "p-work"));
+    assert_eq!(in_use(&mut runtime), (0, 1));
     let none = std::collections::HashSet::new();
     runtime.apply_pane_launches(
         &mut [],
         crate::agent_state::ReadRecordScope::Retain,
         Some(&none),
     );
-    runtime.apply_pane_launches(&mut [], local, None);
-    assert_eq!(in_use(&mut runtime), (1, 0));
-    let live: std::collections::HashSet<String> = ["w1:p2".to_owned()].into();
-    runtime.apply_pane_launches(&mut [], local, Some(&live));
-    assert_eq!(in_use(&mut runtime), (1, 0));
-    // The machine's topology no longer has the pane: the start is over.
-    runtime.apply_pane_launches(&mut [], local, Some(&none));
+    assert_eq!(in_use(&mut runtime), (0, 1));
+    runtime.apply_pane_launches(
+        &mut [],
+        crate::agent_state::ReadRecordScope::Local(&crate::herdr_import::Held::Nothing),
+        Some(&none),
+    );
     assert_eq!(in_use(&mut runtime), (0, 0));
+}
+
+#[test]
+fn a_definite_non_start_releases_even_while_another_clone_survives() {
+    let mut runtime = listed();
+    let start = hold(&mut runtime, "p-work").unwrap();
+    let finish = submitted(&start, "w1:p1", "p-work");
+    finish.not_started();
+    drop(finish);
+    assert_eq!(in_use(&mut runtime), (0, 0));
+    assert!(
+        !runtime
+            .snapshot
+            .ui_state
+            .pane_launches
+            .contains_key("w1:p1")
+    );
+}
+
+#[test]
+fn a_start_unwinding_after_submission_hands_off_its_record_and_a_removed_device_releases_it() {
+    let mut runtime = listed();
+    let start = hold(&mut runtime, "p-work").unwrap();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _finish = submitted(&start, "w1:p1", "p-work");
+        panic!("worker unwound after submission");
+    }));
+    assert_eq!(in_use(&mut runtime), (0, 1));
+    let holds = runtime.profile_holds.clone();
+    let remote = holds
+        .hold(
+            "device-b",
+            &ProfileId("p-work".into()),
+            "claude",
+            0,
+            8,
+            &Default::default(),
+        )
+        .unwrap();
+    holds.forget("device-b");
+    assert!(
+        holds
+            .starting("device-b", &ProfileId("p-work".into()))
+            .is_empty()
+    );
+    drop(remote);
+    assert_eq!(
+        in_use(&mut runtime),
+        (0, 1),
+        "the other machine's use stays"
+    );
+}
+
+#[test]
+fn a_late_result_cannot_replace_a_newer_start_or_its_bound_session() {
+    let mut runtime = listed();
+    let first = hold(&mut runtime, "p-work").unwrap();
+    let old = submitted(&first, "w1:p1", "p-work");
+    let next = hold(&mut runtime, "p-side").unwrap();
+    drop(submitted(&next, "w1:p1", "p-side"));
+    runtime.finish_profile_starts();
+    runtime
+        .snapshot
+        .ui_state
+        .pane_launches
+        .get_mut("w1:p1")
+        .unwrap()
+        .session = Some("new-session".into());
+    drop(old);
+    runtime.finish_profile_starts();
+    let record = &runtime.snapshot.ui_state.pane_launches["w1:p1"];
+    assert_eq!(record.profile.as_ref().unwrap().id.0, "p-side");
+    assert_eq!(record.session.as_deref(), Some("new-session"));
+}
+
+#[test]
+fn an_observed_session_before_completion_stays_observed_when_the_result_arrives() {
+    let mut runtime = listed();
+    let start = hold(&mut runtime, "p-work").unwrap();
+    let finish = submitted(&start, "w1:p1", "p-work");
+    running(&mut runtime, "w1:p1", "p-work", "working");
+    runtime.snapshot.ui_state.pane_launches.clear();
+    runtime.snapshot.navigator.agents[0].session_id = Some("observed-session".into());
+    drop(finish);
+    runtime.finish_profile_starts();
+    let record = &runtime.snapshot.ui_state.pane_launches["w1:p1"];
+    assert!(!record.pending);
+    assert_eq!(record.session.as_deref(), Some("observed-session"));
+}
+
+#[test]
+fn a_late_profile_result_cannot_replace_the_next_built_in_default_start() {
+    let mut runtime = listed();
+    let start = hold(&mut runtime, "p-work").unwrap();
+    let finish = submitted(&start, "w1:p1", "p-work");
+    runtime.record_pane_launch(
+        "w1:p1",
+        "claude",
+        "next-agent",
+        &Default::default(),
+        None,
+        Some("default-session"),
+    );
+    drop(finish);
+    runtime.finish_profile_starts();
+    let record = &runtime.snapshot.ui_state.pane_launches["w1:p1"];
+    assert!(record.profile.is_none());
+    assert_eq!(record.name, "next-agent");
+    assert_eq!(record.session.as_deref(), Some("default-session"));
+}
+
+#[test]
+fn a_finished_wrapper_start_frees_the_profile_it_did_not_run_in() {
+    let mut runtime = listed();
+    let node = runtime.node.to_string();
+    for profile in runtime
+        .kit_states
+        .get_mut(&node)
+        .unwrap()
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .iter_mut()
+    {
+        if let Some(folder) = &profile.account {
+            profile.account_variables = vec![("CLAUDE_CONFIG_DIR".into(), folder.clone())];
+        }
+    }
+    let start = hold(&mut runtime, "p-work").unwrap();
+    drop(submitted(&start, "w1:p1", "p-work"));
+    running(&mut runtime, "w1:p1", "p-work", "wrapper");
+    runtime
+        .ingest_hook_status(
+            &node,
+            "w1:p1",
+            &hide_node_link::panes::HookStatusReport {
+                runtime: "claude-code".into(),
+                version: hide_agent_hooks::HOOK_VERSION,
+                session: Some("wrapper-session".into()),
+                turn: None,
+                counts: None,
+                session_start: true,
+                waiting: None,
+                account: Some(vec![(
+                    "CLAUDE_CONFIG_DIR".into(),
+                    "/home/me/accounts/side".into(),
+                )]),
+            },
+        )
+        .unwrap();
+    let mut rows = runtime.snapshot.navigator.agents.clone();
+    let live = ["w1:p1".to_owned()].into();
+    runtime.apply_pane_launches(
+        &mut rows,
+        crate::agent_state::ReadRecordScope::Local(&crate::herdr_import::Held::Nothing),
+        Some(&live),
+    );
+    assert_eq!(
+        in_use(&mut runtime),
+        (0, 0),
+        "the wrapper now runs in side, so work is free"
+    );
 }
 
 #[test]
@@ -488,28 +682,28 @@ fn a_removal_whose_answer_was_lost_refuses_starts_until_a_list_newer_than_it_set
     runtime.settle_agent_profiles(&job, &outcome);
     // A list read before the change could apply, at the version it names.
     runtime.ingest_profiles(&node, list_at(3, Some(false)));
-    assert!(hold(&runtime, "p-work").is_err());
+    assert!(hold(&mut runtime, "p-work").is_err());
     // The change applied late: being removed.
     runtime.ingest_profiles(&node, list_at(4, Some(true)));
-    assert!(hold(&runtime, "p-work").is_err());
+    assert!(hold(&mut runtime, "p-work").is_err());
     // Its removal finished.
     runtime.ingest_profiles(&node, list_at(5, None));
-    assert!(hold(&runtime, "p-work").is_ok());
+    assert!(hold(&mut runtime, "p-work").is_ok());
 
     // A list read before the profile existed, answered late, says nothing of
     // a removal planned on a newer one: not listing the profile is settled
     // only by a list newer than the removal.
     mark(&runtime);
     runtime.ingest_profiles(&node, list_at(2, None));
-    assert!(hold(&runtime, "p-work").is_err());
+    assert!(hold(&mut runtime, "p-work").is_err());
     runtime.ingest_profiles(&node, list_at(4, None));
-    assert!(hold(&runtime, "p-work").is_ok());
+    assert!(hold(&mut runtime, "p-work").is_ok());
 
     // A removal that never applied: a list past its version settles it, as
     // the change can no longer apply on that list.
     mark(&runtime);
     runtime.ingest_profiles(&node, list_at(4, Some(false)));
-    assert!(hold(&runtime, "p-work").is_ok());
+    assert!(hold(&mut runtime, "p-work").is_ok());
 }
 
 #[test]
@@ -518,6 +712,8 @@ fn starts_with_a_profile_take_only_launch_records_there_are_and_the_built_in_def
     let mut runtime = listed();
     let limit = crate::runtime::agent_choice::PANE_LAUNCH_LIMIT;
     let launch = |name: &str| crate::model::PaneLaunch {
+        pending: false,
+        start: 0,
         kind: "claude".into(),
         name: name.into(),
         choice: Default::default(),
@@ -533,10 +729,10 @@ fn starts_with_a_profile_take_only_launch_records_there_are_and_the_built_in_def
     }
     // Two slots left: two starts planned together take them, a third is
     // refused before it runs.
-    let first = hold(&runtime, "p-work").unwrap();
-    let second = hold(&runtime, "p-side").unwrap();
+    let first = hold(&mut runtime, "p-work").unwrap();
+    let second = hold(&mut runtime, "p-side").unwrap();
     assert_eq!(
-        hold(&runtime, "p-work").unwrap_err().code,
+        hold(&mut runtime, "p-work").unwrap_err().code,
         crate::launch::LAUNCH_RECORDS_FULL
     );
     // A start on the built-in default is never refused, and takes no slot
@@ -556,29 +752,9 @@ fn starts_with_a_profile_take_only_launch_records_there_are_and_the_built_in_def
             .contains_key("w1:d1")
     );
     // The held starts get their records.
-    let profile = |id: &str| LaunchProfile {
-        id: ProfileId(id.into()),
-        name: id.into(),
-        account: AccountKey::Folder(format!("/home/me/accounts/{id}")),
-    };
-    first.hold().unwrap().typed("w1:p1");
-    second.hold().unwrap().typed("w1:p2");
-    runtime.record_pane_launch(
-        "w1:p1",
-        "claude",
-        "a",
-        &Default::default(),
-        Some(&profile("p-work")),
-        None,
-    );
-    runtime.record_pane_launch(
-        "w1:p2",
-        "claude",
-        "b",
-        &Default::default(),
-        Some(&profile("p-side")),
-        None,
-    );
+    drop(submitted(&first, "w1:p1", "p-work"));
+    drop(submitted(&second, "w1:p2", "p-side"));
+    runtime.finish_profile_starts();
     assert!(
         runtime
             .snapshot
@@ -701,7 +877,7 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
         // Meanwhile a list past the removal ended its mark, an agent started
         // with the profile, and its row carries the use: no start holds it.
         runtime.ingest_profiles(&node, list_at(4, Some(false)));
-        let start = hold(&runtime, "p-work").unwrap();
+        let start = hold(&mut runtime, "p-work").unwrap();
         running(&mut runtime, "w1:p1", "p-work", "fix-bell");
         drop(start);
         assert!(
@@ -748,7 +924,7 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
     // The screen's answer lists the agent the delete would pull the account
     // from; the agent keeps its profile, and the runtime is free for the
     // next change.
-    let runtime = shared.lock().unwrap();
+    let mut runtime = shared.lock().unwrap();
     let answered = answer(&runtime);
     assert_eq!(answered.code.as_deref(), Some(profiles::IN_USE));
     assert_eq!(
@@ -759,7 +935,7 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
             .collect::<Vec<_>>(),
         [("w1:p1", false)]
     );
-    assert!(hold(&runtime, "p-work").is_ok());
+    assert!(hold(&mut runtime, "p-work").is_ok());
 }
 
 /// D-30, D-32, B14: a project's default whose removal its machine is
@@ -770,8 +946,8 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
 fn a_project_default_being_removed_is_passed_over_by_the_start_and_the_screen_alike() {
     let mut runtime = listed();
     let node = runtime.node.to_string();
-    let listed_profile = |id: &str, name: &str, removing: bool| {
-        hide_node_link::profiles::ListedProfile {
+    let listed_profile =
+        |id: &str, name: &str, removing: bool| hide_node_link::profiles::ListedProfile {
             id: ProfileId(id.into()),
             kind: "claude-code".into(),
             name: name.into(),
@@ -787,8 +963,7 @@ fn a_project_default_being_removed_is_passed_over_by_the_start_and_the_screen_al
             login: None,
             account_variables: Vec::new(),
             account_key: Some(AccountKey::Folder(format!("/home/me/accounts/{name}"))),
-        }
-    };
+        };
     let list = hide_node_link::profiles::ProfileList {
         version: 4,
         profiles: vec![

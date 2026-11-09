@@ -1371,7 +1371,7 @@ fn spawn(
     );
     // The start holds its profile from here, so a removal planned
     // meanwhile is refused, and one under way refuses it (B27).
-    let agent = hold_start(client, &child_device, agent)?;
+    let agent = hold_start(client, &child_device, agent.with_choice(&reserved.launch))?;
     // The child's machine answers for its profile before the spawn makes
     // its pane, so a profile that is gone or a program that cannot run
     // leaves no pane behind (PRD agent-profiles B20, B22).
@@ -1907,7 +1907,9 @@ fn spawn(
         // it was started under. It is kept before the agent shows its
         // session, which an agent that reports it only at its first turn
         // does later, so the record binds to that session when it arrives.
-        if let Some(runtime) = client.runtime.upgrade() {
+        if reserved.started_profile.is_none()
+            && let Some(runtime) = client.runtime.upgrade()
+        {
             let pane_id = if on_node {
                 pane.to_owned()
             } else {

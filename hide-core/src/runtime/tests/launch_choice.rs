@@ -207,14 +207,17 @@ fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
         // The woken agent is the same conversation on the same choice, so
         // the next restart carries it again.
         assert_eq!(
-            runtime.snapshot().ui_state.pane_launches.get(AGENT),
-            Some(&PaneLaunch {
+            serde_json::to_value(runtime.snapshot().ui_state.pane_launches.get(AGENT)).unwrap(),
+            serde_json::to_value(Some(&PaneLaunch {
+                pending: false,
+                start: 0,
                 kind: kind.to_owned(),
                 name: NAME.to_owned(),
                 choice: launch,
                 session: Some(SESSION.to_owned()),
                 profile: None,
-            }),
+            }))
+            .unwrap(),
             "{kind}"
         );
     }
@@ -463,18 +466,24 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
         ),
     ));
     assert_eq!(
-        runtime
-            .snapshot()
-            .ui_state
-            .pane_launches
-            .get("w-order:t3:p"),
-        Some(&PaneLaunch {
+        serde_json::to_value(
+            runtime
+                .snapshot()
+                .ui_state
+                .pane_launches
+                .get("w-order:t3:p")
+        )
+        .unwrap(),
+        serde_json::to_value(Some(&PaneLaunch {
+            pending: false,
+            start: 0,
             kind: "claude".into(),
             name: "reopen-closed-0".into(),
             choice: launch,
             session: Some(SESSION.into()),
             profile: None,
-        })
+        }))
+        .unwrap()
     );
 }
 
@@ -501,14 +510,17 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
         runtime.launch_choice_of(&agent)
     };
     assert_eq!(
-        launches(&runtime).get(AGENT),
-        Some(&PaneLaunch {
+        serde_json::to_value(launches(&runtime).get(AGENT)).unwrap(),
+        serde_json::to_value(Some(&PaneLaunch {
+            pending: false,
+            start: 0,
             kind: "claude".into(),
             name: NAME.into(),
             choice: launch.clone(),
             session: Some(SESSION.into()),
             profile: None,
-        })
+        }))
+        .unwrap()
     );
     assert_eq!(described(&runtime), launch);
 
@@ -653,7 +665,11 @@ fn a_launch_record_survives_a_restart() {
         Arc::new(hide_node::Local::of_process()),
         crate::node::test_devices(),
     );
-    assert_eq!(restarted.snapshot().ui_state.pane_launches, saved);
+    // In-flight ordering is process-local; the saved choice/session is the contract.
+    assert_eq!(
+        serde_json::to_value(&restarted.snapshot().ui_state.pane_launches).unwrap(),
+        serde_json::to_value(saved).unwrap()
+    );
 }
 
 fn set_permission(runtime: &mut Runtime, payload: serde_json::Value) -> bool {
