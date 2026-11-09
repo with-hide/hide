@@ -49,10 +49,16 @@ ${ZONES}
 .pc-mode button.pc-leave{background:var(--practice-accent);font-weight:600}
 
 .pc-card{position:absolute;z-index:61;box-sizing:border-box;width:var(--size-practice-bubble);max-width:calc(100vw - var(--spacing-xxl));padding:var(--spacing-lg);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto;transition:left .5s ${EASE},top .5s ${EASE}}
+.pc-card:lang(ko){word-break:keep-all}
 .pc-card-text{animation:pc-card .35s ${EASE} both}
 @keyframes pc-card{from{opacity:0;transform:translateY(var(--spacing-sm))}to{opacity:1;transform:none}}
 .pc-card h3{margin:var(--spacing-xxs) 0;font-size:var(--text-headline);line-height:1.35;font-weight:600}
-.pc-card p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
+.pc-body{display:flex;flex-direction:column;gap:var(--spacing-xs);margin-top:var(--spacing-xs)}
+.pc-card p{margin:0;font-size:var(--text-subhead);line-height:1.6;color:var(--practice-mute);text-wrap:pretty}
+.pc-card p b{font-weight:700;color:var(--practice-text)}
+.pc-card p.pc-item{position:relative;padding-left:var(--spacing-lg)}
+.pc-card p.pc-item::before{content:"";position:absolute;left:var(--spacing-xs);top:.7em;width:var(--spacing-xs);height:var(--spacing-xs);border-radius:var(--radius-xl);background:var(--practice-accent)}
+.pc-card p.pc-quote{padding:var(--spacing-xs) var(--spacing-md);border-radius:var(--radius-md);border-left:var(--spacing-xxs) solid var(--practice-accent);background:color-mix(in srgb,var(--practice-accent) 14%,transparent);color:var(--practice-text);font-weight:600}
 `;
 
 // The chapter list: cards on the shell's own background, chosen in the soft

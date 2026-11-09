@@ -14,6 +14,7 @@ import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import type { PracticeChapter, PracticeScene } from "./chapter";
 import { placeCard, type Box } from "./cardPlace";
+import { cardLines } from "./cardText";
 import { COACH_CSS } from "./coachStyle";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -96,6 +97,24 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
   useEffect(() => {
     onScene(chapter.steps.slice(0, index + 1).reduce<PracticeScene>((scene, row) => ({ ...scene, ...row.scene }), {}));
   }, [chapter, index, onScene]);
+
+  // A card that talks about a popover presses its button once the button is there, and presses it again when the card is left.
+  useEffect(() => {
+    if (!step.opens) return;
+    const selector = step.opens;
+    let opened: HTMLElement | null = null;
+    const frame = requestAnimationFrame(function open() {
+      const button = document.querySelector<HTMLElement>(selector);
+      if (!button) return void (opened === null && requestAnimationFrame(open));
+      if (button.getAttribute("aria-expanded") !== "true") button.click();
+      opened = button;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      const button = opened ?? document.querySelector<HTMLElement>(selector);
+      if (button?.getAttribute("aria-expanded") === "true") button.click();
+    };
+  }, [step]);
 
   // The keyboard rests on the card's button, so ⏎ is the card's and nothing waits.
   useEffect(() => go.current?.focus({ preventScroll: true }), [index]);
@@ -183,7 +202,9 @@ export function PracticeCoach({ chapter, onStep, onHub, onLeave, onScene }: Prop
         <div key={step.id} className="pc-card-text">
           <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
           <h3>{words("title")}</h3>
-          <p>{words("text")}</p>
+          <div className="pc-body">{cardLines(words("text")).map((line, at) => (
+            <p key={at} className={line.kind === "line" ? undefined : `pc-${line.kind}`}>{line.parts.map((part, i) => part.bold ? <b key={i}>{part.text}</b> : part.text)}</p>
+          ))}</div>
           {(step.commands ?? []).filter(hasChord).map((command) => <div key={command} className="pc-via">{say(`commands.${command}`)} <span className="pc-keys">{keyParts(commandLabel(command)).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</span></div>)}
         </div>
         <div className="pc-row">

@@ -28,6 +28,8 @@ export type PracticeStep = {
   target?: string | string[];
   /** Parts of the screen the card talks about without ringing them: the card floats clear of them too. */
   keepClear?: string[];
+  /** A button the card presses when it opens and again when it is left, so the popover it holds is open exactly while the card talks about it. */
+  opens?: string;
   /** The three parts of the screen, drawn as labeled zones. */
   zones?: true;
   /** The commands whose chords the card names, in this host's keys and the operator's own. */

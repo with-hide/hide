@@ -98,7 +98,20 @@ test("the first-run cards play with Enter alone, each pointing at a part of the 
       // The card sets its own scene: the list it reads, the panes of the tab, what the lane holds.
       if (id === "projects") await expect(practice.locator('[data-sidebar-lens-option="projects"]')).toHaveAttribute("data-state", "on");
       if (id === "tasks") await expect(practice.locator('[data-sidebar-lens-option="tasks"]')).toHaveAttribute("data-state", "on");
-      if (id === "agents") await expect(practice.locator("[data-pane-header-band]:has([data-pane-tree=\"a1\"])")).toBeVisible();
+      // The project view's ring takes in the whole list, the 내 차례 · 읽을 것 on top included.
+      if (id === "projects") {
+        const top = await practice.locator("[data-raised-list]").boundingBox();
+        const rings = await practice.locator("[data-practice-ring]").evaluateAll((spots) => spots.map((spot) => spot.getBoundingClientRect().toJSON() as { y: number }));
+        expect(top && rings.some((ring) => ring.y <= top.y)).toBe(true);
+      }
+      // The agents card opens the lead's children list from the chip, and leaving the card closes it.
+      if (id === "agents") await expect(practice.locator('[data-agent-tree="a1"]')).toBeVisible();
+      else await expect(practice.locator("[data-agent-tree]")).toHaveCount(0);
+      // The files card brings the agent that opened the file forward in the middle.
+      if (id === "files") {
+        await expect(practice.locator('[data-pane-view="q1"]')).toBeVisible();
+        await expect(practice.locator('[data-pane-view="a1"]')).toHaveCount(0);
+      }
       if (id === "files") await expect(practice.locator('[data-lane-tool="documents"]')).toHaveAttribute("aria-pressed", "true");
       if (id === "explorer") await expect(practice.locator('[data-lane-tool="explorer"]')).toHaveAttribute("aria-pressed", "true");
       if (id === "conduct") await expect(practice.locator("[data-pane-mission-chip]")).toBeVisible();

@@ -89,6 +89,19 @@ const TERMINALS: Record<string, string> = {
     ` ${CODEX}› 1. Yes, merge both${RESET}`,
     `   2. Only ${ref(431)}   3. Not yet`,
   ),
+  q1: lines(
+    `${BOLD}Antigravity${RESET} ${DIM}· ~/billing-app${RESET}`,
+    "",
+    `${DIM}>${RESET} Write the release notes`,
+    "",
+    "● Collected what changed since 1.3.",
+    `● ${BOLD}Write${RESET}(release-notes.md) ${GREEN}+12${RESET}`,
+    "● Opened it for you to look at.",
+    "",
+    `${DIM}${RULE}${RESET}`,
+    `${DIM}>${RESET} `,
+    `${DIM}${RULE}${RESET}`,
+  ),
   e1: lines(
     `${BOLD}>_ Codex${RESET} ${DIM}· ~/billing-app${RESET}`,
     "",
@@ -177,7 +190,11 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
     return (lens === "projects" || lens === "tasks") && lens !== model.lens ? { ...model, lens } : null;
   },
   snapshot(model, nowMs) {
-    const { rest, agents, usage } = dated(tour, nowMs) as Omit<WorldSnapshot, "focused">;
+    const { rest, agents: rows, usage } = dated(tour, nowMs) as Omit<WorldSnapshot, "focused">;
+    // The core stamps each row with its machine; the children popover reads it to say whether a child's device is away.
+    const agents = rows.map((row) => ({ ...row, device_id: row.device_id ?? "local" }));
+    // The lead has eight children in the data; the popover lists three, working, waiting and resting mixed, and says how many more.
+    rest.navigator!.siblings_shown = 3;
     const view = { ...rest.workspace_view!, open: false, tool: null, pinned: false, documents: false };
     let ui_state = { ...rest.ui_state, sidebar_lens: model.lens } as NonNullable<typeof rest.ui_state>;
     let extra: WorldSnapshot["extra"];
@@ -201,6 +218,9 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
     const e1 = checkouts.flatMap((one) => one.tabs.flatMap((tab) => tab.panes)).find((pane) => pane.id === "e1");
     const main = checkouts.find((one) => one.id === "hide:main")!.tabs[0]!;
     if (e1 && !main.panes.some((pane) => pane.id === "e1")) main.panes.push({ ...e1, identity_label: "Task detail API", cwd: "/work/billing-app" });
+    // The agent that opened the file waits in another worktree too; pressing its 볼 것 row brings its pane forward.
+    const q1 = checkouts.flatMap((one) => one.tabs.flatMap((tab) => tab.panes)).find((pane) => pane.id === "q1");
+    if (q1 && !main.panes.some((pane) => pane.id === "q1")) main.panes.push({ ...q1, identity_label: "Write the release notes", cwd: "/work/billing-app" });
     // Another computer's tile on the device rail: connected, with nothing that waits on the learner there.
     const home = rest.navigator!.devices![0]!;
     const quiet = rest.navigator!.workspaces![0]!.agent_scope;
