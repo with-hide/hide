@@ -108,8 +108,8 @@ pub fn reported_variables(
     };
     let mut reported = Vec::new();
     for var in rule.vars.iter().take(REPORTED_VARIABLES) {
-        let value = read(&var.name)
-            .or_else(|| crate::claude_account::scrubbed_folder(adapter, &read));
+        let value =
+            read(&var.name).or_else(|| crate::claude_account::scrubbed_folder(adapter, &read));
         if let Some(value) = value {
             reported.push((var.name.clone(), value));
         }

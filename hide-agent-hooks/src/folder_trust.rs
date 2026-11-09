@@ -51,8 +51,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use hide_agent_adapter::{
-    Account, AccountKey, AccountPath, AgentAdapter, AgentId, LaunchDialect, NodeEnv,
-    Profile,
+    Account, AccountKey, AccountPath, AgentAdapter, AgentId, LaunchDialect, NodeEnv, Profile,
 };
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};

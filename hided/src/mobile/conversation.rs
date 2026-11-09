@@ -758,8 +758,13 @@ mod tests {
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         let before = files();
-        let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "fixture", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "fixture",
+            source,
+        )
+        .unwrap();
         assert_eq!(
             texts(&page.messages),
             ["Read this conversation", "Native answer"]
@@ -1074,8 +1079,13 @@ mod tests {
             records.push(("agent", turns[index].as_str(), "이어서"));
         }
         let (home, path, source) = grok_transcript(&records);
-        let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         assert_eq!(page.messages.len(), PAGE_MESSAGES);
         assert_eq!(texts(&page.messages).last(), Some(&"답변 39\n\n이어서"));
         assert_eq!(texts(&page.messages)[page.messages.len() - 2], "요청");
@@ -1118,8 +1128,13 @@ mod tests {
 
     fn native_phone_pages(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
-        let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         assert_eq!(texts(&page.messages).first(), Some(&"답변 40"));
         assert_eq!(texts(&page.messages).last(), Some(&"답변 69"));
         let older = transcript.pager().before(page.before.unwrap()).unwrap();
@@ -1149,8 +1164,13 @@ mod tests {
 
     fn native_rebound_phone(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
-        let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         let pager = transcript.pager();
         let original = std::fs::read_to_string(&path).unwrap();
         let changed = original.replace("native-phone", "other-ownerx");
@@ -1172,8 +1192,13 @@ mod tests {
 
     fn native_rewritten_phone(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
-        let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         let pager = transcript.pager();
         let original = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, original.replace("답변 69", "수정 69")).unwrap();

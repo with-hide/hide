@@ -116,7 +116,9 @@ fn login_file(account: &Account, holds: fn(&Value) -> bool) -> ProfileLogin {
 /// Signed in while `file` holds what its agent needs (`holds`); missing, or
 /// without those values, signed out.
 fn signed_in(account: &Account, file: &Path, holds: fn(&Value) -> bool) -> ProfileLogin {
-    match credentials::read(file).and_then(|bytes| bytes.map(|bytes| credentials::object(&bytes)).transpose()) {
+    match credentials::read(file)
+        .and_then(|bytes| bytes.map(|bytes| credentials::object(&bytes)).transpose())
+    {
         Ok(Some(login)) if holds(&login) => ProfileLogin::SignedIn,
         Ok(_) => ProfileLogin::SignedOut,
         Err(kind) => {
@@ -170,7 +172,11 @@ mod tests {
         assert_eq!(check(&codex), ProfileLogin::SignedOut);
         std::fs::write(&file, "{}").unwrap();
         assert_eq!(check(&codex), ProfileLogin::SignedOut);
-        std::fs::write(&file, r#"{"tokens":{"access_token":"t","refresh_token":"r"}}"#).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"tokens":{"access_token":"t","refresh_token":"r"}}"#,
+        )
+        .unwrap();
         assert_eq!(check(&codex), ProfileLogin::SignedIn);
         std::fs::write(&file, "not json").unwrap();
         assert_eq!(check(&codex), ProfileLogin::Unknown);
@@ -181,35 +187,89 @@ mod tests {
         // Each file as its agent writes it, with and without the values the
         // agent needs to run signed in.
         let cases = [
-            ("codex", r#"{"OPENAI_API_KEY":null,"tokens":null,"last_refresh":null}"#, ProfileLogin::SignedOut),
-            ("codex", r#"{"tokens":{"id_token":"","access_token":"","refresh_token":""}}"#, ProfileLogin::SignedOut),
-            ("codex", r#"{"OPENAI_API_KEY":"sk-x","tokens":null}"#, ProfileLogin::SignedIn),
-            ("codex", r#"{"tokens":{"id_token":"i","access_token":"a","refresh_token":"r","account_id":"c"},"last_refresh":"2026-11-09T00:00:00Z"}"#, ProfileLogin::SignedIn),
-            ("pi", r#"{"anthropic":{"type":"oauth"}}"#, ProfileLogin::SignedOut),
-            ("pi", r#"{"anthropic":{"type":"api_key","key":""}}"#, ProfileLogin::SignedOut),
-            ("pi", r#"{"anthropic":{"type":"api_key","key":"k"}}"#, ProfileLogin::SignedIn),
-            ("pi", r#"{"openrouter":{"type":"oauth","access":"a","refresh":"r","expires":1}}"#, ProfileLogin::SignedIn),
-            ("grok", r#"{"https://auth.x.ai::u":{"auth_mode":"oidc","email":"e"}}"#, ProfileLogin::SignedOut),
-            ("grok", r#"{"https://auth.x.ai::u":{"key":"k","auth_mode":"oidc"}}"#, ProfileLogin::SignedIn),
+            (
+                "codex",
+                r#"{"OPENAI_API_KEY":null,"tokens":null,"last_refresh":null}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "codex",
+                r#"{"tokens":{"id_token":"","access_token":"","refresh_token":""}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "codex",
+                r#"{"OPENAI_API_KEY":"sk-x","tokens":null}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "codex",
+                r#"{"tokens":{"id_token":"i","access_token":"a","refresh_token":"r","account_id":"c"},"last_refresh":"2026-11-09T00:00:00Z"}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "pi",
+                r#"{"anthropic":{"type":"oauth"}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "pi",
+                r#"{"anthropic":{"type":"api_key","key":""}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "pi",
+                r#"{"anthropic":{"type":"api_key","key":"k"}}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "pi",
+                r#"{"openrouter":{"type":"oauth","access":"a","refresh":"r","expires":1}}"#,
+                ProfileLogin::SignedIn,
+            ),
+            (
+                "grok",
+                r#"{"https://auth.x.ai::u":{"auth_mode":"oidc","email":"e"}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                "grok",
+                r#"{"https://auth.x.ai::u":{"key":"k","auth_mode":"oidc"}}"#,
+                ProfileLogin::SignedIn,
+            ),
         ];
         for (kind, written, expected) in cases {
             let folder = tempfile::tempdir().unwrap();
             let account = account(kind, folder.path());
             std::fs::write(account.path(AccountPath::Login).unwrap(), written).unwrap();
-            assert_eq!(check_of(kind).unwrap()(&account), expected, "{kind} {written}");
+            assert_eq!(
+                check_of(kind).unwrap()(&account),
+                expected,
+                "{kind} {written}"
+            );
         }
         // Claude Code's credentials file; a keychain item is asked for first
         // on macOS, and an account folder of a test has none.
         for (written, expected) in [
             ("{}", ProfileLogin::SignedOut),
             (r#"{"claudeAiOauth":null}"#, ProfileLogin::SignedOut),
-            (r#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#, ProfileLogin::SignedOut),
-            (r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":1}}"#, ProfileLogin::SignedIn),
+            (
+                r#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#,
+                ProfileLogin::SignedOut,
+            ),
+            (
+                r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":1}}"#,
+                ProfileLogin::SignedIn,
+            ),
         ] {
             let folder = tempfile::tempdir().unwrap();
             let claude = account("claude-code", folder.path());
             std::fs::write(claude.path(AccountPath::Usage).unwrap(), written).unwrap();
-            assert_eq!(check_of("claude-code").unwrap()(&claude), expected, "{written}");
+            assert_eq!(
+                check_of("claude-code").unwrap()(&claude),
+                expected,
+                "{written}"
+            );
         }
     }
 
