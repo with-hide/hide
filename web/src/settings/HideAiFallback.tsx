@@ -5,24 +5,25 @@ import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Group, Row } from "../components/settings-rows";
-import { CLI_DEFAULT, addableProviders, modelChoices, modelToValue, providerById, rowKey, unusableProviders, valueToModel } from "../hideAi";
+import { CLI_DEFAULT, addableItems, fallbackItems, itemKey, itemRef, modelChoices, modelToValue, runsOnItem, unusableItems, valueToModel, type AiItem, type ProfileLists } from "../hideAi";
 import { useInterfaceTranslation } from "../i18n/client";
-import type { AiProvider, BackgroundAi } from "../snapshot";
+import type { BackgroundAi } from "../snapshot";
 import { ProviderState, useHideAiWords } from "./hideAiParts";
 
 /**
  * "If <Runs on> can't answer" (PRD settings-cleanup D-16, D-17, B38 to B40):
- * the agents the operator added, in the order they were added, each with its
- * own model and a remove; Add agent offers only agents Hide AI can use. There
- * is no switch and no reordering: an empty list is no fallback, and a different
- * order is a remove and an add.
+ * the items the operator added, in the order they were added, each with its
+ * own model and a remove; Add agent offers only items Hide AI can use, another
+ * profile of the Runs on agent among them (PRD agent-profiles-phase2 B16).
+ * There is no switch and no reordering: an empty list is no fallback, and a
+ * different order is a remove and an add.
  */
-export function HideAiFallback({ ai, actions, onChange }: { ai: BackgroundAi; actions: Actions; onChange: () => void }) {
+export function HideAiFallback({ ai, lists, actions, onChange }: { ai: BackgroundAi; lists: ProfileLists; actions: Actions; onChange: () => void }) {
   const { t } = useInterfaceTranslation();
   const { name } = useHideAiWords();
-  const chosen = providerById(ai, ai.provider);
+  const chosen = runsOnItem(ai, lists);
   if (!chosen) return null;
-  const entries = ai.fallback ?? [];
+  const entries = fallbackItems(ai, lists);
   const agent = name(chosen);
   return (
     <Group
@@ -30,48 +31,50 @@ export function HideAiFallback({ ai, actions, onChange }: { ai: BackgroundAi; ac
       note={[t("hideAi.fallbackNote", { agent }), entries.length === 0 ? t("hideAi.fallbackEmpty", { agent }) : null].filter(Boolean).join(" ")}
       data-settings-group="hide-ai-fallback"
     >
-      {entries.map((entry, index) => {
-        const provider = providerById(ai, entry.provider);
-        return provider ? <FallbackRow key={entry.provider} index={index} provider={provider} model={entry.model} actions={actions} onChange={onChange} /> : null;
-      })}
-      <AddAgent ai={ai} actions={actions} onChange={onChange} />
+      {entries.map((entry, index) => (
+        <FallbackRow key={itemKey(entry.item)} index={index} item={entry.item} model={entry.model} actions={actions} onChange={onChange} />
+      ))}
+      <AddAgent ai={ai} lists={lists} actions={actions} onChange={onChange} />
     </Group>
   );
 }
 
-function FallbackRow({ index, provider, model, actions, onChange }: { index: number; provider: AiProvider; model: string; actions: Actions; onChange: () => void }) {
+function FallbackRow({ index, item, model, actions, onChange }: { index: number; item: AiItem; model: string; actions: Actions; onChange: () => void }) {
   const { t } = useInterfaceTranslation();
   const { name } = useHideAiWords();
-  const choices = modelChoices(provider, model);
+  const choices = item.missing ? [] : modelChoices(item, model);
+  const key = itemKey({ ...itemRef(item), device: null });
   return (
     <Row
-      data-ai-fallback={provider.id}
+      data-ai-fallback={key}
+      data-ai-missing={item.missing ? "true" : undefined}
       label={
-        <span className="flex min-w-0 items-center gap-sm">
+        // A missing profile's entry stays, dimmed, until the operator removes it: Hide never drops it (B21).
+        <span className={item.missing ? "flex min-w-0 items-center gap-sm opacity-(--opacity-dimmed)" : "flex min-w-0 items-center gap-sm"}>
           <span aria-hidden="true" className="w-md shrink-0 text-center font-mono text-body text-muted-foreground" data-ai-fallback-order="true">
             {index + 1}
           </span>
-          <AgentLogo agent={provider.agent} label={provider.label} />
-          <span className="min-w-0 break-words">{name(provider)}</span>
+          <AgentLogo agent={item.agent} label={item.label} />
+          <span className="min-w-0 break-words">{name(item)}</span>
         </span>
       }
     >
-      <ProviderState provider={provider} />
+      {item.missing ? null : <ProviderState provider={item} />}
       <Select
         value={modelToValue(model)}
         disabled={choices.length < 2}
         onValueChange={(value) => {
           onChange();
-          actions.chooseAi(provider.id, valueToModel(value));
+          actions.chooseAi(itemRef(item), valueToModel(value));
         }}
       >
-        <SelectTrigger aria-label={t("hideAi.fallbackModelAria", { agent: name(provider) })} data-ai-fallback-model={provider.id}>
+        <SelectTrigger aria-label={t("hideAi.fallbackModelAria", { agent: name(item) })} data-ai-fallback-model={key}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {choices.map((choice) => (
             <SelectItem key={choice} value={choice}>
-              {choice === CLI_DEFAULT ? t("hideAi.cliDefault") : choice}
+              {choice === CLI_DEFAULT ? t("hideAi.cliDefault") : (item.model_labels?.[choice] ?? choice)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -79,11 +82,11 @@ function FallbackRow({ index, provider, model, actions, onChange }: { index: num
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label={t("hideAi.removeAria", { agent: name(provider) })}
-        data-ai-fallback-remove={provider.id}
+        aria-label={t("hideAi.removeAria", { agent: name(item) })}
+        data-ai-fallback-remove={key}
         onClick={() => {
           onChange();
-          actions.removeAiFallback(provider.id);
+          actions.removeAiFallback(itemRef(item));
         }}
       >
         <XIcon aria-hidden="true" />
@@ -93,15 +96,15 @@ function FallbackRow({ index, provider, model, actions, onChange }: { index: num
 }
 
 /**
- * The Add agent menu: agents Hide AI can use first, then, dimmed under their
- * own heading, the installed agents it cannot use yet with the reason (B38).
+ * The Add agent menu: items Hide AI can use first, then, dimmed under their
+ * own heading, the installed items it cannot use yet with the reason (B38).
  * With nothing to show the button is disabled rather than opening an empty menu.
  */
-function AddAgent({ ai, actions, onChange }: { ai: BackgroundAi; actions: Actions; onChange: () => void }) {
+function AddAgent({ ai, lists, actions, onChange }: { ai: BackgroundAi; lists: ProfileLists; actions: Actions; onChange: () => void }) {
   const { t } = useInterfaceTranslation();
   const { name, state } = useHideAiWords();
-  const addable = addableProviders(ai);
-  const unusable = unusableProviders(ai);
+  const addable = addableItems(ai, lists);
+  const unusable = unusableItems(ai, lists);
   return (
     <Row label={<span />} className="py-xs">
       <DropdownMenu>
@@ -114,11 +117,11 @@ function AddAgent({ ai, actions, onChange }: { ai: BackgroundAi; actions: Action
         <DropdownMenuContent align="end" data-ai-add-menu="true">
           {addable.map((provider) => (
             <DropdownMenuItem
-              key={rowKey(provider)}
-              data-ai-add-item={rowKey(provider)}
+              key={itemKey(provider)}
+              data-ai-add-item={itemKey(provider)}
               onSelect={() => {
                 onChange();
-                actions.addAiFallback(provider.id, provider.device_id ?? null);
+                actions.addAiFallback(itemRef(provider));
               }}
             >
               <AgentLogo agent={provider.agent} label={provider.label} />
@@ -129,7 +132,7 @@ function AddAgent({ ai, actions, onChange }: { ai: BackgroundAi; actions: Action
           {addable.length > 0 && unusable.length > 0 ? <DropdownMenuSeparator /> : null}
           {unusable.length > 0 ? <DropdownMenuLabel>{t("hideAi.cantUse")}</DropdownMenuLabel> : null}
           {unusable.map((provider) => (
-            <DropdownMenuItem key={rowKey(provider)} disabled data-ai-unusable-item={rowKey(provider)}>
+            <DropdownMenuItem key={itemKey(provider)} disabled data-ai-unusable-item={itemKey(provider)}>
               <AgentLogo agent={provider.agent} label={provider.label} />
               <span className="min-w-0 flex-1">{name(provider)}</span>
               <span className="text-caption text-muted-foreground">{state(provider).text}</span>

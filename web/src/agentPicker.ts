@@ -83,16 +83,7 @@ export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind, pro
   // A start names the agent by its engine kind (`agy`); its Hide AI row is joined by the kit's adapter id (`antigravity`).
   const agent = AGENT_ADAPTERS.find((row) => row.can_start && row.herdr_kind === kind)?.id;
   const provider: AiProvider | undefined = ai?.providers.find((row) => row.agent === agent);
-  if (profile) {
-    const own = provider?.profile_models?.find((row) => row.profile === profile.id && row.version === profile.version);
-    if (own && own.models.length > 0) return ready({ models: own.models, labels: own.model_labels });
-    const agentList = catalogFor(ai, kind);
-    // Its read at this version failed: the agent's own list stands in, and the reason is in the log.
-    if (own) return agentList.state === "ready" ? { ...agentList, fromDefault: true } : agentList;
-    // Not read at this version yet: the core reads every startable profile while a screen observes the lists,
-    // unless the agent itself cannot answer.
-    return agentList.state === "unavailable" ? agentList : { state: "loading" };
-  }
+  if (profile) return profileCatalog(provider, profile, catalogFor(ai, kind));
   if (provider && provider.models.length > 0) {
     const listed = { models: provider.models, labels: provider.model_labels };
     lastLists.set(kind, listed);
@@ -103,6 +94,22 @@ export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind, pro
   if (!ai || provider?.state === "unread") return { state: "loading" };
   if (!provider) return { state: "unavailable", reason: null };
   return { state: "unavailable", reason: provider.models_unavailable_reason ?? provider.message ?? null };
+}
+
+/**
+ * The list of `provider`'s profile `profile`, given the agent's own list on that row's machine: the profile's
+ * list read at its version now, or, when that read failed, the agent's list marked `fromDefault`. Before such a
+ * read it is loading, unless the agent itself cannot answer. The start surfaces ask it through `catalogFor`;
+ * Settings › Hide AI asks it of the row of the machine an item runs on.
+ */
+export function profileCatalog(provider: AiProvider | undefined, profile: ProfileItem, agentList: ModelCatalog): ModelCatalog {
+  const own = provider?.profile_models?.find((row) => row.profile === profile.id && row.version === profile.version);
+  if (own && own.models.length > 0) return ready({ models: own.models, labels: own.model_labels });
+  // Its read at this version failed: the agent's own list stands in, and the reason is in the log.
+  if (own) return agentList.state === "ready" ? { ...agentList, fromDefault: true } : agentList;
+  // Not read at this version yet: the core reads every startable profile while a screen observes the lists,
+  // unless the agent itself cannot answer.
+  return agentList.state === "unavailable" ? agentList : { state: "loading" };
 }
 
 /** The name a menu shows for `model`: the agent's own where it gave one, else the model itself. */

@@ -257,7 +257,7 @@ it("names a device's agent with its device, chooses it with its device, and show
   const listed = await mount(snapshot({ providers: rows }, [], wsl));
   expect(listed.q("[data-ai-provider]")?.textContent).toBe("Claude Code");
   listed.events.length = 0;
-  createActions((event) => { listed.events.push(event); return true; }).chooseAi("claude", undefined, "wsl-ubuntu");
+  createActions((event) => { listed.events.push(event); return true; }).chooseAi({ provider: "claude", profile: null, device: "wsl-ubuntu" });
   expect(listed.events).toEqual([{ schema_version: 2, kind: "ai_settings", payload: { provider: "claude", device: "wsl-ubuntu" } }]);
   await listed.unmount();
 
@@ -278,5 +278,43 @@ it("shows the waiting guidance only for an empty fallback list", async () => {
       expect(text).toContain("out of usage");
       expect(text.includes("None added: Hide AI waits for Claude Code.")).toBe(fallback.length === 0);
     } finally { await view.unmount(); }
+  }
+});
+
+// PRD agent-profiles-phase2 B16, B18, B21: profiles are items of Runs on and the fallback list, named as the start
+// panel names them; the line says which item answers and why Runs on stepped aside, and a gone profile stays dimmed.
+it("names profile items, says which answers while Runs on steps aside, and dims a gone profile", async () => {
+  const profile = (id: string, name: string) => ({ id, kind: "claude-code", name, account: null, program: null, env_keys: [], version: 1, install: null, folder: null, hook: null, skill: null });
+  const read = (id: string) => ({ profile: id, version: 1, models: ["opus"], model_labels: { opus: "glm-4.6" }, models_fixed: false, models_unavailable_reason: null, state: "ready", message: null, selectable: true });
+  const claude = provider("claude", "Claude Code", { profile_models: [{ ...read("p-work"), state: "needs_login", selectable: false }, read("p-gw")] });
+  const profiles = { state: "listed", version: 2, profiles: [profile("p-work", "work"), profile("p-gw", "opengateway")], defaults: {} };
+  const next = snapshot({
+    profile: "p-work",
+    model: "sonnet",
+    providers: [claude, provider("codex", "Codex")],
+    fallback: [
+      { provider: "claude", profile: "p-gw", model: "opus" },
+      { provider: "claude", profile: "p-old", profile_missing: true, model: "" },
+    ],
+    refusal: { provider: "claude", profile: "p-work", reason: "needs_login", retry_at_ms: null, using: "claude", using_profile: "p-gw" },
+  });
+  next.rest.navigator.devices[0] = { ...next.rest.navigator.devices[0], kit: { agents: [], profiles } } as never;
+  const view = await mount(next);
+  try {
+    expect(view.q("[data-ai-provider]")?.textContent).toBe("Claude Code · work");
+    expect(view.q("[data-ai-using='claude#p-gw']")?.textContent).toContain("Using Claude Code · opengateway · Claude Code · work is signed out");
+    expect(view.q("[data-ai-fallback='claude#p-gw']")?.textContent).toContain("Claude Code · opengateway");
+    // The gateway's own list, by the names it gives.
+    expect(view.q("[data-ai-fallback-model='claude#p-gw']")?.textContent).toBe("glm-4.6");
+    const gone = view.q("[data-ai-fallback='claude#p-old']");
+    expect(gone?.dataset.aiMissing).toBe("true");
+    expect(gone?.textContent).toContain("Claude Code · Missing profile");
+    expect((view.q("[data-ai-fallback-model='claude#p-old']") as HTMLButtonElement | null)?.disabled).toBe(true);
+
+    view.events.length = 0;
+    (view.q("[data-ai-fallback-remove='claude#p-old']") as HTMLButtonElement).click();
+    expect(view.events).toEqual([{ schema_version: 2, kind: "ai_settings", payload: { fallback_remove: "claude", profile: "p-old" } }]);
+  } finally {
+    await view.unmount();
   }
 });

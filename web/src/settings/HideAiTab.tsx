@@ -10,12 +10,15 @@ import {
   firstEnabledAgent,
   modelChoices,
   modelToValue,
+  itemKey,
+  itemRef,
   modelsFailed,
   nobodySignedIn,
-  parseRowKey,
-  providerById,
-  rowKey,
+  orderItem,
+  parseItemKey,
+  profileListsOf,
   runsOnChoices,
+  runsOnItem,
   usageLimitChoices,
   usageLimitOf,
   usageLimitToValue,
@@ -41,7 +44,8 @@ export function HideAiTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { name, refusal, signIn } = useHideAiWords();
   const ai = useShellStore((s) => s.rest?.status?.background_ai);
-  const kitAgents = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.kit?.agents);
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const kitAgents = devices?.find((device) => device.kind !== "remote")?.kit?.agents;
   const issueSettings = useShellStore((s) => s.rest?.ui_state?.issue_settings);
   const [changedAt, setChangedAt] = useState<number | null>(null);
   const aiError = useErrorSince(changedAt, ["ai_settings."]);
@@ -50,14 +54,17 @@ export function HideAiTab({ actions }: { actions: Actions }) {
   useAgentsDemand(actions, false);
   const changed = () => setChangedAt(Date.now());
   const enabled = ai?.enabled ?? true;
-  const selected = providerById(ai, ai?.provider);
-  const answering = ai?.refusal?.using ? providerById(ai, ai.refusal.using) : null;
-  const refused = ai?.refusal ? providerById(ai, ai.refusal.provider) : null;
-  const choices = ai ? runsOnChoices(ai) : [];
-  const modelValues = selected ? modelChoices(selected) : [];
+  const lists = profileListsOf(devices);
+  const selected = runsOnItem(ai, lists);
+  const answering = ai?.refusal?.using ? orderItem(ai, lists, ai.refusal.using, ai.refusal.using_profile ?? null) : null;
+  const refused = ai?.refusal ? orderItem(ai, lists, ai.refusal.provider, ai.refusal.profile ?? null) : null;
+  const choices = ai ? runsOnChoices(ai, lists) : [];
+  // Runs on's model is the core's (an older daemon keeps it on the agent's row only).
+  const model = ai?.model ?? selected?.model ?? "";
+  const modelValues = selected && !selected.missing ? modelChoices(selected, model) : [];
   const usageLimit = usageLimitOf(ai);
-  // Every agent Hide AI would ask is past the limit: the line names the limit, not one agent (B5).
-  const listed = [selected, ...(ai?.fallback ?? []).map((entry) => providerById(ai, entry.provider))];
+  // Every item Hide AI would ask is past the limit: the line names the limit, not one item (B5).
+  const listed = [selected, ...(ai?.fallback ?? []).map((entry) => orderItem(ai, lists, entry.provider, entry.profile ?? null))];
   const everyAgentPast = listed.length > 1 && listed.every((provider) => provider?.past_limit === true);
   const agentLines = [
     aiError ? (
@@ -110,37 +117,37 @@ export function HideAiTab({ actions }: { actions: Actions }) {
         <Group title={t("hideAi.runsOn")} note={t("hideAi.runsOnNote")} data-settings-group="hide-ai-runs-on">
           <Row label={t("hideAi.agent")} detail={agentLines.length > 0 ? <div className="flex flex-col gap-xs">{agentLines}</div> : null}>
             <Select
-              value={selected ? rowKey(selected) : undefined}
+              value={selected ? itemKey(selected) : undefined}
               disabled={choices.length === 0}
               onValueChange={(value) => {
                 changed();
-                const { provider, device } = parseRowKey(value);
-                actions.chooseAi(provider, undefined, device);
+                actions.chooseAi(parseItemKey(value));
               }}
             >
-              {/* A device agent's name carries its machine (B11), longer than the control's width: the trigger grows to show it whole. */}
+              {/* A profile's or a device's item carries more than the agent's name (B11): the trigger grows to show it whole. */}
               <SelectTrigger className="w-auto min-w-(--size-settings-control-w)" aria-label={t("hideAi.agentAria")} data-ai-provider="true">
                 <SelectValue placeholder={t("hideAi.choose")} />
               </SelectTrigger>
               <SelectContent>
-                {choices.map((provider) => (
-                  <SelectItem key={rowKey(provider)} value={rowKey(provider)}>
-                    <AgentLogo agent={provider.agent} label={provider.label} />
-                    {name(provider)}
+                {choices.map((item) => (
+                  // A missing profile stays shown as the choice it was, and cannot be chosen again (B21).
+                  <SelectItem key={itemKey(item)} value={itemKey(item)} disabled={item.missing} data-ai-item={itemKey(item)}>
+                    <AgentLogo agent={item.agent} label={item.label} />
+                    {name(item)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {selected ? <ProviderState provider={selected} /> : null}
+            {selected && !selected.missing ? <ProviderState provider={selected} /> : null}
           </Row>
           {selected ? (
             <Row label={t("hideAi.model")} detail={modelsFailed(selected) ? <Note data-ai-models-failed="true">{t("hideAi.modelsFailed")}</Note> : null}>
               <Select
-                value={modelToValue(selected.model)}
+                value={modelToValue(model)}
                 disabled={modelValues.length < 2}
                 onValueChange={(value) => {
                   changed();
-                  actions.chooseAi(selected.id, valueToModel(value));
+                  actions.chooseAi(itemRef(selected), valueToModel(value));
                 }}
               >
                 <SelectTrigger aria-label={t("hideAi.modelAria")} data-ai-model="true">
@@ -149,7 +156,7 @@ export function HideAiTab({ actions }: { actions: Actions }) {
                 <SelectContent>
                   {modelValues.map((value) => (
                     <SelectItem key={value} value={value}>
-                      {value === CLI_DEFAULT ? t("hideAi.cliDefault") : value}
+                      {value === CLI_DEFAULT ? t("hideAi.cliDefault") : (selected.model_labels?.[value] ?? value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -160,14 +167,14 @@ export function HideAiTab({ actions }: { actions: Actions }) {
           {answering && refused && ai?.refusal ? (
             <Row
               label={
-                <Status tone="warn" data-ai-using={answering.id}>
+                <Status tone="warn" data-ai-using={itemKey(answering)}>
                   {t("hideAi.using", { using: name(answering), reason: refusal(refused, ai.refusal) })}
                 </Status>
               }
             />
           ) : null}
         </Group>
-        {ai ? <HideAiFallback ai={ai} actions={actions} onChange={changed} /> : null}
+        {ai ? <HideAiFallback ai={ai} lists={lists} actions={actions} onChange={changed} /> : null}
         <Group data-settings-group="hide-ai-usage-limit">
           <Row
             label={

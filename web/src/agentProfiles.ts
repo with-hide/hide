@@ -244,6 +244,11 @@ export function itemName(t: TFunction<"translation">, agentLabel: string, profil
   return profile ? t("agentProfiles.agentWithProfile", { agent: agentLabel, profile }) : agentLabel;
 }
 
+/** What an item whose profile the machine no longer lists is called: the agent and `Missing profile`, never a guessed name (D-12). */
+export function missingItemName(t: TFunction<"translation">, agentLabel: string): string {
+  return itemName(t, agentLabel, t("agentProfiles.itemGone"));
+}
+
 /** The project's chosen profile for `agent` (`project_settings.agent_profiles`), by the catalog project a start target names. */
 export function projectProfile(rest: SnapshotRest | null, deviceId: string, workspaceId: string, agent: string): string | null {
   const workspace = catalogWorkspaces(rest).find((row) => row.id === workspaceId && row.device_id === deviceId);

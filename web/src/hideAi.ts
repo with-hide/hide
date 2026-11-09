@@ -3,9 +3,11 @@
 // first-run choice makes Hide AI use. The core decides who may be chosen
 // (`AiProvider.selectable`); this module only reads its answer, so the screen
 // never offers a change the core would refuse.
+import { profileCatalog, type ModelCatalog } from "./agentPicker";
+import { listedProfiles } from "./agentProfiles";
 import { formatDateTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
-import type { AiProvider, BackgroundAi, KitAgent } from "./snapshot";
+import type { AiProvider, BackgroundAi, Device, KitAgent, MachineAgentProfiles } from "./snapshot";
 
 /** A select cannot carry an empty value, so "CLI default" (the agent asked with no `--model`) is this. */
 export const CLI_DEFAULT = "__cli_default__";
@@ -74,39 +76,152 @@ export function percentOf(used: number): number {
   return Math.round(used);
 }
 
-/** The machine an agent of the order runs on: Runs on's, a fallback entry's, and for any other agent the core's own (null). */
-export function machineOf(ai: BackgroundAi | undefined, id: string | null | undefined): string | null {
-  if (!ai || !id) return null;
-  if (id === ai.provider) return ai.device ?? null;
-  return ai.fallback?.find((entry) => entry.provider === id)?.device ?? null;
+/**
+ * One item Hide AI runs on (PRD agent-profiles-phase2 D-07): an agent's row on
+ * a machine, as one of that machine's profiles of it runs it. A profile's item
+ * reads as a row of its own (its sign-in, models, week), so the screen words
+ * and offers it as it does an agent; `profile` null is the built-in default,
+ * which is the row itself.
+ */
+export type AiItem = AiProvider & {
+  profile: string | null;
+  /** The profile's name on its machine; null for the built-in default and for a profile not listed there. */
+  profileName: string | null;
+  /** The order names a profile its machine no longer lists (B21): shown as a missing profile, never offered. */
+  missing: boolean;
+};
+
+/** An item as an event names it: the agent, its profile (null: the built-in default) and the machine (null: the core's own). */
+export type AiItemRef = { provider: string; profile: string | null; device: string | null };
+
+/** The profile list of the machine `device` names, null for the core's own machine; null while it is not read or the machine keeps none. */
+export type ProfileLists = (device: string | null) => MachineAgentProfiles | null;
+
+/** The profile lists of the navigator's machines; the core's own is its row that is not a remote device. */
+export function profileListsOf(devices: readonly Device[] | undefined): ProfileLists {
+  return (device) => listedProfiles(devices?.find((row) => (device === null ? row.kind !== "remote" : row.id === device)));
 }
 
-/** The row of agent `id` on the machine the order runs it on (PRD wsl-device B11): one agent runs on one machine. */
-export function providerById(ai: BackgroundAi | undefined, id: string | null | undefined): AiProvider | null {
-  const machine = machineOf(ai, id);
-  return ai?.providers.find((provider) => provider.id === id && (provider.device_id ?? null) === machine) ?? null;
+/** The agent's own list on a row's machine, which a profile's failed read falls back to (B9). */
+function rowCatalog(row: AiProvider): ModelCatalog {
+  if (row.models.length > 0) return { state: "ready", models: row.models, ...(row.model_labels ? { labels: row.model_labels } : {}) };
+  return row.state === "unread" ? { state: "loading" } : { state: "unavailable", reason: row.models_unavailable_reason };
 }
 
-/** A row's select value: its agent, and the device it runs on after an `@`; an agent id never holds one. */
-export function rowKey(provider: AiProvider): string {
-  return provider.device_id ? `${provider.id}@${provider.device_id}` : provider.id;
-}
-
-/** The agent and the device (null: the core's own machine) a select value names. */
-export function parseRowKey(value: string): { provider: string; device: string | null } {
-  const at = value.indexOf("@");
-  return at < 0 ? { provider: value, device: null } : { provider: value.slice(0, at), device: value.slice(at + 1) };
+function builtIn(row: AiProvider): AiItem {
+  return { ...row, profile: null, profileName: null, missing: false };
 }
 
 /**
- * Whether Hide AI would answer a request now (B7, B66): it is on, and the agent
+ * The item of `row`'s machine profile `profile`: what its last read at the
+ * profile's version now says. `missing` is the core's judgement for an item of
+ * the order (`profile_missing`); a profile the list does not hold otherwise is
+ * one not read yet.
+ */
+function profileItem(row: AiProvider, profile: string, lists: ProfileLists, missing = false): AiItem {
+  const listed = missing ? undefined : lists(row.device_id ?? null)?.profiles.find((entry) => entry.id === profile && entry.kind === row.agent);
+  const quiet = { retry_at_ms: null, weekly: null, past_limit: false, message: null, selectable: false, models: [], model_labels: undefined, models_fixed: false, models_unavailable_reason: null };
+  if (!listed) return { ...row, ...quiet, profile, profileName: null, missing, state: missing ? "profile_missing" : "unread" };
+  const read = row.profile_models?.find((entry) => entry.profile === profile && entry.version === listed.version);
+  const item = { ...row, ...quiet, profile, profileName: listed.name, missing: false };
+  if (!read?.state) return { ...item, state: "unread" };
+  const catalog = profileCatalog(row, { id: profile, version: listed.version }, rowCatalog(row));
+  return {
+    ...item,
+    state: read.state,
+    message: read.message ?? null,
+    selectable: read.selectable === true,
+    models: catalog.state === "ready" ? [...catalog.models] : [],
+    model_labels: catalog.state === "ready" ? catalog.labels : undefined,
+    models_fixed: read.models_fixed,
+    models_unavailable_reason: read.models_unavailable_reason,
+    weekly: read.weekly ?? null,
+    past_limit: read.past_limit === true,
+  };
+}
+
+/** Every item on every machine's row: each agent's built-in default first, then its profiles in the machine's order. */
+export function aiItems(ai: BackgroundAi, lists: ProfileLists): AiItem[] {
+  return ai.providers.flatMap((row) => [builtIn(row), ...(row.profile_models ?? []).map((entry) => profileItem(row, entry.profile, lists))]);
+}
+
+/** The order: Runs on (null before one is chosen), then the fallback list, each with the machine it runs on. */
+function orderRefs(ai: BackgroundAi): { runsOn: AiItemRef | null; fallback: AiItemRef[] } {
+  return {
+    runsOn: ai.provider ? { provider: ai.provider, profile: ai.profile ?? null, device: ai.device ?? null } : null,
+    fallback: (ai.fallback ?? []).map((entry) => ({ provider: entry.provider, profile: entry.profile ?? null, device: entry.device ?? null })),
+  };
+}
+
+/** The item of the order that is agent `provider` as profile `profile`, on the machine the order runs it on; null when the order has none or its machine's row is gone. */
+export function orderItem(ai: BackgroundAi | undefined, lists: ProfileLists, provider: string | null | undefined, profile: string | null = null): AiItem | null {
+  if (!ai || !provider) return null;
+  const { runsOn, fallback } = orderRefs(ai);
+  const index = fallback.findIndex((ref) => ref.provider === provider && ref.profile === profile);
+  const ref = runsOn?.provider === provider && runsOn.profile === profile ? runsOn : fallback[index];
+  const device = ref?.device ?? null;
+  const row = ai.providers.find((candidate) => candidate.id === provider && (candidate.device_id ?? null) === device);
+  if (!row) return null;
+  if (profile === null) return builtIn(row);
+  const missing = ref === runsOn ? ai.profile_missing === true : (ai.fallback?.[index]?.profile_missing ?? false);
+  return profileItem(row, profile, lists, missing);
+}
+
+/** Runs on's item. */
+export function runsOnItem(ai: BackgroundAi | undefined, lists: ProfileLists): AiItem | null {
+  return orderItem(ai, lists, ai?.provider, ai?.profile ?? null);
+}
+
+/** The fallback list's items with each entry's own model, in order; an entry whose machine's row is gone is left out. */
+export function fallbackItems(ai: BackgroundAi, lists: ProfileLists): { item: AiItem; model: string }[] {
+  return (ai.fallback ?? []).flatMap((entry) => {
+    const item = orderItem(ai, lists, entry.provider, entry.profile ?? null);
+    return item ? [{ item, model: entry.model }] : [];
+  });
+}
+
+/** What an event names of an item. */
+export function itemRef(item: AiItem): AiItemRef {
+  return { provider: item.id, profile: item.profile, device: item.device_id ?? null };
+}
+
+/** An item's select value: its agent, `#` and its profile, then `@` and the device it runs on; neither an agent id nor a profile id holds one. */
+export function itemKey(item: AiItemRef | AiItem): string {
+  const ref = "id" in item ? itemRef(item) : item;
+  return `${ref.provider}${ref.profile ? `#${ref.profile}` : ""}${ref.device ? `@${ref.device}` : ""}`;
+}
+
+/** The item a select value names. */
+export function parseItemKey(value: string): AiItemRef {
+  const at = value.indexOf("@");
+  const named = at < 0 ? value : value.slice(0, at);
+  const hash = named.indexOf("#");
+  return {
+    provider: hash < 0 ? named : named.slice(0, hash),
+    profile: hash < 0 ? null : named.slice(hash + 1),
+    device: at < 0 ? null : value.slice(at + 1),
+  };
+}
+
+/** Whether two items are one item: one agent as one profile, which runs on one machine (D-07). */
+function sameItem(a: AiItemRef, b: AiItemRef): boolean {
+  return a.provider === b.provider && a.profile === b.profile;
+}
+
+/**
+ * Whether Hide AI would answer a request now (B7, B66): it is on, and the item
  * it runs on or one listed under it can be asked. A screen that would wait for
  * an answer asks this first, so it never waits on one that cannot come.
  */
 export function hideAiCanAnswer(ai: BackgroundAi | undefined): boolean {
   if (!ai || ai.enabled === false) return false;
-  if (providerById(ai, ai.provider)?.selectable) return true;
-  return (ai.fallback ?? []).some((entry) => providerById(ai, entry.provider)?.selectable === true);
+  const { runsOn, fallback } = orderRefs(ai);
+  const answers = (ref: AiItemRef, missing: boolean) => {
+    const row = ai.providers.find((candidate) => candidate.id === ref.provider && (candidate.device_id ?? null) === ref.device);
+    if (!row || missing) return false;
+    return ref.profile === null ? row.selectable : row.profile_models?.some((entry) => entry.profile === ref.profile && entry.selectable === true) === true;
+  };
+  return (runsOn !== null && answers(runsOn, ai.profile_missing === true)) || fallback.some((ref, index) => answers(ref, ai.fallback?.[index]?.profile_missing === true));
 }
 
 /** The feature switch, independent of a provider's temporary availability. */
@@ -114,31 +229,31 @@ export function summariesEnabled(ai: BackgroundAi | undefined): boolean {
   return ai?.enabled !== false && ai?.chosen !== false && ai?.agent_summary === true;
 }
 
-/** Runs on: every agent the core would accept, on each machine, and the chosen one even when it has a problem (B34). */
-export function runsOnChoices(ai: BackgroundAi): AiProvider[] {
-  const chosen = providerById(ai, ai.provider);
-  return ai.providers.filter((provider) => provider.selectable || provider === chosen);
+/** Runs on: every item the core would accept, on each machine, and the chosen one even when it has a problem or its profile is gone, last when no row lists it (B34, B21). */
+export function runsOnChoices(ai: BackgroundAi, lists: ProfileLists): AiItem[] {
+  const chosen = runsOnItem(ai, lists);
+  const isChosen = (item: AiItem) => chosen !== null && itemKey(item) === itemKey(chosen);
+  const items = aiItems(ai, lists)
+    .map((item) => (isChosen(item) ? (chosen as AiItem) : item))
+    .filter((item) => item.selectable || item === chosen);
+  return chosen && !items.includes(chosen) ? [...items, chosen] : items;
 }
 
-function inFallback(ai: BackgroundAi, id: string): boolean {
-  return (ai.fallback ?? []).some((entry) => entry.provider === id);
+function inOrder(ai: BackgroundAi, item: AiItem): boolean {
+  const { runsOn, fallback } = orderRefs(ai);
+  const ref = itemRef(item);
+  return (runsOn !== null && sameItem(runsOn, ref)) || fallback.some((listed) => sameItem(listed, ref));
 }
 
-/** The Add agent menu: agents Hide AI can use that are not Runs on and not already listed (B38). */
-export function addableProviders(ai: BackgroundAi): AiProvider[] {
-  return ai.providers.filter((provider) => provider.selectable && provider.id !== ai.provider && !inFallback(ai, provider.id));
+/** The Add agent menu: items Hide AI can use that are not Runs on and not already listed, on any machine (B38, B16). */
+export function addableItems(ai: BackgroundAi, lists: ProfileLists): AiItem[] {
+  return aiItems(ai, lists).filter((item) => item.selectable && !inOrder(ai, item));
 }
 
-/** The dimmed part of that menu: installed agents Hide AI cannot use yet, each with its reason. */
-export function unusableProviders(ai: BackgroundAi): AiProvider[] {
-  return ai.providers.filter(
-    (provider) =>
-      !provider.selectable &&
-      provider.installed &&
-      provider.state !== "unread" &&
-      provider.state !== "not_installed" &&
-      provider.id !== ai.provider &&
-      !inFallback(ai, provider.id),
+/** The dimmed part of that menu: installed items Hide AI cannot use yet, each with its reason. */
+export function unusableItems(ai: BackgroundAi, lists: ProfileLists): AiItem[] {
+  return aiItems(ai, lists).filter(
+    (item) => !item.selectable && item.installed && item.state !== "unread" && item.state !== "not_installed" && !inOrder(ai, item),
   );
 }
 

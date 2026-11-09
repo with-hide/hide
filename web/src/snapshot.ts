@@ -2410,6 +2410,14 @@ export type AiProfileModels = {
   model_labels?: Record<string, string>;
   models_fixed: boolean;
   models_unavailable_reason: string | null;
+  /** The profile's sign-in as its agent's row says it (`AiProvider.state`), read with the profile's own account. Absent from a peer that predates profile items. */
+  state?: string;
+  message?: string | null;
+  /** Runs on and Add agent offer the item. */
+  selectable?: boolean;
+  /** The weekly usage of the profile's own account; null for a profile with no figure of its own. */
+  weekly?: AiWeekly | null;
+  past_limit?: boolean;
 };
 
 /** One agent's weekly usage: a percent and when the week resets (unix ms), when the agent said. */
@@ -2418,6 +2426,10 @@ export type AiWeekly = { used_percent: number; resets_at_ms: number | null };
 /** The agents tried, in this order, when Runs on cannot answer. */
 export type AiFallback = {
   provider: string;
+  /** The profile of the agent it runs as (PRD agent-profiles-phase2 D-07); null or absent is its built-in default. */
+  profile?: string | null;
+  /** `profile` is one its machine no longer lists (B21): shown as a missing profile, passed over by Hide AI. */
+  profile_missing?: boolean;
   /** The connected device it runs on; null or absent is the core's own machine. */
   device?: string | null;
   model: string;
@@ -2426,12 +2438,16 @@ export type AiFallback = {
 /** Why Runs on is not answering, and who answers instead; absent while it answers. */
 export type AiRefusal = {
   provider: string;
-  /** `usage_limited`, `past_limit`, `needs_login`, `not_installed`, `unavailable` or `unsupported`. */
+  /** The profile Runs on runs as; null or absent is its built-in default. */
+  profile?: string | null;
+  /** `usage_limited`, `past_limit`, `needs_login`, `not_installed`, `unavailable`, `unsupported` or `profile_missing`. */
   reason: string;
   /** When a usage limit or the week ends (unix ms), when the agent said. */
   retry_at_ms: number | null;
   /** The listed agent answering instead; null when none can. */
   using: string | null;
+  /** The profile `using` runs as; null or absent is its built-in default. */
+  using_profile?: string | null;
   /** With `past_limit`: the agent's weekly percent and the limit it is past. */
   used_percent?: number | null;
   limit?: number | null;
@@ -2484,6 +2500,12 @@ export type BackgroundAi = {
   enabled?: boolean;
   /** Runs on; null when nobody chose and none can be chosen yet. */
   provider: string | null;
+  /** The profile of Runs on's agent it runs as (PRD agent-profiles-phase2 D-07); null or absent is its built-in default. */
+  profile?: string | null;
+  /** `profile` is one its machine no longer lists, or the machine keeps no profiles (B6, B21). */
+  profile_missing?: boolean;
+  /** The model Runs on is asked for; empty is the CLI's own default. Absent from an older daemon, which keeps it on Runs on's row. */
+  model?: string;
   /** The connected device Runs on's agent runs on; null or absent is the core's own machine. */
   device?: string | null;
   chosen: boolean;
