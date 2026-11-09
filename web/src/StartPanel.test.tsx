@@ -188,7 +188,7 @@ it("shows the profile the core would pick, the project's first, and sends a prof
   const ui = useUiStore.getState();
   const panel = useStartPanel.getState();
   const events: { kind: string; payload: Record<string, unknown> }[] = [];
-  const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null });
+  const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null, startable: true });
   const snapshot = (profiles: unknown, projectProfile: string | null) => ({
     navigator: {
       focused_device_id: "core-machine",

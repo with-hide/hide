@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentProfilesView, signInStart } from "./agentProfiles";
+import { agentProfilesView, pickedProfile, signInStart } from "./agentProfiles";
 import type { AgentUsage, LimitCell } from "./generated/hided-ws";
 import type { AgentProfileWire, MachineAgentProfiles } from "./snapshot";
 import type { StartTarget, StartTargets } from "./startTargets";
@@ -7,7 +7,7 @@ import type { StartTarget, StartTargets } from "./startTargets";
 const NOW = 1_800_000_000_000;
 
 function wire(id: string, fields: Partial<AgentProfileWire> = {}): AgentProfileWire {
-  return { id, kind: "claude-code", name: id, account: `/accounts/${id}`, program: null, env_keys: [], version: 1, install: "own", folder: `/accounts/${id}`, hook: null, skill: null, ...fields };
+  return { id, kind: "claude-code", name: id, account: `/accounts/${id}`, program: null, env_keys: [], version: 1, install: "own", folder: `/accounts/${id}`, hook: null, skill: null, startable: true, ...fields };
 }
 
 function weekly(used: number): LimitCell {
@@ -69,5 +69,17 @@ describe("signInStart", () => {
   it("leaves it to the start panel where the machine has no checkout to start in", () => {
     expect(signInStart(targets(null, checkout("box", "/srv", true, "not_connected")), "box", "claude-code")).toBeNull();
     expect(signInStart(targets(null), "mac", "claude-code")).toBeNull();
+  });
+});
+
+describe("pickedProfile", () => {
+  // D-30, D-32, B14: the menu preselects what the core's start takes, by the core's own judgment of each profile.
+  it("passes over a project default the core will not start and keeps one it will", () => {
+    const listed = { ...machine([wire("p-work", { install: "removing", startable: false }), wire("p-side"), wire("p-new", { install: null })]), defaults: { "claude-code": "p-side" } };
+    expect(pickedProfile(listed, "claude-code", "p-work")).toBe("p-side");
+    expect(pickedProfile(listed, "claude-code", "p-new")).toBe("p-new");
+    expect(pickedProfile(listed, "claude-code", "p-gone")).toBe("p-side");
+    expect(pickedProfile(listed, "claude-code", "default")).toBe("default");
+    expect(pickedProfile({ ...listed, defaults: {} }, "claude-code", "p-work")).toBe("default");
   });
 });

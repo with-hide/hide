@@ -336,6 +336,25 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
             hold: None,
         });
     };
+    let start = profile_start(node, kind, &id, &name, LAUNCH_TIMEOUT)?;
+    Ok(Launch {
+        kind: kind.to_owned(),
+        profile: Some((id, start)),
+        hold: request.hold.clone(),
+    })
+}
+
+/// How the profile `id` of `kind`, known as `name`, starts on `node` now
+/// (`Call::ProfileLaunch`), or why it does not: the one reading of the
+/// machine's answer, which a start asks when it is planned ([`resolve`])
+/// and its executor asks again just before it runs ([`exec_start`]).
+fn profile_start(
+    node: Option<&dyn NodeLink>,
+    kind: &str,
+    id: &ProfileId,
+    name: &str,
+    timeout: Duration,
+) -> Result<ProfileStart, Refusal> {
     let agent = label(kind);
     let refused = |code, detail: String| Refusal { code, detail };
     let node = node.ok_or_else(|| {
@@ -352,30 +371,25 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
             kind: kind.to_owned(),
             profile: id.clone(),
         },
-        LAUNCH_TIMEOUT,
+        timeout,
     );
-    let start = match answer {
-        Ok(ProfileLaunch::Ready(start)) => start,
-        Ok(ProfileLaunch::Gone) => {
-            return Err(refused(
-                PROFILE_GONE,
-                format!(
-                    "{agent}'s profile {name} is gone, so it was not started; start a new agent with another profile (hide agent spawn --kind {kind} --profile <name>)"
-                ),
-            ));
-        }
-        Ok(ProfileLaunch::Refused { text }) => {
-            return Err(refused(
-                PROFILE_REFUSED,
-                format!("{agent} was not started: {text}"),
-            ));
-        }
+    match answer {
+        Ok(ProfileLaunch::Ready(start)) => Ok(start),
+        Ok(ProfileLaunch::Gone) => Err(refused(
+            PROFILE_GONE,
+            format!(
+                "{agent}'s profile {name} is gone, so it was not started; start a new agent with another profile (hide agent spawn --kind {kind} --profile <name>)"
+            ),
+        )),
+        Ok(ProfileLaunch::Refused { text }) => Err(refused(
+            PROFILE_REFUSED,
+            format!("{agent} was not started: {text}"),
+        )),
         // A node that knows the call and keeps no profiles, or one on an
         // older protocol that cannot read it.
         Err(LinkError::Refused(error))
             if error.code == ErrorCode::Unsupported
-                || (error.code == ErrorCode::InvalidRequest
-                    && node.predates_current_protocol()) =>
+                || (error.code == ErrorCode::InvalidRequest && node.predates_current_protocol()) =>
         {
             crate::diagnostic!(serde_json::json!({
                 "component": "launch",
@@ -384,12 +398,12 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
                 "profile": id.0,
                 "reason": error.message,
             }));
-            return Err(refused(
+            Err(refused(
                 PROFILES_UNSUPPORTED,
                 format!(
                     "this machine does not support profiles, so {agent} starts there only with its default profile"
                 ),
-            ));
+            ))
         }
         Err(error) => {
             crate::diagnostic!(serde_json::json!({
@@ -399,19 +413,14 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
                 "profile": id.0,
                 "reason": error.to_string(),
             }));
-            return Err(refused(
+            Err(refused(
                 PROFILE_UNANSWERED,
                 format!(
                     "{agent} with the profile {name} was not started: its machine did not answer for the profile"
                 ),
-            ));
+            ))
         }
-    };
-    Ok(Launch {
-        kind: kind.to_owned(),
-        profile: Some((id, start)),
-        hold: request.hold.clone(),
-    })
+    }
 }
 
 /// How the start `attempt` runs, asked by its executor just before it runs
@@ -421,15 +430,15 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
 /// that is gone, being removed, changed since, or that its machine does not
 /// answer for now is refused with why, which the executor reports as its
 /// check's refusal and runs nothing on. The machine is asked as a start
-/// asks it ([`resolve`]); the hold the start took when it was planned stays
-/// until the runtime sees what came of it, so a removal through this core
-/// is refused all along, and this ask refuses one made elsewhere.
+/// asks it ([`profile_start`]); the hold the start took when it was planned
+/// stays until what came of the start ends it, so a removal through this
+/// core is refused all along, and this ask refuses one made elsewhere.
 pub(crate) fn exec_start(
     node: Option<&dyn NodeLink>,
     attempt: &ExecAttempt,
 ) -> hide_agent_hooks::hook_request::ExecProfile {
     use hide_agent_hooks::hook_request::{ExecProfile, ExecStart};
-    let (agent, kind, name) = (label(&attempt.kind), &attempt.kind, &attempt.name);
+    let (agent, name) = (label(&attempt.kind), &attempt.name);
     let refused = |reason: &str, failure: String| {
         crate::diagnostic!(serde_json::json!({
             "component": "launch",
@@ -441,25 +450,9 @@ pub(crate) fn exec_start(
         }));
         ExecProfile::Refused { failure }
     };
-    let Some(node) = node else {
-        return refused(
-            "node_unavailable",
-            format!(
-                "{agent} with the profile {name} was not started: its machine cannot be reached to read the profile"
-            ),
-        );
-    };
-    let answer = crate::node_access::call_as::<ProfileLaunch>(
-        node,
-        hide_node_link::protocol::Call::ProfileLaunch {
-            kind: attempt.kind.clone(),
-            profile: attempt.profile.clone(),
-        },
-        EXEC_TIMEOUT,
-    );
-    let start = match answer {
-        Ok(ProfileLaunch::Ready(start)) if start.version == attempt.version => start,
-        Ok(ProfileLaunch::Ready(_)) => {
+    let start = match profile_start(node, &attempt.kind, &attempt.profile, name, EXEC_TIMEOUT) {
+        Ok(start) if start.version == attempt.version => start,
+        Ok(_) => {
             return refused(
                 "profile_changed",
                 format!(
@@ -467,25 +460,7 @@ pub(crate) fn exec_start(
                 ),
             );
         }
-        Ok(ProfileLaunch::Gone) => {
-            return refused(
-                PROFILE_GONE,
-                format!(
-                    "{agent}'s profile {name} is gone, so it was not started; start a new agent with another profile (hide agent spawn --kind {kind} --profile <name>)"
-                ),
-            );
-        }
-        Ok(ProfileLaunch::Refused { text }) => {
-            return refused(PROFILE_REFUSED, format!("{agent} was not started: {text}"));
-        }
-        Err(error) => {
-            return refused(
-                &error.to_string(),
-                format!(
-                    "{agent} with the profile {name} was not started: its machine did not answer for the profile"
-                ),
-            );
-        }
+        Err(refusal) => return refused(refusal.code, refusal.detail),
     };
     let (program, leading) = start.program.map_or((None, Vec::new()), |program| {
         (Some(program.file), program.leading)
@@ -630,11 +605,13 @@ impl Parent {
 /// The profile a new start of `kind` runs with when no record names one
 /// (D-32): the one the start chose, then its parent's ([`Parent`]), then the
 /// project's default (`project`, which Project settings choose), then the
-/// agent's default on the machine (`profiles`). A choice the machine does not
-/// list, or lists as being removed, is the caller's to refuse ([`chosen`]);
-/// a parent's profile is asked of its machine, which refuses a removed one
-/// by name; a project's or machine default that is gone falls through to
-/// the next.
+/// agent's default on the machine (`profiles`). Whether a start may take a
+/// profile now is judged once (`ProfilesSnapshot::startable`), and how the
+/// start came to it decides what one it may not take does: a choice is the
+/// caller's to refuse ([`chosen_id`]); a parent's profile is asked of its
+/// machine, which refuses one gone or being removed by name; a project's or
+/// machine default that is gone or being removed falls through to the next,
+/// as the start panel shows it preselected.
 pub(crate) fn pick(
     kind: &str,
     chosen: Option<(ProfileId, String)>,
@@ -642,15 +619,19 @@ pub(crate) fn pick(
     project: Option<&ProfileId>,
     profiles: Option<&ProfilesSnapshot>,
 ) -> Request {
-    let listed = |id: &ProfileId| listed(kind, id, profiles);
+    let startable = |id: &ProfileId| {
+        profiles?
+            .startable(kind, &id.0)
+            .map(|profile| (id.clone(), profile.name.clone()))
+    };
     if let Some(chosen) = chosen {
         return Request::new(kind, Some(chosen));
     }
     match parent {
         Parent::Default => return Request::new(kind, None),
         Parent::Profile(profile) => {
-            let named =
-                listed(&profile.id).unwrap_or_else(|| (profile.id.clone(), profile.name.clone()));
+            let named = listed(kind, &profile.id, profiles)
+                .unwrap_or_else(|| (profile.id.clone(), profile.name.clone()));
             return Request::new(kind, Some(named));
         }
         Parent::None | Parent::Unknown => {}
@@ -660,10 +641,10 @@ pub(crate) fn pick(
     if project.is_some_and(ProfileId::is_default) {
         return Request::new(kind, None);
     }
-    let profile = project.and_then(listed).or_else(|| {
+    let profile = project.and_then(startable).or_else(|| {
         let agent = hide_agent_adapter::adapter(kind)?.id;
         let id = profiles?.defaults.get(agent)?;
-        listed(&ProfileId(id.clone()))
+        startable(&ProfileId(id.clone()))
     });
     Request::new(kind, profile)
 }
@@ -704,9 +685,9 @@ pub(crate) fn chosen(
 }
 
 /// The profile `id` of `kind` as a start that names it by id (the start
-/// panel's `▾`) takes it: the built-in default, or one the machine lists
-/// and is not removing; refused otherwise with why, the caller's to word
-/// under [`PROFILE_GONE`] (B16).
+/// panel's `▾`) takes it: the built-in default, or one a start may take now
+/// (`ProfilesSnapshot::startable`); refused otherwise with why, the
+/// caller's to word under [`PROFILE_GONE`] (B16).
 pub(crate) fn chosen_id(
     kind: &str,
     id: &str,
@@ -718,14 +699,7 @@ pub(crate) fn chosen_id(
         return Ok((builtin.id, builtin.name));
     }
     profiles
-        .into_iter()
-        .flat_map(|profiles| &profiles.profiles)
-        .find(|profile| {
-            profile.kind == agent
-                && profile.id == id
-                && profile.install != Some(crate::model::ProfileInstall::Removing)
-                && profile.install != Some(crate::model::ProfileInstall::RemoveFailed)
-        })
+        .and_then(|profiles| profiles.startable(kind, id))
         .map(|profile| (ProfileId(profile.id.clone()), profile.name.clone()))
         .ok_or_else(|| {
             format!(
@@ -735,7 +709,9 @@ pub(crate) fn chosen_id(
         })
 }
 
-/// The profile `id` of `kind` as `profiles` lists it, with its name.
+/// The profile `id` of `kind` as `profiles` lists it, with its name, in
+/// whatever state: what a parent's profile is named by before its machine
+/// is asked for it.
 fn listed(
     kind: &str,
     id: &ProfileId,

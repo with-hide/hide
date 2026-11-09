@@ -1887,7 +1887,11 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 .as_deref()
                 .ok_or_else(|| "session_resume_agent_required".to_owned())?;
             let node = task_session_node(&runtime, request.id, kind)?;
-            let account = task_resume_account(&runtime, request.id, kind, node.as_ref())?;
+            let account = runtime
+                .lock()
+                .map_err(|_| TASK_GONE.to_owned())?
+                .task_agent_account(request.id, kind)
+                .map_err(str::to_owned)?;
             crate::live::confirm_session_launch(
                 node.as_ref(),
                 kind,
@@ -2135,30 +2139,6 @@ fn settle_task_session_profile(
         .settle_session_profile(request.id, kind, &account)
         .map_err(|code| ControlFailure::Definite(code.to_owned()))?;
     Ok(())
-}
-
-/// The account task `id`'s resumed conversation lies in: its profile's,
-/// as the machine that holds the session answers for it now (a profile
-/// that is gone or refused starts nothing, D-27), the default account for
-/// the built-in default (PRD agent-profiles B19).
-fn task_resume_account(
-    runtime: &Arc<Mutex<Runtime>>,
-    id: u64,
-    kind: &str,
-    node: &dyn crate::node_access::NodeLink,
-) -> Result<hide_agent_adapter::AccountKey, String> {
-    let profile = runtime
-        .lock()
-        .map_err(|_| TASK_GONE)?
-        .task_agent_profile(id);
-    if profile.is_none() {
-        return Ok(Default::default());
-    }
-    let launch = crate::launch::resolve(Some(node), &crate::launch::Request::new(kind, profile))
-        .map_err(|refusal| refusal.code.to_owned())?;
-    Ok(crate::launch::LaunchProfile::account_of(
-        launch.record().as_ref(),
-    ))
 }
 
 /// The node of the machine that runs task `id`'s pane.

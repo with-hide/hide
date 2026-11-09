@@ -2173,6 +2173,8 @@ export type AgentProfileWire = {
   login?: AgentProfileLogin | null;
   /** Its last start ran in another of the machine's accounts: its program sets a folder of its own (B25). */
   wrapper_folder?: boolean;
+  /** A new start may take it now (`ProfileSnapshot::startable`): the core's one judgment, which an automatic preselection follows (D-30). */
+  startable: boolean;
 };
 
 /** What a node found of a profile account's sign-in (`contracts/snapshot-wire-enums.json`: `profile_login`). */

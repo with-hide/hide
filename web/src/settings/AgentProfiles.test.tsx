@@ -22,7 +22,7 @@ const agent = (id: string, label: string, over: Partial<KitAgent> = {}): KitAgen
 const AGENTS = [agent("claude-code", "Claude Code"), agent("codex", "Codex"), agent("antigravity", "Antigravity"), agent("omp", "omp", { availability: "not_installed", enabled: false, chosen: false })];
 
 const listed = (profiles: MachineAgentProfiles["profiles"] = [], defaults: Record<string, string> = {}): MachineAgentProfiles => ({ state: "listed", version: 3, profiles, defaults });
-const work = { id: "p-work", kind: "claude-code", name: "work", account: "/home/me/accounts/work", program: null, env_keys: ["A"], version: 1, install: "own" as const, folder: "/home/me/accounts/work", hook: ok, skill: ok };
+const work = { id: "p-work", kind: "claude-code", name: "work", account: "/home/me/accounts/work", program: null, env_keys: ["A"], version: 1, install: "own" as const, folder: "/home/me/accounts/work", hook: ok, skill: ok, startable: true };
 
 function device(profiles: MachineAgentProfiles | undefined): Device {
   return { agent_scope: emptyScope(), id: "local", label: "mini", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit: { unavailable: null, busy: false, components: [], agents: AGENTS, offers_reinstall: false, shares_account_with: null, profiles } } as Device;

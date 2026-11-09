@@ -25,7 +25,10 @@ fn profile(id: &str, kind: &str, name: &str) -> ProfileSnapshot {
         skill: None,
         login: None,
         wrapper_folder: false,
-        account_key: hide_agent_adapter::AccountKey::Default,
+        startable: true,
+        account_key: Some(hide_agent_adapter::AccountKey::Folder(format!(
+            "/home/me/accounts/{name}"
+        ))),
         account_variables: Vec::new(),
     }
 }
@@ -757,4 +760,65 @@ fn a_removal_made_again_on_a_moved_list_is_refused_for_an_agent_that_started_wit
         [("w1:p1", false)]
     );
     assert!(hold(&runtime, "p-work").is_ok());
+}
+
+/// D-30, D-32, B14: a project's default whose removal its machine is
+/// making (an answer that was lost leaves the project naming it) is passed
+/// over by a new start, as the start panel preselects it from the same
+/// judgment the snapshot carries, while a start that chose it is refused.
+#[test]
+fn a_project_default_being_removed_is_passed_over_by_the_start_and_the_screen_alike() {
+    let mut runtime = listed();
+    let node = runtime.node.to_string();
+    let listed_profile = |id: &str, name: &str, removing: bool| {
+        hide_node_link::profiles::ListedProfile {
+            id: ProfileId(id.into()),
+            kind: "claude-code".into(),
+            name: name.into(),
+            account: Some(hide_agent_adapter::AccountRef::Folder(format!(
+                "/home/me/accounts/{name}"
+            ))),
+            program: None,
+            env_keys: Vec::new(),
+            env: None,
+            version: 1,
+            removing,
+            place: None,
+            login: None,
+            account_variables: Vec::new(),
+            account_key: Some(AccountKey::Folder(format!("/home/me/accounts/{name}"))),
+        }
+    };
+    let list = hide_node_link::profiles::ProfileList {
+        version: 4,
+        profiles: vec![
+            listed_profile("p-work", "work", true),
+            listed_profile("p-side", "side", false),
+        ],
+        defaults: [("claude-code".to_owned(), ProfileId("p-side".into()))].into(),
+        unjudged: None,
+    };
+    runtime.ingest_profiles(&node, crate::runtime::kit::ProfilesRead::Listed(list));
+    project_default(&mut runtime, "p-work");
+    let start = runtime
+        .new_start_profile(&node, Some("claude"), Some(ROOT), None)
+        .map(|profile| profile.map(|(id, _)| id.0));
+    assert_eq!(start, Ok(Some("p-side".into())));
+    let shown = serde_json::to_value(runtime.machine_profiles(&node).unwrap()).unwrap();
+    let startable = |id: &str| {
+        shown["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == id)
+            .map(|profile| profile["startable"].clone())
+    };
+    assert_eq!(startable("p-work"), Some(serde_json::json!(false)));
+    assert_eq!(startable("p-side"), Some(serde_json::json!(true)));
+    assert!(
+        runtime
+            .new_start_profile(&node, Some("claude"), Some(ROOT), Some("p-work"))
+            .is_err(),
+        "a start that chose it is refused"
+    );
 }

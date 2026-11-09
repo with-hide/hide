@@ -5009,6 +5009,43 @@ impl Runtime {
             .and_then(|launch| launch.profile.clone())
     }
 
+    /// The account task `id`'s `kind` agent runs in, as the task's machine
+    /// lists its profile (`ProfileSnapshot::account_key`, as that node keyed
+    /// it): the default account for the built-in default. A profile the
+    /// machine no longer lists is refused as gone, and one a start may not
+    /// take, or that does not resolve there, as refused (D-27).
+    pub(crate) fn task_agent_account(
+        &self,
+        id: u64,
+        kind: &str,
+    ) -> Result<hide_agent_adapter::AccountKey, &'static str> {
+        let Some((profile, _)) = self.task_agent_profile(id) else {
+            return Ok(hide_agent_adapter::AccountKey::Default);
+        };
+        let device = self
+            .snapshot
+            .task_operation
+            .as_ref()
+            .filter(|operation| operation.id == id)
+            .and_then(|operation| operation.device_id.clone())
+            .unwrap_or_else(|| self.node.to_string());
+        let profiles = self
+            .machine_profiles(&device)
+            .ok_or(crate::launch::PROFILE_GONE)?;
+        let agent = hide_agent_adapter::adapter(kind).map_or(kind, |adapter| adapter.id);
+        if !profiles
+            .profiles
+            .iter()
+            .any(|listed| listed.kind == agent && listed.id == profile.0)
+        {
+            return Err(crate::launch::PROFILE_GONE);
+        }
+        profiles
+            .startable(kind, &profile.0)
+            .and_then(|listed| listed.account_key.clone())
+            .ok_or(crate::launch::PROFILE_REFUSED)
+    }
+
     /// The agent the task's worker should now start: the created pane, the
     /// chosen kind, its first prompt and its CLI arguments, once the creation
     /// is settled.

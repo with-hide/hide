@@ -101,12 +101,12 @@ export function agentProfilesView(profiles: MachineAgentProfiles | null, agent: 
   return { agent, label, way, program: agentAdapter(agent)?.program ?? agent, profiles: [builtIn, ...own] };
 }
 
-/** The profile a start of `agent` picks with nothing chosen (D-32): the project's default while its machine lists it, else the agent's default there. The core's `launch::pick` decides the start; this only says which one the menu shows chosen. */
+/** The profile a start of `agent` picks with nothing chosen (D-32): the project's default while a start may take it, else the agent's default there. Whether a start may take a profile is the core's judgment (`startable`), the one `launch::pick` decides the start by; this only says which one the menu shows chosen. */
 export function pickedProfile(profiles: MachineAgentProfiles | null, agent: string, projectDefault: string | null): string {
   // A project that names the built-in profile starts it; only no choice falls through to the agent's default.
   if (projectDefault === BUILT_IN_PROFILE) return BUILT_IN_PROFILE;
-  const listed = (id: string | null | undefined) => (id && profiles?.profiles.some((profile) => profile.kind === agent && profile.id === id && profile.install !== "removing" && profile.install !== "remove_failed") ? id : null);
-  return listed(projectDefault) ?? listed(profiles?.defaults[agent]) ?? BUILT_IN_PROFILE;
+  const startable = (id: string | null | undefined) => (id && profiles?.profiles.some((profile) => profile.kind === agent && profile.id === id && profile.startable) ? id : null);
+  return startable(projectDefault) ?? startable(profiles?.defaults[agent]) ?? BUILT_IN_PROFILE;
 }
 
 /** The answer to the request `requestId`, once the core gave one. */

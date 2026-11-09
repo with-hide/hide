@@ -214,28 +214,23 @@ impl Runtime {
         let profiles = self.machine_profiles(device)?;
         let mut wanted = variables.to_vec();
         wanted.sort();
-        let default = profiles.defaults.get(kind);
-        let mut matches: Vec<&crate::model::ProfileSnapshot> = profiles
+        // The account those variables name, as its node keyed it.
+        let key = profiles
             .profiles
             .iter()
-            .filter(|profile| {
+            .find(|profile| {
                 agent_id(&profile.kind) == Some(kind)
-                    && !matches!(
-                        profile.install,
-                        Some(
-                            crate::model::ProfileInstall::Removing
-                                | crate::model::ProfileInstall::RemoveFailed
-                        )
-                    )
+                    && profile.startable
                     && !profile.account_variables.is_empty()
                     && {
                         let mut listed = profile.account_variables.clone();
                         listed.sort();
                         listed == wanted
                     }
-            })
-            .collect();
-        matches.sort_by_key(|profile| Some(&profile.id) != default);
+            })?
+            .account_key
+            .clone()?;
+        let matches = profiles.in_account(kind, &key);
         let first = matches.first()?;
         let pair = |profile: &crate::model::ProfileSnapshot| {
             (ProfileId(profile.id.clone()), profile.name.clone())
@@ -243,7 +238,7 @@ impl Runtime {
         Some(ReportedAccount {
             named: (matches.len() == 1).then(|| pair(first)),
             start: Some(pair(first)),
-            ..blank(first.account_key.clone())
+            ..blank(key)
         })
     }
 }

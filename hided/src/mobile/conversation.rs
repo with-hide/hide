@@ -260,38 +260,21 @@ impl Transcript {
     /// Finds the conversation and reads its newest page. `SessionFileMissing`
     /// means the session is reported but has written nothing yet.
     ///
-    /// The conversation is read in one account the node registered
-    /// (`accounts`, PRD agent-profiles D-36): the one whose sessions place
-    /// holds a reported file, else the first that holds the reported id, the
-    /// default account first. The account stays with the open transcript.
+    /// The conversation is read in `account` alone, the one the core says
+    /// the pane's agent runs in (`hide_core::Core::pane_account`, PRD
+    /// agent-profiles D-03, D-36, B19), among those the node registered
+    /// (`accounts`): an account it did not register is refused. The
+    /// account stays with the open transcript.
     pub fn open(
         accounts: &Accounts,
+        account: &AccountKey,
         pane_id: &str,
         source: Source,
     ) -> Result<(Self, Page), SessionError> {
-        if let SessionIdentity::Path(path) = &source.identity
-            && let Some(key) = accounts.account_of(source.agent, path)
-        {
-            let key = key.clone();
-            let accounts = accounts
-                .reading(source.agent, &key)
-                .map_err(|refusal| SessionError::Checkpoint(refusal.reason().to_owned()))?;
-            return Self::open_in(&accounts, key, pane_id, source);
-        }
-        let mut first = None;
-        for (key, accounts) in accounts.each(source.agent) {
-            match Self::open_in(&accounts, key, pane_id, source.clone()) {
-                Ok(open) => return Ok(open),
-                Err(error) => {
-                    first.get_or_insert(error);
-                }
-            }
-        }
-        match first {
-            Some(error) => Err(error),
-            // An agent that keeps no account of its own (Cursor).
-            None => Self::open_in(accounts, AccountKey::Default, pane_id, source),
-        }
+        let accounts = accounts
+            .reading(source.agent, account)
+            .map_err(|refusal| SessionError::Checkpoint(refusal.reason().to_owned()))?;
+        Self::open_in(&accounts, account.clone(), pane_id, source)
     }
 
     /// Opens the conversation in the account `key`, which `accounts` reads
@@ -776,7 +759,7 @@ mod tests {
         };
         let before = files();
         let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), "fixture", source).unwrap();
+            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "fixture", source).unwrap();
         assert_eq!(
             texts(&page.messages),
             ["Read this conversation", "Native answer"]
@@ -803,6 +786,7 @@ mod tests {
         assert_eq!(transcript.poll().unwrap(), Tail::Reset);
         let (mut restored, _) = Transcript::open(
             &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
             "fixture",
             transcript.source().clone(),
         )
@@ -1091,7 +1075,7 @@ mod tests {
         }
         let (home, path, source) = grok_transcript(&records);
         let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), "pane", source).unwrap();
+            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
         assert_eq!(page.messages.len(), PAGE_MESSAGES);
         assert_eq!(texts(&page.messages).last(), Some(&"답변 39\n\n이어서"));
         assert_eq!(texts(&page.messages)[page.messages.len() - 2], "요청");
@@ -1117,6 +1101,7 @@ mod tests {
         );
         let (_, page) = Transcript::open(
             &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
             "pane",
             transcript.source().clone(),
         )
@@ -1134,7 +1119,7 @@ mod tests {
     fn native_phone_pages(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
         let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), "pane", source).unwrap();
+            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
         assert_eq!(texts(&page.messages).first(), Some(&"답변 40"));
         assert_eq!(texts(&page.messages).last(), Some(&"답변 69"));
         let older = transcript.pager().before(page.before.unwrap()).unwrap();
@@ -1165,7 +1150,7 @@ mod tests {
     fn native_rebound_phone(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
         let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), "pane", source).unwrap();
+            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
         let pager = transcript.pager();
         let original = std::fs::read_to_string(&path).unwrap();
         let changed = original.replace("native-phone", "other-ownerx");
@@ -1188,7 +1173,7 @@ mod tests {
     fn native_rewritten_phone(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
         let (mut transcript, page) =
-            Transcript::open(&hide_session::Accounts::new(home.path()), "pane", source).unwrap();
+            Transcript::open(&hide_session::Accounts::new(home.path()), &AccountKey::Default, "pane", source).unwrap();
         let pager = transcript.pager();
         let original = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, original.replace("답변 69", "수정 69")).unwrap();

@@ -51,7 +51,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use hide_agent_adapter::{
-    Account, AccountKey, AccountPath, AccountRef, AgentAdapter, AgentId, LaunchDialect, NodeEnv,
+    Account, AccountKey, AccountPath, AgentAdapter, AgentId, LaunchDialect, NodeEnv,
     Profile,
 };
 use hide_platform::programs::Program;
@@ -368,10 +368,8 @@ fn account_of(
     home: &Path,
     key: &AccountKey,
 ) -> Result<Option<Account>, InstallFailure> {
-    let spelled = match key {
-        AccountKey::Default => return Ok(None),
-        AccountKey::Folder(folder) => AccountRef::Folder(folder.clone()),
-        AccountKey::Name(name) => AccountRef::Name(name.clone()),
+    let Some(spelled) = key.account() else {
+        return Ok(None);
     };
     let adapter = agent.adapter();
     let profile = Profile {

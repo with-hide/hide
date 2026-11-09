@@ -869,11 +869,13 @@ fn a_session_line_resumes_with_the_profile_of_the_account_that_holds_it() {
         skill: None,
         login: None,
         wrapper_folder: false,
-        account_key: hide_agent_adapter::AccountKey::Default,
+        startable: true,
+        account_key: Some(AccountKey::Folder(account.to_owned())),
         account_variables: Vec::new(),
     };
     let going = crate::model::ProfileSnapshot {
         install: Some(crate::model::ProfileInstall::Removing),
+        startable: false,
         ..profile("going", "claude-code", "/accounts/going")
     };
     let mut kit = runtime.kit_state(crate::node::TEST_NODE);
