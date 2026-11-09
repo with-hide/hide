@@ -203,12 +203,11 @@ fn a_parent_component_in_a_nested_profile_never_reads_as_the_default_account() {
 /// A link below a profile's folder never makes a session of an account the
 /// node did not register readable or listed, nor does `..` in a path; the
 /// default account's own link is followed as before profiles.
-#[cfg(unix)]
 #[test]
 fn a_link_below_a_profile_account_leads_nowhere_while_the_default_account_s_link_is_followed() {
-    use std::os::unix::fs::symlink;
+    use hide_platform::fs::link::create_link;
     let root = tempfile::tempdir().unwrap();
-    let root = root.path().canonicalize().unwrap();
+    let root = hide_platform::fs::identity::canonical(root.path()).unwrap();
     let home = root.join("home");
     let a = root.join("a");
     let codex_a = root.join("codex-a");
@@ -218,16 +217,16 @@ fn a_link_below_a_profile_account_leads_nowhere_while_the_default_account_s_link
     let codex_theirs = file(&b.join("sessions/2026/11/09/rollout-1.jsonl"));
     std::fs::create_dir_all(&a).unwrap();
     std::fs::create_dir_all(&codex_a).unwrap();
-    symlink(b.join("projects"), a.join("projects")).unwrap();
-    symlink(b.join("sessions"), codex_a.join("sessions")).unwrap();
+    create_link(&b.join("projects"), &a.join("projects")).unwrap();
+    create_link(&b.join("sessions"), &codex_a.join("sessions")).unwrap();
     // A folder between the account's sessions folder and the file.
     std::fs::create_dir_all(middle.join("projects")).unwrap();
-    symlink(b.join("projects/-w"), middle.join("projects/-w")).unwrap();
+    create_link(&b.join("projects/-w"), &middle.join("projects/-w")).unwrap();
     let linked_default = file(&root.join("elsewhere/claude-projects/-w/s.jsonl"));
     std::fs::create_dir_all(home.join(".claude")).unwrap();
-    symlink(
-        root.join("elsewhere/claude-projects"),
-        home.join(".claude/projects"),
+    create_link(
+        &root.join("elsewhere/claude-projects"),
+        &home.join(".claude/projects"),
     )
     .unwrap();
     let accounts = Accounts::new(&home).with_profiles([
@@ -260,9 +259,11 @@ fn a_link_below_a_profile_account_leads_nowhere_while_the_default_account_s_link
     );
     let listed = listed(&accounts);
     assert!(
-        !listed.iter().any(|path| path.contains("/b/")
-            || path.starts_with(a.to_str().unwrap())
-            || path.starts_with(codex_a.to_str().unwrap())),
+        !listed.iter().any(|path| {
+            [&a, &codex_a, &middle, &b]
+                .iter()
+                .any(|root| Path::new(path).starts_with(root))
+        }),
         "{listed:?} lists {theirs:?} or {codex_theirs:?}"
     );
 
