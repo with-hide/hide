@@ -123,6 +123,8 @@ impl Runtime {
             .collect::<Vec<_>>();
         for pane_id in &unstarted {
             self.letter_wakes.touch();
+            // The engine took the start, so it may have run: not tried again.
+            self.letter_wakes.failed_wake(pane_id, false);
             self.agent_wake_started.remove(pane_id);
             if let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) {
                 let reason = agent_sleep_engine::WAKE_NOT_READY.to_owned();
@@ -604,7 +606,11 @@ impl Runtime {
                     .insert(pane_id.to_owned(), unix_milliseconds());
                 false
             }
-            WakeOutcome::Failed { reason, detail } => {
+            WakeOutcome::Failed {
+                reason,
+                detail,
+                passing,
+            } => {
                 record.phase = SleepPhase::Failed;
                 record.reason = Some(reason.clone());
                 crate::diagnostic!(serde_json::json!({
@@ -615,7 +621,9 @@ impl Runtime {
                     "mode": mode,
                     "reason": reason,
                     "detail": detail,
+                    "passing": passing,
                 }));
+                self.letter_wakes.failed_wake(pane_id, passing);
                 self.persist_ui_state();
                 self.refresh_sleep_rows_of(pane_id);
                 true
@@ -725,6 +733,7 @@ impl Runtime {
                     WakeOutcome::Failed {
                         reason: agent_sleep_engine::WAKE_LAUNCH_CHOICE.to_owned(),
                         detail,
+                        passing: false,
                     },
                 );
             }
@@ -747,6 +756,7 @@ impl Runtime {
                         WakeOutcome::Failed {
                             reason: agent_sleep_engine::WAKE_NOT_RESUMED.to_owned(),
                             detail,
+                            passing: false,
                         },
                     );
                 };
@@ -789,9 +799,11 @@ impl Runtime {
             return self.ingest_agent_wake(
                 pane_id,
                 mode,
+                // The worker never ran, so nothing was typed.
                 WakeOutcome::Failed {
                     reason: agent_sleep_engine::WAKE_NOT_READY.to_owned(),
                     detail: message,
+                    passing: true,
                 },
             );
         }

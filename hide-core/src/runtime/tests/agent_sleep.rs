@@ -2045,6 +2045,7 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
         crate::agent_sleep_engine::WakeOutcome::Failed {
             reason: crate::agent_sleep_engine::WAKE_NOT_RESUMED.into(),
             detail: "agent_start_failed: exited".into(),
+            passing: false,
         },
     ));
     let failed = row(&runtime);

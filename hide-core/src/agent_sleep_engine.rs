@@ -403,11 +403,19 @@ pub(crate) const WAKE_LAUNCH_CHOICE: &str = "agent_wake.launch_choice_refused";
 
 /// How a wake ended. `reason` is the code the pane words (B14); `detail` is
 /// what only the diagnostic carries, the engine's own code and message among it
-/// (B19).
+/// (B19). `passing` says the wake typed nothing and failed for a cause that
+/// can pass (the engine refused the start's input, the holder could not be
+/// renewed, the shell had not started), so the same wake may be asked again
+/// (`LetterWakes`); a wake that typed its start, or failed for a cause that
+/// stays (a folder, a profile, a launch choice), is not.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WakeOutcome {
     Started,
-    Failed { reason: String, detail: String },
+    Failed {
+        reason: String,
+        detail: String,
+        passing: bool,
+    },
 }
 
 /// Starts the agent again in the same pane, through the engine's `agent.start`
@@ -439,6 +447,7 @@ pub(crate) fn wake_launch(
     .map_err(|refusal| WakeOutcome::Failed {
         reason: refusal.code.to_owned(),
         detail: refusal.detail,
+        passing: false,
     })
 }
 
@@ -455,6 +464,7 @@ pub(crate) fn start_launched(
         return WakeOutcome::Failed {
             reason: WAKE_FOLDER_MISSING.to_owned(),
             detail: format!("{cwd} is not a directory"),
+            passing: false,
         };
     }
     let start = match engine.prepare_start(AgentLaunch {
@@ -473,6 +483,7 @@ pub(crate) fn start_launched(
             return WakeOutcome::Failed {
                 reason: detail.clone(),
                 detail,
+                passing: false,
             };
         }
     };
@@ -498,10 +509,12 @@ pub(crate) fn start_launched(
         Ok(HolderRenewal::Current | HolderRenewal::Kept { .. }) => {
             crate::agent_start::ShellStart::Plain
         }
+        // Nothing was typed: the pane's holder is not known to run it.
         Err(error) => {
             return WakeOutcome::Failed {
                 reason: refused_reason(request.mode).to_owned(),
                 detail: error.to_string(),
+                passing: true,
             };
         }
     };
@@ -531,25 +544,36 @@ pub(crate) fn start_launched(
             }
             WakeOutcome::Started
         }
+        // An answer the start does not promise may follow a typed start.
         Err(StartError::Engine(EngineError::Answer(detail))) => WakeOutcome::Failed {
             reason: WAKE_NOT_READY.to_owned(),
             detail,
+            passing: false,
         },
         Err(StartError::NotStarted { detail, .. }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
             detail,
+            passing: true,
         },
         Err(StartError::ShellStarting { waited, screen }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
             detail: crate::agent_start::shell_starting_message(waited, screen.as_deref()),
+            passing: true,
         },
+        // The engine refused before typing anything, a device pane's node
+        // that could not hold the input among it (`pane_input_cancelled`,
+        // with-hide/hide-private#660); a profile it could not confirm may
+        // have started (`agent_start::start_within`).
         Err(StartError::Engine(EngineError::Refused { code, message })) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
+            passing: code != crate::launch::PROFILE_UNCONFIRMED,
             detail: format!("{code}: {message}"),
         },
+        // No answer: the start may have been typed.
         Err(StartError::Engine(error)) => WakeOutcome::Failed {
             reason: WAKE_NOT_READY.to_owned(),
             detail: error.to_string(),
+            passing: false,
         },
     }
 }
@@ -1260,6 +1284,7 @@ mod tests {
             WakeOutcome::Failed {
                 reason: WAKE_NOT_RESUMED.into(),
                 detail: "agent_name_taken: agent name one is already used".into(),
+                passing: true,
             }
         );
     }
@@ -1402,7 +1427,8 @@ mod tests {
     /// A renewal after which no holder is known to run the pane leaves no
     /// shell to type into: its new holder did not start, its earlier one
     /// was asked to end and may still be ending, or its node's answer never
-    /// came. The wake fails with the engine's words and types nothing.
+    /// came. The wake fails with the engine's words and types nothing, so
+    /// a letter's wake may ask it again.
     #[test]
     fn a_wake_whose_renewal_left_no_known_holder_fails_and_types_nothing() {
         for (error, detail) in [
@@ -1440,7 +1466,9 @@ mod tests {
                 WakeOutcome::Failed {
                     reason: WAKE_NOT_RESUMED.into(),
                     detail: detail.into(),
-                }
+                    passing: true,
+                },
+                "{detail}"
             );
             assert_eq!(fake.methods(), ["renew_holder"]);
         }
@@ -1528,7 +1556,7 @@ mod tests {
         );
         assert!(matches!(
             outcome,
-            WakeOutcome::Failed { ref reason, ref detail } if reason == WAKE_FOLDER_MISSING && detail.contains("/nonexistent/agent-sleep-test")
+            WakeOutcome::Failed { ref reason, ref detail, passing: false } if reason == WAKE_FOLDER_MISSING && detail.contains("/nonexistent/agent-sleep-test")
         ));
         assert!(fake.methods().is_empty());
     }

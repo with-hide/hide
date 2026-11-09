@@ -27,6 +27,13 @@ pub(in crate::runtime) const MAX_LETTER_WAKES: usize = 4;
 /// woken (D-16).
 pub(crate) const WAKE_ROLE: &str = "wake";
 
+/// The letter wakes a sleeper gets in a row while each fails for a cause
+/// that can pass: a letter has as many tries to reach its agent by a wake
+/// as by a bell. The wait before the second is a refused bell's, doubled
+/// before the third, since the same refusals of a pane's input (a device's
+/// node that could not hold it, a busy node) pass in seconds for both.
+pub(in crate::runtime) const WAKE_TRIES: u8 = crate::delivery::ledger::BELLS;
+
 /// Where an asleep recipient sleeps: in its pane, or as a dormant
 /// conversation whose pane was closed.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -83,6 +90,14 @@ impl Stage {
     }
 }
 
+/// The letter wakes one sleeper had in a row, and when the next may start
+/// after a passing failure.
+#[derive(Clone, Copy, Debug, Default)]
+struct Tries {
+    started: u8,
+    retry_at_unix_ms: Option<u64>,
+}
+
 /// A letter a failed wake left undelivered, until its sender was told.
 #[derive(Clone, Debug)]
 struct Failure {
@@ -111,11 +126,58 @@ pub(in crate::runtime) struct LetterWakes {
     woke: BTreeMap<String, u64>,
     /// A thread is telling senders; it is the only one.
     noting: bool,
+    /// The letter wakes each sleeper had in a row: a wake that typed
+    /// nothing for a cause that can pass is asked again after a wait rather
+    /// than failing its letters, up to `WAKE_TRIES` (with-hide/hide-private#660,
+    /// #675). One per sleeper a wake runs or waits for, forgotten once it is
+    /// back or its letters fail.
+    tries: BTreeMap<Route, Tries>,
+    /// Sleepers whose last wake failed for a cause that can pass
+    /// (`WakeOutcome::Failed::passing`), told by the wake's answer.
+    passing: BTreeSet<Route>,
 }
 
 impl LetterWakes {
     pub(in crate::runtime) fn touch(&mut self) {
         self.dirty = true;
+    }
+
+    /// The wake of the agent asleep in `pane` failed; `passing` says it
+    /// typed nothing for a cause that can pass.
+    pub(in crate::runtime) fn failed_wake(&mut self, pane: &str, passing: bool) {
+        let route = Route::Pane(pane.to_owned());
+        if passing {
+            self.passing.insert(route);
+        } else {
+            self.passing.remove(&route);
+        }
+    }
+
+    /// Whether a wake that waits after a passing failure may start now.
+    fn retry_due(&self, now: u64) -> bool {
+        self.tries
+            .values()
+            .any(|tries| tries.retry_at_unix_ms.is_some_and(|at| at <= now))
+    }
+
+    /// Ends the waits whose time has come: the pass that reads them starts
+    /// their wakes, and one it cannot start yet (four already run, no
+    /// connection) waits for the move that frees it, as any queued wake
+    /// does, rather than bringing a pass every tick.
+    fn end_due_waits(&mut self, now: u64) {
+        for tries in self.tries.values_mut() {
+            if tries.retry_at_unix_ms.is_some_and(|at| at <= now) {
+                tries.retry_at_unix_ms = None;
+            }
+        }
+    }
+
+    /// Whether `route`'s next wake still waits after a passing failure.
+    fn retry_waits(&self, route: &Route, now: u64) -> bool {
+        self.tries
+            .get(route)
+            .and_then(|tries| tries.retry_at_unix_ms)
+            .is_some_and(|at| now < at)
     }
 }
 
@@ -123,6 +185,16 @@ impl LetterWakes {
 impl Runtime {
     pub(in crate::runtime) fn letter_wakes_running(&self) -> usize {
         self.letter_wakes.running.len()
+    }
+
+    /// Lets every letter wake that waits after a passing failure start now,
+    /// as its wait passing would.
+    pub(in crate::runtime) fn letter_wake_retries_due(&mut self) {
+        for tries in self.letter_wakes.tries.values_mut() {
+            if tries.retry_at_unix_ms.is_some() {
+                tries.retry_at_unix_ms = Some(0);
+            }
+        }
     }
 }
 
@@ -287,13 +359,15 @@ impl Runtime {
     /// and as many queued wakes as the caps allow. Run by the coordinator's
     /// tick; a tick with nothing moved is one flag test.
     pub(crate) fn drive_letter_wakes(&mut self) -> bool {
-        if !self.letter_wakes.dirty || self.effects_held() {
+        let now = crate::runtime::unix_milliseconds();
+        if !(self.letter_wakes.dirty || self.letter_wakes.retry_due(now)) || self.effects_held() {
             return false;
         }
         let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {
             return false;
         };
         self.letter_wakes.dirty = false;
+        self.letter_wakes.end_due_waits(now);
         let store = &self.snapshot.ui_state.agent_sleep;
         if store.records.is_empty()
             && store.dormant.is_empty()
@@ -302,17 +376,21 @@ impl Runtime {
         {
             // Nothing sleeps and nothing is owed: no letter to look at.
             self.letter_wakes.queue.clear();
+            self.letter_wakes.tries.clear();
+            self.letter_wakes.passing.clear();
             return false;
         }
         let mut changed = false;
         for route in std::mem::take(&mut self.letter_wakes.running) {
             match self.route_stage(&route) {
                 // Woke: the delivery's own bell carries the letters on.
-                None => {}
+                None => {
+                    self.letter_wakes.tries.remove(&route);
+                }
                 Some(Stage::Waking | Stage::Ending) => {
                     self.letter_wakes.running.insert(route);
                 }
-                Some(Stage::Failed(reason)) => self.fail_letters(&ledger, &route, &reason),
+                Some(Stage::Failed(reason)) => self.wake_failed(&ledger, route, &reason, now),
                 // A restart read the wake as asleep again: it waits its turn.
                 Some(Stage::Sleeping) if !self.letter_wakes.queue.contains(&route) => {
                     self.letter_wakes.queue.push_back(route);
@@ -358,12 +436,21 @@ impl Runtime {
                     continue;
                 }
             }
-            if !self.letter_wake_admitted(&route) {
+            if self.letter_wakes.retry_waits(&route, now) || !self.letter_wake_admitted(&route) {
                 self.letter_wakes.queue.push_back(route);
                 continue;
             }
-            changed |= self.start_letter_wake(&ledger, route);
+            changed |= self.start_letter_wake(&ledger, route, now);
         }
+        // A sleeper whose wake neither runs nor waits needs no count.
+        let wakes = &mut self.letter_wakes;
+        let (running, queue) = (&wakes.running, &wakes.queue);
+        wakes
+            .tries
+            .retain(|route, _| running.contains(route) || queue.contains(route));
+        wakes
+            .passing
+            .retain(|route| running.contains(route) || queue.contains(route));
         self.forget_failures(&ledger);
         self.note_failed_letters(&ledger);
         changed
@@ -398,9 +485,9 @@ impl Runtime {
     }
 
     /// Starts one letter wake: the conversation resumed in place, the screen
-    /// left as it is (B5, D-15). A wake that fails before it starts fails
-    /// its letters at once.
-    fn start_letter_wake(&mut self, ledger: &Ledger, route: Route) -> bool {
+    /// left as it is (B5, D-15). A wake that fails before it starts is
+    /// judged as any failed wake (`wake_failed`).
+    fn start_letter_wake(&mut self, ledger: &Ledger, route: Route, now: u64) -> bool {
         // Read before the wake, which may take the record with it.
         let letters = self.route_letters(ledger, &route);
         let changed = match &route {
@@ -413,7 +500,11 @@ impl Runtime {
                 self.letter_wakes.queue.push_back(route);
                 return false;
             }
-            Route::Pane(pane) => self.begin_agent_wake(pane, WakeMode::Resume, "letter"),
+            Route::Pane(pane) => {
+                let tries = self.letter_wakes.tries.entry(route.clone()).or_default();
+                tries.started = tries.started.saturating_add(1);
+                self.begin_agent_wake(pane, WakeMode::Resume, "letter")
+            }
             Route::Dormant(id) => match self.begin_dormant_wake(id) {
                 Ok(started) => started,
                 // A busy checkout, a spent transition budget or a close not
@@ -439,7 +530,7 @@ impl Runtime {
                 self.mark_woken(letters);
                 self.letter_wakes.running.insert(route);
             }
-            Some(Stage::Failed(reason)) => self.fail_letters(ledger, &route, &reason),
+            Some(Stage::Failed(reason)) => self.wake_failed(ledger, route, &reason, now),
             // No connection to wake it on yet: it waits for the next move.
             Some(Stage::Sleeping | Stage::Ending) => self.letter_wakes.queue.push_back(route),
             // Awake already: the wake ran to its end in the start.
@@ -452,6 +543,45 @@ impl Runtime {
         let now = crate::runtime::unix_milliseconds();
         for id in letters {
             self.letter_wakes.woke.entry(id).or_insert(now);
+        }
+    }
+
+    /// `route`'s letter wake failed. One that typed nothing for a cause that
+    /// can pass, before the sleeper's `WAKE_TRIES`th wake in a row, is asked
+    /// again after 5 s, then 10 s: its letters wait, and wake their
+    /// recipient as if they had not yet (with-hide/hide-private#660, #675).
+    /// Any other fails the letters at once, and their senders are told.
+    fn wake_failed(&mut self, ledger: &Ledger, route: Route, reason: &str, now: u64) {
+        let passing = self.letter_wakes.passing.remove(&route);
+        let started = self
+            .letter_wakes
+            .tries
+            .get(&route)
+            .map_or(0, |tries| tries.started);
+        if !passing || started >= WAKE_TRIES {
+            self.letter_wakes.tries.remove(&route);
+            self.fail_letters(ledger, &route, reason);
+            return;
+        }
+        let wait = crate::delivery::doorbell::RETRY_FIRST_MS << started.saturating_sub(1).min(4);
+        crate::diagnostic!(json!({
+            "component": "agent_sleep",
+            "kind": "agent_sleep.letter_wake_retry",
+            "route": format!("{route:?}"),
+            "reason": reason,
+            "wakes": started,
+            "retry_in_ms": wait,
+        }));
+        for id in self.route_letters(ledger, &route) {
+            self.letter_wakes.woke.remove(&id);
+        }
+        self.letter_wakes
+            .tries
+            .entry(route.clone())
+            .or_default()
+            .retry_at_unix_ms = Some(now.saturating_add(wait));
+        if !self.letter_wakes.queue.contains(&route) {
+            self.letter_wakes.queue.push_back(route);
         }
     }
 

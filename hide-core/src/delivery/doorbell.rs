@@ -39,7 +39,7 @@ const PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
 /// come from a fact the episode does not carry, such as the engine's readiness,
 /// the letter itself or the delivery store's answer, so waiting for the
 /// episode to move could wait until the letter expires.
-const RETRY_FIRST_MS: u64 = 5_000;
+pub(crate) const RETRY_FIRST_MS: u64 = 5_000;
 const RETRY_LIMIT_MS: u64 = 120_000;
 /// How long a pane whose letters wait on a possible draft rests, with no
 /// input hide routed and no change of the engine's status, before the operator is

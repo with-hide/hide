@@ -341,6 +341,7 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
         WakeOutcome::Failed {
             reason: crate::agent_sleep_engine::WAKE_FOLDER_MISSING.into(),
             detail: "fixture".into(),
+            passing: false,
         },
     );
     runtime.drive_letter_wakes();
@@ -366,6 +367,116 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
     letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+}
+
+/// The wake's answer that it typed nothing for a cause that can pass: the
+/// node of an off-screen device pane could not hold the resume line
+/// (with-hide/hide-private#660).
+fn refused_wake() -> WakeOutcome {
+    WakeOutcome::Failed {
+        reason: crate::agent_sleep_engine::WAKE_NOT_RESUMED.into(),
+        detail: "pane_input_cancelled: Pane input delivery exceeded its deadline".into(),
+        passing: true,
+    }
+}
+
+/// with-hide/hide-private#660, #675: a letter wake the engine refused before
+/// typing anything does not fail its `request` at once; the same wake is
+/// asked again once its wait has passed, and the letter fails, with the
+/// wake's reason for its sender, only when the third wake in a row is
+/// refused as well.
+#[test]
+fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_the_third() {
+    let mut runtime = sleepers(&[WORKER]);
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    for wake in 1..=2 {
+        runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+        runtime.drive_letter_wakes();
+        assert!(
+            runtime.delivery_wake_failures().is_empty(),
+            "wake {wake} was refused and its letter still waits"
+        );
+        // Nothing starts again before the wait has passed.
+        runtime.letter_wakes.touch();
+        runtime.drive_letter_wakes();
+        assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+        runtime.letter_wake_retries_due();
+        runtime.drive_letter_wakes();
+        assert_eq!(
+            phase(&runtime, WORKER),
+            Some(SleepPhase::Waking),
+            "wake {} starts",
+            wake + 1
+        );
+    }
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        runtime
+            .delivery_wake_failures()
+            .get(&request)
+            .map(String::as_str),
+        Some(crate::agent_sleep_engine::WAKE_NOT_RESUMED)
+    );
+    runtime.letter_wake_retries_due();
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+}
+
+/// A refused letter wake whose next try brings the agent back leaves its
+/// letter pending for the bell, and the next refusal of a later sleep
+/// starts the count again.
+#[test]
+fn a_letter_wake_that_comes_back_on_its_next_try_keeps_its_letter() {
+    let mut runtime = sleepers(&[WORKER]);
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+    runtime.drive_letter_wakes();
+    runtime.letter_wake_retries_due();
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // The agent is back: its record goes.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert!(runtime.delivery_wake_failures().is_empty());
+    let ledger = runtime.delivery_state().unwrap();
+    let kept = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == request)
+        .unwrap();
+    assert_eq!(kept.state, State::Pending);
+}
+
+/// A wake that may have typed its start, or failed for a cause that stays,
+/// is not asked again: its letters fail at once, as before.
+#[test]
+fn a_letter_wake_that_may_have_typed_fails_its_letter_at_once() {
+    let mut runtime = sleepers(&[WORKER]);
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    runtime.ingest_agent_wake(
+        WORKER,
+        WakeMode::Resume,
+        WakeOutcome::Failed {
+            reason: crate::agent_sleep_engine::WAKE_NOT_READY.into(),
+            detail: "the engine's answer never came".into(),
+            passing: false,
+        },
+    );
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        runtime
+            .delivery_wake_failures()
+            .get(&request)
+            .map(String::as_str),
+        Some(crate::agent_sleep_engine::WAKE_NOT_READY)
+    );
 }
 
 /// D-13, D-16: an agent whose wake failed takes letters but no longer
