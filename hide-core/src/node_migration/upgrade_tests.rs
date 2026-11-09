@@ -617,6 +617,47 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
             ));
         }
     }
+    // Every record a released build wrote predates agent profiles: it loads
+    // as the built-in default, and the start that wakes, resumes or reopens
+    // it is the line every agent always had, asking nothing of its machine
+    // (PRD agent-profiles D-27, B29).
+    let recorded = ui
+        .pane_launches
+        .values()
+        .map(|row| (row.kind.as_str(), row.profile.as_ref()))
+        .chain(
+            ui.agent_sleep
+                .records
+                .values()
+                .map(|row| (row.kind.as_str(), row.profile.as_ref())),
+        )
+        .chain(
+            ui.agent_sleep
+                .dormant
+                .values()
+                .map(|row| (row.kind.as_str(), row.profile.as_ref())),
+        )
+        .chain(
+            ui.session_archive
+                .records
+                .values()
+                .flat_map(|row| &row.members)
+                .map(|member| (member.kind.as_str(), member.profile.as_ref())),
+        );
+    for (kind, profile) in recorded {
+        let argv = vec![kind.to_owned(), "--resume".to_owned()];
+        let start = crate::launch::resolve(None, &crate::launch::Request::recorded(kind, profile))
+            .map(|launch| (launch.record(), launch.line(argv.clone())));
+        let default_line = Ok(crate::launch::StartLine {
+            words: argv,
+            attempt: None,
+        });
+        if profile.is_some() || start != Ok((None, default_line)) {
+            failures.push(format!(
+                "a released {kind} record does not start with the built-in default: {profile:?} {start:?}"
+            ));
+        }
+    }
     // A later build wakes a dormant sleep only from a record that still
     // proves its session (`DormantRecord::validate`).
     for (id, record) in &ui.agent_sleep.dormant {

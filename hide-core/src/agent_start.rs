@@ -63,12 +63,7 @@ pub(crate) const SHELL_WAIT: Duration = Duration::from_secs(30);
 /// so how long it holds the start's name while no agent shows. Long, because
 /// typing a long first prompt into a slow shell takes most of it.
 pub(crate) const AGENT_START_DEADLINE: Duration = Duration::from_secs(120);
-/// How long a caller waits for the answer to a start that waits out
-/// [`AGENT_START_DEADLINE`]: a little longer, so a slow start is not
-/// reported as an unanswered one.
-pub(crate) const START_ANSWER_WAIT: Duration =
-    Duration::from_secs(AGENT_START_DEADLINE.as_secs() + 5);
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A typed start is not proof that its program exists. Keep the fork's node
@@ -385,7 +380,6 @@ pub(crate) fn start_at_shell_checked(
     correlation_id: &str,
     shell: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
     start_at_shell_within(
@@ -394,7 +388,6 @@ pub(crate) fn start_at_shell_checked(
         correlation_id,
         shell,
         start,
-        answer_timeout,
         SHELL_WAIT,
         check,
     )
@@ -412,7 +405,6 @@ pub(crate) fn start_at_shell_within(
     correlation_id: &str,
     shell: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     shell_wait: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
@@ -422,7 +414,6 @@ pub(crate) fn start_at_shell_within(
         correlation_id,
         shell,
         start,
-        answer_timeout,
         shell_wait.min(SHELL_WAIT),
         Duration::ZERO,
         check,
@@ -441,7 +432,6 @@ pub(crate) fn start_at_shell_reusing_name(
     correlation_id: &str,
     shell: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
     start_within(
@@ -450,7 +440,6 @@ pub(crate) fn start_at_shell_reusing_name(
         correlation_id,
         shell,
         start,
-        answer_timeout,
         SHELL_WAIT,
         NAME_RELEASE_WAIT,
         check,
@@ -468,7 +457,6 @@ pub(crate) fn start_within(
     correlation_id: &str,
     shell_start: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     wait: Duration,
     name_release_wait: Duration,
     check: &dyn Fn() -> Result<(), String>,
@@ -498,7 +486,9 @@ pub(crate) fn start_within(
     loop {
         shell.wait(started, deadline)?;
         check().map_err(StartError::refused)?;
-        match engine.start_agent(Wait::Each(answer_timeout), start) {
+        // The engine's start ends by the caller's own deadline: a start with a
+        // profile waits within it for what came of its attempt.
+        match engine.start_agent(Wait::By(deadline), start) {
             // The engine refused before typing anything: something besides the
             // shell runs in the pane. A prompt hook can take the terminal
             // between the read and the start, and on Windows the engine refuses a
@@ -808,7 +798,7 @@ mod tests {
             .prepare_start(crate::engine::AgentLaunch {
                 pane_id: text("pane_id", "w1:p1"),
                 name: text("name", "agent"),
-                kind: text("kind", "claude"),
+                launch: crate::launch::Launch::default_of(&text("kind", "claude")),
                 args: params["args"]
                     .as_array()
                     .map(|args| {
@@ -1008,7 +998,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             wait,
             Duration::ZERO,
             &|| Ok(()),
@@ -1022,7 +1011,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             Duration::from_secs(5),
             name_wait,
             &|| Ok(()),
@@ -1129,7 +1117,6 @@ mod tests {
                 ShellStart::Plain,
                 &prepared(json!({"pane_id":"w1:p1"})),
                 Duration::from_secs(5),
-                Duration::from_secs(5),
                 Duration::ZERO,
                 &|| {
                     let count = checks.get();
@@ -1222,7 +1209,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1", "name": "factory-hide-t1", "kind": "claude"})),
-            Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::ZERO,
             &|| Ok(()),
@@ -1374,7 +1360,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1", "args": ["--", "가".repeat(bytes / 3)]})),
-            Duration::from_secs(5),
             wait,
             Duration::ZERO,
             &|| Ok(()),
@@ -1491,7 +1476,6 @@ mod tests {
                 program: "zsh".into(),
             },
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             wait,
             Duration::ZERO,
             &|| Ok(()),
@@ -1622,7 +1606,6 @@ mod tests {
                 program: "powershell".into(),
             },
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             Duration::from_millis(300),
             Duration::ZERO,
             &|| Ok(()),

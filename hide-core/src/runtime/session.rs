@@ -4937,6 +4937,7 @@ impl Runtime {
         prompt: Option<String>,
         args: Vec<String>,
         launch: hide_agent_adapter::LaunchChoice,
+        profile: Option<(hide_agent_adapter::ProfileId, String)>,
     ) {
         self.task_agent_launch = Some(crate::runtime::TaskAgentLaunch {
             task: id,
@@ -4945,6 +4946,7 @@ impl Runtime {
                 .filter(|prompt| !prompt.is_empty()),
             args,
             launch,
+            profile,
             resume_reference: None,
         });
     }
@@ -5111,6 +5113,7 @@ impl Runtime {
                 .clone()
                 .filter(|(task, _)| *task == id)
                 .map_or(crate::agent_start::ShellStart::Plain, |(_, shell)| shell),
+            profile: launch.and_then(|launch| launch.profile.clone()),
         })
     }
 
@@ -5146,7 +5149,7 @@ impl Runtime {
         // The pane keeps the choice its agent started with, for the restarts
         // Hide makes of it, under the name the start gave the agent: the task
         // worker names it from the engine's own id for the pane.
-        if let (crate::worktree_control::TaskAgentOutcome::Started, Some(launch)) =
+        if let (crate::worktree_control::TaskAgentOutcome::Started(profile), Some(launch)) =
             (&outcome, &launch)
             && let Some((pane_id, kind, name)) =
                 self.snapshot.task_operation.as_ref().and_then(|operation| {
@@ -5160,7 +5163,7 @@ impl Runtime {
                     Some((pane_id, kind, name))
                 })
         {
-            self.record_pane_launch(&pane_id, &kind, &name, launch, None);
+            self.record_pane_launch(&pane_id, &kind, &name, launch, profile.as_ref(), None);
         }
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;
@@ -5175,7 +5178,7 @@ impl Runtime {
             self.start_prompts.remove(pane_id);
         }
         let (phase, failure) = match outcome {
-            crate::worktree_control::TaskAgentOutcome::Started => ("started", None),
+            crate::worktree_control::TaskAgentOutcome::Started(_) => ("started", None),
             crate::worktree_control::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
             crate::worktree_control::TaskAgentOutcome::Unknown(failure) => {
                 ("unknown", Some(failure))

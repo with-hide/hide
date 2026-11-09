@@ -366,7 +366,17 @@ use crate::error::HostError;
 /// longer keeps a Home folder, and asks each helper once to remove what
 /// Hide's marker lists in `~/hide`; a helper on 86 would refuse the call, so
 /// it upgrades first and keeps its `~/hide` until then.
-pub const PROTOCOL_VERSION: u32 = 87;
+/// 88: a node answers how a start of one of its profiles runs there
+/// (`ProfileLaunch`, PRD agent-profiles D-26): the profile's variables and
+/// program, checked on that machine, and the `hide` beside the node that
+/// starts it (`hide agent exec`); a helper on 87 would refuse the call, so
+/// it upgrades, and a node the core still admits on an older protocol
+/// answers it unrun, which the core reads as a machine that starts only each
+/// agent's built-in default profile. The same step lets the core read one
+/// process of a pane fresh (`holders::PaneCall::Process`) and carries the
+/// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
+/// `executor`), by which the core decides what came of that start.
+pub const PROTOCOL_VERSION: u32 = 88;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -821,6 +831,16 @@ pub enum Call {
     ProfileInstall {
         profile: hide_agent_adapter::ProfileId,
     },
+    /// How a start of the agent `kind` with the profile `profile` runs on
+    /// this machine (`crate::profiles::ProfileLaunch`): ready, gone, or
+    /// refused when the profile is being removed or another agent's, when its
+    /// account or variables no longer resolve here, or when its program is
+    /// not found. The built-in default profile is never asked: it starts as
+    /// the agent always has.
+    ProfileLaunch {
+        kind: String,
+        profile: hide_agent_adapter::ProfileId,
+    },
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
     HookDiagnosis,
@@ -1041,10 +1061,15 @@ pub enum Call {
     /// an [`OpenCodeFork`]: decided by the schema of the database holding it
     /// (`hide_session::opencode::fork_route`), and for OpenCode 2.x made by its
     /// server before the answer, within the node's own bound.
+    /// `profile` is the profile the fork's agent starts with, as its
+    /// machine answered it ([`Call::ProfileLaunch`]): OpenCode runs with its
+    /// variables and program, as the agent will (PRD agent-profiles D-26).
     #[serde(rename = "opencode_fork")]
     OpenCodeFork {
         source: String,
         cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<crate::profiles::ProfileStart>,
     },
     /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
     /// made, in the node account's own settings of that agent
@@ -1395,6 +1420,7 @@ impl Call {
             | Self::ProfileList { .. }
             | Self::ProfileApply { .. }
             | Self::ProfileInstall { .. }
+            | Self::ProfileLaunch { .. }
             | Self::HookDiagnosis
             | Self::OwedConfirmations { .. }
             | Self::HerdrSave
@@ -1777,6 +1803,10 @@ mod tests {
             },
             Call::ProfileInstall {
                 profile: ProfileId("p-wire-probe".into()),
+            },
+            Call::ProfileLaunch {
+                kind: "claude-code".into(),
+                profile: ProfileId("p-1".into()),
             },
         ];
         for call in calls {

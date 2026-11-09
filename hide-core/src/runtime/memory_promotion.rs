@@ -2272,6 +2272,7 @@ pub(super) fn spawn_hide_agent(
             brief: Some(spawn.prompt.clone()),
             task: Some(spawn.task.clone()),
             beside: false,
+            profile: None,
         },
     )?;
     view["id"]

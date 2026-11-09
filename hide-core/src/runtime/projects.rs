@@ -4338,6 +4338,10 @@ impl Runtime {
             .map_or_else(Default::default, |kind| {
                 self.agent_permission(device.as_deref().unwrap_or(self.node.as_str()), kind)
             });
+        let profile = self.new_start_profile(
+            device.as_deref().unwrap_or(self.node.as_str()),
+            payload.agent_kind.as_deref(),
+        );
         self.set_task_agent_launch(
             id,
             prompt,
@@ -4350,6 +4354,7 @@ impl Runtime {
                 model,
                 effort: None,
             },
+            profile,
         );
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
@@ -4578,18 +4583,21 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
-        self.start_in_checkout(payload, true, None)
+        self.start_in_checkout(payload, true, None, None)
     }
 
     /// A start in a checkout's new tab; `remember` false keeps the start out
     /// of the remembered agent choice (an archive resume). `cwd` is a folder
     /// inside the checkout the resumed conversation ran in; one outside it is
-    /// ignored and the tab starts at the checkout.
+    /// ignored and the tab starts at the checkout. `recorded` is the profile
+    /// an archive's resume ran with; a resume that names none resumes with
+    /// the built-in default, and a new start picks its profile (D-32).
     pub(super) fn start_in_checkout(
         &mut self,
         mut payload: AgentStartInCheckoutPayload,
         remember: bool,
         cwd: Option<String>,
+        recorded: Option<&crate::launch::LaunchProfile>,
     ) -> bool {
         let request_id = payload.request_id.clone();
         if payload.confirm_only {
@@ -4788,6 +4796,11 @@ impl Runtime {
         if remember && !payload.confirm_only {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         }
+        let profile = match (&resume, recorded) {
+            (_, Some(recorded)) => Some((recorded.id.clone(), recorded.name.clone())),
+            (Some(_), None) => None,
+            (None, None) => self.new_start_profile(&device, agent_kind.as_deref()),
+        };
         let mut arguments = resume.unwrap_or_default();
         let permission = agent_kind.as_deref().map_or_else(Default::default, |kind| {
             self.agent_permission(&device, kind)
@@ -4805,6 +4818,7 @@ impl Runtime {
                 model,
                 effort: None,
             },
+            profile,
         );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();

@@ -1131,6 +1131,9 @@ pub(crate) struct TaskAgentLaunch {
     /// The model and effort among `args`, which the started pane keeps for
     /// the agent's restarts.
     pub(crate) launch: hide_agent_adapter::LaunchChoice,
+    /// The profile the agent runs with (`crate::launch::Request::profile`),
+    /// `None` for the built-in default.
+    pub(crate) profile: Option<(hide_agent_adapter::ProfileId, String)>,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
 }
 

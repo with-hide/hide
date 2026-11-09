@@ -1203,7 +1203,16 @@ fn answer_bootstrap(
                     return Err("pane_changed");
                 }
             }
-            let mut answer = crate::hook_request::answer(core, &cap, hook, desktop);
+            // An executor's report is taken only from that attempt's
+            // executor, as this machine's kernel names the connection's
+            // process.
+            let executor = match &hook.command {
+                hide_node_link::panes::HookCommand::AgentExec { attempt, .. } => Some(
+                    hide_agent_hooks::hook_request::executor_process(peer as u32, attempt)?,
+                ),
+                _ => None,
+            };
+            let mut answer = crate::hook_request::answer(core, &cap, hook, executor, desktop);
             install::stamp(&mut answer, own_install());
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");

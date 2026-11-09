@@ -514,6 +514,16 @@ impl Program {
         Self { path, search }
     }
 
+    /// The program the file `path` is, run with `search`, when this account
+    /// can start it ([`runnable`]); why it cannot otherwise.
+    pub fn at(path: &Path, search: OsString) -> Result<Self, String> {
+        runnable(path, Some(&search))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            search,
+        })
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -597,6 +607,76 @@ pub fn start(path: &Path, search: &OsStr) -> Start {
             Start::Batch
         }
     }
+}
+
+/// Whether this account can start the file `path` run with `search` as its
+/// `PATH` (this process's own when `None`): a file it may run and, for a
+/// script that names its interpreter on its first line (`#!`), an
+/// interpreter that is such a file too, found on `search` when the script
+/// asks `env` for it. A program that passes and still ends at its start (a
+/// library its system lacks) fails as the program it is. Why it cannot,
+/// naming the file, otherwise.
+pub fn runnable(path: &Path, search: Option<&OsStr>) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    if !host::is_program(path) {
+        return Err(format!(
+            "{} is not a program this account may run",
+            path.display()
+        ));
+    }
+    let Some(interpreter) = interpreter(path) else {
+        return Ok(());
+    };
+    let found = match interpreter {
+        Interpreter::File(file) => host::is_program(&file).then_some(file.clone()).ok_or(file),
+        Interpreter::Named(name) => {
+            let search = search
+                .map(OsStr::to_owned)
+                .or_else(|| std::env::var_os("PATH"))
+                .unwrap_or_default();
+            host::find_program(&search, &name).ok_or_else(|| PathBuf::from(name))
+        }
+    };
+    found.map(drop).map_err(|missing| {
+        format!(
+            "{} runs {}, which is not a program here",
+            path.display(),
+            missing.display()
+        )
+    })
+}
+
+/// The interpreter a script's first line names (`#!`).
+enum Interpreter {
+    /// By its file.
+    File(PathBuf),
+    /// By the name `env` finds on the `PATH` (`#!/usr/bin/env node`).
+    Named(String),
+}
+
+/// The interpreter the file at `path` names on its first line, if it is a
+/// script that names one. Only Unix starts a script by its first line.
+fn interpreter(path: &Path) -> Option<Interpreter> {
+    use std::io::Read;
+    if cfg!(windows) {
+        return None;
+    }
+    let mut head = [0_u8; 256];
+    let read = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
+    let line = head[..read].strip_prefix(b"#!")?;
+    let line = line.split(|byte| *byte == b'\n').next().unwrap_or(line);
+    let line = String::from_utf8_lossy(line);
+    let mut words = line.split_whitespace();
+    let file = PathBuf::from(words.next()?);
+    if file.file_name() != Some(OsStr::new("env")) {
+        return Some(Interpreter::File(file));
+    }
+    // `env`'s own options (`-S`) and the variables it sets come first.
+    words
+        .find(|word| !word.starts_with('-') && !word.contains('='))
+        .map(|name| Interpreter::Named(name.to_owned()))
 }
 
 /// The folders installers put a CLI in that a daemon's `PATH` may not reach.

@@ -839,6 +839,7 @@ mod tests {
             resume_path: None,
             provider: "claude".into(),
             name: terminal.into(),
+            profile: None,
         }
     }
 

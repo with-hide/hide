@@ -3385,6 +3385,7 @@ impl Runtime {
                 // A choice the agent does not take is refused before any pane
                 // is made for the fork.
                 let launch = self.launch_choice_of(agent);
+                let profile = self.launch_profile_of(agent);
                 let permission = self.agent_permission_for_pane(&pane_id, agent_kind.kind());
                 if let Err(detail) =
                     super::agent_choice::launch_arguments(agent_kind.kind(), &launch, &permission)
@@ -3436,6 +3437,7 @@ impl Runtime {
                         kind: agent.agent_kind.clone(),
                         name: name.clone(),
                         launch: launch.clone(),
+                        profile: profile.clone(),
                     },
                 );
                 let Some(context) = self.live.as_ref().cloned() else {
@@ -3462,6 +3464,7 @@ impl Runtime {
                     placement: payload.placement,
                     codex_daemon: self.codex_daemon_for_pane(&pane_id),
                     launch,
+                    profile,
                     permission,
                 };
                 // Keys typed between the press and the agent's start wait for

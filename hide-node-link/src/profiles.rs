@@ -1,16 +1,17 @@
 //! The agent profiles a node keeps for its machine (PRD agent-profiles D-04,
 //! D-24, D-29, D-30; docs/ARCHITECTURE.md, The node's profile file).
 //!
-//! Each machine's node owns one profile file and answers the core's three
+//! Each machine's node owns one profile file and answers the core's four
 //! calls on it: [`crate::protocol::Call::ProfileList`],
-//! [`crate::protocol::Call::ProfileApply`] and
-//! [`crate::protocol::Call::ProfileInstall`]. A node that predates them
+//! [`crate::protocol::Call::ProfileApply`],
+//! [`crate::protocol::Call::ProfileInstall`] and, for a start,
+//! [`crate::protocol::Call::ProfileLaunch`]. A node that predates them
 //! refuses them unrun, and the core then offers only each agent's built-in
 //! default profile on that machine.
 
 use std::collections::BTreeMap;
 
-use hide_agent_adapter::{AccountRef, ProfileId};
+use hide_agent_adapter::{AccountKey, AccountRef, ProfileId};
 use hide_kit::ProfilePlace;
 use serde::{Deserialize, Serialize};
 
@@ -135,4 +136,50 @@ pub enum ProfileField {
     /// The profile as a whole: one the machine has no room for, one that is
     /// gone or being removed, or one the node's own variables refuse.
     Profile,
+}
+
+/// A node's answer to [`crate::protocol::Call::ProfileLaunch`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProfileLaunch {
+    /// The start runs so.
+    Ready(ProfileStart),
+    /// This machine has no such profile any more.
+    Gone,
+    /// The profile cannot start now; `text` says why, naming the profile and,
+    /// when it is the cause, its program.
+    Refused { text: String },
+}
+
+/// How a start of one profile's agent runs on its machine, as that
+/// machine's node checked it just now: what the start line of `hide agent
+/// exec` carries.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileStart {
+    /// The profile's name, which the start line and its failures name.
+    pub name: String,
+    /// The account the agent runs in (D-15).
+    pub account: AccountKey,
+    /// The profile's version the answer was made from.
+    pub version: u64,
+    /// The variables the start sets: the account's, then the profile's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<(String, String)>,
+    /// The profile's own program, found on the machine, run in place of the
+    /// agent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<ProfileProgram>,
+    /// The absolute path of the `hide` beside the node, which runs the start
+    /// (`hide agent exec`).
+    pub exec: String,
+}
+
+/// A profile's program as its machine starts it: the file, and the words
+/// before the agent's arguments (npm's Windows launcher read as the program
+/// it runs, `hide_platform::programs::Start`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileProgram {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leading: Vec<String>,
 }

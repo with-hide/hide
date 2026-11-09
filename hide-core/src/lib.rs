@@ -49,6 +49,7 @@ pub mod issues;
 mod kit;
 mod labels;
 mod latest_file;
+pub mod launch;
 pub mod links;
 pub mod live;
 pub mod local_issues;

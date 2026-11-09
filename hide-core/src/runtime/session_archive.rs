@@ -393,6 +393,7 @@ impl Runtime {
             depth: 0,
             closed: false,
             resume: Resume::Idle,
+            profile: self.launch_profile_of(agent),
         }
     }
 
@@ -1589,6 +1590,7 @@ impl Runtime {
             },
             false,
             member.cwd.clone(),
+            member.profile.as_ref(),
         );
         if let Some(operation) = self
             .snapshot
@@ -1664,6 +1666,10 @@ impl Runtime {
             None,
             arguments,
             hide_agent_adapter::LaunchChoice::default(),
+            member
+                .profile
+                .as_ref()
+                .map(|profile| (profile.id.clone(), profile.name.clone())),
         );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = member.source_reference.clone();

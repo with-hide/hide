@@ -835,6 +835,28 @@ pub fn request_hook(
     )
 }
 
+/// How long `hide agent exec` waits for its node to answer a report: the
+/// agent waits on it, and a `Ready` that is not answered starts nothing.
+const AGENT_EXEC_WITHIN: Duration = Duration::from_secs(10);
+
+/// `hide agent exec`'s report of the profile's start `attempt` the pane's
+/// shell ran (`HookCommand::AgentExec`), within [`AGENT_EXEC_WITHIN`].
+pub fn report_agent_exec(
+    env: &Env,
+    attempt: &str,
+    event: hide_node_link::panes::AgentExecEvent,
+) -> Result<Value, String> {
+    hook_request(
+        env,
+        std::env::var(crate::env::HIDE_CAP_REF).ok(),
+        hide_node_link::panes::HookCommand::AgentExec {
+            attempt: attempt.to_owned(),
+            event,
+        },
+        Instant::now() + AGENT_EXEC_WITHIN,
+    )
+}
+
 /// [`request_hook`] with the reference `HIDE_CAP_REF` names, if any, and the
 /// request's deadline.
 fn hook_request(

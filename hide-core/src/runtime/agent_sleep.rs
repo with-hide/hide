@@ -655,6 +655,7 @@ impl Runtime {
             return false;
         };
         record.launch = self.launch_choice_of(agent);
+        record.profile = self.launch_profile_of(agent);
         let kind = record.kind.clone();
         crate::diagnostic!(serde_json::json!({
             "component": "agent_sleep",
@@ -766,6 +767,7 @@ impl Runtime {
             cwd: record.cwd.clone(),
             session_id: record.session_id.clone(),
             codex_daemon,
+            profile: record.profile.clone(),
         };
         crate::diagnostic!(serde_json::json!({
             "component": "agent_sleep",
@@ -777,10 +779,11 @@ impl Runtime {
         }));
         // The pane's record follows the agent the wake starts: the resumed
         // conversation, or the new one it reports.
-        let (kind, name, session) = (
+        let (kind, name, session, profile) = (
             request.kind.clone(),
             request.name.clone(),
             request.session_id.clone(),
+            request.profile.clone(),
         );
         if let Err(message) = agent_sleep_engine::spawn_wake(context, request) {
             return self.ingest_agent_wake(
@@ -793,7 +796,14 @@ impl Runtime {
             );
         }
         let session = (mode == WakeMode::Resume).then_some(session).flatten();
-        self.record_pane_launch(pane_id, &kind, &name, &choice, session.as_deref());
+        self.record_pane_launch(
+            pane_id,
+            &kind,
+            &name,
+            &choice,
+            profile.as_ref(),
+            session.as_deref(),
+        );
         self.persist_ui_state();
         self.refresh_sleep_rows_of(pane_id);
         true
@@ -851,6 +861,7 @@ impl Runtime {
             let record = crate::sidebar::project_agent(agent).ok().and_then(|row| {
                 let mut record = SleepRecord::ending(&row, cwd, now)?;
                 record.launch = self.launch_choice_of(&row);
+                record.profile = self.launch_profile_of(&row);
                 Some(record)
             });
             let Some(mut record) = record else {

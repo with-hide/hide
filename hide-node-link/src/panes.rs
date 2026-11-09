@@ -82,7 +82,8 @@ pub struct PaneIdentity {
 // A hook's proof-and-answer exchange is spoken by the hook itself, so its
 // types are the hook crate's (`hide_agent_hooks::hook_request`).
 pub use hide_agent_hooks::hook_request::{
-    HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest, PullPoint,
+    AGENT_EXEC_FAILURE_LIMIT, AgentExecEvent, ExecProcess, HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT,
+    HookCommand, HookRequest, PullPoint,
 };
 
 /// What a node tells the core without being asked: one JSON line with an
@@ -102,6 +103,12 @@ pub enum NodeEvent {
         one_shot: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hook: Option<HookRequest>,
+        /// For a `hook` that is `HookCommand::AgentExec`, the process that
+        /// sent it, which the node's kernel says is that attempt's executor
+        /// (`hide_agent_hooks::hook_request::executor_process`); none for
+        /// every other request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        executor: Option<ExecProcess>,
     },
     /// A process that is in no pane the node can prove asked for a
     /// credential, and the node's kernel says its working directory is

@@ -101,6 +101,7 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
             plan_node: None,
             plan: None,
             beside: false,
+            profile: None,
         },
     }
 }

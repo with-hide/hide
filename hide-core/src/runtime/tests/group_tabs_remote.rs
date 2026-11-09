@@ -655,7 +655,10 @@ fn an_archived_remote_root_keeps_its_pending_follow_before_automatic_descendants
                 shell: crate::agent_start::ShellStart::Plain,
             }),
         );
-        runtime.ingest_task_agent_result(task, crate::worktree_control::TaskAgentOutcome::Started);
+        runtime.ingest_task_agent_result(
+            task,
+            crate::worktree_control::TaskAgentOutcome::Started(None),
+        );
         runtime.advance_session_archive();
         assert!(matches!(
             runtime.snapshot.ui_state.session_archive.records[&id].members[0].resume,

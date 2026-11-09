@@ -18,6 +18,13 @@ const REASON_KEYS = new Map<string, MessageKey>([
   ["agent_hook_missing", "coreError.startReason.agent_hook_not_ready"],
   ["agent_hook_unchecked", "coreError.startReason.agent_hook_not_ready"],
   ["agent_hook_unconfirmed", "coreError.startReason.agent_hook_unconfirmed"],
+  // A start whose agent profile its machine did not answer for
+  // (`hide-core/src/launch.rs`); the profile's name stays in the log.
+  ["profile_gone", "coreError.startReason.profile_gone"],
+  ["profile_refused", "coreError.startReason.profile_refused"],
+  ["profiles_unsupported", "coreError.startReason.profiles_unsupported"],
+  ["profile_unanswered", "coreError.startReason.profile_unanswered"],
+  ["profile_unconfirmed", "coreError.startReason.profile_unconfirmed"],
   // Why waking a sleeping agent failed (`agent_sleep_engine::WAKE_*`).
   ["agent_wake.folder_missing", "taskReason.folderMissing"],
   ["agent_wake.not_resumed", "wakeReason.notResumed"],

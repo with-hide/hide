@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Instant;
 
+use hide_agent_hooks::hook_request::ExecSeen;
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
     HolderError, HolderKey, HolderRenewal, HolderScroll, HolderStart, PaneFacts, PaneHolders,
@@ -44,6 +45,7 @@ use crate::session_sync::{NotResumed, ProjectedAgent, ProjectionState};
 use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
 
 mod agents;
+mod attempt;
 mod creation;
 pub(crate) mod herdr_session;
 mod ids;
@@ -381,6 +383,108 @@ impl OwnEngine<'_> {
     #[cfg(test)]
     pub(crate) fn stop(&self) {
         self.shared.stopped.store(true, Ordering::Release);
+        self.topology().settle_attempts(attempt::ENGINE_STOPPED);
+    }
+
+    /// Waits for what came of `finish`'s attempt until `by`, reading and
+    /// sleeping off every lock (`attempt`): a fresh read of its process
+    /// once its executor is `Ready`, as often as a start polls its pane.
+    #[allow(clippy::disallowed_methods)] // a production wait between reads of a process, bounded by the caller's deadline
+    fn await_attempt(&self, finish: attempt::Finish<'_, '_>, by: Instant) -> attempt::Outcome {
+        let (pane, id) = (finish.pane().to_owned(), finish.attempt().to_owned());
+        loop {
+            let look = if self.check().is_ok() {
+                self.topology().look_attempt(&pane, &id)
+            } else {
+                None
+            };
+            let decided = match look {
+                Some(attempt::Look::Ended) => break,
+                None if self.check().is_err() => Some(attempt::Outcome::Unconfirmed {
+                    why: attempt::ENGINE_STOPPED,
+                }),
+                None => Some(attempt::Outcome::Unconfirmed {
+                    why: attempt::PANE_ENDED,
+                }),
+                Some(attempt::Look::Unready) => None,
+                Some(attempt::Look::Ready { executor, child }) => {
+                    let within = by.saturating_duration_since(Instant::now());
+                    let seen = attempt::seen(&id, executor, child, |pid| {
+                        self.shared.holders.process(
+                            &pane,
+                            pid,
+                            within.min(hide_node_link::link_panes::ASK_WAIT),
+                        )
+                    });
+                    match seen {
+                        ExecSeen::Ran => Some(attempt::Outcome::Started),
+                        ExecSeen::Ended => Some(attempt::Outcome::Unconfirmed {
+                            why: attempt::ENDED_UNSEEN,
+                        }),
+                        ExecSeen::Waiting => None,
+                    }
+                }
+            };
+            if let Some(outcome) = decided {
+                self.topology().settle_attempt(&pane, &id, outcome);
+                break;
+            }
+            let now = Instant::now();
+            if now >= by {
+                self.topology().settle_attempt(
+                    &pane,
+                    &id,
+                    attempt::Outcome::Unconfirmed {
+                        why: attempt::DEADLINE,
+                    },
+                );
+                break;
+            }
+            std::thread::sleep(crate::agent_start::POLL_INTERVAL.min(by - now));
+        }
+        finish.end()
+    }
+
+    /// Takes the attempt `id` out of `pane` and answers what came of it:
+    /// a failure withdraws its own start's provisional agent; any other end
+    /// lays the pane's last facts again, so a program the attempt held back
+    /// from showing (`agents::apply`) shows now.
+    fn finish_attempt(&self, pane: &str, id: &str) -> attempt::Outcome {
+        let taken = {
+            let mut topology = self.topology();
+            topology.take_attempt(pane, id).map(|(outcome, withdrawn)| {
+                let facts = topology
+                    .pane(pane)
+                    .ok()
+                    .filter(|held| held.live.heard)
+                    .map(|held| held.live.facts.clone());
+                (outcome, withdrawn, facts)
+            })
+        };
+        let Some((outcome, withdrawn, facts)) = taken else {
+            return attempt::Outcome::Unconfirmed {
+                why: attempt::PANE_ENDED,
+            };
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "own_engine",
+            "kind": "agent_exec.ended",
+            "pane": pane,
+            "attempt": id,
+            "outcome": match &outcome {
+                attempt::Outcome::Started => "started",
+                attempt::Outcome::Failed { checked: true, .. } => "refused",
+                attempt::Outcome::Failed { checked: false, .. } => "failed",
+                attempt::Outcome::Unconfirmed { why } => why,
+            },
+        }));
+        if withdrawn {
+            self.give_rules(pane);
+            self.changed();
+        } else if let Some(facts) = facts {
+            self.pane_facts(pane, &facts);
+        }
+        outcome
     }
 
     fn topology(&self) -> Held<'_> {
@@ -621,6 +725,7 @@ impl OwnEngine<'_> {
         agent: agents::PaneAgent,
         line: &str,
         wakes: bool,
+        attempt: Option<String>,
     ) -> Answer<()> {
         let start = {
             let mut topology = self.topology();
@@ -634,7 +739,7 @@ impl OwnEngine<'_> {
                     "another pane runs an agent under its name".to_owned(),
                 ));
             }
-            topology.start_agent(pane, agent)?
+            topology.start_agent(pane, agent, attempt)?
         };
         self.give_rules(pane);
         self.changed();
@@ -1304,6 +1409,17 @@ enum Settled {
 
 /// Settles the start of `pane`, drawn `starting`, once its holder started
 /// or did not, `failed` saying why ([`OwnEngine::start_drawn`]).
+/// The name of an executor's report, as a diagnostic names it.
+fn agent_exec_event(event: &hide_node_link::panes::AgentExecEvent) -> &'static str {
+    use hide_node_link::panes::AgentExecEvent;
+    match event {
+        AgentExecEvent::Ready => "ready",
+        AgentExecEvent::Refused { .. } => "refused",
+        AgentExecEvent::Failed { .. } => "failed",
+        AgentExecEvent::Spawned { .. } => "spawned",
+    }
+}
+
 /// The instant a call bounded by `wait` ends by: a read of many panes asks
 /// each holder only for what is left of it.
 fn deadline(wait: Wait) -> Instant {
@@ -2315,17 +2431,21 @@ impl<'g> Engine for OwnEngine<'g> {
 
     fn prepare_start(&self, launch: AgentLaunch) -> Result<PreparedStart, String> {
         let catalog = self.shared.definitions.get();
-        let definition = agents::definition(&catalog, &launch.kind)
-            .ok_or_else(|| format!("no agent definition names {}", launch.kind))?;
-        let argv = agents::start_argv(
-            definition,
-            launch.program.as_ref(),
-            crate::codex_launch::start_arguments(
-                &definition.id,
-                launch.codex_daemon,
-                launch.args.clone(),
-            )?,
-        )?;
+        let kind = launch.launch.kind();
+        let definition = agents::definition(&catalog, kind)
+            .ok_or_else(|| format!("no agent definition names {kind}"))?;
+        let argv = launch
+            .launch
+            .line(agents::start_argv(
+                definition,
+                launch.launch.agent_file(launch.program.as_ref()),
+                crate::codex_launch::start_arguments(
+                    &definition.id,
+                    launch.codex_daemon,
+                    launch.args.clone(),
+                )?,
+            )?)?
+            .words;
         // The longest of the shells' lines, so the start is bounded as the
         // shell it meets will type it.
         let line = shell_line::longest(|shell| shell_line::command(&argv, shell))
@@ -2338,25 +2458,26 @@ impl<'g> Engine for OwnEngine<'g> {
         self.renew(pane, cwd)
     }
 
-    fn start_agent(&self, _wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
+    fn start_agent(&self, wait: Wait, start: &PreparedStart) -> Answer<StartedAgent> {
         self.check()?;
         let launch = start.launch();
         let pane = launch.pane_id.as_str();
         let catalog = self.shared.definitions.get();
-        let definition = agents::definition(&catalog, &launch.kind).ok_or_else(|| {
-            refused(
-                "unknown_agent",
-                format!("no agent definition names {}", launch.kind),
-            )
-        })?;
+        let kind = launch.launch.kind();
+        let definition = agents::definition(&catalog, kind)
+            .ok_or_else(|| refused("unknown_agent", format!("no agent definition names {kind}")))?;
         let args = crate::codex_launch::start_arguments(
             &definition.id,
             launch.codex_daemon,
             launch.args.clone(),
         )
         .map_err(|message| refused("agent_start_refused", message))?;
-        let argv = agents::start_argv(definition, launch.program.as_ref(), args)
-            .map_err(|message| refused("agent_start_refused", message))?;
+        let argv = agents::start_argv(
+            definition,
+            launch.launch.agent_file(launch.program.as_ref()),
+            args,
+        )
+        .map_err(|message| refused("agent_start_refused", message))?;
         // Herdr's condition for a start: the shell holds the terminal alone.
         let processes = self.processes(pane)?;
         if !processes.shell_holds_terminal() {
@@ -2371,12 +2492,26 @@ impl<'g> Engine for OwnEngine<'g> {
                 format!("pane {pane} runs cmd.exe, which takes no start line; start the agent from PowerShell"),
             )
         })?;
-        let line = shell_line::command(&argv, shell).ok_or_else(|| {
+        // A profile's start runs the agent through `hide agent exec`, so its
+        // variables reach the agent alone; the session the start names is
+        // read from the agent's own words.
+        let line = launch
+            .launch
+            .line(argv.clone())
+            .map_err(|message| refused("agent_start_refused", message))?;
+        let typed = shell_line::command(&line.words, shell).ok_or_else(|| {
             refused(
                 "agent_start_refused",
                 format!("the {} start cannot be typed into a shell", definition.id),
             )
         })?;
+        // A profile's start ends with what came of its attempt, which typing
+        // the line does not say (PRD agent-profiles B22); whatever ends this
+        // call ends the attempt with it.
+        let finish = line
+            .attempt
+            .as_deref()
+            .map(|id| attempt::Finish::new(self, pane, id));
         self.type_agent_start(
             pane,
             agents::PaneAgent::started(
@@ -2384,12 +2519,52 @@ impl<'g> Engine for OwnEngine<'g> {
                 Some(&launch.name),
                 agents::started_session(definition, &argv, launch.wakes),
             ),
-            &line,
+            &typed,
             launch.wakes,
+            line.attempt.clone(),
         )?;
+        if let Some(finish) = finish {
+            match self.await_attempt(finish, deadline(wait)) {
+                attempt::Outcome::Started => {}
+                attempt::Outcome::Failed { failure, .. } => {
+                    return Err(refused(crate::launch::PROFILE_REFUSED, failure));
+                }
+                attempt::Outcome::Unconfirmed { why } => {
+                    return Err(refused(
+                        crate::launch::PROFILE_UNCONFIRMED,
+                        format!(
+                            "the {} start with its profile was typed in pane {pane}, and \
+                             whether its program runs is not known ({why})",
+                            definition.id
+                        ),
+                    ));
+                }
+            }
+        }
         Ok(StartedAgent {
             pane_id: pane.to_owned(),
             terminal_id: Some(pane.to_owned()),
+        })
+    }
+
+    fn agent_exec(&self, pane: &str, report: crate::engine::AgentExecReport) -> Answer<()> {
+        self.check()?;
+        // Only the attempt's state moves here; its waiter, off every lock,
+        // reads what came of it.
+        let taken = self.topology().attempt_report(pane, &report);
+        taken.map_err(|code| {
+            crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "agent_exec.not_taken",
+                "pane": pane,
+                "attempt": report.attempt,
+                "event": agent_exec_event(&report.event),
+                "code": code,
+            }));
+            refused(
+                code,
+                format!("pane {pane} runs no start {}", report.attempt),
+            )
         })
     }
 
@@ -2619,6 +2794,10 @@ mod tests {
         /// How many of the next process asks about each pane are lost, as a
         /// node's ask is that never comes back.
         processes_lost: Mutex<BTreeMap<String, usize>>,
+        /// What a fresh read of each process answers, by pid; a pid it does
+        /// not name is no process in the pane. The pids read, in order.
+        programs: Mutex<BTreeMap<u32, hide_node_link::holders::HolderProcess>>,
+        programs_read: Mutex<Vec<u32>>,
     }
 
     impl Holders {
@@ -2865,6 +3044,15 @@ mod tests {
             Err(HolderError::Unreachable {
                 message: "not asked".to_owned(),
             })
+        }
+        fn process(
+            &self,
+            _: &str,
+            pid: u32,
+            _: Duration,
+        ) -> Result<Option<hide_node_link::holders::HolderProcess>, HolderError> {
+            self.programs_read.lock().unwrap().push(pid);
+            Ok(self.programs.lock().unwrap().get(&pid).cloned())
         }
         fn processes(&self, pane: &str, within: Duration) -> Result<HolderProcesses, HolderError> {
             self.processes_within.lock().unwrap().push(within);
@@ -3830,7 +4018,6 @@ mod tests {
                 "test:wake",
                 crate::agent_start::ShellStart::Plain,
                 &start,
-                Duration::from_secs(1),
                 wait,
                 Duration::ZERO,
                 // Ends the start once its shell was read, before typing.
@@ -4273,7 +4460,7 @@ mod tests {
         AgentLaunch {
             pane_id: pane.to_owned(),
             name: name.to_owned(),
-            kind: kind.to_owned(),
+            launch: crate::launch::Launch::default_of(kind),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
@@ -4502,6 +4689,720 @@ mod tests {
         assert_eq!(listed[0].name.as_deref(), Some("worker"));
         assert_eq!(listed[0].agent_status.as_deref(), Some("done"));
         assert_eq!(engine.pane_agent_status(WAIT, &pane).unwrap(), "done");
+    }
+
+    /// The executor of a profile's start as a fresh read of the pane's
+    /// process names it (`attempt`).
+    const EXECUTOR: hide_node_link::panes::ExecProcess = hide_node_link::panes::ExecProcess {
+        pid: 300,
+        started: 30,
+    };
+
+    fn words(line: &[&str]) -> Vec<String> {
+        line.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// The arguments of the attempt's executor, `hide agent exec`.
+    fn executor_words(attempt: &str) -> Vec<String> {
+        words(&[
+            "/opt/hide/hide",
+            "agent",
+            "exec",
+            "--attempt",
+            attempt,
+            "--profile",
+            "Claude · gw",
+            "--",
+            "claude",
+        ])
+    }
+
+    fn answered(
+        name: &str,
+        program: Option<hide_node_link::profiles::ProfileProgram>,
+    ) -> hide_node_link::profiles::ProfileStart {
+        hide_node_link::profiles::ProfileStart {
+            name: name.to_owned(),
+            account: hide_agent_adapter::AccountKey::Default,
+            version: 1,
+            env: Vec::new(),
+            program,
+            exec: "/opt/hide/hide".to_owned(),
+        }
+    }
+
+    /// An engine whose one pane is a shell alone.
+    fn shell_pane() -> (Arc<Holders>, OwnEngine<'static>, String) {
+        let holders = Arc::new(Holders::default());
+        holders.idle_shell(41, "zsh");
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        (holders, engine, pane)
+    }
+
+    fn profile_launch(
+        engine: &OwnEngine,
+        pane: &str,
+        profile: hide_node_link::profiles::ProfileStart,
+        args: &[&str],
+    ) -> PreparedStart {
+        engine
+            .prepare_start(AgentLaunch {
+                launch: crate::launch::Launch::answered("claude", "p1", profile),
+                ..launch(pane, "worker", "claude", args)
+            })
+            .unwrap()
+    }
+
+    /// The attempt the `nth` profile's line typed into `pane` names, once
+    /// it is typed.
+    fn typed_attempt(holders: &Holders, pane: &str, nth: usize) -> String {
+        settles("the start's line is typed", || {
+            holders.typed(pane).matches("--attempt ").count() > nth
+        });
+        holders
+            .typed(pane)
+            .split("--attempt ")
+            .nth(nth + 1)
+            .and_then(|rest| rest.split(' ').next())
+            .expect("a profile's start names its attempt")
+            .to_owned()
+    }
+
+    fn exec_report(
+        engine: &OwnEngine,
+        pane: &str,
+        attempt: &str,
+        event: hide_node_link::panes::AgentExecEvent,
+        executor: hide_node_link::panes::ExecProcess,
+    ) -> Answer<()> {
+        engine.agent_exec(
+            pane,
+            crate::engine::AgentExecReport {
+                attempt: attempt.to_owned(),
+                event,
+                executor,
+            },
+        )
+    }
+
+    /// `process` as a fresh read of it answers: `argv`, under its start,
+    /// started by `parent`.
+    fn reads(
+        holders: &Holders,
+        process: hide_node_link::panes::ExecProcess,
+        parent: u32,
+        argv: Vec<String>,
+    ) {
+        holders.programs.lock().unwrap().insert(
+            process.pid,
+            hide_node_link::holders::HolderProcess {
+                started: process.started,
+                parent: Some(parent),
+                argv,
+            },
+        );
+    }
+
+    /// Starts `start`, a profile's, by `wait`, while `play` plays its
+    /// executor with the attempt its line names once it is typed.
+    fn start_played(
+        engine: &OwnEngine,
+        holders: &Holders,
+        start: &PreparedStart,
+        wait: Wait,
+        play: impl FnOnce(&str) + Send,
+    ) -> Answer<StartedAgent> {
+        let pane = start.launch().pane_id.clone();
+        let before = holders.typed(&pane).matches("--attempt ").count();
+        std::thread::scope(|scope| {
+            scope.spawn(|| play(&typed_attempt(holders, &pane, before)));
+            engine.start_agent(wait, start)
+        })
+    }
+
+    /// `hide agent exec` on Unix whose program starts: its `Ready`, then
+    /// its own process running the program.
+    fn execs<'a>(
+        engine: &'a OwnEngine,
+        holders: &'a Holders,
+        pane: &'a str,
+    ) -> impl FnOnce(&str) + Send + 'a {
+        move |attempt| {
+            reads(holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(
+                engine,
+                pane,
+                attempt,
+                hide_node_link::panes::AgentExecEvent::Ready,
+                EXECUTOR,
+            )
+            .unwrap();
+            reads(holders, EXECUTOR, 41, words(&["claude", "--model", "x"]));
+        }
+    }
+
+    fn within(millis: u64) -> Wait {
+        Wait::By(Instant::now() + Duration::from_millis(millis))
+    }
+
+    /// A start with a profile other than the built-in default is typed as
+    /// `hide agent exec` with its attempt first and the profile's variables
+    /// as its arguments, never as a variable of the pane's shell (PRD
+    /// agent-profiles D-26, B21), and starts once a fresh read shows its
+    /// program in the executor's own process; the test above types the
+    /// built-in default's line, unchanged (B29).
+    #[test]
+    fn a_profiles_start_is_typed_as_hide_agent_exec_with_its_variables_as_arguments() {
+        let (holders, engine, pane) = shell_pane();
+        let mut profile = answered("work", None);
+        profile.account =
+            hide_agent_adapter::AccountKey::Folder("/home/me/.claude-work".to_owned());
+        profile.env = vec![(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            "/home/me/.claude-work".to_owned(),
+        )];
+        let start = profile_launch(&engine, &pane, profile, &["--model", "it's"]);
+        start_played(
+            &engine,
+            &holders,
+            &start,
+            WAIT,
+            execs(&engine, &holders, &pane),
+        )
+        .unwrap();
+        let attempt = typed_attempt(&holders, &pane, 0);
+        assert_eq!(
+            holders.typed(&pane),
+            format!(
+                "/opt/hide/hide agent exec --attempt {attempt} --profile 'Claude · work' --env CLAUDE_CONFIG_DIR=/home/me/.claude-work -- claude --model 'it'\\''s'\r"
+            )
+        );
+        // The agent is still the definition's agent, by its own program.
+        assert_eq!(
+            holders.rules_given(1),
+            [(pane.clone(), Some("claude-code".to_owned()))]
+        );
+        assert_eq!(
+            engine
+                .delivery_agent(WAIT, "worker")
+                .unwrap()
+                .kind
+                .as_deref(),
+            Some("claude")
+        );
+        assert!(
+            engine
+                .topology()
+                .pane(&pane)
+                .unwrap()
+                .live
+                .attempt
+                .is_none()
+        );
+    }
+
+    /// A profile's own program takes the agent's place with the agent's
+    /// arguments alone: the words the agent's program starts with on this
+    /// machine (npm's script on Windows) are the agent's, not the wrapper's.
+    #[test]
+    fn a_profiles_program_replaces_the_agents_program_and_the_words_it_starts_with() {
+        let typed = |program: Option<hide_node_link::profiles::ProfileProgram>| {
+            let (holders, engine, pane) = shell_pane();
+            let start = engine
+                .prepare_start(AgentLaunch {
+                    launch: crate::launch::Launch::answered(
+                        "claude",
+                        "p1",
+                        answered("gw", program),
+                    ),
+                    program: Some(crate::engine::StartProgram {
+                        name: "claude".to_owned(),
+                        program: "/opt/node".to_owned(),
+                        leading: vec!["/opt/claude/cli.js".to_owned()],
+                    }),
+                    ..launch(&pane, "worker", "claude", &["--model", "x"])
+                })
+                .unwrap();
+            start_played(
+                &engine,
+                &holders,
+                &start,
+                WAIT,
+                execs(&engine, &holders, &pane),
+            )
+            .unwrap();
+            let attempt = typed_attempt(&holders, &pane, 0);
+            holders.typed(&pane).replace(&attempt, "<attempt>")
+        };
+
+        assert_eq!(
+            typed(Some(hide_node_link::profiles::ProfileProgram {
+                file: "/opt/gw".to_owned(),
+                leading: vec!["--via".to_owned()],
+            })),
+            "/opt/hide/hide agent exec --attempt <attempt> --profile 'Claude · gw' --program /opt/gw --leading --via -- claude --model x\r"
+        );
+        assert_eq!(
+            typed(None),
+            "/opt/hide/hide agent exec --attempt <attempt> --profile 'Claude · gw' -- /opt/node /opt/claude/cli.js --model x\r",
+            "without a program of its own the profile starts the agent's as it always starts"
+        );
+    }
+
+    /// A profile's program its executor's check refuses fails the start
+    /// that typed it, with the executor's sentence, and frees the agent's
+    /// name at once (PRD agent-profiles B22); nothing of a process is read
+    /// for a start that was never `Ready`.
+    #[test]
+    fn a_profiles_start_whose_program_cannot_start_fails_and_frees_its_name() {
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let failure = "Claude · gw could not start /opt/gw: /usr/bin/nope is not a program here";
+
+        let refused = start_played(&engine, &holders, &start, WAIT, |attempt| {
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                hide_node_link::panes::AgentExecEvent::Refused {
+                    failure: failure.to_owned(),
+                },
+                EXECUTOR,
+            )
+            .unwrap();
+        })
+        .unwrap_err();
+
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_REFUSED));
+        assert!(refused.message().contains(failure), "{refused:?}");
+        assert!(
+            engine.delivery_agent(WAIT, "worker").is_err(),
+            "the name is free for the next start"
+        );
+        assert!(
+            engine
+                .topology()
+                .pane(&pane)
+                .unwrap()
+                .live
+                .attempt
+                .is_none()
+        );
+        assert!(holders.programs_read.lock().unwrap().is_empty());
+    }
+
+    /// A start whose `exec` fails after its `Ready` (the check passed)
+    /// fails with the executor's sentence, the same as a refused check.
+    #[test]
+    fn a_start_whose_exec_fails_after_its_ready_fails_with_the_executors_sentence() {
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let refused = start_played(&engine, &holders, &start, WAIT, |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                hide_node_link::panes::AgentExecEvent::Ready,
+                EXECUTOR,
+            )
+            .unwrap();
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                hide_node_link::panes::AgentExecEvent::Failed {
+                    failure: "Claude · gw could not start /opt/gw: Permission denied".to_owned(),
+                },
+                EXECUTOR,
+            )
+            .unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_REFUSED));
+        assert!(
+            refused.message().contains("Permission denied"),
+            "{refused:?}"
+        );
+        assert!(engine.delivery_agent(WAIT, "worker").is_err());
+    }
+
+    /// Windows: a child the system lists while it is still suspended, before
+    /// its executor put it in its job and resumed it, is no evidence; a job
+    /// that then fails fails the start. Once the executor reported the child
+    /// in its job, a read of that child under the executor starts it.
+    #[test]
+    fn a_windows_child_counts_only_once_its_executor_reported_it_in_its_job() {
+        use hide_node_link::panes::{AgentExecEvent, ExecProcess};
+        let (holders, engine, pane) = shell_pane();
+        let child = ExecProcess {
+            pid: 301,
+            started: 31,
+        };
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let refused = start_played(&engine, &holders, &start, WAIT, |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            reads(&holders, child, EXECUTOR.pid, words(&["claude"]));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            settles("the executor's process is read", || {
+                holders
+                    .programs_read
+                    .lock()
+                    .unwrap()
+                    .contains(&EXECUTOR.pid)
+            });
+            assert_eq!(
+                engine.topology().look_attempt(&pane, attempt),
+                Some(attempt::Look::Ready {
+                    executor: EXECUTOR,
+                    child: None,
+                }),
+                "a suspended child leaves the start undecided"
+            );
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                AgentExecEvent::Failed {
+                    failure: "Claude · gw could not start claude: its job refused it".to_owned(),
+                },
+                EXECUTOR,
+            )
+            .unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_REFUSED));
+
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        start_played(&engine, &holders, &start, WAIT, |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                AgentExecEvent::Spawned { child },
+                EXECUTOR,
+            )
+            .unwrap();
+        })
+        .unwrap();
+        assert!(holders.programs_read.lock().unwrap().contains(&child.pid));
+    }
+
+    /// The start a pane runs keeps its own result when another start is
+    /// refused in that pane meanwhile: the refused one takes nothing of it,
+    /// and the running one's failure reaches it (R2).
+    #[test]
+    fn a_start_refused_while_another_runs_in_its_pane_leaves_that_start_its_own_result() {
+        use hide_node_link::panes::AgentExecEvent;
+        let (holders, engine, pane) = shell_pane();
+        let first = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let second = profile_launch(&engine, &pane, answered("other", None), &[]);
+        let refused = start_played(&engine, &holders, &first, WAIT, |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            let busy = engine.start_agent(WAIT, &second).unwrap_err();
+            assert_eq!(busy.code(), Some("agent_pane_busy"), "{busy:?}");
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                AgentExecEvent::Failed {
+                    failure: "the first start's program".to_owned(),
+                },
+                EXECUTOR,
+            )
+            .unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_REFUSED));
+        assert!(refused.message().contains("the first start's program"));
+        assert_eq!(holders.typed(&pane).matches("--attempt ").count(), 1);
+    }
+
+    /// Every report of an ended start, and a read of its process running a
+    /// program, is nothing to the next start in its pane, which ends by
+    /// its own executor alone.
+    #[test]
+    fn a_late_report_of_an_ended_start_changes_nothing_of_the_next_in_its_pane() {
+        use hide_node_link::panes::{AgentExecEvent, ExecProcess};
+        let (holders, engine, pane) = shell_pane();
+        let first = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        start_played(&engine, &holders, &first, WAIT, |attempt| {
+            exec_report(
+                &engine,
+                &pane,
+                attempt,
+                AgentExecEvent::Refused {
+                    failure: "gone".to_owned(),
+                },
+                EXECUTOR,
+            )
+            .unwrap();
+        })
+        .unwrap_err();
+        let ended = typed_attempt(&holders, &pane, 0);
+        let next = ExecProcess {
+            pid: 303,
+            started: 33,
+        };
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        start_played(&engine, &holders, &start, WAIT, |attempt| {
+            for event in [
+                AgentExecEvent::Ready,
+                AgentExecEvent::Failed {
+                    failure: "late".to_owned(),
+                },
+                AgentExecEvent::Spawned { child: next },
+            ] {
+                let late = exec_report(&engine, &pane, &ended, event, EXECUTOR).unwrap_err();
+                assert_eq!(late.code(), Some(crate::engine::ATTEMPT_UNKNOWN));
+            }
+            // The ended start's process running a program is not this start's.
+            reads(&holders, EXECUTOR, 41, words(&["claude"]));
+            reads(&holders, next, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, next).unwrap();
+            settles("the next start's executor is read", || {
+                holders.programs_read.lock().unwrap().contains(&next.pid)
+            });
+            assert!(
+                engine
+                    .topology()
+                    .look_attempt(&pane, attempt)
+                    .is_some_and(|look| look != attempt::Look::Ended)
+            );
+            reads(&holders, next, 41, words(&["claude"]));
+        })
+        .unwrap();
+        assert!(
+            !holders
+                .programs_read
+                .lock()
+                .unwrap()
+                .contains(&EXECUTOR.pid)
+        );
+    }
+
+    /// While a start is undecided its executor alone in the foreground is no
+    /// agent: it does not show and the start keeps its claim; the agent's
+    /// own hook leaves the start undecided too. Nothing deciding it by the
+    /// caller's deadline leaves it unknown, and nothing is typed again; the
+    /// pane's facts then decide what shows, as for any typed start.
+    #[test]
+    fn an_executor_alone_in_the_pane_neither_shows_its_agent_nor_starts_it() {
+        use hide_node_link::panes::AgentExecEvent;
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let refused = start_played(&engine, &holders, &start, within(800), |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            let mut facts = running("hide", hide_node_link::holders::ScreenState::Unknown);
+            facts.foreground.as_mut().unwrap().argv = executor_words(attempt);
+            holders.say(&pane, &facts);
+            {
+                let topology = engine.topology();
+                let held = topology.pane(&pane).unwrap();
+                let agent = held.agent.as_ref().unwrap();
+                assert!(!agent.live.shown, "the executor alone is not the agent");
+                assert!(
+                    agent.live.start_claim.is_some(),
+                    "the start keeps its claim"
+                );
+            }
+            engine.hook_session(&pane, "claude-code", "s-1").unwrap();
+            assert!(
+                engine
+                    .topology()
+                    .look_attempt(&pane, attempt)
+                    .is_some_and(|look| look != attempt::Look::Ended),
+                "the agent's own hook does not decide the start"
+            );
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_UNCONFIRMED));
+        assert!(refused.message().contains(attempt::DEADLINE), "{refused:?}");
+        assert_eq!(holders.typed(&pane).matches("--attempt ").count(), 1);
+        assert!(
+            engine
+                .topology()
+                .pane(&pane)
+                .unwrap()
+                .live
+                .attempt
+                .is_none()
+        );
+    }
+
+    /// A program the pane's facts show is no evidence of a start: facts that
+    /// name the executor's pid with the shell's arguments it had before it
+    /// became `hide`, or with the agent's program from an earlier read, leave
+    /// the start to the reads of its process.
+    #[test]
+    fn the_panes_facts_never_decide_a_profiles_start() {
+        use hide_node_link::panes::AgentExecEvent;
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let refused = start_played(&engine, &holders, &start, within(600), |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            for (name, argv) in [("zsh", words(&["-zsh"])), ("claude", words(&["claude"]))] {
+                let mut facts = running(name, hide_node_link::holders::ScreenState::Unknown);
+                let program = facts.foreground.as_mut().unwrap();
+                program.pid = EXECUTOR.pid;
+                program.argv = argv;
+                holders.say(&pane, &facts);
+            }
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_UNCONFIRMED));
+    }
+
+    /// A read of the executor's pid under another start is another process:
+    /// the start's own process ended before a read showed its program, and
+    /// what came of it is unknown.
+    #[test]
+    fn the_executors_pid_under_another_start_is_another_process() {
+        use hide_node_link::panes::{AgentExecEvent, ExecProcess};
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let refused = start_played(&engine, &holders, &start, WAIT, |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            let reused = ExecProcess {
+                pid: EXECUTOR.pid,
+                started: EXECUTOR.started + 1,
+            };
+            reads(&holders, reused, 41, words(&["claude"]));
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_UNCONFIRMED));
+        assert!(
+            refused.message().contains(attempt::ENDED_UNSEEN),
+            "{refused:?}"
+        );
+    }
+
+    /// An engine that stops while a start waits ends it at once, unknown.
+    #[test]
+    fn an_engine_that_stops_ends_a_waiting_start_at_once() {
+        use hide_node_link::panes::AgentExecEvent;
+        let (holders, engine, pane) = shell_pane();
+        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let asked = Instant::now();
+        let refused = start_played(&engine, &holders, &start, within(30_000), |attempt| {
+            reads(&holders, EXECUTOR, 41, executor_words(attempt));
+            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
+            engine.stop();
+        })
+        .unwrap_err();
+        assert_eq!(refused.code(), Some(crate::launch::PROFILE_UNCONFIRMED));
+        assert!(
+            refused.message().contains(attempt::ENGINE_STOPPED),
+            "{refused:?}"
+        );
+        assert!(asked.elapsed() < Duration::from_secs(10));
+    }
+
+    /// A start whose waiter goes before anything decided it ends its
+    /// attempt on the way out; a report that comes later is refused.
+    #[test]
+    fn a_waiter_that_goes_ends_its_attempt_and_later_reports_are_refused() {
+        let (_holders, engine, pane) = shell_pane();
+        let id = hide_agent_hooks::hook_request::fresh_request_id().unwrap();
+        {
+            let _finish = attempt::Finish::new(&engine, &pane, &id);
+            engine
+                .type_agent_start(
+                    &pane,
+                    agents::PaneAgent::started("claude-code", Some("worker"), None),
+                    "line",
+                    false,
+                    Some(id.clone()),
+                )
+                .unwrap();
+            assert!(engine.topology().look_attempt(&pane, &id).is_some());
+        }
+        assert_eq!(engine.topology().look_attempt(&pane, &id), None);
+        let late = exec_report(
+            &engine,
+            &pane,
+            &id,
+            hide_node_link::panes::AgentExecEvent::Ready,
+            EXECUTOR,
+        )
+        .unwrap_err();
+        assert_eq!(late.code(), Some(crate::engine::ATTEMPT_UNKNOWN));
+    }
+
+    /// The built-in default starts as it always has: no attempt, no read of
+    /// its process, and no wait, even past the caller's deadline.
+    #[test]
+    fn the_built_in_default_starts_without_an_attempt_or_a_wait() {
+        let (holders, engine, pane) = shell_pane();
+        let start = engine
+            .prepare_start(launch(&pane, "worker", "claude", &[]))
+            .unwrap();
+        engine
+            .start_agent(Wait::By(Instant::now()), &start)
+            .unwrap();
+        assert!(
+            engine
+                .topology()
+                .pane(&pane)
+                .unwrap()
+                .live
+                .attempt
+                .is_none()
+        );
+        assert!(holders.programs_read.lock().unwrap().is_empty());
+        assert!(!holders.typed(&pane).contains("agent exec"));
+    }
+
+    /// A restore's resume with a profile whose program its executor could
+    /// not start is named as not resumed with the executor's sentence, the
+    /// restore's own result for the pane (PRD agent-profiles B22).
+    #[test]
+    fn a_profile_resume_whose_program_cannot_start_is_named_not_resumed_with_its_executors_sentence()
+     {
+        let (_holders, engine, pane) = shell_pane();
+        let id = hide_agent_hooks::hook_request::fresh_request_id().unwrap();
+        let resume = restore::Resume::of_profile(&pane, "claude-code", "s-1");
+        let finish = attempt::Finish::new(&engine, &pane, &id);
+        engine
+            .type_agent_start(
+                &pane,
+                agents::PaneAgent::resumed("claude-code", None, Some("s-1".to_owned())),
+                "line",
+                false,
+                Some(id.clone()),
+            )
+            .unwrap();
+        engine.observe_resume(&resume, finish);
+        exec_report(
+            &engine,
+            &pane,
+            &id,
+            hide_node_link::panes::AgentExecEvent::Refused {
+                failure: "Claude · gw could not start /opt/gw: it is gone".to_owned(),
+            },
+            EXECUTOR,
+        )
+        .unwrap();
+        settles("the resume is named as not resumed", || {
+            !engine.session(WAIT).unwrap().not_resumed.is_empty()
+        });
+        let left = engine.session(WAIT).unwrap().not_resumed;
+        assert_eq!(left[0].pane_id, pane);
+        assert!(
+            left[0].why.contains("/opt/gw: it is gone"),
+            "{}",
+            left[0].why
+        );
+        assert!(engine.topology().pane(&pane).unwrap().agent.is_none());
     }
 
     fn undelivered_input() -> HolderError {
@@ -5754,6 +6655,7 @@ mod tests {
             effort: Some("high".to_owned()),
         };
         let record = |name: &str| crate::model::PaneLaunch {
+            profile: None,
             kind: "claude".to_owned(),
             name: name.to_owned(),
             choice: chosen.clone(),

@@ -525,7 +525,7 @@ fn the_own_engine_refuses_an_agent_start_over_a_running_program() {
         .prepare_start(super::AgentLaunch {
             pane_id: pane.clone(),
             name: "refused".into(),
-            kind: "claude".into(),
+            launch: crate::launch::Launch::default_of("claude"),
             args: Vec::new(),
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             wakes: false,
@@ -1140,7 +1140,7 @@ fn launched_input_reaches_npms_program(shell: &str) {
             .prepare_start(super::AgentLaunch {
                 pane_id: pane.clone(),
                 name: format!("launched-{index}"),
-                kind: "codex".into(),
+                launch: crate::launch::Launch::default_of("codex"),
                 args: words.clone(),
                 codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                 wakes: false,
@@ -1528,7 +1528,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
             .prepare_start(super::AgentLaunch {
                 pane_id: pane.clone(),
                 name: name.into(),
-                kind: kind.into(),
+                launch: crate::launch::Launch::default_of(kind),
                 args: Vec::new(),
                 codex_daemon: CodexDaemon::Unsupported,
                 wakes: false,
@@ -1541,7 +1541,6 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
             &format!("contract:{name}"),
             ShellStart::Plain,
             &start,
-            SHOWN_WITHIN,
             &|| Ok(()),
         )
         .unwrap_or_else(|error| panic!("{kind} starts: {error:?}"));
@@ -1661,7 +1660,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         .prepare_start(super::AgentLaunch {
             pane_id: pane.clone(),
             name: "sleeper".into(),
-            kind: "claude".into(),
+            launch: crate::launch::Launch::default_of("claude"),
             args: Vec::new(),
             codex_daemon: CodexDaemon::Unsupported,
             wakes: false,
@@ -1674,7 +1673,6 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
         "contract:sleep",
         ShellStart::Plain,
         &start,
-        SHOWN_WITHIN,
         &|| Ok(()),
     )
     .unwrap_or_else(|error| panic!("the agent starts: {error:?}"));
@@ -1730,6 +1728,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
             cwd: None,
             session_id: session,
             codex_daemon: CodexDaemon::Unsupported,
+            profile: None,
         },
     );
     assert_eq!(woke, WakeOutcome::Started);

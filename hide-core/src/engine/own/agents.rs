@@ -603,6 +603,10 @@ pub(super) struct PaneLive {
     /// explicitly removes rules. A new engine must send its first decision
     /// even for a shell whose holder kept the previous agent's rules.
     pub(super) rules_sent: Option<Option<String>>,
+    /// The start with a profile typed here, until its waiter ends it
+    /// (`super::attempt`): kept apart from the pane's agent, so recognizing
+    /// that agent never ends it.
+    pub(super) attempt: Option<super::attempt::Attempt>,
 }
 
 impl PaneLive {
@@ -678,6 +682,10 @@ pub(super) fn apply(
     }
     let program = facts.foreground.as_ref();
     let foreground = program.and_then(|program| recognized(catalog, program));
+    let attempting = live
+        .attempt
+        .as_ref()
+        .is_some_and(super::attempt::Attempt::pending);
     match (agent.as_mut(), program, foreground) {
         // The system could not say what holds the terminal: the agent stays
         // who it is until the holder reads its terminal again.
@@ -689,6 +697,11 @@ pub(super) fn apply(
         (Some(current), _, Some(definition)) if definition.id == current.kind => {
             applied.changed |= current.show();
         }
+        // While a start with a profile is undecided, the program a
+        // definition does not name may be its executor (`hide agent exec`)
+        // alone: it shows once the attempt has ended
+        // (`OwnEngine::finish_attempt` lays the pane's facts again).
+        (Some(_), Some(_), None) if attempting => {}
         (Some(current), Some(_), None) => {
             applied.changed |= current.show();
         }

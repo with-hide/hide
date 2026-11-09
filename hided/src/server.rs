@@ -1466,6 +1466,24 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
         }
+        // A spawn's agent profile (docs/ARCHITECTURE.md, Starting an agent
+        // with a profile): only an unanswered machine is worth the same
+        // intent again as it is.
+        "profile_gone" => {
+            "That machine no longer has the profile; spawn with another --profile, or without --profile for the agent's default there"
+        }
+        "profiles_unsupported" => {
+            "That machine's Hide predates agent profiles; update Hide there, or spawn without --profile"
+        }
+        "profile_refused" => {
+            "The profile cannot start its program on that machine (the detail says why); fix that program or the profile, or spawn with another --profile, since the same intent fails the same way until then"
+        }
+        "profile_unanswered" => {
+            "That machine did not answer for the profile; check that it is connected, then run the same command again with the same intent"
+        }
+        "profile_unconfirmed" => {
+            "The agent's start was typed but Hide could not confirm its program runs; look at the agent's pane before starting it again, since it may be running"
+        }
         "beside_pane_unavailable" => {
             "The engine could not split your pane (it closed, or the engine refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
         }

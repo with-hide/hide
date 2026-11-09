@@ -1093,6 +1093,7 @@ mod tests {
             resume_path: None,
             provider: "codex".into(),
             name: "Agent".into(),
+            profile: None,
         };
         layout.display_mut(&marked).unwrap().opener = Some(opener.clone());
         assert!(layout.repair().is_empty(), "the move says nothing");

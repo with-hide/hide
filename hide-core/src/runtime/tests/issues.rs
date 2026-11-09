@@ -677,6 +677,7 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
             model: Some("opus".into()),
             effort: None,
         },
+        None,
     );
     assert!(runtime.ingest_task_operation_result(
         id,
@@ -720,7 +721,8 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
         .unwrap()
         .agent_phase = Some("starting".into());
     assert!(
-        runtime.ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started)
+        runtime
+            .ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started(None))
     );
     assert!(runtime.task_agent_launch.is_none());
     let operation = runtime.snapshot().task_operation.clone().unwrap();

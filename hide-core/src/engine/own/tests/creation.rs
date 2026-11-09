@@ -77,6 +77,7 @@ impl Placement {
                     task: None,
                     brief: None,
                     beside: false,
+                    profile: None,
                 },
             },
             2,

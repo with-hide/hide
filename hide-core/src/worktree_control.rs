@@ -1257,12 +1257,17 @@ pub struct PendingAgentStart {
     /// The worktree this task made, which an agent that asks for folder
     /// trust is told to trust before it starts there.
     pub(crate) made_worktree: Option<String>,
+    /// The profile the agent runs with (`crate::launch::Request::profile`),
+    /// `None` for the built-in default.
+    pub(crate) profile: Option<(hide_agent_adapter::ProfileId, String)>,
 }
 
 /// How starting the chosen agent in a task's created pane ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskAgentOutcome {
-    Started,
+    /// The agent started, with the profile its pane's record keeps (`None`
+    /// for the built-in default).
+    Started(Option<crate::launch::LaunchProfile>),
     /// The engine refused, or the agent is not installed; nothing started.
     Failed(AgentFailure),
     /// The engine did not answer; the agent may be running. The pane says which.
@@ -1454,6 +1459,7 @@ fn launch_with_prompt_checked(
         resume_reference,
         shell,
         made_worktree,
+        profile,
     } = start;
     // The trust is written by the machine that runs the pane: `agent_node`
     // is none for a device, whose own engine answers for its PATH, and a
@@ -1491,7 +1497,7 @@ fn launch_with_prompt_checked(
         id,
         &pane_id,
         shell,
-        &kind,
+        &crate::launch::Request::new(&kind, profile),
         args,
         prompt.as_deref(),
         codex_daemon,
@@ -1555,7 +1561,7 @@ pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), St
 
 /// How one `agent.start` ended.
 enum Launch {
-    Started,
+    Started(Option<crate::launch::LaunchProfile>),
     Failed(AgentFailure),
     Unknown(AgentFailure),
 }
@@ -1563,7 +1569,7 @@ enum Launch {
 impl From<Launch> for TaskAgentOutcome {
     fn from(launch: Launch) -> Self {
         match launch {
-            Launch::Started => TaskAgentOutcome::Started,
+            Launch::Started(profile) => TaskAgentOutcome::Started(profile),
             Launch::Failed(failure) => TaskAgentOutcome::Failed(failure),
             Launch::Unknown(failure) => TaskAgentOutcome::Unknown(failure),
         }
@@ -1579,7 +1585,7 @@ fn launch_agent(
     id: u64,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
-    kind: &str,
+    agent: &crate::launch::Request,
     mut args: Vec<String>,
     prompt: Option<&str>,
     codex_daemon: crate::codex_launch::CodexDaemon,
@@ -1588,6 +1594,16 @@ fn launch_agent(
     if let Err(reason) = check() {
         return Launch::Failed(AgentFailure::reason(reason));
     }
+    let kind = agent.kind();
+    // The profile is asked of the node that runs the pane, before anything
+    // is typed there: one gone or refused starts nothing (D-27, B20, B22).
+    let launch = match crate::launch::resolve(pane_node, agent) {
+        Ok(launch) => launch,
+        Err(refusal) => {
+            return Launch::Failed(AgentFailure::with_detail(refusal.code, refusal.detail));
+        }
+    };
+    let profile = launch.record();
     // The engine would type the command into the pane's shell and wait for
     // an agent that can never appear; say so before asking it. A device's
     // PATH is not this machine's, so there its engine answers for it. Asked
@@ -1641,7 +1657,7 @@ fn launch_agent(
     let start = match engine.prepare_start(crate::engine::AgentLaunch {
         pane_id: pane_id.to_owned(),
         name: name.clone(),
-        kind: kind.to_owned(),
+        launch,
         args,
         codex_daemon,
         wakes: false,
@@ -1664,12 +1680,14 @@ fn launch_agent(
         &format!("hide-core:task:{id}:agent"),
         shell,
         &start,
-        crate::agent_start::START_ANSWER_WAIT,
         check,
     ) {
-        Ok(_) => typed.map_or(Launch::Started, |prompt| {
+        Ok(_) => match typed.map_or(Launch::Started(None), |prompt| {
             type_first_prompt(engine, id, pane_id, kind, &name, prompt)
-        }),
+        }) {
+            Launch::Started(_) => Launch::Started(profile),
+            other => other,
+        },
         Err(StartError::Engine(EngineError::Answer(message))) => {
             Launch::Unknown(AgentFailure::with_detail(
                 "agent_start.unconfirmed",
@@ -1691,6 +1709,19 @@ fn launch_agent(
             if message == crate::live::SESSION_CHANGED =>
         {
             Launch::Failed(AgentFailure::reason(code))
+        }
+        // A profile's program that did not start fails the task by the
+        // profile's own reason, as a profile refused before typing does; one
+        // whose start is not known may run.
+        Err(StartError::Engine(EngineError::Refused { code, message }))
+            if code == crate::launch::PROFILE_REFUSED =>
+        {
+            Launch::Failed(AgentFailure::with_detail(code, message))
+        }
+        Err(StartError::Engine(EngineError::Refused { code, message }))
+            if code == crate::launch::PROFILE_UNCONFIRMED =>
+        {
+            Launch::Unknown(AgentFailure::with_detail(code, message))
         }
         Err(StartError::Engine(EngineError::Refused { code, message })) => Launch::Failed(
             AgentFailure::with_detail("agent_start.refused_by_herdr", format!("{code}: {message}")),
@@ -1739,7 +1770,7 @@ fn type_first_prompt(
         raw_pane_id: pane_id.to_owned(),
     };
     match ladder::deliver(engine, &target, prompt) {
-        Delivered::Sent(_) => Launch::Started,
+        Delivered::Sent(_) => Launch::Started(None),
         Delivered::NotYet(cause) | Delivered::Lost(cause) => failed(cause.to_owned()),
     }
 }
@@ -1942,7 +1973,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 .as_ref()
                 .and_then(|start| start.agent_phase.as_deref())
             {
-                Some("started") => TaskAgentOutcome::Started,
+                Some("started") => TaskAgentOutcome::Started(None),
                 Some("failed") | None => {
                     TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.pane_restored"))
                 }
@@ -4447,6 +4478,7 @@ mod tests {
             codex_daemon: Default::default(),
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: None,
+            profile: None,
         };
         let server = server(vec![]);
         assert_eq!(
@@ -4561,10 +4593,11 @@ mod tests {
                     codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                     shell: crate::agent_start::ShellStart::Plain,
                     made_worktree: None,
+                    profile: None,
                 },
             );
             assert!(
-                matches!(outcome, TaskAgentOutcome::Started),
+                matches!(outcome, TaskAgentOutcome::Started(_)),
                 "{kind}: {outcome:?}"
             );
             let requests = requests_of(&server);
@@ -4604,13 +4637,17 @@ mod tests {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: Some(wire.clone()),
+            profile: None,
         };
         // A device start: no agent node (its engine answers for its PATH), a
         // pane node that is the device's.
         let server = server(vec![shell_ready(), started()]);
         let outcome =
             launch_with_prompt_checked(&*server, None, Some(&node), false, 7, make(), &|| Ok(()));
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let written: Value =
             serde_json::from_slice(&std::fs::read(home.path().join(".claude.json")).unwrap())
                 .unwrap();
@@ -4647,6 +4684,7 @@ mod tests {
                 codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(reason) = outcome else {
@@ -4689,6 +4727,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         assert_eq!(
@@ -4753,6 +4792,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         assert_eq!(
@@ -4787,9 +4827,13 @@ mod tests {
                 codex_daemon: crate::codex_launch::CodexDaemon::Present,
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let requests = requests_of(&server);
         assert_eq!(
             requests[1]["params"]["args"],
@@ -4817,9 +4861,13 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let requests = requests_of(&server);
         assert_eq!(methods_of(&requests), ["pane_processes", "start_agent"]);
         assert_eq!(
@@ -4852,6 +4900,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(message) = outcome else {
@@ -4886,6 +4935,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(message) = outcome else {
@@ -4924,6 +4974,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(message) = outcome else {
@@ -4942,6 +4993,44 @@ mod tests {
             methods_of(&requests_of(&server)),
             ["pane_processes", "start_agent"]
         );
+    }
+
+    /// A task's agent whose profile's program did not start fails the task
+    /// by the profile's own reason, with the executor's sentence; one whose
+    /// start is not known may run, so the task says so rather than failing.
+    #[test]
+    fn a_profiles_program_that_did_not_start_fails_the_task_by_the_profiles_reason() {
+        let sentence = "Claude Code · gw could not start /opt/gw: Bad CPU type in executable";
+        for (code, unknown) in [
+            (crate::launch::PROFILE_REFUSED, false),
+            (crate::launch::PROFILE_UNCONFIRMED, true),
+        ] {
+            let server = server(vec![shell_ready(), refused(code, sentence)]);
+            let outcome = launch_with_prompt(
+                &*server,
+                Some(&Starts(StartForm::Program)),
+                7,
+                PendingAgentStart {
+                    resume_reference: None,
+                    resume_scope: None,
+                    pane_id: "w1:p1".into(),
+                    kind: "claude".into(),
+                    prompt: None,
+                    args: Vec::new(),
+                    codex_daemon: Default::default(),
+                    shell: crate::agent_start::ShellStart::Plain,
+                    made_worktree: None,
+                    profile: None,
+                },
+            );
+            let failure = match outcome {
+                TaskAgentOutcome::Failed(failure) if !unknown => failure,
+                TaskAgentOutcome::Unknown(failure) if unknown => failure,
+                other => panic!("{code}: {other:?}"),
+            };
+            assert_eq!(failure.reason, code);
+            assert_eq!(failure.detail.as_deref(), Some(sentence));
+        }
     }
 
     /// A machine that has the agent and starts it as `0` says.
@@ -4982,6 +5071,7 @@ mod tests {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: None,
+            profile: None,
         }
     }
 
@@ -4995,7 +5085,10 @@ mod tests {
         let server = server(replies);
         let prompt = "50% done, say \"hi\"\nthen stop";
         let outcome = launch_with_prompt(&*server, None, 7, codex_start(prompt));
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let requests = requests_of(&server);
         assert_eq!(
             methods_of(&requests),

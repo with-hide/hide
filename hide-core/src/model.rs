@@ -5021,6 +5021,10 @@ pub struct PaneLaunch {
     /// name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The profile the agent runs with (PRD agent-profiles D-27); `None`, as
+    /// in every record written before profiles, for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// The scale a pane has until the user zooms it.

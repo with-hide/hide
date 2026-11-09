@@ -293,11 +293,26 @@ fn start_dormant(
     if !crate::node_access::is_directory(node, &work.record.cwd) {
         return DormantStartOutcome::NotStarted;
     }
+    // A profile gone from its machine, or one it refuses now, wakes nothing
+    // (D-27, B20).
+    let launch = match crate::launch::resolve(
+        Some(node),
+        &crate::launch::Request::recorded(&work.record.kind, work.record.profile.as_ref()),
+    ) {
+        Ok(launch) => launch,
+        Err(refusal) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_sleep", "kind": "agent_sleep.dormant_profile_refused",
+                "sleep_id": work.id.as_str(), "reason": refusal.code, "detail": refusal.detail,
+            }));
+            return DormantStartOutcome::NotStarted;
+        }
+    };
     let name = wake_name(work);
     let start = match engine.prepare_start(AgentLaunch {
         pane_id: pane.to_owned(),
         name,
-        kind: work.record.kind.clone(),
+        launch,
         args,
         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
         wakes: true,
@@ -316,7 +331,6 @@ fn start_dormant(
         )
     };
     let correlation = format!("hide:{}:resume", work.id.as_str());
-    let answer_timeout = crate::agent_start::START_ANSWER_WAIT;
     // The old pane closed a moment ago, and the engine refuses its agent's name
     // until it has forgotten that agent.
     let started = if work.record.registration.is_some() {
@@ -326,7 +340,6 @@ fn start_dormant(
             &correlation,
             crate::agent_start::ShellStart::Plain,
             &start,
-            answer_timeout,
             &confirm,
         )
     } else {
@@ -336,7 +349,6 @@ fn start_dormant(
             &correlation,
             crate::agent_start::ShellStart::Plain,
             &start,
-            answer_timeout,
             &confirm,
         )
     };
