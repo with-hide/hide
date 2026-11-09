@@ -380,7 +380,8 @@ An agent that is installed and not selectable is shown with that reason, never h
 Asking costs child processes, so the probe is a capability reader like the project panel's: the session-sync coordinator drives it, the work runs on a worker thread, the runtime mutex is never held across it, and it asks nothing at all while the group is off screen.
 In the web shell the daemon holds that flag for every connected page: each page reports only its own demand, and a page that closes or disconnects releases it (`hided/src/demand.rs`).
 With no window attached, or no engine to read for, the coordinator asks the probe for nothing on every wake (`provider_probe_reads` in `hide-core/src/session_sync/coordinator.rs`), so its worker drops every router and profile backend and their app-servers end with the window, not at the ten-minute idle exit; that answer is not published, so `hide agent catalog` keeps the lists the last window read.
-A read under way when the window leaves starts no further profile or device: the one it is on ends within its own read limit, and the next read releases it.
+A read under way when the window leaves stops at the next profile or device it would start: those are not asked.
+The agents' own availability and model lists it is already asking, for this machine or for a device, are asked to the end, each call within its own limit; the next read then releases every backend.
 `scripts/check-capability-readers-off-lock.sh` asserts that structurally, by name.
 
 ### A profile's model list

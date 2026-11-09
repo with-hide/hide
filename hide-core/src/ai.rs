@@ -165,7 +165,9 @@ pub struct AiReader {
     inner: BackgroundRead<AiRequest, BackgroundAiSnapshot>,
     /// Whether a screen still reads model lists, as the latest request
     /// says: a read under way checks it before each item's backend and each
-    /// device's, so a window that closes mid-read starts nothing more.
+    /// device's, so a window that closes mid-read starts no further profile
+    /// or device; the agents' own lists it is already asking are asked to
+    /// the end.
     observing: Arc<AtomicBool>,
 }
 
