@@ -852,6 +852,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         ask_subject: None,
         laid_since_unix_ms: None,
         laid_more: 0,
+        laid_asks: BTreeSet::new(),
         human_turn: None,
         status_word_visible: true,
         changed_at_unix_ms: agent.changed_at_unix_ms,
@@ -1924,6 +1925,7 @@ mod tests {
                 unread: false,
                 checks_ended: None,
                 human_turn: None,
+                read_asks: None,
             },
         );
         apply_read_state(
@@ -3009,6 +3011,7 @@ mod tests {
             unread: false,
             checks_ended: None,
             human_turn: None,
+            read_asks: None,
         };
         for (saved, unread, what) in [
             (40, false, "the same sequence is still read"),
@@ -3280,6 +3283,115 @@ mod tests {
             let (sent, taken_back) = notice(&root);
             assert!(sent.is_empty() && taken_back.is_empty(), "{end:?}");
         }
+    }
+
+    /// A question the core laid on a row the operator read stays read while
+    /// the agent works and rests under it, and only its own turn is let go:
+    /// another question laid, a descendant's news and the end of its checks
+    /// still turn it unread, and a record from before the questions were kept
+    /// is judged by the turn as it was (docs/status-model.md, A question the
+    /// core lays stays read).
+    #[test]
+    fn a_read_core_question_lets_go_of_the_agents_own_turn_and_nothing_else() {
+        let session = "c0ffee00-0000-4000-8000-000000000001";
+        // A pass with `asks` laid on the resting root as the core lays
+        // them, a working root carrying none, and the child `child`.
+        let laid = |root: (&str, u64),
+                    asks: &[&str],
+                    child: (&str, u64),
+                    checks: Option<crate::model::ChecksEnded>,
+                    saved: &mut Saved,
+                    focused: Option<&str>| {
+            let mut child = pane("child", child.0, child.1, None, "child-session");
+            child["spawned_from_pane_id"] = json!("root");
+            child["declared_parent_session"] =
+                json!(crate::engine::tokens::session_digest(session).unwrap());
+            let completion = (root.0 == "done").then_some(root.1);
+            let mut agents = projected(json!([
+                pane("root", root.0, root.1, completion, session),
+                child
+            ]));
+            let row = &mut agents[0];
+            row.checks_ended = checks;
+            if row.activity != "working" && !asks.is_empty() {
+                row.demand = "question".to_owned();
+                row.user_turn = Some(hide_session::turns::UserTurnFact {
+                    kind: hide_session::turns::UserTurnKind::Question,
+                    content: None,
+                });
+                row.ask_subject = Some(crate::model::AskSubject::MissionDecision {
+                    line: "Ship it?".to_owned(),
+                });
+                row.laid_since_unix_ms = Some(1);
+                row.laid_asks = asks.iter().map(|ask| (*ask).to_owned()).collect();
+            }
+            apply_lineage(&mut agents, &[], &[]);
+            apply_read_state(
+                &mut agents,
+                Default::default(),
+                &mut saved.records,
+                &mut connection(),
+                focused.as_slice(),
+            );
+            agents
+                .into_iter()
+                .find(|row| row.pane_id == "root")
+                .unwrap()
+        };
+        let read = |saved: &mut Saved| {
+            let row = laid(
+                ("idle", 4),
+                &["a"],
+                ("working", 1),
+                None,
+                saved,
+                Some("root"),
+            );
+            assert!(!row.unread);
+        };
+        let quiet = ("working", 1);
+
+        let mut saved = Saved::default();
+        read(&mut saved);
+        assert!(laid(("working", 5), &[], quiet, None, &mut saved, None).unread);
+        let rested = laid(("done", 6), &["a"], quiet, None, &mut saved, None);
+        assert!(!rested.unread, "its own work and rest under the question");
+        assert_eq!(
+            saved.records["root"].read_asks,
+            Some(BTreeSet::from(["a".to_owned()]))
+        );
+
+        for (what, asks, child, checks) in [
+            (
+                "another question laid beside it",
+                &["a", "b"][..],
+                quiet,
+                None,
+            ),
+            ("another question in its place", &["b"][..], quiet, None),
+            ("a child finishing", &["a"][..], ("done", 2), None),
+            (
+                "its checks ending",
+                &["a"][..],
+                quiet,
+                Some(crate::model::ChecksEnded {
+                    number: 7,
+                    passed: true,
+                }),
+            ),
+        ] {
+            let mut saved = Saved::default();
+            read(&mut saved);
+            let row = laid(("done", 6), asks, child, checks, &mut saved, None);
+            assert!(row.unread, "{what} is news");
+        }
+
+        // A record from before the questions were kept is judged by the turn.
+        let mut saved = Saved::default();
+        read(&mut saved);
+        saved.records.get_mut("root").unwrap().read_asks = None;
+        assert!(!laid(("idle", 4), &["a"], quiet, None, &mut saved, None).unread);
+        assert!(laid(("done", 6), &["a"], quiet, None, &mut saved, None).unread);
     }
 
     fn wire_lacks(row: &SidebarAgentSnapshot, field: &str) -> bool {

@@ -820,6 +820,7 @@ fn read_fingerprint(agent: &SidebarAgentSnapshot) -> PaneReadRecord {
             .declared_human_turn
             .as_ref()
             .map(|declared| declared.id.clone()),
+        read_asks: Some(agent.laid_asks.clone()),
     }
 }
 
@@ -881,7 +882,30 @@ fn record_covers(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
 /// and completion, with nothing its descendants, its checks or a person's
 /// turn sent (`SidebarAgentSnapshot::own_unread`). The one comparison both
 /// `record_covers` and the children wait read.
+///
+/// A question the core laid on the row is judged apart from the agent's
+/// turn: one the record has not read is news, and while every one laid was
+/// read, the agent working and resting under it is not, since the row still
+/// asks what the operator read (docs/status-model.md, A question the core
+/// lays stays read).
 fn record_covers_turn(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
+    let asks = asks_read(record, current);
+    asks != Some(false) && (asks == Some(true) || turn_covered(record, current))
+}
+
+/// Whether the record read the core's questions laid on the row now: Some
+/// (true) when one is laid and the record read them all, Some(false) when
+/// one is laid that it did not read, and None when none is laid or the
+/// record was written before it kept them.
+fn asks_read(record: &PaneReadRecord, current: &PaneReadRecord) -> Option<bool> {
+    let read = record.read_asks.as_ref()?;
+    let laid = current.read_asks.as_ref().filter(|laid| !laid.is_empty())?;
+    Some(laid.is_subset(read))
+}
+
+/// Whether a record covers the agent's own turn itself: its sequence,
+/// session, demand, activity and completion.
+fn turn_covered(record: &PaneReadRecord, current: &PaneReadRecord) -> bool {
     record.state_change_seq == current.state_change_seq
         && (record.session_id.is_none()
             || current.session_id.is_none()
@@ -1053,6 +1077,7 @@ pub fn apply_read_state(
             record.demand = agent.demand.clone();
             record.activity = agent.activity.clone();
             record.completed = agent.completed;
+            record.read_asks = Some(agent.laid_asks.clone());
             moved = true;
         } else if settled_here && !record.unread && from_another_server {
             // Only this server's numbering is taken; what the operator read
@@ -1076,6 +1101,16 @@ pub fn apply_read_state(
                 .is_none_or(|now| now.contains(signal))
         });
         moved |= record.descendant_signals.len() != before;
+        // A question the record read that is not laid beside those the row
+        // carries now is gone: the core lays all of a row's questions at
+        // once. Dropping it never changes the read axis, as above.
+        if let Some(read) = record.read_asks.as_mut()
+            && !agent.laid_asks.is_empty()
+            && !read.is_subset(&agent.laid_asks)
+        {
+            read.retain(|ask| agent.laid_asks.contains(ask));
+            moved = true;
+        }
         if moved {
             changes.push(ReadRecordChange {
                 pane_id: agent.pane_id.clone(),

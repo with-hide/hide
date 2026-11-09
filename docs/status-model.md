@@ -81,6 +81,18 @@ A mission decision, and a mission node's attention (above), follow the same path
 A row that has both a plan waiting for review and a mission decision carries the one asked first and counts the other behind it, as the root's other asks are counted (`외 N건`, needs-you-cleanup D-13).
 Input an agent has not confirmed follows the same path, laid on the pane rather than a session, since a child that never took its brief may have no session yet: `{cause: "input_unconfirmed", input: "brief" | "letter", spent, held}`, worded `브리프 확인 안 됨` or `편지 확인 안 됨`, `브리프 못 받음` or `편지 못 받음` only when a composer read saw the text still there (`held`), and `· 재시도 다 씀` once its typings are spent (`agents.input.*`); the core lays it only once no parent can clear the screen ([delivery.md: Input an agent did not take](delivery.md#input-an-agent-did-not-take)), and a delegated child's ask rises to its root as the seventh escalation cause.
 
+### A question the core lays stays read
+
+A question the core lays on a row (a plan waiting for review, a mission decision, a mission node's attention, input not taken) is known by the event that raised it, never by its words or when it was laid: the plan's instance and when it was put up (`Plan::asked_at_unix_ms`), the mission's question key, the node's raise key, the input's spawn or letter (`runtime/plans.rs::ask_id`).
+The row carries the ids laid on it now (`laid_asks`), and reading the row keeps them in its read record (`PaneReadRecord::read_asks`, absent in a record written before, which is judged as it was).
+While every question laid on the row is one the record read, the agent's own work and rest under it (its sequence, activity, completion and demand) are not news, so a Conductor that a letter wakes and that rests again keeps the raise the operator read read, and nothing is announced again (operator decision 2026-11-09).
+A question not among them, another laid beside it or in its place, is news; so are a descendant's signal, the end of its checks and a person's turn, which are judged as for any row.
+Reading removes the emphasis only: the demand, the read ask's place in 내 차례 and the Needs You count stay, and the mission's own Needs You item while the Conductor works is unchanged.
+A question the record read and the row no longer carries beside the ones it does is trimmed, so the set holds only what one row carries.
+A question laid or lifted reads every machine's rows again, a device's included, and the device's kept session is relaid with its published one.
+Known limitation: an answer the agent gives the operator's own typed request while a read question stands does not light the row again; the operator is at that pane.
+Regression owners: `a_raise_the_operator_read_stays_read_while_its_conductor_works_and_rests` in `runtime/tests/missions.rs`, `a_device_rows_read_plan_review_stays_read_through_its_agents_turns` in `runtime/tests/read_on_look.rs` and `a_read_core_question_lets_go_of_the_agents_own_turn_and_nothing_else` in `sidebar.rs`.
+
 ### A person's turn an agent declares
 
 An agent at a step only a person can take, a sign-in, an unlock, an app or system permission, says so with `hide agent ask-human auth|permission <where>` (PRD ask-human D-02, D-03); it adds no status, mark colour or group, and Hide AI's own reading of a blocked turn stays for an agent that does not say it.

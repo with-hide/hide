@@ -2950,6 +2950,7 @@ fn a_version_8_record_keeps_a_plan_beside_its_session_until_the_session_goes() {
         ask: Some("scope moved".into()),
         created_at_unix_ms: 1_000,
         updated_at_unix_ms: 2_000,
+        asked_at_unix_ms: Some(2_000),
     };
     store
         .apply_ledger_update(&LedgerUpdate::Plan {

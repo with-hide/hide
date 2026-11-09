@@ -2722,6 +2722,7 @@ pub(crate) mod tests {
                 spent: false,
                 held: false,
             },
+            "spawn-1".to_owned(),
         )];
         runtime.plans.input_edit += 1;
         assert!(runtime.refresh_plan_reviews(), "the ask is laid on the row");

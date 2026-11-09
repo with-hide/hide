@@ -1978,6 +1978,14 @@ pub struct SidebarAgentSnapshot {
     pub(crate) laid_since_unix_ms: Option<u64>,
     #[serde(skip)]
     pub(crate) laid_more: usize,
+    /// Which of the core's questions are laid on this row now, the one it
+    /// leads with and those counted behind it, each by the event that raised
+    /// it (`runtime/plans.rs::core_asks`); empty while none is. What the read
+    /// record compares, so a question the operator read stays read while the
+    /// agent works and rests under it (docs/status-model.md, A question the
+    /// core lays stays read).
+    #[serde(skip)]
+    pub(crate) laid_asks: BTreeSet<String>,
     /// Derived: whether the row draws its status word. It leaves working and
     /// read rows, where the mark already says it, and stays on rows that
     /// still concern the operator.
@@ -5154,6 +5162,13 @@ pub struct PaneReadRecord {
     /// (PRD ask-human): another declaration is news, as a new demand is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_turn: Option<String>,
+    /// The core's questions laid on the pane when it was read, each by the
+    /// event that raised it (`SidebarAgentSnapshot::laid_asks`): while the
+    /// questions laid are among these, the agent's own work and rest under
+    /// them are not news, and a question not among them is. None in a record
+    /// written before the questions were kept, which is judged as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_asks: Option<BTreeSet<String>>,
 }
 
 /// A pane whose last stop finished work, as Hide last saw it. A
