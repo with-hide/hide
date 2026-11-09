@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon, ListChecksIcon } from "lucide-react";
+import { CheckIcon, ListChecksIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import { ProgressCells } from "./components/mission-tone";
@@ -9,6 +9,7 @@ import { cn } from "./lib/utils";
 import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
 import { PlanChecklist } from "./components/plan-checklist";
+import { PopoverOpenRow } from "./components/popover-open-row";
 import { PlanPill, planState } from "./PlanMap";
 import { formatElapsed, useElapsed } from "./components/elapsed";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -86,9 +87,10 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
 
 /**
  * The popover's body (B3, B7), headed as the plan's page is: its state pill,
- * a cell per step, `n/m` and `크게 ›`; then the checklist, and a foot with the
- * direct children no step is handed to and when the plan last moved, or how
- * long a finished one took.
+ * a cell per step and `n/m`; then the checklist, a foot with the direct
+ * children no step is handed to and when the plan last moved, or how long a
+ * finished one took, and the last row, `지도 열기 ›`, the same row a mission's
+ * popover ends in.
  */
 export function PlanPopoverBody({ paneId, plan, onLarge, openPane }: { paneId: string; plan: PlanView; onLarge: () => void; openPane: (paneId: string) => void }) {
   const { t } = useInterfaceTranslation();
@@ -101,20 +103,12 @@ export function PlanPopoverBody({ paneId, plan, onLarge, openPane }: { paneId: s
         <span className="shrink-0 font-semibold tabular-nums text-foreground" data-plan-count="true">
           {proposed ? t("plan.steps", { count: plan.progress.total }) : planCount(plan)}
         </span>
-        <button
-          type="button"
-          className="flex shrink-0 items-center gap-xxs rounded-xs px-xs py-xxs text-primary outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
-          onClick={onLarge}
-          data-pane-plan-large="true"
-        >
-          {t("plan.large")}
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-        </button>
       </div>
       <div className="px-xs py-sm">
         <PlanChecklist plan={plan} popover openPane={openPane} />
       </div>
       <PlanFoot paneId={paneId} plan={plan} />
+      <PopoverOpenRow label={t("plan.popover.open")} onClick={onLarge} data-pane-plan-large="true" />
     </div>
   );
 }
@@ -126,7 +120,7 @@ function PlanFoot({ paneId, plan }: { paneId: string; plan: PlanView }) {
   const updated = useElapsed(finished ? null : plan.updated_at_unix_ms);
   const when = finished ? t("plan.took", { elapsed: formatElapsed(requireInterfaceLanguage(i18n.language), plan.updated_at_unix_ms - plan.created_at_unix_ms) }) : updated ? t("plan.updated", { elapsed: updated }) : null;
   return (
-    <div className="mx-sm flex min-w-0 items-baseline gap-sm border-t border-border pb-sm pt-xs text-micro text-muted-foreground" data-plan-foot="true">
+    <div className="flex min-w-0 items-baseline gap-sm px-sm pb-sm pt-xs text-micro text-muted-foreground" data-plan-foot="true">
       <Delegated paneId={paneId} plan={plan} />
       {when ? <span className="ml-auto shrink-0" data-plan-summary-when="true">{when}</span> : null}
     </div>

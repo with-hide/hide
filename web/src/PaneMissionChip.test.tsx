@@ -91,14 +91,14 @@ async function mount(missions: Mission[], { pane = "p1", plans = [] as PlanView[
 it("reads each state in words with a cell per node, in the plan chip's place, and a pane that conducts nothing keeps its plan chip (B8, B36, PRD mission-pane-chip B1, B2, B17)", async () => {
   const allDone = NODES.map((row) => ({ ...row, status: "done" as const }));
   const cases: [Partial<Mission>, string, string, string | undefined][] = [
-    // The mission's number (`M1` for `mission-1`) stands where the word "Mission" stood, and a state word follows it.
-    [{ status: "planning", nodes: [] }, "planning", "M1 Planning", undefined],
-    [{}, "running", "M1 1/3", "done working waiting"],
+    // The mission's number (`M1` for `mission-1`) stands where the word "Mission" stood, then a dot, then the state word or the progress.
+    [{ status: "planning", nodes: [] }, "planning", "M1 · Planning", undefined],
+    [{}, "running", "M1 · 1/3", "done working waiting"],
     // A decision keeps the progress and adds `!` in its colour (needs-you-cleanup B6).
-    [{ decision: "Which base for the screen PR?" }, "decision", "! M1 1/3", "done working waiting"],
-    [{ status: "merge_wait" }, "merge_wait", "M1 Waiting to merge", "done working waiting"],
-    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "M1 3/3", "done done done"],
-    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "M1 Cancelled", "done cancelled cancelled"],
+    [{ decision: "Which base for the screen PR?" }, "decision", "! M1 · 1/3", "done working waiting"],
+    [{ status: "merge_wait" }, "merge_wait", "M1 · Waiting to merge", "done working waiting"],
+    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "M1 · 3/3", "done done done"],
+    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "M1 · Cancelled", "done cancelled cancelled"],
   ];
   for (const [extra, state, text, cells] of cases) {
     const view = await mount([mission(extra)], { plans: [plan()] });
@@ -189,16 +189,24 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
   try {
     await act(async () => view.actions.togglePlanChip());
     const popover = view.popover()!;
-    expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/5");
+    expect(popover.querySelector("[data-mission-mini-title]")?.textContent).toBe("Ship the API");
+    expect(popover.querySelector("[data-mission-number]")?.textContent).toBe("M1");
+    expect(popover.querySelector("[data-mission-mini-head] [data-progress-cells]")).not.toBeNull();
+    expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toContain("Running1/51 done · 2 next");
     const rows = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-node]")].map((row) => [row.dataset.missionMiniNode, row.textContent]);
     expect(rows).toEqual([["api", `api title${PR_TEXT}PR`], ["probe", "probe titleResearch"]]);
     expect(popover.querySelector("[data-mission-mini-tally]")?.textContent).toBe("1 done · 2 next");
     // The map is drawn only in the 보기 slot, and the record opens from the pane menu and the sidebar.
     expect(popover.querySelector("[data-dependency-node]")).toBeNull();
     expect(popover.textContent).not.toContain("record");
-    // No `Larger`: the head's end says the chip itself opens the map.
-    expect(popover.querySelector("button:not([data-mission-mini-conversation])")).toBeNull();
-    expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Click for the map");
+    // The one thing to press is the last row, `Open the map`, and it opens the map as the chip does.
+    expect([...popover.querySelectorAll("button:not([data-mission-mini-conversation])")].map((button) => button.getAttribute("data-mission-mini-open"))).toEqual(["true"]);
+    expect(popover.querySelector("[data-mission-popover]")?.lastElementChild?.getAttribute("data-mission-mini-open")).toBe("true");
+    expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Open the map");
+    // Pressing it opens the mission's card in the 보기 slot and closes the popover, as the chip's own press does.
+    await view.press("[data-mission-mini-open]");
+    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" } }]);
+    expect(view.popover()).toBeNull();
   } finally { await view.unmount(); }
 });
 
@@ -216,6 +224,7 @@ it("shows a finished mission's time, the report's first two lines and at most th
     await act(async () => done.actions.togglePlanChip());
     const popover = done.popover()!;
     expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Finished· 3h");
+    expect(popover.querySelector("[data-mission-mini-title]")?.textContent).toBe("Ship the API");
     // The Conductor's Markdown is quoted as its words: no `#`, no `- [ ]`.
     expect([...popover.querySelectorAll("[data-mission-mini-report] p")].map((line) => line.textContent)).toEqual(["All merged", "One step left for later"]);
     const results = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-result]")].map((row) => row.dataset.missionMiniResult);
@@ -240,7 +249,7 @@ it("leads with the decision and its way to the conversation, which brings the Co
   try {
     await act(async () => view.actions.togglePlanChip());
     const map = view.popover()!;
-    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3");
+    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toContain("Running1/3");
     expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?Go to terminal");
     await view.press("[data-mission-mini-conversation]");
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
