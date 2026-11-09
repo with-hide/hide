@@ -428,7 +428,11 @@ fn still_holds(
                         .is_some_and(|pull| !pull.badge.is_settled())
                 })
         }
-        AttentionReason::ConductorFailed | AttentionReason::CloseRefused => true,
+        AttentionReason::ConductorFailed => true,
+        // A refused close is about a mission every node of which is
+        // finished: once any node works again there is nothing to close and
+        // the question goes, with its choices.
+        AttentionReason::CloseRefused => mission.nodes.iter().all(|node| node.status.finished()),
     }
 }
 

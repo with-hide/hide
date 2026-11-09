@@ -591,10 +591,20 @@ impl Runtime {
                     ) else {
                         continue;
                     };
+                    // The deepest checkout holding the folder, not the first
+                    // (PRD home-folder-project D-07).
                     let checkout_index = context_path.as_deref().and_then(|path| {
-                        workspace_snapshot.checkouts.iter().position(|checkout| {
-                            path_is_within_checkout(&paths, path, &checkout.path)
-                        })
+                        workspace_snapshot
+                            .checkouts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, checkout)| {
+                                path_is_within_checkout(&paths, path, &checkout.path)
+                            })
+                            .max_by_key(|(index, checkout)| {
+                                (checkout.path.len(), std::cmp::Reverse(*index))
+                            })
+                            .map(|(index, _)| index)
                     });
                     (workspace_snapshot, checkout_index)
                 }
@@ -1978,7 +1988,10 @@ impl Runtime {
         fetched: Result<RemoteSessionSnapshot, SessionFetchError>,
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
-        changed | self.complete_look()
+        self.request_home_retirements();
+        // The engine's word on the tab in front, or a tab it closed.
+        let detail = self.sync_detail_home();
+        changed | detail | self.complete_look()
     }
 
     fn apply_remote_session(
@@ -2509,6 +2522,8 @@ impl Runtime {
         self.ingesting_session = true;
         let changed = self.apply_session_update(fetched, precomputed, focus_check, pass);
         self.ingesting_session = false;
+        // The projects are known now: an old Home waiting on them is asked.
+        self.request_home_retirements();
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
         let pumped = self.pump_geometry_queues();
@@ -3144,7 +3159,7 @@ impl Runtime {
             // Completions are kept first, so the lineage hands up the ones a
             // restored server no longer reports.
             self.apply_pane_completions(&mut agents, None, local, live_pane_ids.as_ref());
-            self.apply_pane_launches(&agents, local, live_pane_ids.as_ref());
+            self.apply_pane_launches(&mut agents, local, live_pane_ids.as_ref());
             // A plan waiting for review is a question the lineage raises
             // and the read axis compares, so it is laid before both.
             let node = self.node.as_str().to_owned();
@@ -3155,6 +3170,7 @@ impl Runtime {
             // Views to look at go to Needs You or up to the ancestors, which
             // the lineage and the read axis decide.
             self.lay_unseen_views(&mut agents);
+            self.lay_human_turns(&mut agents);
             self.lay_start_prompts(&mut agents, local, live_pane_ids.as_ref());
             // The tree takes in the children this machine's agents have on
             // devices, as `refresh_agent_lineage` below and every later read
@@ -4921,6 +4937,7 @@ impl Runtime {
         prompt: Option<String>,
         args: Vec<String>,
         launch: hide_agent_adapter::LaunchChoice,
+        profile: Option<(hide_agent_adapter::ProfileId, String)>,
     ) {
         self.task_agent_launch = Some(crate::runtime::TaskAgentLaunch {
             task: id,
@@ -4929,20 +4946,67 @@ impl Runtime {
                 .filter(|prompt| !prompt.is_empty()),
             args,
             launch,
+            profile,
             resume_reference: None,
+            profile_from_session: None,
         });
     }
 
-    /// Adds CLI arguments learned after the task began (a Home start's
-    /// linked folders, known once its helper answered).
-    pub(super) fn extend_task_agent_args(&mut self, id: u64, args: Vec<String>) {
-        if let Some(launch) = self
+    /// The session task `id` resumes when it names no account
+    /// (`TaskAgentLaunch::profile_from_session`), until its profile is
+    /// settled.
+    pub(crate) fn task_profile_from_session(
+        &self,
+        id: u64,
+    ) -> Option<crate::sidebar::SessionAgentSessionPayload> {
+        self.task_agent_launch
+            .as_ref()
+            .filter(|launch| launch.task == id)
+            .and_then(|launch| launch.profile_from_session.clone())
+    }
+
+    /// Gives task `id` the profile of `account` on the task's machine
+    /// ([`Self::session_profile`]) and answers it, or why no profile of
+    /// that account can resume the session.
+    pub(crate) fn settle_session_profile(
+        &mut self,
+        id: u64,
+        kind: &str,
+        account: &hide_agent_adapter::AccountKey,
+    ) -> Result<Option<(hide_agent_adapter::ProfileId, String)>, &'static str> {
+        let device = self
+            .snapshot
+            .task_operation
+            .as_ref()
+            .filter(|operation| operation.id == id)
+            .map(|operation| {
+                operation
+                    .device_id
+                    .clone()
+                    .unwrap_or_else(|| self.node.as_str().to_owned())
+            })
+            .ok_or("agent_start.failed")?;
+        let profile = self.session_profile(&device, kind, account)?;
+        let launch = self
             .task_agent_launch
             .as_mut()
             .filter(|launch| launch.task == id)
-        {
-            launch.args.extend(args);
-        }
+            .ok_or("agent_start.failed")?;
+        launch.profile = profile.clone();
+        launch.profile_from_session = None;
+        Ok(profile)
+    }
+
+    /// The profile task `id`'s agent starts with, `None` for the built-in
+    /// default or a task that starts no agent.
+    pub(crate) fn task_agent_profile(
+        &self,
+        id: u64,
+    ) -> Option<(hide_agent_adapter::ProfileId, String)> {
+        self.task_agent_launch
+            .as_ref()
+            .filter(|launch| launch.task == id)
+            .and_then(|launch| launch.profile.clone())
     }
 
     /// The agent the task's worker should now start: the created pane, the
@@ -5037,6 +5101,16 @@ impl Runtime {
         }
     }
 
+    /// The machine the task `id`'s agent starts on.
+    pub(crate) fn task_agent_machine(&self, id: u64) -> String {
+        self.snapshot
+            .task_operation
+            .as_ref()
+            .filter(|operation| operation.id == id)
+            .and_then(|operation| operation.device_id.clone())
+            .unwrap_or_else(|| self.node.as_str().to_owned())
+    }
+
     pub(crate) fn pending_task_agent_start(
         &self,
         id: u64,
@@ -5107,6 +5181,7 @@ impl Runtime {
                 .clone()
                 .filter(|(task, _)| *task == id)
                 .map_or(crate::agent_start::ShellStart::Plain, |(_, shell)| shell),
+            profile: launch.and_then(|launch| launch.profile.clone()),
         })
     }
 
@@ -5142,7 +5217,7 @@ impl Runtime {
         // The pane keeps the choice its agent started with, for the restarts
         // Hide makes of it, under the name the start gave the agent: the task
         // worker names it from the engine's own id for the pane.
-        if let (crate::worktree_control::TaskAgentOutcome::Started, Some(launch)) =
+        if let (crate::worktree_control::TaskAgentOutcome::Started(profile), Some(launch)) =
             (&outcome, &launch)
             && let Some((pane_id, kind, name)) =
                 self.snapshot.task_operation.as_ref().and_then(|operation| {
@@ -5156,7 +5231,7 @@ impl Runtime {
                     Some((pane_id, kind, name))
                 })
         {
-            self.record_pane_launch(&pane_id, &kind, &name, launch, None);
+            self.record_pane_launch(&pane_id, &kind, &name, launch, profile.as_ref(), None);
         }
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;
@@ -5171,7 +5246,7 @@ impl Runtime {
             self.start_prompts.remove(pane_id);
         }
         let (phase, failure) = match outcome {
-            crate::worktree_control::TaskAgentOutcome::Started => ("started", None),
+            crate::worktree_control::TaskAgentOutcome::Started(_) => ("started", None),
             crate::worktree_control::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
             crate::worktree_control::TaskAgentOutcome::Unknown(failure) => {
                 ("unknown", Some(failure))

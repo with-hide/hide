@@ -465,7 +465,7 @@ pub fn exchange(dir: &impl Handle, left: &OsStr, right: &OsStr) -> io::Result<()
 }
 
 /// [`rename_no_replace`] for a caller that has two paths and no open folders:
-/// a finished clone moved to its name, a staged folder moved to `~/hide`.
+/// a finished clone moved to its name, a staged folder moved to its place.
 pub fn rename_no_replace_path(from: &Path, to: &Path) -> io::Result<()> {
     sys::rename_no_replace_path(from, to)
 }

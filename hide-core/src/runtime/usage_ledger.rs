@@ -84,11 +84,7 @@ impl Runtime {
                 .navigator
                 .workspaces
                 .iter()
-                .filter(|project| {
-                    !project.is_home
-                        && project.remote_target_id.is_none()
-                        && project.device_id == node
-                })
+                .filter(|project| project.remote_target_id.is_none() && project.device_id == node)
                 .map(|project| crate::usage_ledger::project_cost::ProjectRoots {
                     workspace_id: project.id.clone(),
                     roots: project

@@ -539,8 +539,10 @@ pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> C
     }
 }
 
-/// `node` runs the pane (`agent_start::start_at_shell_checked`); none
-/// when it cannot be reached. The pane's shell gets `shell_wait`, at most
+/// `launch` is the start its machine answered for (`launch::resolve`),
+/// which the caller asks before it makes anything the start needs. `node`
+/// runs the pane (`agent_start::start_at_shell_checked`); none when it
+/// cannot be reached. The pane's shell gets `shell_wait`, at most
 /// `agent_start::SHELL_WAIT`, to finish starting; one that had not (stopped
 /// at a question, not at its prompt, or not reading its line yet) is refused
 /// as `agent_start::SHELL_STARTING` with the screen's last line when there
@@ -554,11 +556,11 @@ pub(crate) fn start_agent(
     shell: crate::agent_start::ShellStart,
     shell_wait: Duration,
     name: &str,
-    kind: &str,
+    launch: crate::launch::Launch,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
-) -> Result<String, String> {
+) -> Result<Started, NotStarted> {
     start_agent_checked(
         engine,
         node,
@@ -567,30 +569,75 @@ pub(crate) fn start_agent(
         shell,
         shell_wait,
         name,
-        kind,
+        launch,
         args,
         codex_daemon,
         program,
         &|| Ok(()),
     )
-    .map_err(|error| match error {
-        crate::agent_start::StartError::ShellStarting { waited, screen } => {
-            crate::coordination::shell_starting_refusal(waited, screen.as_deref())
-        }
-        // The engine refused the pane as busy until the start's deadline: nothing
-        // was typed, and the same intent asks again in the same pane.
-        crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
-            if code == crate::agent_start::PANE_BUSY =>
-        {
-            PANE_BUSY_REFUSAL.to_owned()
-        }
-        other => start_error_message(other),
+    .map_err(|error| {
+        let unused = match &error {
+            crate::agent_start::StartError::ShellStarting { .. } => {
+                Some(crate::agent_start::SHELL_STARTING)
+            }
+            crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
+                if code == crate::launch::PROFILE_REFUSED =>
+            {
+                Some(crate::launch::PROFILE_REFUSED)
+            }
+            _ => None,
+        };
+        let refusal = match error {
+            crate::agent_start::StartError::ShellStarting { waited, screen } => {
+                crate::coordination::shell_starting_refusal(waited, screen.as_deref())
+            }
+            // The engine refused the pane as busy until the start's deadline:
+            // nothing was typed, and the same intent asks again in the same
+            // pane.
+            crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
+                if code == crate::agent_start::PANE_BUSY =>
+            {
+                PANE_BUSY_REFUSAL.to_owned()
+            }
+            // A profile's program that did not start, or whose start is not
+            // known, by its own code, with the executor's sentence.
+            crate::agent_start::StartError::Engine(EngineError::Refused { code, message })
+                if crate::launch::ends_a_start(&code) =>
+            {
+                crate::coordination::refusal(&code, &message)
+            }
+            other => start_error_message(other),
+        };
+        NotStarted { refusal, unused }
     })
+}
+
+/// A spawn's start that did not take: the refusal the spawn answers, and,
+/// when nothing of the start is left in its pane, why (`unused`): a shell
+/// that never became ready for the line (`agent_start::SHELL_STARTING`), or
+/// a profile's program its executor saw fail to start
+/// (`launch::PROFILE_REFUSED`), whose provisional agent the engine has
+/// already withdrawn. A start whose result is not known
+/// (`launch::PROFILE_UNCONFIRMED`, an unconfirmed answer) may run there.
+#[derive(Debug)]
+pub(crate) struct NotStarted {
+    pub(crate) refusal: String,
+    pub(crate) unused: Option<&'static str>,
 }
 
 /// A spawn's start that engine refused as busy for its whole wait.
 pub(crate) const PANE_BUSY_REFUSAL: &str = "pane_busy";
 
+/// A start the engine took: its pane, and the profile the agent runs with,
+/// which the agent's record keeps (`None` for the built-in default).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Started {
+    pub(crate) pane_id: String,
+    pub(crate) profile: Option<crate::launch::LaunchProfile>,
+}
+
+/// [`start_agent`] with an admission `check` the start asks before its
+/// effect.
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
 pub(crate) fn start_agent_checked(
     engine: &dyn Engine,
@@ -600,17 +647,18 @@ pub(crate) fn start_agent_checked(
     shell: crate::agent_start::ShellStart,
     shell_wait: Duration,
     name: &str,
-    kind: &str,
+    launch: crate::launch::Launch,
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
     check: &dyn Fn() -> Result<(), String>,
-) -> Result<String, crate::agent_start::StartError> {
+) -> Result<Started, crate::agent_start::StartError> {
+    let profile = launch.record();
     let start = engine
         .prepare_start(crate::engine::AgentLaunch {
             pane_id: pane_id.to_owned(),
             name: name.to_owned(),
-            kind: kind.to_owned(),
+            launch,
             args,
             codex_daemon,
             wakes: false,
@@ -621,16 +669,12 @@ pub(crate) fn start_agent_checked(
             detail,
         })?;
     match crate::agent_start::start_at_shell_within(
-        engine,
-        node,
-        request_id,
-        shell,
-        &start,
-        Duration::from_secs(5),
-        shell_wait,
-        check,
+        engine, node, request_id, shell, &start, shell_wait, check,
     ) {
-        Ok(started) => Ok(started.pane_id),
+        Ok(started) => Ok(Started {
+            pane_id: started.pane_id,
+            profile,
+        }),
         Err(crate::agent_start::StartError::Engine(EngineError::Answer(detail))) => {
             Err(crate::agent_start::StartError::NotStarted {
                 reason: "agent_start.unconfirmed".into(),
@@ -657,6 +701,7 @@ pub(crate) fn start_error_message(error: crate::agent_start::StartError) -> Stri
 pub(crate) fn confirm_session_launch(
     node: &dyn crate::node_access::NodeLink,
     kind: &str,
+    account: &hide_agent_adapter::AccountKey,
     id: &str,
     cwd: Option<&str>,
     source_reference: Option<&crate::sidebar::SessionAgentSessionPayload>,
@@ -681,6 +726,7 @@ pub(crate) fn confirm_session_launch(
     }
     let request = hide_session::session_activity::SessionActivityRequest {
         agent,
+        account: account.clone(),
         reference_kind: source_reference.kind.clone(),
         reference_value: source_reference.value.clone(),
         cwd: Some(cwd.ok_or("session_route_cwd_unconfirmed")?.into()),

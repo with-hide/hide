@@ -247,6 +247,7 @@ fn dormant_intent(runtime: &mut Runtime) -> crate::agent_sleep::SleepId {
             registration: None,
             launch: Default::default(),
             owner: Some(owner),
+            profile: None,
         })
         .unwrap()
 }
@@ -969,9 +970,25 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             ..Default::default()
         });
         confirmed.agents.push(agent);
+        // The woken pane's record is there before its agent shows, so the
+        // agent's session is read in its profile's account (B19).
+        let recorded = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .ui_state
+                .pane_launches
+                .get("w-order:t3:p")
+                .map(|record| (record.name.clone(), record.choice.clone()))
+        };
+        assert_eq!(
+            recorded(&runtime),
+            Some((wake_name.clone(), launch.clone())),
+            "{kind}"
+        );
         runtime.ingest_session(Ok(confirmed));
         assert!(runtime.snapshot.navigator.sleeping_sessions.is_empty());
-        // The woken pane keeps the choice for the agent's next restart.
+        // The woken pane keeps the choice for the agent's next restart, the
+        // CLI's defaults too, so a child it starts knows its account (D-32).
         assert_eq!(
             runtime
                 .snapshot
@@ -979,7 +996,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 .pane_launches
                 .get("w-order:t3:p")
                 .map(|record| (record.name.as_str(), &record.choice)),
-            (!launch.is_default()).then_some((wake_name.as_str(), &launch)),
+            Some((wake_name.as_str(), &launch)),
             "{kind}"
         );
         assert!(runtime.snapshot.ui_state.agent_sleep.dormant.is_empty());
@@ -1081,7 +1098,7 @@ fn a_dormant_sleep_keeps_the_choice_the_agent_was_started_with() {
             .unwrap()
             .started_name = Some("reviewer".into());
         if let Some(recorded) = recorded {
-            runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None);
+            runtime.record_pane_launch(SLEEPER, "pi", "reviewer", recorded, None, None);
         }
         runtime.dispatch_json(&event(
             "agent_sleep",

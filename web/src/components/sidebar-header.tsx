@@ -1,6 +1,8 @@
 import { useInterfaceTranslation } from "../i18n/client";
-import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, SearchIcon, ServerIcon } from "lucide-react";
+import { ChevronDownIcon, LaptopIcon, LayoutDashboardIcon, PlusIcon, SearchIcon, ServerIcon, WaypointsIcon } from "lucide-react";
+import { cn } from "../lib/utils";
 import { Kbd } from "./ui/kbd";
+import { RowButton } from "./ui/row-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
 
@@ -41,12 +43,14 @@ export function DeviceTitle({ rail, title, deviceMenu }: { rail: boolean; title:
  * The top of the sidebar under the window's top row (PRD
  * sidebar-titlebar-refresh D-08): a visible Search row with the ⌘K chord as
  * bound, then the shared Overview row and, where the host can pick a folder,
- * the Add project row under it (PRD first-run-onboarding B51), with the
- * project tree directly below. Drawn from what the caller reads out of the
+ * the `미션` row (PRD mission-screen B1), and, where the host can pick a
+ * folder, the Add project row under it (PRD first-run-onboarding B51), with
+ * the project tree directly below. Drawn from what the caller reads out of the
  * stores, so a test renders it without them.
  */
 export function SidebarHeader({
   overview,
+  missions,
   addProject,
   compact = false,
   searchChord,
@@ -54,6 +58,8 @@ export function SidebarHeader({
 }: {
   compact?: boolean;
   overview?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
+  /** The mission screen's row (B1): selected while the screen shows, its count the missions with something in their 내 차례. */
+  missions?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
   addProject?: { chord: string | null; onOpen: () => void };
   searchChord: string | null;
   onSearch: () => void;
@@ -76,12 +82,23 @@ export function SidebarHeader({
       {overview ? (
         <Hint label={overview.count > 0 ? t("overview.needsYouHint", { count: overview.count }) : t("overview.title")} shortcut={overview.chord}>
           <button type="button" aria-current={overview.selected ? "page" : undefined} data-sidebar-overview="true" onClick={overview.onOpen}
-            className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${addProject ? "" : "border-b border-border"} ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
+            className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${addProject || missions ? "" : "border-b border-border"} ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
             <LayoutDashboardIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 flex-1 truncate text-left">{t("overview.title")}</span>
             {overview.count > 0 ? <span data-overview-count="true" className="text-caption text-warning">{t("overview.askingCount", { count: overview.count })}</span> : null}
             {overview.chord && !compact ? <Kbd className="sidebar-command-keycap">{overview.chord}</Kbd> : null}
           </button>
+        </Hint>
+      ) : null}
+      {missions ? (
+        <Hint label={missions.count > 0 ? t("missionScreen.rowHint", { count: missions.count }) : t("missionScreen.title")} shortcut={missions.chord}>
+          <RowButton aria-current={missions.selected ? "page" : undefined} data-sidebar-missions="true" onClick={missions.onOpen}
+            className={cn("h-(--size-tab-strip) shrink-0 gap-sm rounded-none px-md py-0 text-body", !addProject && "border-b border-border", missions.selected ? "bg-selected text-foreground hover:bg-selected" : "text-subtle-foreground")}>
+            <WaypointsIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-left">{t("missionScreen.title")}</span>
+            {missions.count > 0 ? <span data-missions-count={missions.count} className="text-caption tabular-nums text-warning">{missions.count}</span> : null}
+            {missions.chord && !compact ? <Kbd className="sidebar-command-keycap">{missions.chord}</Kbd> : null}
+          </RowButton>
         </Hint>
       ) : null}
       {addProject ? (

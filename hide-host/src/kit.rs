@@ -55,7 +55,7 @@ pub fn handle(
                     "HOME is not set, so Hide cannot tell where to install",
                 )
             })?;
-            return run_build(
+            let answer = run_build(
                 &Placement {
                     root: root.clone(),
                     version: version.clone(),
@@ -65,10 +65,15 @@ pub fn handle(
                 cli_dir,
                 retirement_projects,
                 Arc::clone(&env.stop),
+                crate::profiles::source(env),
             );
+            return settled(env, answer);
         }
         KitPlace::Bundled(kit_dir) => {
-            return bundled(kit_dir, env, action, cli_dir, retirement_projects);
+            return settled(
+                env,
+                bundled(kit_dir, env, action, cli_dir, retirement_projects),
+            );
         }
         KitPlace::Standalone => {
             return Err(HostError::new(
@@ -91,7 +96,7 @@ pub fn handle(
             "The home folder is unknown, so the helper cannot tell where to install",
         )
     })?;
-    run_for_projects(
+    let answer = run_for_projects(
         &Placement {
             root,
             version,
@@ -101,7 +106,54 @@ pub fn handle(
         cli_dir,
         retirement_projects,
         Arc::clone(&env.stop),
-    )
+        crate::profiles::source(env),
+    );
+    settled(env, answer)
+}
+
+/// A kit answer, after the profiles being removed whose accounts the pass
+/// found free of Hide's pieces have left the profile file.
+fn settled(env: &Env, answer: HostResult<Value>) -> HostResult<Value> {
+    if let Ok(answer) = &answer
+        && let Some(profiles) = answer.get("profiles")
+        && let Ok(reports) =
+            serde_json::from_value::<Vec<hide_kit::ProfileReport>>(profiles.clone())
+    {
+        crate::profiles::settle_after_kit(env, &reports);
+    }
+    answer
+}
+
+/// The kit target of this node's own installation, for a pass over the
+/// profile accounts alone (`hide_kit::apply_profiles`), which names no
+/// command folder and changes no build.
+pub(crate) fn profile_target(env: &Env) -> HostResult<hide_kit::KitTarget> {
+    let home = env.home.clone().ok_or_else(|| {
+        HostError::new(
+            ErrorCode::Unsupported,
+            "HOME is not set, so Hide cannot tell where to install",
+        )
+    })?;
+    let cli_dir = home.join(".local").join("bin");
+    let stop = Arc::clone(&env.stop);
+    match &env.kit {
+        KitPlace::Installed => {
+            let executable = std::env::current_exe().map_err(|error| {
+                HostError::new(
+                    ErrorCode::Io,
+                    format!("The helper could not tell where it runs from: {error}"),
+                )
+            })?;
+            let (root, _) = install_layout(&executable)?;
+            Ok(hide_kit::device_target(&root, &home, &cli_dir, stop))
+        }
+        KitPlace::Build { root, .. } => Ok(hide_kit::device_target(root, &home, &cli_dir, stop)),
+        KitPlace::Bundled(kit_dir) => Ok(hide_kit::local_target(kit_dir, &home, stop)),
+        KitPlace::Standalone => Err(HostError::new(
+            ErrorCode::Unsupported,
+            hide_kit::STANDALONE_REASON,
+        )),
+    }
 }
 
 /// The kit of the machine whose desktop package holds the parts: they stay
@@ -124,6 +176,7 @@ fn bundled(
     let mut target = hide_kit::local_target(kit_dir, &home, Arc::clone(&env.stop));
     target.cli_dir = inputs.cli_dir;
     target.retirement_projects = inputs.projects;
+    target.profiles = crate::profiles::source(env);
     let mut report = match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
             hide_kit::apply(&target, &scope_of(action))
@@ -158,11 +211,13 @@ pub fn run_build(
     cli_dir: &str,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
+    profiles: Option<hide_kit::ProfileSource>,
 ) -> HostResult<Value> {
     let home = &placement.home;
     let Inputs { projects, cli_dir } = Inputs::read(home, cli_dir, retirement_projects)?;
     let mut target = hide_kit::device_target(&placement.root, home, &cli_dir, stop);
     target.retirement_projects = projects;
+    target.profiles = profiles;
     match action {
         KitAction::Apply | KitAction::Reinstall { .. } => {
             if let Err(refusal) = hide_kit::retirement_preflight(&target) {
@@ -305,7 +360,7 @@ pub fn run(
     cli_dir: &str,
     stop: Arc<AtomicBool>,
 ) -> HostResult<Value> {
-    run_for_projects(placement, action, cli_dir, &[], stop)
+    run_for_projects(placement, action, cli_dir, &[], stop, None)
 }
 
 fn run_for_projects(
@@ -314,6 +369,7 @@ fn run_for_projects(
     cli_dir: &str,
     retirement_projects: &[String],
     stop: Arc<AtomicBool>,
+    profiles: Option<hide_kit::ProfileSource>,
 ) -> HostResult<Value> {
     let home = &placement.home;
     let Inputs { projects, cli_dir } = Inputs::read(home, cli_dir, retirement_projects)?;
@@ -321,6 +377,7 @@ fn run_for_projects(
         let mut target =
             hide_kit::device_target(&placement.root, home, &cli_dir, Arc::clone(&stop));
         target.retirement_projects = projects.clone();
+        target.profiles = profiles.clone();
         target
     };
     match action {
@@ -622,7 +679,7 @@ mod tests {
     #[test]
     fn every_kit_location_follows_the_home_the_platform_names() {
         use crate::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
-        use hide_agent_adapter::{ADAPTERS, HomeScope};
+        use hide_agent_adapter::{ADAPTERS, AccountPath, NodeEnv, Profile};
         let dir = tempfile::tempdir().unwrap();
         let own = dir.path().join("own");
         let account = dir.path().join("account");
@@ -661,13 +718,20 @@ mod tests {
         locations.extend(
             hide_agent_hooks::runtime::AgentRuntime::ALL.map(|runtime| runtime.config_path(&home)),
         );
-        // Each agent's folder as the agent itself reads it in a pane.
+        // Each agent's places as Hide reads them for a pane there: its
+        // default account, following the variables the start step sets.
         for agent in ADAPTERS {
-            let value = agent.home_variable.and_then(started);
-            locations.push(
-                agent
-                    .home(Some(&home), value.as_deref(), HomeScope::Read)
-                    .unwrap(),
+            let mut node = NodeEnv::new(Some(home.clone()));
+            for (variable, _) in agents.iter() {
+                node = node.with_variable(variable, started(variable));
+            }
+            let account = agent
+                .resolve(&Profile::builtin_default(agent.id), &node)
+                .unwrap();
+            locations.extend(
+                AccountPath::ALL
+                    .into_iter()
+                    .filter_map(|path| account.path(path).map(Path::to_path_buf)),
             );
         }
         for location in locations {
@@ -819,6 +883,7 @@ mod tests {
             "~/.local/bin",
             &[],
             Arc::new(AtomicBool::new(true)),
+            None,
         )
         .unwrap();
         drop(held);
@@ -846,6 +911,7 @@ mod tests {
             "~/.local/bin",
             &[],
             Arc::default(),
+            None,
         )
         .unwrap_err();
         assert_eq!(refused.code, ErrorCode::Unsupported);
@@ -997,6 +1063,7 @@ mod tests {
             "~/.local/bin",
             &[],
             Arc::new(AtomicBool::new(true)),
+            None,
         )
         .unwrap();
         assert!(!folder.exists());

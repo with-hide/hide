@@ -174,6 +174,17 @@ pub struct PhoneEscalation {
     pub cause: String,
     /// The line its blocked turn left, when it left one.
     pub line: Option<String>,
+    /// The person's turn it declared, which the step says as its waiting
+    /// reason (PRD ask-human D-18, B25); absent for every other cause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human: Option<PhoneHuman>,
+}
+
+/// What a person's turn asks and where, as a step's waiting reason says it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PhoneHuman {
+    pub kind: String,
+    pub place: String,
 }
 
 #[derive(Deserialize)]
@@ -257,6 +268,8 @@ struct WorkerIn {
 struct RawAgent<'a> {
     escalation: Option<&'a str>,
     blocked_line: Option<&'a str>,
+    /// The person's turn the row leads with, while that is its escalation.
+    human: Option<PhoneHuman>,
 }
 
 impl PhoneMissions {
@@ -403,6 +416,7 @@ fn phone_mission(
                 Some(PhoneEscalation {
                     cause: agent.escalation?.to_owned(),
                     line: agent.blocked_line.map(cut),
+                    human: agent.human.clone(),
                 })
             });
             PhoneNode {
@@ -491,6 +505,15 @@ fn raw_agents(rest: &Value) -> HashMap<&str, RawAgent<'_>> {
             Some((
                 pane,
                 RawAgent {
+                    human: agent
+                        .pointer("/escalation/cause")
+                        .filter(|cause| *cause == "human_turn")
+                        .and_then(|_| {
+                            Some(PhoneHuman {
+                                kind: agent.pointer("/human_turn/kind")?.as_str()?.to_owned(),
+                                place: agent.pointer("/human_turn/place")?.as_str()?.to_owned(),
+                            })
+                        }),
                     escalation: agent.pointer("/escalation/cause").and_then(Value::as_str),
                     blocked_line: blocked
                         .then(|| agent.pointer("/request/line").and_then(Value::as_str))
@@ -655,7 +678,8 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_the_core_raised_carries_its_cause_and_the_line_its_blocked_turn_left() {
+    fn a_worker_the_core_raised_carries_its_cause_and_the_line_its_blocked_turn_left_or_its_persons_turn()
+     {
         let mut agents = vec![
             agent("w1:p1", json!({})),
             agent(
@@ -666,6 +690,7 @@ mod tests {
             ),
         ];
         agents.push(agent("w1:p3", json!({"escalation": {"cause": "draft"}, "request": {"end": "done", "line": "not blocked"}})));
+        agents.push(agent("w1:p4", json!({"escalation": {"cause": "human_turn"}, "human_turn": {"id": "w.1", "kind": "auth", "place": "github.com/login", "pane_id": "w1:p4", "title": "w", "since_unix_ms": 1, "own": true}})));
         let rest = rest(
             vec![mission(
                 "m1",
@@ -675,6 +700,7 @@ mod tests {
                     node("a", json!({"pane_id": "w1:p2"})),
                     node("b", json!({"pane_id": "w1:p3"})),
                     node("c", json!({})),
+                    node("d", json!({"pane_id": "w1:p4"})),
                 ],
             )],
             json!({"navigator": {"agents": agents, "devices": []}}),
@@ -684,17 +710,31 @@ mod tests {
             nodes[0].escalation,
             Some(PhoneEscalation {
                 cause: "child_blocked".into(),
-                line: Some("Login expired".into())
+                line: Some("Login expired".into()),
+                human: None,
             })
         );
         assert_eq!(
             nodes[1].escalation,
             Some(PhoneEscalation {
                 cause: "draft".into(),
-                line: None
+                line: None,
+                human: None,
             })
         );
         assert_eq!(nodes[2].escalation, None);
+        // A person's turn says what and where, as the step's waiting reason (PRD ask-human B25).
+        assert_eq!(
+            nodes[3].escalation,
+            Some(PhoneEscalation {
+                cause: "human_turn".into(),
+                line: None,
+                human: Some(PhoneHuman {
+                    kind: "auth".into(),
+                    place: "github.com/login".into(),
+                }),
+            })
+        );
     }
 
     #[test]

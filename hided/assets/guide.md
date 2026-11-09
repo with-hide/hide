@@ -24,7 +24,7 @@ hide request reply <id> --intent <key> --body <text>
 hide inbox
 ```
 
-- A target is an agent's name or registration id from `hide agent list`, or a pane id on your own machine; use a new `--intent` for each new letter, and the same one to retry it.
+- A target is an agent's name or registration id from `hide agent list`, or a pane id on your own machine; use a new `--intent` for each new letter, including the same text to another agent, and the same one only to retry that exact letter; a reused intent with another recipient, kind or body (for a reply, another letter replied to or another body) is refused `intent_conflict`.
 - The body's first line is its one-line summary, which the operator sees when Hide wakes the recipient, so begin with what happened or what you need.
 - `request` asks and waits for a reply; `block` says you cannot go on without one; `progress` is an interim report, such as a plan, and ends nothing; `report` says the work is finished and ends your parent's watch on you.
 - Send `progress` at a plan, a change of direction, or before a long wait, not at every step: the recipient reads only your newest three in full.
@@ -39,7 +39,7 @@ hide inbox
 ## Agents
 
 ```
-hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>]
+hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] [--profile <name>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>]
 hide ps [--all] [--here] [--json]
 hide agent list
 hide agent show <id|here|spawn id|intent>
@@ -53,15 +53,34 @@ hide agent end <id> [--actor <id>] [--keep-pane]
 
 - See current panes and agents with `hide ps`: one tree of the live panes and the agents in them; `--here` keeps this project, `--all` adds ended registrations, `--json` gives the flat list.
 - `hide agent list` shows the agents Hide knows, with their machine and their `runtime`: `running`, `asleep` while Hide holds one asleep (a `request` or `block` letter wakes it), or `ended`; `hide ps` says the same; `hide agent show here` is your own registration: your id, parent, origin, machine and the watch on you.
-- `hide agent show <id>` adds `state`, what the agent is doing now as the sidebar reads it: `activity` (`working`, `stopped` or `unknown`; a state Hide cannot read now is `unknown`, never ready), `waiting` (null when it waits on nothing; otherwise its `cause`, such as `question`, `approval`, `blocked` or `input_unconfirmed`, and `on`, `operator` or the agent id that should answer) and `pending_inputs` (a brief or letter Hide typed that the agent has not recorded, with its `attempts` and `phase`).
+- `hide agent show <id>` adds `state`, what the agent is doing now as the sidebar reads it: `activity` (`working`, `stopped` or `unknown`; a state Hide cannot read now is `unknown`, never ready), `waiting` (null when it waits on nothing; otherwise its `cause`, such as `question`, `approval`, `blocked`, `input_unconfirmed` or `human_turn` (with `human`: its kind, place and time), and `on`, `operator` or the agent id that should answer) and `pending_inputs` (a brief or letter Hide typed that the agent has not recorded, with its `attempts` and `phase`).
 - A child that never registered is still yours to look at: a spawn that stopped partway answers its code with `spawn` (`id` and `pane`), and `hide agent show <spawn id>`, or the intent you spawned it under, shows that spawn, its pane and its state. Running the same spawn again never starts a second child.
-- A stuck child: read its screen with `hide pane read <pane>`, then answer it with `hide pane send <pane> --key <name>`; Hide types an unconfirmed brief again once the screen is answered. You may answer a trust or approval screen for it when that is within your work: Hide does not check consent, and the operator sets how much agents may approve in Settings > Agents. Leave a login to the operator.
+- A stuck child: read its screen with `hide pane read <pane>`, then answer it with `hide pane send <pane> --key <name>`; Hide types an unconfirmed brief again once the screen is answered. You may answer a trust or approval screen for it when that is within your work: Hide does not check consent, and the operator sets how much agents may approve in Settings > Agents. A sign-in or a permission is the operator's: the agent at it declares it, as below.
+- A step only a person can take: run `hide agent ask-human auth <where>` for a sign-in, a re-authentication or an unlock, or `hide agent ask-human permission <where>` for an app connection or an OS permission, then stop and end your turn. `<where>` is where the person acts, such as `hide agent ask-human auth https://github.com/login` or `hide agent ask-human permission "System Settings > Privacy & Security > Camera"`; it is shown to the operator as you wrote it, a query or a code included, until the step is done. Your lineage's top row stands in the operator's 내 차례 with a key and they are told; when they have done it and press 다 했어요 you get a letter that says so, and a message they type to you ends it too. `hide agent ask-human --clear` takes it down if you got past the step yourself. Anything else, a decision included, goes to your parent with `hide request send`. A command that waits for a person's approval, such as `op read`, needs a timeout of its own, so you can declare and stop rather than hang.
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
 - `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
   `hide agent end <id>` instead ends its registration and closes its pane, which ends the agent and every program it started; its conversation waits under 보관됨, where 이어가기 resumes it, and `--keep-pane` ends only the registration.
   To end yourself, run `hide agent end <your id> --keep-pane`: without it your own pane closes, and the command never gets its answer.
 - `hide agent archive <id>` does what the screen's `세션 보관` does for that session: its conversation is saved, its panes close, and the operator resumes it from 보관됨; it answers `{"archived":"<id>","pane_id":"<pane>"}`, and refuses a session that is working with `archive_confirmation_required`, which only the operator confirms, from Hide's screen.
+
+## Agent profiles
+
+```
+hide agent profile list [--kind <kind>] [--machine <device id>]
+hide agent profile add <kind> <name> [--account <folder|name>] [--program <program>] [--env KEY=VALUE]... [--default] [--machine <device id>]
+hide agent profile edit <kind> <name> [--rename <name>] [--program <program> | --no-program] [--env KEY=VALUE]... [--unset-env KEY]... [--machine <device id>]
+hide agent profile default <kind> <name> [--machine <device id>]
+hide agent profile remove <kind> <name> [--machine <device id>]
+hide agent profile reinstall <kind> <name> [--machine <device id>]
+```
+
+- A profile is one way to start an agent on a machine: its own account folder (an omp profile name for omp), a program to run instead, and extra environment variables. Settings › Agents shows the same list and makes the same checks. Every agent also has the built-in `default` profile, its own folder, which is never edited or removed.
+- A start takes `--profile <name>` first, then the profile of a parent of the same kind, then the project's choice (Project settings › Working style › Agent accounts), then the agent's default (`hide agent profile default`). `--profile default` starts the built-in one; `--machine` looks the name up on that device.
+- Moving the operator's aliases, when they ask for it: read their shell's startup files (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, PowerShell's `$PROFILE`) for an alias or function that starts an agent with another account, such as `alias claude-b='CLAUDE_CONFIG_DIR=~/.claude-b claude'`. Register each one: its account folder goes in `--account` (`hide agent profile add claude b --account ~/.claude-b`), its other variables in `--env`, and a wrapper it runs in `--program`. The variable that moves the account is never an `--env`: the account field sets it, and `--env` refuses it. Then run `hide agent profile list` and report what you registered; leave the alias where it is unless the operator asks you to remove it.
+- Connecting a new account: `hide agent profile add <kind> <name> --account <new folder>` (Hide makes the folder, readable by the operator only, and installs its hooks there), then `hide agent spawn --parent here --profile <name> …`, and tell the operator to sign in in that pane: a new folder starts signed out. `hide agent profile list` shows whether the install succeeded.
+- Keep secrets out of `--env`: Hide stores those values as settings. A key belongs in the program run instead.
+- A refusal names its code and what to do: `profile_refused` (a field and why, such as the agent's own folder or a reserved variable), `profile_in_use` (the agents running or starting with the profile, sleeping ones too, which have to end first), `profile_gone`, `profile_builtin`, `profile_busy` (another change is running) and `profiles_unsupported` (a device whose Hide has no profiles).
 
 ## Panes
 

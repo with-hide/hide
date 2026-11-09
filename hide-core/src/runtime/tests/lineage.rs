@@ -2101,6 +2101,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
+            profiles: Vec::new(),
             refused: None,
         },
     );
@@ -2146,6 +2147,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
+            profiles: Vec::new(),
             refused: None,
         },
     );

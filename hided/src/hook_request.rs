@@ -4,7 +4,9 @@
 
 use std::time::{Duration, Instant};
 
-use hide_node_link::panes::{HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest};
+use hide_node_link::panes::{
+    AgentExecEvent, ExecProcess, HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest,
+};
 use serde_json::{Value, json};
 
 use crate::core::CoreHandle;
@@ -53,6 +55,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                 prompt,
             } => memory_ask(event, runtime, session, prompt).is_some(),
             HookCommand::Status { report } => valid_status(report),
+            HookCommand::AgentExec { .. } => request.command.agent_exec_valid(),
             HookCommand::LetterPull {
                 prompt_digest,
                 session,
@@ -73,10 +76,15 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
         }
 }
 
+/// `executor` is the process that sent an `AgentExec`, as the kernel of
+/// the pane's machine says it is that attempt's executor
+/// (`hide_agent_hooks::hook_request::executor_process`); none for every
+/// other command.
 pub(crate) fn answer(
     core: &CoreHandle,
     cap: &Capability,
     request: &HookRequest,
+    executor: Option<ExecProcess>,
     desktop: bool,
 ) -> Value {
     let result = match &request.command {
@@ -118,6 +126,9 @@ pub(crate) fn answer(
             None,
         ),
         HookCommand::Status { report } => status(core, cap, report),
+        HookCommand::AgentExec { attempt, event } => {
+            agent_exec(core, cap, attempt, event.clone(), executor)
+        }
         HookCommand::Memory {
             event,
             runtime,
@@ -181,6 +192,35 @@ fn status(
             }));
             (reason.to_owned(), "Continue without the status report")
         })
+}
+
+/// What `hide agent exec` in the caller's pane reported of its profile's
+/// start, which ends the engine's wait for it.
+/// An `AgentExec` report, taken only with the kernel's word for its
+/// sender: a `Ready` refused here leaves the program unstarted.
+fn agent_exec(
+    core: &CoreHandle,
+    cap: &Capability,
+    attempt: &str,
+    event: AgentExecEvent,
+    executor: Option<ExecProcess>,
+) -> Result<Value, Failure> {
+    cap.pane_terminal()
+        .ok_or("agent_pane_required")
+        .and_then(|_| executor.ok_or("caller_unavailable"))
+        .and_then(|executor| {
+            core.agent_exec(
+                &cap.context.device_id,
+                &cap.pane_id,
+                hide_core::engine::AgentExecReport {
+                    attempt: attempt.to_owned(),
+                    event,
+                    executor,
+                },
+            )
+        })
+        .map(|()| json!({"recorded": true}))
+        .map_err(|reason| (reason.to_owned(), "Start the agent again"))
 }
 
 fn workspace_info(core: &CoreHandle, cap: &Capability, desktop: bool) -> Result<Value, Failure> {

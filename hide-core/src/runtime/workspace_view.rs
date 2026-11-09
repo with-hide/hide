@@ -698,9 +698,9 @@ impl Runtime {
     }
 
     /// A tool opened `key`'s closed lane on itself alone (`open_on`), so the
-    /// window's 보기 slot, which ⌘E's close left shown, stops being drawn
-    /// there and stays on the rail to come back to. The slot is the
-    /// window's, so only the lane in front gives way.
+    /// front tab's 보기 slot, which ⌘E's close left shown, stops being drawn
+    /// there and stays on the rail to come back to. Only the lane in front
+    /// gives way.
     fn leave_detail_at(&mut self, key: &WorkspaceKey) {
         if self.front_workspace_key().as_ref() == Some(key) {
             self.leave_detail();
@@ -1334,12 +1334,10 @@ impl Runtime {
             let (visible, section) = match view.tool.filter(|_| view.open) {
                 Some(Tool::Explorer) => (true, RightPanelSection::Explorer),
                 Some(Tool::Changes) => (true, RightPanelSection::Changes),
-                // The Project tool, Memory and the Mission tool project as
-                // `Memory`, which no reader gates on; `Overview` would start the
-                // disk and Git reads.
-                Some(Tool::Project | Tool::Memory | Tool::Mission) => {
-                    (true, RightPanelSection::Memory)
-                }
+                // The Project tool and Memory project as `Memory`, which no
+                // reader gates on; `Overview` would start the disk and Git
+                // reads.
+                Some(Tool::Project | Tool::Memory) => (true, RightPanelSection::Memory),
                 None => (false, self.snapshot.ui_state.right_panel_section),
             };
             self.snapshot.ui_state.right_panel_visible = visible;

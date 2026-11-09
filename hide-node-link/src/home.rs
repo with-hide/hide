@@ -1,47 +1,26 @@
-//! The Home folder after a sync.
+//! The one-time retirement of Hide's old Home folder (`~/hide`).
 
 use serde::{Deserialize, Serialize};
 
-/// The most project links one Home holds.
-pub const MAX_LINKS: usize = 256;
-
-/// The Home folder after a sync.
+/// What [`crate::protocol::Call::HomeRetire`] did to one machine's `~/hide`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HomeSynced {
-    /// Absolute, canonical path of `<user home>/hide`, in wire spelling (`/`).
+pub struct HomeRetired {
+    /// Absolute path of `<user home>/hide`, in wire spelling (`/`).
     pub home: String,
-    /// This call made the Home folder.
-    pub created: bool,
-    /// Every project Home holds after the sync, sorted by name: a link Hide
-    /// manages, or where Home holds no link (Windows) its line in `AGENTS.md`.
-    pub links: Vec<HomeLink>,
-    /// Managed links this sync removed.
-    pub dropped: Vec<HomeDrop>,
-    /// Requested projects that got no link.
-    pub skipped: Vec<HomeSkip>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HomeLink {
-    pub name: String,
-    pub target: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HomeDrop {
-    pub name: String,
-    pub target: String,
-    /// `listed` (Home lists the project now and holds no link, on Windows),
-    /// `unregistered` (the project left the list) or `dangling` (its folder
-    /// is gone).
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HomeSkip {
-    pub target: String,
-    /// `missing` (not a folder now), `name_taken` (something of the
-    /// operator's holds the link's name), `link_failed` (the disk refused the
-    /// link), `not_absolute`, or `no_name` (the path has no final component).
-    pub reason: String,
+    /// Whether the folder is still there after the call: it holds something
+    /// Hide did not make, a session or pane was recorded in it, it has no
+    /// marker of Hide's, or it is not a folder.
+    pub kept: bool,
+    /// Hide's marker was found, so its entries were Hide's to remove.
+    pub marked: bool,
+    /// The names of the entries removed.
+    pub removed: Vec<String>,
+    /// Entries the marker listed that now hold something else, left as the
+    /// operator's.
+    pub changed: Vec<String>,
+    /// Why the cleanup of a folder Hide made (its marker was found) could not
+    /// finish, when it could not: the folder is still there, and a later call
+    /// retries. Failures before the marker was found are errors of the call.
+    #[serde(default)]
+    pub failure: Option<String>,
 }

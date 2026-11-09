@@ -886,3 +886,113 @@ fn pi_s_own_lock_is_waited_for_and_a_missing_agent_folder_is_made() {
     assert!(settings.is_file());
     assert!(!lock.exists());
 }
+
+/// Claude Code's account in the folder `spelled`, as the node resolves a
+/// profile's for a start.
+fn claude_account(home: &Path, spelled: &str) -> Account {
+    let adapter = AgentId::ClaudeCode.adapter();
+    adapter
+        .resolve(
+            &Profile {
+                account: Some(AccountRef::Folder(spelled.to_owned())),
+                ..Profile::builtin_default(adapter.id)
+            },
+            &NodeEnv::new(Some(home.to_path_buf())),
+        )
+        .unwrap()
+}
+
+#[test]
+fn a_profile_account_s_trust_is_its_own_and_leaves_with_that_account_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    let work = real(home, ".claude-work");
+    let account = claude_account(home, work.to_str().unwrap());
+    let at = AccountAt::Account {
+        home,
+        account: &account,
+    };
+    let default_file = Agent::ClaudeCode.settings_path(home);
+    let profile_file = Agent::ClaudeCode.settings_path(at);
+    assert!(
+        profile_file.starts_with(&work),
+        "the trust goes in the file Claude reads in that account: {profile_file:?}"
+    );
+    let tree = real(home, "repo-task");
+    let key = Agent::ClaudeCode.spelling(&tree).unwrap();
+    let flag = serde_json::json!({"hasTrustDialogAccepted": true});
+
+    trust(Agent::ClaudeCode, at, &tree, none()).unwrap();
+    assert_eq!(read_json(&profile_file)["projects"][&key], flag);
+    assert!(
+        !default_file.exists(),
+        "the default account's file is not touched"
+    );
+    trust(Agent::ClaudeCode, home, &tree, none()).unwrap();
+    assert_eq!(read_json(&default_file)["projects"][&key], flag);
+    // Hide keeps one record under the home, an entry per account.
+    assert_eq!(
+        recorded(Agent::ClaudeCode, home),
+        [key.clone(), key.clone()]
+    );
+
+    // Switching the agent off in the default account takes out the
+    // default's entry alone: the profile account's goes with its pieces.
+    assert_eq!(forget_all(Agent::ClaudeCode, home, none()).unwrap(), 1);
+    assert!(read_json(&default_file)["projects"].get(&key).is_none());
+    assert_eq!(read_json(&profile_file)["projects"][&key], flag);
+    trust(Agent::ClaudeCode, home, &tree, none()).unwrap();
+
+    // The account going, named with a final separator, takes out its own
+    // entry and leaves the default account's.
+    let respelled = claude_account(home, &format!("{}/", work.display()));
+    assert_ne!(respelled.key, account.key);
+    assert_eq!(
+        forget_account(Agent::ClaudeCode, home, &respelled, none()).unwrap(),
+        1
+    );
+    assert!(read_json(&profile_file)["projects"].get(&key).is_none());
+    assert_eq!(read_json(&default_file)["projects"][&key], flag);
+    assert_eq!(
+        recorded(Agent::ClaudeCode, home),
+        std::slice::from_ref(&key)
+    );
+
+    // Removing the worktree takes it out of every account it was trusted in.
+    trust(Agent::ClaudeCode, at, &tree, none()).unwrap();
+    assert_eq!(forget(Agent::ClaudeCode, home, &tree, none()).unwrap(), 2);
+    assert!(read_json(&profile_file)["projects"].get(&key).is_none());
+    assert!(read_json(&default_file)["projects"].get(&key).is_none());
+    assert!(recorded(Agent::ClaudeCode, home).is_empty());
+}
+
+#[test]
+fn a_record_entry_of_an_earlier_build_reads_as_the_default_account_s() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    let tree = real(home, "repo-task");
+    let key = Agent::ClaudeCode.spelling(&tree).unwrap();
+    let record = Agent::ClaudeCode.record_path(home);
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, serde_json::to_vec(&[&key]).unwrap()).unwrap();
+    assert_eq!(
+        read_record(Agent::ClaudeCode, home).unwrap()[0].account(),
+        &AccountKey::Default
+    );
+
+    let work = real(home, ".claude-work");
+    let account = claude_account(home, work.to_str().unwrap());
+    trust(
+        Agent::ClaudeCode,
+        AccountAt::Account {
+            home,
+            account: &account,
+        },
+        &tree,
+        none(),
+    )
+    .unwrap();
+    let read = read_record(Agent::ClaudeCode, home).unwrap();
+    assert_eq!(read[1].account(), &account.key);
+    assert_eq!(read[1].folder(), key);
+}

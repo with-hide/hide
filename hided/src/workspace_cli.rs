@@ -31,6 +31,9 @@ const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
 /// The catalog's own wait for a model-list read is 10 seconds; the exchange
 /// outlives it.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
+/// A profile change reads the list, then installs or takes out Hide's
+/// pieces in its account (`hide_core::agent_profiles`, its node's wait).
+const PROFILE_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// An auto-bootstrapped direct CLI owns its reference even if transport fails.
 struct OneShotReference(PathBuf);
@@ -473,6 +476,28 @@ pub fn request_agent_catalog(
     })
 }
 
+/// `hide agent profile`: a change of a machine's agent profiles, which
+/// installs or takes out Hide's pieces in the account it touches. Never sent
+/// again on its own: a lost answer is read back with `list`.
+pub fn request_agent_profile(
+    credential: &mut Credential,
+    command: &hide_core::agent_profiles::ProfileCommand,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"agent_profile","request_id":request_id,"command":command}),
+            &request_id,
+            true,
+            PROFILE_TIMEOUT,
+            after,
+        )
+    })
+}
+
 /// `hide device`: the core's own device registrations. A `list` is a read;
 /// an `add` or `remove` run again after a lost answer is refused as a
 /// duplicate or an unknown device, never applied twice.
@@ -832,6 +857,28 @@ pub fn request_hook(
         std::env::var(crate::env::HIDE_CAP_REF).ok(),
         command,
         Instant::now() + within,
+    )
+}
+
+/// How long `hide agent exec` waits for its node to answer a report: the
+/// agent waits on it, and a `Ready` that is not answered starts nothing.
+const AGENT_EXEC_WITHIN: Duration = Duration::from_secs(10);
+
+/// `hide agent exec`'s report of the profile's start `attempt` the pane's
+/// shell ran (`HookCommand::AgentExec`), within [`AGENT_EXEC_WITHIN`].
+pub fn report_agent_exec(
+    env: &Env,
+    attempt: &str,
+    event: hide_node_link::panes::AgentExecEvent,
+) -> Result<Value, String> {
+    hook_request(
+        env,
+        std::env::var(crate::env::HIDE_CAP_REF).ok(),
+        hide_node_link::panes::HookCommand::AgentExec {
+            attempt: attempt.to_owned(),
+            event,
+        },
+        Instant::now() + AGENT_EXEC_WITHIN,
     )
 }
 

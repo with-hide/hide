@@ -191,6 +191,8 @@ const renderers: Renderers = {
     "Disabled": () => <GallerySelect value="claude" disabled />,
     "Open": () => <GallerySelect value="claude" open />,
     "Open With Descriptions": () => <GallerySelect value="claude" open described />,
+    "Ghost": () => <GallerySelect value="claude" variant="ghost" />,
+    "Ghost Focus": () => <GallerySelect value="claude" variant="ghost" state="focus" />,
   },
   "Checkbox": {
     "Unchecked": () => <LabeledCheckbox />,
@@ -345,10 +347,10 @@ const renderers: Renderers = {
   },
 };
 
-function GallerySelect({ value, open, disabled, state, described }: { value?: string; open?: boolean; disabled?: boolean; state?: "focus"; described?: boolean }) {
+function GallerySelect({ value, open, disabled, state, described, variant }: { value?: string; open?: boolean; disabled?: boolean; state?: "focus"; described?: boolean; variant?: "ghost" }) {
   return (
     <Select defaultValue={value} open={open} disabled={disabled}>
-      <SelectTrigger aria-label="Agent" data-gallery-state={state}>
+      <SelectTrigger aria-label="Agent" data-gallery-state={state} variant={variant} className={variant ? "w-auto" : undefined}>
         <SelectValue placeholder="Choose an agent" />
       </SelectTrigger>
       <SelectContent>

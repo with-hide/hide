@@ -14,7 +14,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { initGithubRepository } from "./github-remote";
-import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { focusTab, newTab, openProject, openWorktree, withControl, type OpenedProject } from "./daemon-actions";
 import { startEngine } from "./engine-fixture";
 import { setAgentState, startAgentInProject } from "./fixture-agents";
 import { startHided } from "./hided-fixture";
@@ -28,7 +28,7 @@ test.describe.configure({ timeout: 180_000 });
  * A project on a private engine and hided with the fake `gh`, the sidebar on
  * its PR list; `agentOn` starts a working agent in a worktree of that branch.
  */
-async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
+async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string }; project: OpenedProject }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -70,7 +70,7 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     await showSidebarPrs(page);
     const work = page.locator("[data-sidebar-prs]");
     await expect(work.locator("[data-pr-group]").first()).toBeVisible({ timeout: 30_000 });
-    await fn({ gh, work, sent, last, daemon });
+    await fn({ gh, work, sent, last, daemon, project });
   } finally {
     daemon?.stop();
     engine.stop();
@@ -90,7 +90,7 @@ async function unfold(card: Locator, section: "files"): Promise<void> {
 test("the PR list groups by whose move it is and says why on each row", async ({ page }) => {
   await openWork(page, async ({ work }) => {
     // The rail is the documents button, then Project · Memory | Explorer · Changes; the list is the sidebar's (PRD lane-two-columns B25, B41).
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(6);
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
     await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-checked", "true");
     // The Project icon counts worktrees left behind, not the PRs that wait on the operator: those are this list's (PRD project-panel-results D-01).
     await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
@@ -222,6 +222,34 @@ test("all four extra questions failing still lists every pull request and names 
   );
 });
 
+// Operator decision 2026-11-08: a 보기 slot item belongs to the Agent tab that was in front when it
+// opened. Another tab in front, here the checkout's second, shows no card and no slot button of the
+// first tab's; back in the first tab the card is there as it was.
+test("the card stays with the Agent tab it was opened in and does not follow to another tab", async ({ page }) => {
+  await openWork(page, async ({ work, daemon, project }) => {
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(1);
+    await screenshot(page, "work-pr-card-first-tab-light");
+
+    const second = await withControl(daemon, async (control) => {
+      const created = await newTab(control, project, "second");
+      await focusTab(control, project, created.tab);
+      return created;
+    });
+    // The page draws the tab the core shows a few frames after it says so.
+    for (let frame = 0; frame < 20; frame += 1) await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+    await screenshot(page, "work-pr-card-second-tab-light");
+    await expect(page.locator('aside[data-lane="detail"]')).toHaveCount(0);
+    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(0);
+
+    await withControl(daemon, (control) => focusTab(control, project, project.tab));
+    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(1);
+    expect(second.tab).not.toBe(project.tab);
+  });
+});
+
 test("the card opens in the 보기 slot and Merge goes out on the head it showed", async ({ page }) => {
   await openWork(page, async ({ gh, work, sent, last }) => {
     // A row opens the card in the 보기 slot and no Files tab (B27, B50), and
@@ -234,7 +262,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     // The rail's slot button draws the card's PR mark in its state and stands
     // apart from the tools by one rule (B46).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "documents", "divider", "project", "memory", "mission", "divider", "explorer", "changes"]);
+    expect(rail).toEqual(["detail", "documents", "divider", "project", "memory", "divider", "explorer", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
@@ -284,7 +312,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
   });
 });
 
-test("the lane chord brings the card back with its tool and alone, and the slot button opens another checkout's closed lane (lane-two-columns B15, B22)", async ({ page }) => {
+test("the lane chord brings the card back with its tool and alone, and another checkout in front shows no card of this tab's (lane-two-columns B15, B22)", async ({ page }) => {
   await openWork(page, async ({ work, daemon }) => {
     const screen = page.locator("[data-workspace-screen]");
     const slot = page.locator('[data-lane-tool="detail"]');
@@ -311,8 +339,9 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     await expect(card).toBeVisible();
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
 
-    // A checkout whose lane was never opened: the window's slot still holds
-    // the card, and its button opens that checkout's lane on it (B22).
+    // Another checkout in front, whose lane was never opened: the card belongs
+    // to the Agent tab it was opened in, so this checkout's tab shows none and
+    // the rail has no slot button for it (B22).
     const other = path.join(daemon.home, "projects", "other");
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, "README.md"), "# other\n");
@@ -322,10 +351,14 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     await expect(otherRow).toHaveCount(1, { timeout: 20_000 });
     await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click();
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
-    await expect(slot).toHaveAttribute("aria-pressed", "false");
-    await slot.click();
+    await expect(slot).toHaveCount(0);
+    await expect(card).toHaveCount(0);
+
+    // Back in the first checkout's tab its card is there, and its button
+    // is the way to it.
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+    await expect(slot).toHaveCount(1);
     await expect(card).toBeVisible();
-    await expect(slot).toHaveAttribute("aria-pressed", "true");
   });
 });
 

@@ -2749,7 +2749,6 @@ impl Runtime {
                 path: row.path.clone(),
                 device_id: device_id.to_owned(),
                 pinned: true,
-                home: false,
             }
         };
         if let Some(row) =
@@ -2913,7 +2912,7 @@ impl Runtime {
 
     /// A project's checkout folders and the panes in them, by the ids its
     /// own engine uses.
-    fn project_panes(
+    pub(super) fn project_panes(
         &self,
         workspace_id: &str,
         device: Option<&str>,
@@ -4319,6 +4318,25 @@ impl Runtime {
             self.set_error("worktree.create_invalid_prompt", message, false);
             return true;
         }
+        // The profile is judged before anything is made, so a chosen one the
+        // machine no longer lists leaves no worktree behind (B16).
+        let profile = match self.new_start_profile(
+            device.as_deref().unwrap_or(self.node.as_str()),
+            payload.agent_kind.as_deref(),
+            Some(&payload.repository_root),
+            payload.profile.as_deref(),
+        ) {
+            Ok(profile) => profile,
+            Err(message) => {
+                self.set_request_error(
+                    "worktree.create_profile_gone",
+                    message,
+                    false,
+                    payload.request_id.as_deref(),
+                );
+                return true;
+            }
+        };
         let id = match self.begin_task_operation(
             "worktree_create",
             Some(payload.repository_root.clone()),
@@ -4351,6 +4369,7 @@ impl Runtime {
                 model,
                 effort: None,
             },
+            profile,
         );
         if let Some(operation) = self.snapshot.task_operation.as_mut() {
             operation.device_id = device.clone();
@@ -4579,18 +4598,39 @@ impl Runtime {
     /// worktree sheet already reports through. The shell starts the provider
     /// in the pane the slot names, so `terminal` needs nothing more from it.
     pub(super) fn agent_start_in_checkout(&mut self, payload: AgentStartInCheckoutPayload) -> bool {
-        self.start_in_checkout(payload, true, None)
+        // 이어받기 resumes its gone Conductor's session by its id alone, which
+        // the mission's record kept with the profile it started with.
+        match self.conductor_resume_profile(&payload) {
+            Ok(Some(recorded)) => self.start_in_checkout(
+                payload,
+                true,
+                None,
+                StartProfile::Recorded(recorded.as_ref()),
+            ),
+            Ok(None) => self.start_in_checkout(payload, true, None, StartProfile::Unrecorded),
+            Err(kind) => {
+                self.set_request_error(
+                    kind,
+                    "Two missions name this session with different profiles".to_owned(),
+                    false,
+                    payload.request_id.as_deref(),
+                );
+                true
+            }
+        }
     }
 
     /// A start in a checkout's new tab; `remember` false keeps the start out
     /// of the remembered agent choice (an archive resume). `cwd` is a folder
     /// inside the checkout the resumed conversation ran in; one outside it is
-    /// ignored and the tab starts at the checkout.
+    /// ignored and the tab starts at the checkout. `recorded` says what the
+    /// caller knows of the profile ([`StartProfile`]).
     pub(super) fn start_in_checkout(
         &mut self,
         mut payload: AgentStartInCheckoutPayload,
         remember: bool,
         cwd: Option<String>,
+        recorded: StartProfile<'_>,
     ) -> bool {
         let request_id = payload.request_id.clone();
         if payload.confirm_only {
@@ -4694,23 +4734,13 @@ impl Runtime {
             .clone()
             .filter(|device| !device.is_empty())
             .unwrap_or_else(|| self.node.as_str().to_owned());
-        // A start names one place: a device's Home, or one of its checkouts.
-        let checkout_path = match (payload.home, payload.checkout_path.clone()) {
-            (true, None) => {
-                return self.start_in_home(
-                    &device,
-                    agent_kind,
-                    model,
-                    prompt,
-                    request_id,
-                    payload.stay_behind,
-                );
-            }
-            (false, Some(path)) if !path.is_empty() => path,
+        // A start names one checkout of a project the operator registered.
+        let checkout_path = match payload.checkout_path.clone() {
+            Some(path) if !path.is_empty() => path,
             _ => {
                 self.set_request_error(
                     "agent_start.invalid_target",
-                    "A start names either Home or one checkout",
+                    "A start names one checkout",
                     false,
                     request_id.as_deref(),
                 );
@@ -4758,6 +4788,57 @@ impl Runtime {
             }
             None => None,
         };
+        // A new start's profile is judged before its tab is made, so a chosen
+        // one the machine no longer lists leaves nothing behind (B16).
+        let picked = if resume.is_none() && !matches!(recorded, StartProfile::Recorded(Some(_))) {
+            match self.new_start_profile(
+                &device,
+                agent_kind.as_deref(),
+                Some(&checkout_path),
+                payload.profile.as_deref(),
+            ) {
+                Ok(profile) => profile,
+                Err(message) => {
+                    self.set_request_error(
+                        "agent_start.profile_gone",
+                        message,
+                        false,
+                        request_id.as_deref(),
+                    );
+                    return true;
+                }
+            }
+        } else {
+            None
+        };
+        // A resume that names no account asks the session's machine which
+        // account holds the session its proof or its line names: the file
+        // for Claude Code and Codex, whose resume is proven by no reader,
+        // else the id their own command resumes by, which keeps the default
+        // account only while that is the one the machine keeps for the agent.
+        let from_session = (matches!(recorded, StartProfile::Unrecorded) && resume.is_some())
+            .then(|| {
+                resume_reference.clone().or_else(|| {
+                    let path = payload.resume_session_path.as_ref().filter(|path| {
+                        !path.is_empty()
+                            && path.len() <= 4096
+                            && !path.chars().any(char::is_control)
+                    });
+                    match path {
+                        Some(path) => Some(crate::sidebar::SessionAgentSessionPayload {
+                            kind: "path".into(),
+                            value: path.clone(),
+                        }),
+                        None => payload.resume_session_id.clone().map(|id| {
+                            crate::sidebar::SessionAgentSessionPayload {
+                                kind: "id".into(),
+                                value: id,
+                            }
+                        }),
+                    }
+                })
+            })
+            .flatten();
         let retry = (!payload.confirm_only)
             .then(|| {
                 self.snapshot
@@ -4799,6 +4880,13 @@ impl Runtime {
         if remember && !payload.confirm_only {
             self.remember_agent_choice(agent_kind.as_deref(), model.as_deref());
         }
+        let profile = match (&resume, recorded) {
+            (_, StartProfile::Recorded(Some(recorded))) => {
+                Some((recorded.id.clone(), recorded.name.clone()))
+            }
+            (Some(_), _) => None,
+            (None, _) => picked,
+        };
         let mut arguments = resume.unwrap_or_default();
         let permission = agent_kind.as_deref().map_or_else(Default::default, |kind| {
             self.agent_permission(&device, kind)
@@ -4816,9 +4904,11 @@ impl Runtime {
                 model,
                 effort: None,
             },
+            profile,
         );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = resume_reference.clone();
+            launch.profile_from_session = from_session;
         }
         if retry.is_some() {
             return self.retry_task_agent(id);
@@ -5366,7 +5456,19 @@ impl Runtime {
                 } else {
                     super::device_catalog::registration_refusal_kind(&error)
                 };
-                return self.refuse_row_registration(&registration, why, kind, error.to_string());
+                // Home itself is asked about in its own words, so a pin of
+                // it says it is added from Add a project (PRD
+                // home-folder-project B6).
+                let home = matches!(
+                    &error,
+                    crate::node_access::LinkError::Refused(refused) if refused.home
+                );
+                let changed =
+                    self.refuse_row_registration(&registration, why, kind, error.to_string());
+                if home && let Some(last) = self.snapshot.status.last_error.as_mut() {
+                    last.home = true;
+                }
+                return changed;
             }
         }
         let registered = self
@@ -5585,14 +5687,7 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
     let plain = if proven {
         hide_session::valid_native_id(session_id) && !session_id.ends_with(".jsonl")
     } else {
-        session_id
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-            && session_id.len() <= 128
-            && session_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        hide_session::valid_plain_id(session_id)
     };
     if !plain {
         return None;
@@ -5710,4 +5805,18 @@ pub(super) fn with_review_proofs(
             Some(listed.into_iter().chain(proved.iter().cloned()).collect())
         }
     }
+}
+
+/// What a start in a checkout knows of the profile it runs with.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum StartProfile<'a> {
+    /// The record of the resumed session's start kept it: its profile, or
+    /// `None` for one that ran with the built-in default, as every record
+    /// made before profiles did (D-27).
+    Recorded(Option<&'a crate::launch::LaunchProfile>),
+    /// No record says: a new start picks its profile (D-32), and a resume of
+    /// a session line or record runs with the profile of the account the
+    /// session's machine says holds it (B19,
+    /// `TaskAgentLaunch::profile_from_session`).
+    Unrecorded,
 }

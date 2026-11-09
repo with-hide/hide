@@ -99,6 +99,14 @@ it("words an unconfirmed brief by which input it was and whether its composer he
   expect(phone.shown.map(({ body }) => body)).toEqual(["대기 · 브리프 확인 안 됨 · project", "대기 · 편지 못 받음 · project"]);
 });
 
+it("words a person's turn as 사람 차례, its kind, where and the device it waits on (PRD ask-human B13)", async () => {
+  const phone = phoneWorker();
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_question: "질문", subject_human_turn: "사람 차례", subject_human_turn_auth: "인증", subject_human_turn_permission: "허용" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "Sign in", subject: { cause: "human_turn", id: "a.1", kind: "auth", place: "github.com/login", device: "mini" }, place: "project" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "Allow", subject: { cause: "human_turn", id: "a.2", kind: "permission", place: "System Settings > Camera" }, place: "project" });
+  expect(phone.shown.map(({ body }) => body)).toEqual(["사람 차례 · 인증 · github.com/login · mini · project", "사람 차례 · 허용 · System Settings > Camera · project"]);
+});
+
 it("leads with the status word with no detail too, and works with older payloads and cached page words", async () => {
   const phone = phoneWorker();
   await phone.words({ needs_you: "내 차례", done: "읽을 것", status_done: "끝남", status_question: "질문", status_stopped: "멈춤" });

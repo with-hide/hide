@@ -179,13 +179,16 @@ def route(kind, home):
     return {"args": entry["args"](home), "env": entry["env"](home), "unset": list(entry["unset"])}
 
 
-def wrapper(directory, executable, operator, state, kind, home, sandbox, path, extra=None, keys=None):
+def wrapper(directory, executable, operator, state, kind, home, sandbox, path, extra=None, keys=None,
+            account_vars=()):
     """The program a pane's `claude` or `codex` runs: the agent with the
     operator's HOME, the operator's PATH behind the candidate's `hide`, and
     its route, inside the write sandbox. A spawned pane has the private
     Herdr's environment, whose PATH reaches neither node nor the account's tools.
     Each (variable, file) of `keys` is set to that file's content at each
-    start, so no key is written into the program or the report."""
+    start, so no key is written into the program or the report. An account
+    variable a start with a profile set to an account under `home` keeps
+    the start's value over the route's (the `profile` cell)."""
     private_directory(directory)
     target = directory / Path(executable).name
     # The route goes on every start, the product's own restarts (Wake's
@@ -196,8 +199,12 @@ def wrapper(directory, executable, operator, state, kind, home, sandbox, path, e
     environment = {"HOME": str(operator), "HIDE_STATE_DIR": str(state), "PATH": os.pathsep.join((str(directory), path)),
                    **QUIET, **route(kind, home)["env"], **(extra or {})}
     lines = ["#!/bin/sh"]
+    lines.extend(f'hide_kept_{name}="${{{name}-}}"' for name in account_vars)
     lines.extend("unset " + name for name in route(kind, home)["unset"])
     lines.append("export " + " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items()))
+    prefix = shlex.quote(str(home).rstrip("/") + "/")
+    lines.extend(f'case "$hide_kept_{name}" in {prefix}*) {name}="$hide_kept_{name}"; export {name};; esac'
+                 for name in account_vars)
     lines.extend(f"{name}=$(cat {shlex.quote(str(file))}) && export {name}" for name, file in (keys or {}).items())
     lines.append("exec " + " ".join(shlex.quote(value) for value in command) + ' "$@"')
     write_private(target, ("\n".join(lines) + "\n").encode())

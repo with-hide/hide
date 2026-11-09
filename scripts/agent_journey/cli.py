@@ -28,7 +28,7 @@ from agent_live_check.runtime import clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher, tool_path
 
-from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service
+from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service, profiles
 from .controller import Controller
 from .contract import load_contract
 from .failure import FailureLogs, drop_on_pass
@@ -328,7 +328,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             # refuses a folder that is not private.
             private_directory(private)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
-                         os.environ.get("PATH", ""), extra, keys)
+                         os.environ.get("PATH", ""), extra, keys, rows[key]["account_vars"])
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}
         if kind == "opencode":
             agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
@@ -422,7 +422,8 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
         update = declaration["auto_update"]
         update_env = {update["name"]: update["value"]} if update["kind"] == "environment" else {}
         program = cache.install(runtime, kind, pin, update_env)
-        launch = ci.wrapper(runtime, program, kind, tool_path(None), fake_env=extra, sandbox=sandbox)
+        launch = ci.wrapper(runtime, program, kind, tool_path(None), fake_env=extra, sandbox=sandbox,
+                            account_vars=row["account_vars"])
         environment = {**clean_env(private=True), "HOME": str(runtime.home), "TMPDIR": runtime.env["TMPDIR"]}
         if kind == "opencode":
             agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
@@ -472,7 +473,8 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, 
         # The journey's own runs of an agent run as installed (`--version`,
         # OpenCode's service) go through a wrapper no pane finds.
         launch = ci.wrapper(runtime, program, kind, os.environ.get("PATH", ""), journey_config, fake_env,
-                            folder=runtime.run / "launchers" if installed else None)
+                            folder=runtime.run / "launchers" if installed else None,
+                            account_vars=rows[key]["account_vars"])
         if installed:
             ci.share_with_daemon(runtime, ci.agent_environment(runtime, kind, os.environ.get("PATH", ""),
                                                                 journey_config, fake_env))
@@ -638,6 +640,14 @@ def main(argv=None):
         else:
             sandbox, ready = None, prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, urls,
                                               services, diagnostics)
+        # Each agent's profile in an account of its own, in the profile file
+        # before hided starts, so its first kit pass reaches that account.
+        accounts = profiles.prepare(runtime, table, rows, ready, root, urls, fake_key) if fake else {}
+        if not fake and not fixture_bin:
+            for key in ready:
+                cells.settle(table, key, "profile", cells.NOT_MEASURED, cells.REAL_LOGIN_PROFILE)
+        for key, account in accounts.items():
+            next(row for row in report["agents"] if row["id"] == key)["profile"] = account
         report["holders"] = runtime.start()
         failure_logs = FailureLogs(runtime.output("hided"))
         if sandbox:
@@ -714,6 +724,9 @@ def main(argv=None):
                 # A start of its own; no later cell types into it.
                 journey.close()
                 journey.step("launch_brief", untrusted)
+                # The profile's journey, in its own account and panes.
+                journey.close()
+                journey.step("profile_cell", accounts.get(key))
                 agent["requests"] = journey.requests()
                 if fake:
                     # What a provider would have been asked; the session files may not show each one.

@@ -23,8 +23,40 @@ const GIT_DIR_NAME: &str = ".git";
 /// every absolute link target, so one whose resolution lies under
 /// `real_root` is followed as that relative path, through the same handle;
 /// the resolution only classifies the row and never opens anything.
-pub fn list(dir: &Dir, relative: &Path, real_root: &Path) -> HostResult<Listing> {
-    list_where(dir, relative, real_root, |name| name == GIT_DIR_NAME)
+///
+/// When the root is the account's home folder (`home`), its top level also
+/// leaves out the names [`home_clutter`] names, for tidiness and speed: a
+/// typed path or a link still opens them (PRD home-folder-project D-04).
+pub fn list(
+    dir: &Dir,
+    relative: &Path,
+    real_root: &Path,
+    home: Option<&Path>,
+) -> HostResult<Listing> {
+    let top_of_home = relative.as_os_str().is_empty()
+        && home.is_some_and(|home| crate::register::is_home(real_root, home));
+    list_where(dir, relative, real_root, |name| {
+        name == GIT_DIR_NAME || (top_of_home && home_clutter(name))
+    })
+}
+
+/// The name of the folder a system keeps an account's app data in, at the
+/// top of the home folder: macOS' `Library`, Windows' `AppData`; the other
+/// systems keep theirs in hidden folders, which [`home_clutter`] leaves out
+/// already.
+pub const APP_DATA_DIR: Option<&str> = if cfg!(target_os = "macos") {
+    Some("Library")
+} else if cfg!(windows) {
+    Some("AppData")
+} else {
+    None
+};
+
+/// Whether a top-level name of the home folder is left out of the Explorer's
+/// listing and the file index of a project that is the home folder: a hidden
+/// name (a leading dot) or the system's app-data folder.
+pub fn home_clutter(name: &str) -> bool {
+    name.starts_with('.') || APP_DATA_DIR == Some(name)
 }
 
 /// [`list`] with the caller's own names to leave out (`skip`), which are

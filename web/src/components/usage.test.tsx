@@ -21,7 +21,7 @@ const inWorkspace = {
   navigator: {
     devices: [{ id: "local", kind: "local", label: "This Mac" }],
     focused_checkout_id: "app-main",
-    workspaces: [{ id: "app", label: "app", path: "/app", device_id: "local", is_home: false, checkouts: [{ id: "app-main", tabs: [] }] }],
+    workspaces: [{ id: "app", label: "app", path: "/app", device_id: "local", checkouts: [{ id: "app-main", tabs: [] }] }],
   },
   workspace_view: { checkout_id: "app-main" },
 } as unknown as SnapshotRest;

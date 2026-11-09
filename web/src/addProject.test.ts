@@ -148,8 +148,6 @@ describe("Add a project", () => {
     // A worktree folder added last does not take the default away from where the projects are.
     expect(defaultProjectParent([registration("/home/me/a"), registration("/home/me/b"), registration("/home/me/app.worktrees/c")], "local")).toBe("/home/me");
     expect(defaultProjectParent([registration("/home/me/a", "mini")], "local")).toBe("~");
-    // The device's Home is no project: a project added after it is not expected beside `~/hide`.
-    expect(defaultProjectParent([registration("/home/me/work/a"), { ...registration("/home/me/hide"), home: true }], "local")).toBe("/home/me/work");
   });
 
   it("takes one folder name, and says why another is not one", () => {
@@ -207,6 +205,11 @@ describe("Add a project", () => {
     it("asks rather than refuses a folder outside home, in each language", () => {
       expect(refusalText("needs_confirmation", t)).toBe("This folder is outside your home folder. Add it as a project?");
       expect(refusalText("needs_confirmation", ko)).toBe("홈 밖 폴더예요. 이 폴더를 프로젝트로 추가할까요?");
+    });
+
+    it("asks about the whole home folder in its own words, in each language (PRD home-folder-project B1)", () => {
+      expect(refusalText("needs_confirmation", t, true)).toBe("This is your whole home folder. Add it as a project?");
+      expect(refusalText("needs_confirmation", ko, true)).toBe("홈 폴더 전체예요. 이 폴더를 프로젝트로 추가할까요?");
     });
 
     it("tells a folder in a repository holding home apart from home itself", () => {

@@ -134,12 +134,11 @@ describe("row menus", () => {
       ["issue_source_local", "Local", false],
     ]);
     expect(choices("local")?.map((choice) => choice[2])).toEqual([false, false, true]);
-    // A folder has no GitHub choice; a project without a source (a dialed device's) or the Home offers none, and a node's that dials the core offers it.
+    // A folder has no GitHub choice; a project without a source (a dialed device's) offers none, and a node's that dials the core offers it.
     const folder = workspace({ is_git: false, checkouts: [primary()], tasks: { source: { ...source, kind: "local", label: "Local" }, tasks: [] } as unknown as Workspace["tasks"] });
     expect(projectMenu(folder, desktop).find((item) => item.id === "issue_source")?.choices?.map((choice) => choice.id)).toEqual(["issue_source_auto", "issue_source_local"]);
     expect(projectMenu({ ...read, remote_target_id: "studio", device_id: "studio", tasks: { ...read.tasks!, source: null } }, desktop).some((item) => item.id === "issue_source")).toBe(false);
     expect(projectMenu({ ...read, remote_target_id: "macbook", device_id: "macbook" }, desktop).some((item) => item.id === "issue_source")).toBe(true);
-    expect(projectMenu({ ...read, is_home: true }, desktop).some((item) => item.id === "issue_source")).toBe(false);
     expect(projectMenu(workspace({ checkouts: [primary()] }), desktop).some((item) => item.id === "issue_source")).toBe(false);
   });
 

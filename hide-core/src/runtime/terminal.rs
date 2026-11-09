@@ -707,6 +707,9 @@ impl Runtime {
     /// The engine's own status is the delivery observation's; a pane with none is
     /// judged from its row, where only a resting agent's wait is the plan's.
     pub(super) fn record_operator_submit(&self, pane_id: &str) {
+        // Whatever the Enter answers, the operator spoke to the agent, which
+        // takes its person's turn down (PRD ask-human D-08, B22).
+        self.human_turn_spoke(pane_id);
         let Some(services) = self.label_services.as_ref() else {
             return;
         };
@@ -1305,7 +1308,10 @@ impl Runtime {
         self.recent_visible_tabs
             .truncate(ATTACHED_TAB_LIMIT.max(shown.len()));
         let released = self.release_sessions_outside_attach_window();
-        self.sync_terminal_intents() | released
+        // The 보기 slot follows the tab now in front, on every path that
+        // moves it.
+        let detail = self.sync_detail_home();
+        self.sync_terminal_intents() | released | detail
     }
     /// Ends the terminal session of every pane whose tab has left the attach
     /// window.

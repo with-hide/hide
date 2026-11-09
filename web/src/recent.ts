@@ -410,7 +410,7 @@ export function paneItem(rest: SnapshotRest | null, paneId: string): CycleItem |
   return {
     key: paneKey(paneId),
     title: agent.identity_label,
-    detail: { kind: "surface", place: place.workspace.is_home ? null : placeLabel(place.workspace, place.checkout), surface: AGENT_SURFACE },
+    detail: { kind: "surface", place: placeLabel(place.workspace, place.checkout), surface: AGENT_SURFACE },
     kind: AGENT_SURFACE,
     chip: deviceChip(rest, place.deviceId),
     agent,
@@ -430,7 +430,7 @@ export function panelItem(rest: SnapshotRest | null, entry: RecentEntry): CycleI
   const surface = entry;
   const place = findCheckout(rest, surface.checkoutId);
   if (!place) return null;
-  const detail: CycleDetail = { kind: "surface", place: place.workspace.is_home ? null : placeLabel(place.workspace, place.checkout), surface: surface.kind };
+  const detail: CycleDetail = { kind: "surface", place: placeLabel(place.workspace, place.checkout), surface: surface.kind };
   const base = { key: surface.key, kind: surface.kind, chip: deviceChip(rest, place.deviceId), target: { kind: "surface", surface } as const, detail };
   if (surface.kind !== AGENT_SURFACE) return { ...base, title: surface.label, agent: null };
   const tab = place.checkout.tabs.find((row) => row.id === surface.id);

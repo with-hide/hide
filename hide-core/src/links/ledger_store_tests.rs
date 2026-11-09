@@ -194,7 +194,7 @@ fn native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling()
     std::fs::create_dir(&root).unwrap();
     let root = std::fs::canonicalize(root).unwrap();
     let wire_root = hide_platform::path::to_wire(&root).unwrap();
-    let transcripts = home.path().join(hide_session::CLAUDE_SESSIONS);
+    let transcripts = home.path().join(".claude/projects");
     std::fs::create_dir_all(&transcripts).unwrap();
     let env = hide_host::serve::Env::standalone(Some(home.path().to_owned()));
     let (mut store, _) = LinkStore::open(&home.path().join("links.sqlite3")).unwrap();
@@ -391,7 +391,7 @@ fn pruned_native_session_resumes(replaced: bool) {
         .unwrap();
     let read = |checkpoint| {
         hide_session::links::read(
-            directory.path(),
+            &hide_session::Accounts::new(directory.path()),
             &[hide_session::links::ReadRequest {
                 agent: hide_session::Agent::Claude,
                 path: file.to_string_lossy().into(),

@@ -10,7 +10,8 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
 import { askSubjectText } from "./askSubject";
-import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
+import { humanTurnText } from "./humanTurn";
+import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, HumanKind, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
  * Why a row's second line is on screen at rest (the core's `RowLine::mode`).
@@ -209,9 +210,12 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  * 막힘); a working row names nothing more, its line says why. A row of unknown state
  * has no mark and says only `상태 모름`. A sleeping row says its
  * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
- * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27).
+ * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27). A person's turn names
+ * the key and what it asks, `사람 차례 · 인증 · github.com/login`.
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; wait?: AgentWait | null }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; wait?: AgentWait | null; human_turn?: { kind: HumanKind; place: string } | null }): string {
+  // The key's name and what it asks, on the declaring row and its root (PRD ask-human B9).
+  if (agent.human_turn && agent.mark !== "unknown") return [t("agents.human.mark"), humanTurnText(t, agent.human_turn)].join(" · ");
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
   if (agent.mark === "look") return [markName(t, "look"), agent.look?.label].filter(Boolean).join(" · ");
   if (agent.mark === "unknown") return statusText(t, agent.status_code === "starting" ? "starting" : "unknown");
@@ -275,8 +279,18 @@ export function branchChip(agent: Pick<AgentRow, "state">): string | null {
  * row's visible text is hidden from assistive technology, so everything it
  * shows has to be here.
  */
+/**
+ * The agent's product name, and the profile it runs with when that is not its
+ * built-in default (`Claude Code · work`): what the hover and the accessible
+ * name say for a logo that wears the profile badge (PRD agent-profiles B17).
+ */
+export function agentWithProfile(t: TFunction<"translation">, agent: Pick<AgentRow, "agent_kind" | "profile">): string {
+  const product = agentProductName(agent.agent_kind);
+  return agent.profile ? t("agentProfiles.agentWithProfile", { agent: product, profile: agent.profile }) : product;
+}
+
 export function rowAccessibleName(t: TFunction<"translation">, agent: AgentRow, device: string | null): string {
-  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentProductName(agent.agent_kind), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
+  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentWithProfile(t, agent), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
 }
 
 export function recordPending(agent: Pick<AgentRow, "record_connection">): boolean {

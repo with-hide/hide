@@ -25,6 +25,7 @@
 //! command needs from the host is carried beside it instead: the checkout's
 //! owner workspace (`checkout_owner`), and each tab's own id.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -230,12 +231,38 @@ fn recorded_place(
     })
 }
 
+/// A folder outside every repository, as the registered folder holding it
+/// would have it: a pane in `~/notes` is the registered `~`'s, one in
+/// `~/work/app/src` the registered `~/work/app`'s, the deepest of them, not a
+/// project row of its own (PRD home-folder-project D-07). A repository's
+/// facts are never changed: Git places them.
+fn held<'a>(folders: &[PathBuf], facts: &'a ProjectFacts) -> Cow<'a, ProjectFacts> {
+    if facts.kind != ProjectKind::Folder {
+        return Cow::Borrowed(facts);
+    }
+    match folders
+        .iter()
+        .filter(|folder| facts.root.starts_with(folder))
+        .max_by_key(|folder| folder.as_os_str().len())
+    {
+        Some(folder) if *folder != facts.root => Cow::Owned(ProjectFacts {
+            root: folder.clone(),
+            checkout_root: folder.clone(),
+            ..facts.clone()
+        }),
+        _ => Cow::Borrowed(facts),
+    }
+}
+
 /// The session as the device's facts group it. See the module comment.
+/// `folders` are the folders registered on the device, which hold the panes
+/// below them that no repository places.
 pub(crate) fn group(
     target: &str,
     raw: &RemoteSessionSnapshot,
     facts: &DeviceFacts,
     worktrees: Option<&DeviceWorktrees>,
+    folders: &[PathBuf],
 ) -> RemoteSessionSnapshot {
     let mut projects: Vec<WorkspaceSnapshot> = Vec::new();
     // Each checkout's candidates for the tab it brings forward: the active
@@ -323,11 +350,13 @@ pub(crate) fn group(
         };
         // Tabs split by the checkout their directory is in; a tab whose
         // directory has no answer stays with the workspace's own checkout.
-        let mut parts: Vec<(&ProjectFacts, Vec<&TabSnapshot>)> = vec![(primary, Vec::new())];
+        let primary = held(folders, primary);
+        let mut parts: Vec<(Cow<ProjectFacts>, Vec<&TabSnapshot>)> =
+            vec![(primary.clone(), Vec::new())];
         for tab in &raw_checkout.tabs {
             let facts = facts
                 .known(tab_context(tab, raw_checkout))
-                .unwrap_or(primary);
+                .map_or_else(|| primary.clone(), |known| held(folders, known));
             match parts
                 .iter_mut()
                 .find(|(known, _)| known.checkout_root == facts.checkout_root)
@@ -622,7 +651,6 @@ pub(crate) fn apply_registrations(
             .find(|registration| registration.id == project.id);
         project.registered = registration.is_some();
         project.pinned = registration.is_some_and(|registration| registration.pinned);
-        project.is_home = registration.is_some_and(|registration| registration.home);
     }
     for registration in &registrations {
         if session
@@ -655,7 +683,6 @@ pub(crate) fn apply_registrations(
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: registration.pinned,
-            is_home: registration.home,
             checkouts: vec![CheckoutSnapshot {
                 id: checkout_id(target, &registration.path),
                 next_tab_label: crate::model::next_tab_label(std::iter::empty()),

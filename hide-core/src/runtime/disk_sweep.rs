@@ -128,8 +128,18 @@ impl Runtime {
     /// The machine a project id is on, if it is one whose disk is measured:
     /// this one's, or a node's that dials this core.
     fn sweep_project(&self, workspace_id: &str) -> Option<(Option<String>, String)> {
+        // The home folder is never measured: its size is the whole account's,
+        // and the host would refuse the measurement anyway (PRD
+        // home-folder-project D-06, B11).
+        let is_home = |home: Option<&str>, path: &str| {
+            home.is_some_and(|home| {
+                crate::workspace::comparison_by_names(Path::new(home))
+                    == crate::workspace::comparison_by_names(Path::new(path))
+            })
+        };
         if let Some(workspace) = self.local_project_by_id(workspace_id) {
-            return Some((None, workspace.path));
+            let home = self.home_real.as_deref().and_then(Path::to_str);
+            return (!is_home(home, &workspace.path)).then_some((None, workspace.path));
         }
         self.snapshot.status.remote.iter().find_map(|status| {
             let workspace = status
@@ -141,6 +151,12 @@ impl Runtime {
             self.link_origin(&status.target_id)
                 .is_some_and(LinkOrigin::reports_own_facts)
                 .then(|| (Some(status.target_id.clone()), workspace.path.clone()))
+                .filter(|(_, path)| {
+                    !is_home(
+                        self.device_homes.get(&status.target_id).map(String::as_str),
+                        path,
+                    )
+                })
         })
     }
 

@@ -82,17 +82,6 @@ fn without_gate(runtime: &mut Runtime) {
     }
 }
 
-fn mission_slot_items(runtime: &Runtime) -> usize {
-    runtime
-        .snapshot
-        .ui_state
-        .detail
-        .items
-        .iter()
-        .filter(|item| matches!(item, DetailItem::Mission { .. }))
-        .count()
-}
-
 fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
@@ -112,6 +101,7 @@ fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::del
             plan_node: None,
             plan: None,
             beside: false,
+            profile: None,
         },
     }
 }
@@ -204,9 +194,8 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
         created["mission"]["cap"], 4,
         "the settings' concurrency is the default cap"
     );
-    assert_eq!(
-        mission_slot_items(&runtime),
-        0,
+    assert!(
+        runtime.snapshot.ui_state.detail.items.is_empty(),
         "an empty mission opens nothing"
     );
     let detail = runtime.snapshot.ui_state.detail.clone();
@@ -215,11 +204,9 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
     // draws; the lane's 보기 slot stays as it was (mission-pane-chip B11).
     let (planned, _) = command(&mut runtime, "sender", plan()).unwrap();
     assert_eq!(planned["mission"]["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(mission_slot_items(&runtime), 0);
     assert_eq!(runtime.snapshot.ui_state.detail, detail);
 
     command(&mut runtime, "sender", plan()).unwrap();
-    assert_eq!(mission_slot_items(&runtime), 0);
     assert_eq!(runtime.snapshot.ui_state.detail, detail);
 
     runtime.refresh_missions();
@@ -410,12 +397,31 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     runtime.snapshot.navigator.agents = vec![conductor_row()];
+    // The Conductor's session started with a profile, as its pane's record
+    // keeps it (PRD agent-profiles D-27).
+    let work = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-work".into()),
+        name: "work".into(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+    };
+    runtime.record_pane_launch(
+        "sender",
+        "codex",
+        "sender",
+        &Default::default(),
+        Some(&work),
+        None,
+    );
     command(
         &mut runtime,
         "sender",
         json!({"op": "create", "title": "Fix the bug"}),
     )
     .unwrap();
+    assert_eq!(
+        runtime.missions.book.missions[0].conductor.profile,
+        Some(work.clone())
+    );
 
     // The Conductor's pane closed.
     runtime.delivery_observations.remove("sender");
@@ -444,6 +450,16 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     let conductor = &runtime.snapshot.missions.items[0].conductor;
     assert!(conductor.present);
     assert_eq!(conductor.pane_id, "resumed");
+    // The pane it came back in keeps no record of its own yet: the record
+    // keeps the profile the conversation started with, through a save and
+    // a read back as a restart makes.
+    assert_eq!(
+        runtime.missions.book.missions[0].conductor.profile,
+        Some(work.clone())
+    );
+    let saved = serde_json::to_value(&runtime.missions.book).unwrap();
+    let read: crate::missions::MissionBook = serde_json::from_value(saved).unwrap();
+    assert_eq!(read.missions[0].conductor.profile, Some(work.clone()));
     // A resumed conversation gets no prompt of its own: one letter waits
     // to tell it to go on, and seeing the pane again adds none.
     let events = |runtime: &Runtime| -> Vec<crate::missions::WakeEvent> {
@@ -1424,18 +1440,19 @@ fn a_mission_goes_with_its_conductors_deleted_session() {
             .map(|session| session.session_id.as_str()),
         Some(native.as_str())
     );
-    // The operator opened the map.
+    // The operator's mission screen shows it.
     let id = runtime.missions.book.missions[0].id.clone();
-    runtime.open_detail(DetailItem::Mission { mission: id });
-    assert_eq!(mission_slot_items(&runtime), 1);
+    assert!(
+        runtime
+            .mission_shown(super::super::mission_events::MissionShownPayload { mission: Some(id) })
+    );
 
     assert!(!runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), "another".into())]));
     assert!(runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), native)]));
     assert!(runtime.missions.book.missions.is_empty());
     assert_eq!(
-        mission_slot_items(&runtime),
-        0,
-        "the map of a deleted mission leaves the slot"
+        runtime.missions.shown, None,
+        "the screen's detail of a deleted mission sends nothing"
     );
 }
 
@@ -2809,10 +2826,9 @@ fn the_open_missions_published_events_share_the_cores_list() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
-    runtime.snapshot.ui_state.detail.items = vec![DetailItem::Mission {
-        mission: "mission-1".into(),
-    }];
-    runtime.snapshot.ui_state.detail.shown = true;
+    runtime.mission_shown(super::super::mission_events::MissionShownPayload {
+        mission: Some("mission-1".into()),
+    });
     runtime.refresh_mission_events();
     let held = &runtime.missions.events["mission-1"].events;
     assert!(std::sync::Arc::ptr_eq(
@@ -2875,16 +2891,18 @@ fn a_conductor_whose_agent_the_doorbell_does_not_ring_takes_no_banner_answer() {
 }
 
 #[test]
-fn only_the_mission_open_in_the_slot_sends_its_events() {
+fn only_the_mission_the_screen_shows_sends_its_events() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);
     assert!(runtime.snapshot.mission_events.events.is_empty());
-    runtime.open_detail(DetailItem::Mission {
-        mission: "mission-1".into(),
-    });
+    assert!(
+        runtime.mission_shown(super::super::mission_events::MissionShownPayload {
+            mission: Some("mission-1".into()),
+        })
+    );
     runtime.refresh_mission_events();
     assert_eq!(
         runtime.snapshot.mission_events.mission.as_deref(),
@@ -2899,6 +2917,37 @@ fn only_the_mission_open_in_the_slot_sends_its_events() {
     .unwrap();
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.events.len(), 2);
+    // The detail closed: no mission's events are sent; the same answer again changes nothing.
+    let shown = |mission: Option<&str>| super::super::mission_events::MissionShownPayload {
+        mission: mission.map(str::to_owned),
+    };
+    // The typed event carries it from the page; a mission the book does not hold reads as none.
+    let event = |mission: Value| explorer_event("mission_shown", json!({ "mission": mission }));
+    assert!(runtime.dispatch_json(&event(json!("mission-404"))));
+    assert_eq!(runtime.missions.shown, None);
+    assert!(runtime.dispatch_json(&event(json!("mission-1"))));
+    assert_eq!(runtime.missions.shown.as_deref(), Some("mission-1"));
+    assert!(runtime.dispatch_json(&event(Value::Null)));
+    // A payload with a field the event does not know is refused and changes nothing.
+    runtime.dispatch_json(&explorer_event(
+        "mission_shown",
+        json!({ "mission": "mission-1", "pane": "p1" }),
+    ));
+    assert_eq!(
+        runtime
+            .snapshot()
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("event.invalid_payload")
+    );
+    assert_eq!(runtime.missions.shown, None);
+    assert!(!runtime.mission_shown(shown(None)));
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    assert!(runtime.snapshot.mission_events.events.is_empty());
+    assert!(runtime.mission_shown(shown(Some("mission-1"))));
     // The events go with their mission's deleted session (D-22).
     let session = runtime.missions.book.missions[0]
         .conductor
@@ -2909,6 +2958,69 @@ fn only_the_mission_open_in_the_slot_sends_its_events() {
     assert!(!runtime.missions.events.contains_key("mission-1"));
     runtime.refresh_mission_events();
     assert!(runtime.snapshot.mission_events.events.is_empty());
+}
+
+/// Operator decision 2026-11-09: a mission's card on top of the front Agent
+/// tab's 보기 slot sends its events while the slot is drawn; the mission
+/// screen's detail, when the page names one, wins; the card goes with its
+/// mission.
+#[test]
+fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.open_detail(DetailItem::Mission {
+        mission: "mission-1".into(),
+    });
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    assert_eq!(runtime.snapshot.mission_events.events.len(), 1);
+    // The slot folded behind the documents sends nothing; shown again, it does.
+    runtime.snapshot.ui_state.detail.shown = false;
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    runtime.snapshot.ui_state.detail.shown = true;
+    // The mission screen's detail wins over the card while the page names it.
+    runtime.missions.shown = Some("mission-404".into());
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-404")
+    );
+    runtime.missions.shown = None;
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    // Another card on top sends no mission's events; ← brings the map back.
+    runtime.open_detail(DetailItem::Cost {
+        workspace_id: "w".into(),
+    });
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    runtime.detail_back();
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    // The mission deleted with its Conductor's session takes its card along.
+    let session = runtime.missions.book.missions[0]
+        .conductor
+        .session
+        .clone()
+        .unwrap();
+    assert!(runtime.drop_missions_of(&[(session.device_id, session.session_id)]));
+    assert_eq!(
+        runtime.snapshot.ui_state.detail,
+        crate::model::DetailSlot::default()
+    );
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
 }
 
 /// The fixture's `recipient` pane as the node's worker and a third pane,
@@ -6085,6 +6197,7 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         Some(crate::model::AskSubject::MissionAttention {
             node: "Fix it".into(),
             reason: AttentionReason::PrClosed,
+            unmet: 0,
         })
     );
     assert!(runtime.claim_mission_notices().is_empty());
@@ -8142,5 +8255,315 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         held(&runtime),
         None,
         "the later letter's bell was answered: the Conductor is reached again, before any ack"
+    );
+}
+
+/// A mission of one direct change (no pull request) whose worker recorded
+/// both lines at `HEAD` and finished it there.
+fn finished_direct_node(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct",
+             "criteria": ["it works"]},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+    checkout_at(runtime, HEAD);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+}
+
+/// A finished direct node keeps the proof its check gave: the worker then
+/// merges into main and the folder moves on, and the mission still closes
+/// with no raise, since the node was judged on the commit it finished on.
+#[test]
+fn a_finished_direct_nodes_check_survives_its_folder_moving() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    checkout_at(&mut runtime, OTHER_HEAD);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_ne!(mission.status, MissionStatus::Running);
+    assert!(
+        mission.nodes.iter().all(|node| node.attention.is_none()),
+        "{:?}",
+        mission.nodes[0].attention
+    );
+}
+
+/// The proof frozen at a finish goes with it: a node set working again is
+/// judged against its folder, so a check from before asks to be run again.
+#[test]
+fn a_direct_node_set_working_again_needs_a_fresh_check() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    let done_head = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .done_head
+            .clone()
+    };
+    assert_eq!(done_head(&runtime).as_deref(), Some(HEAD));
+    checkout_at(&mut runtime, OTHER_HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    assert_eq!(done_head(&runtime), None);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_criteria_unmet", Some("fix: check"))
+    );
+    // A fresh check on the new commit finishes it again, on that commit.
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    assert_eq!(done_head(&runtime).as_deref(), Some(OTHER_HEAD));
+}
+
+/// A node finished before the commit was kept has none and is judged
+/// against its folder as before; the mission's close is then refused, and
+/// the operator's 완료로 닫기 passes the empty line as their own decision
+/// and closes it. Drop is not offered, since the work is finished.
+#[test]
+fn the_operator_closes_a_refused_mission_as_done_passing_the_empty_lines() {
+    use crate::mission_criteria::CriterionState;
+    use crate::missions::{AttentionReason, OperatorAction};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].done_head = None;
+    checkout_at(&mut runtime, OTHER_HEAD);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let node = node_view(&runtime, "fix");
+    let attention = node.attention.expect("the refused close is raised");
+    assert_eq!(attention.reason, AttentionReason::CloseRefused);
+    assert_eq!(attention.unmet_nodes, 1);
+    assert!(attention.choices.contains(&OperatorAction::Done));
+    assert!(!attention.choices.contains(&OperatorAction::Drop));
+    let payload = |action| crate::runtime::mission_health::MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        action,
+        since_unix_ms: Some(attention.since_unix_ms),
+    };
+    assert_eq!(
+        runtime
+            .mission_attention_act(&payload(OperatorAction::Drop), now)
+            .unwrap_err(),
+        "mission_attention_choice_refused"
+    );
+    assert!(
+        runtime
+            .mission_attention_act(&payload(OperatorAction::Done), now)
+            .unwrap()
+    );
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.nodes[0].attention.is_none());
+    let check = mission.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "check")
+        .unwrap();
+    assert_eq!(check.state, CriterionState::Skipped);
+    assert_eq!(
+        check.skip.as_ref().map(|skip| skip.reason.as_str()),
+        Some("운영자 판단")
+    );
+    assert_eq!(
+        check.by.as_ref().map(|by| by.role),
+        Some(crate::mission_criteria::Role::Operator)
+    );
+}
+
+/// The same passing check sent again after the folder moved on changes
+/// nothing: the proof the node finished on stays, so the line stays passed.
+#[test]
+fn a_check_sent_again_unchanged_keeps_the_proof_a_node_finished_on() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    checkout_at(&mut runtime, OTHER_HEAD);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let done_head = runtime.missions.book.get("mission-1").unwrap().nodes[0]
+        .done_head
+        .clone();
+    assert_eq!(done_head.as_deref(), Some(HEAD));
+}
+
+/// 완료로 닫기 answers a question about a mission whose every node was
+/// finished: once another node works again it is refused and passes nothing,
+/// and the next evaluation takes the question and its choices away.
+#[test]
+fn a_refused_close_is_not_closed_by_the_operator_once_a_node_works_again() {
+    use crate::missions::{AttentionReason, NodeStatus, OperatorAction};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let mut second = mission.nodes[0].clone();
+        second.key = "second".into();
+        mission.nodes.push(second);
+        mission.nodes[0].done_head = None;
+    }
+    checkout_at(&mut runtime, OTHER_HEAD);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    let attention = node_view(&runtime, "fix").attention.unwrap();
+    assert_eq!(attention.reason, AttentionReason::CloseRefused);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    let payload = crate::runtime::mission_health::MissionAttentionPayload {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        action: OperatorAction::Done,
+        since_unix_ms: Some(attention.since_unix_ms),
+    };
+    assert_eq!(
+        runtime.mission_attention_act(&payload, now + 1),
+        Err("mission_attention_moved".into())
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(mission.nodes[1].status, NodeStatus::Working);
+    assert!(
+        mission.nodes[0]
+            .criteria
+            .iter()
+            .all(|line| line.skip.is_none())
+    );
+    runtime.drive_mission_health(now + 2);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+}
+
+/// A refused close the evaluation took away because another node worked
+/// again is not held back as handled: once that node finishes again and the
+/// close is refused again, the question comes back with its own history
+/// entry, so the mission is never left running with nothing to answer.
+#[test]
+fn a_refused_close_is_asked_again_after_a_node_resumed_and_finished() {
+    use crate::mission_criteria::CriterionState;
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    finished_direct_node(&mut runtime);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let mut second = mission.nodes[0].clone();
+        second.key = "second".into();
+        mission.nodes.push(second);
+        mission.nodes[0].done_head = None;
+    }
+    checkout_at(&mut runtime, OTHER_HEAD);
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        node_view(&runtime, "fix").attention.unwrap().reason,
+        AttentionReason::CloseRefused
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 1);
+    assert!(node_view(&runtime, "fix").attention.is_none());
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("second", "check", json!({"commit": OTHER_HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "second", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 2);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(
+        node_view(&runtime, "fix")
+            .attention
+            .map(|raise| raise.reason),
+        Some(AttentionReason::CloseRefused),
+        "the close was refused again, so the choice to close is reachable again"
+    );
+    let raised = runtime.missions.events["mission-1"]
+        .events
+        .iter()
+        .filter(|event| event.reason == Some(AttentionReason::CloseRefused))
+        .filter_map(|event| event.id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        raised.len(),
+        2,
+        "each question has its own entry: {raised:?}"
     );
 }

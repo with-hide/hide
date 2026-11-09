@@ -182,6 +182,7 @@ pub(crate) mod tests {
             brief: None,
             task,
             beside: false,
+            profile: None,
         };
         let reserved = apply(
             ledger,
@@ -453,6 +454,7 @@ pub(crate) mod tests {
                 brief: None,
                 task,
                 beside: false,
+                profile: None,
             },
         };
         apply(&mut ledger, &hide, &again(memory_task("m72")), 1).unwrap();

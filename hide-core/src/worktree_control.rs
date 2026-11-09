@@ -1257,12 +1257,17 @@ pub struct PendingAgentStart {
     /// The worktree this task made, which an agent that asks for folder
     /// trust is told to trust before it starts there.
     pub(crate) made_worktree: Option<String>,
+    /// The profile the agent runs with (`crate::launch::Request::profile`),
+    /// `None` for the built-in default.
+    pub(crate) profile: Option<(hide_agent_adapter::ProfileId, String)>,
 }
 
 /// How starting the chosen agent in a task's created pane ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskAgentOutcome {
-    Started,
+    /// The agent started, with the profile its pane's record keeps (`None`
+    /// for the built-in default).
+    Started(Option<crate::launch::LaunchProfile>),
     /// The engine refused, or the agent is not installed; nothing started.
     Failed(AgentFailure),
     /// The engine did not answer; the agent may be running. The pane says which.
@@ -1320,11 +1325,19 @@ fn start_task_agent(
     let Some(runtime) = runtime.upgrade() else {
         return;
     };
+    // The start holds its profile from here (`launch::holds`): a removal
+    // planned meanwhile is refused, and one under way refuses the start.
     let pending = match runtime.lock() {
-        Ok(guard) => guard.pending_task_agent_start(id),
+        Ok(guard) => guard.pending_task_agent_start(id).map(|start| {
+            let held = guard.hold_profile_start(
+                &guard.task_agent_machine(id),
+                crate::launch::Request::new(&start.kind, start.profile.clone()),
+            );
+            (start, held)
+        }),
         Err(_) => return,
     };
-    let Some(start) = pending else {
+    let Some((start, held)) = pending else {
         return;
     };
     let generation = runtime
@@ -1339,9 +1352,12 @@ fn start_task_agent(
     // The node that runs the task's pane, this machine's or a device's, which
     // a long start line asks whether the pane's shell is reading.
     let pane_node = task_session_node(&runtime, id, &start.kind).ok();
-    let outcome = match reader {
-        Err(reason) => TaskAgentOutcome::Failed(AgentFailure::reason(reason)),
-        Ok(reader) => {
+    let outcome = match (reader, held) {
+        (_, Err(refusal)) => {
+            TaskAgentOutcome::Failed(AgentFailure::with_detail(refusal.code, refusal.detail))
+        }
+        (Err(reason), _) => TaskAgentOutcome::Failed(AgentFailure::reason(reason)),
+        (Ok(reader), Ok(held)) => {
             let expected = start.clone();
             let current_intent = || -> Result<Option<crate::start_claim::BoundPane>, String> {
                 current()?;
@@ -1395,6 +1411,7 @@ fn start_task_agent(
                 agent_node.is_some(),
                 id,
                 start,
+                held.hold(),
                 &current_start,
             )
         }
@@ -1430,6 +1447,7 @@ fn launch_with_prompt(
         agent_node.is_some(),
         id,
         start,
+        None,
         &|| Ok(()),
     )
 }
@@ -1442,6 +1460,7 @@ fn launch_with_prompt_checked(
     here: bool,
     id: u64,
     start: PendingAgentStart,
+    hold: Option<crate::launch::holds::Hold>,
     current: &dyn Fn() -> Result<(), String>,
 ) -> TaskAgentOutcome {
     let PendingAgentStart {
@@ -1454,12 +1473,18 @@ fn launch_with_prompt_checked(
         resume_reference,
         shell,
         made_worktree,
+        profile,
     } = start;
     // The trust is written by the machine that runs the pane: `agent_node`
     // is none for a device, whose own engine answers for its PATH, and a
     // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(refusal) = crate::agent_start::trust_worktree(pane_node, &kind, path)
+        && let Err(refusal) = crate::agent_start::trust_worktree(
+            pane_node,
+            &kind,
+            path,
+            profile.as_ref().map(|(id, _)| id),
+        )
     {
         return TaskAgentOutcome::Failed(AgentFailure::with_detail(refusal.code, refusal.detail));
     }
@@ -1491,16 +1516,17 @@ fn launch_with_prompt_checked(
         id,
         &pane_id,
         shell,
-        &kind,
+        &crate::launch::Request::new(&kind, profile).held(hold),
         args,
         prompt.as_deref(),
         codex_daemon,
-        &|| {
+        &|account| {
             current()?;
             if let Some(scope) = resume_scope.as_ref() {
                 crate::live::confirm_session_launch(
                     agent_node.ok_or("session_route_reader_unavailable")?,
                     &kind,
+                    account,
                     &scope.id,
                     Some(&scope.cwd),
                     resume_reference.as_ref(),
@@ -1555,7 +1581,7 @@ pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), St
 
 /// How one `agent.start` ended.
 enum Launch {
-    Started,
+    Started(Option<crate::launch::LaunchProfile>),
     Failed(AgentFailure),
     Unknown(AgentFailure),
 }
@@ -1563,7 +1589,7 @@ enum Launch {
 impl From<Launch> for TaskAgentOutcome {
     fn from(launch: Launch) -> Self {
         match launch {
-            Launch::Started => TaskAgentOutcome::Started,
+            Launch::Started(profile) => TaskAgentOutcome::Started(profile),
             Launch::Failed(failure) => TaskAgentOutcome::Failed(failure),
             Launch::Unknown(failure) => TaskAgentOutcome::Unknown(failure),
         }
@@ -1579,12 +1605,25 @@ fn launch_agent(
     id: u64,
     pane_id: &str,
     shell: crate::agent_start::ShellStart,
-    kind: &str,
+    agent: &crate::launch::Request,
     mut args: Vec<String>,
     prompt: Option<&str>,
     codex_daemon: crate::codex_launch::CodexDaemon,
-    check: &dyn Fn() -> Result<(), String>,
+    check: &dyn Fn(&hide_agent_adapter::AccountKey) -> Result<(), String>,
 ) -> Launch {
+    let kind = agent.kind();
+    // The profile is asked of the node that runs the pane, before anything
+    // is typed there: one gone or refused starts nothing (D-27, B20, B22).
+    let launch = match crate::launch::resolve(pane_node, agent) {
+        Ok(launch) => launch,
+        Err(refusal) => {
+            return Launch::Failed(AgentFailure::with_detail(refusal.code, refusal.detail));
+        }
+    };
+    let profile = launch.record();
+    // A resumed conversation is proven in the account its profile names.
+    let account = crate::launch::LaunchProfile::account_of(profile.as_ref());
+    let check = &|| check(&account);
     if let Err(reason) = check() {
         return Launch::Failed(AgentFailure::reason(reason));
     }
@@ -1641,7 +1680,7 @@ fn launch_agent(
     let start = match engine.prepare_start(crate::engine::AgentLaunch {
         pane_id: pane_id.to_owned(),
         name: name.clone(),
-        kind: kind.to_owned(),
+        launch,
         args,
         codex_daemon,
         wakes: false,
@@ -1664,12 +1703,14 @@ fn launch_agent(
         &format!("hide-core:task:{id}:agent"),
         shell,
         &start,
-        crate::agent_start::START_ANSWER_WAIT,
         check,
     ) {
-        Ok(_) => typed.map_or(Launch::Started, |prompt| {
+        Ok(_) => match typed.map_or(Launch::Started(None), |prompt| {
             type_first_prompt(engine, id, pane_id, kind, &name, prompt)
-        }),
+        }) {
+            Launch::Started(_) => Launch::Started(profile),
+            other => other,
+        },
         Err(StartError::Engine(EngineError::Answer(message))) => {
             Launch::Unknown(AgentFailure::with_detail(
                 "agent_start.unconfirmed",
@@ -1691,6 +1732,19 @@ fn launch_agent(
             if message == crate::live::SESSION_CHANGED =>
         {
             Launch::Failed(AgentFailure::reason(code))
+        }
+        // A profile's program that did not start fails the task by the
+        // profile's own reason, as a profile refused before typing does; one
+        // whose start is not known may run.
+        Err(StartError::Engine(EngineError::Refused { code, message }))
+            if code == crate::launch::PROFILE_REFUSED =>
+        {
+            Launch::Failed(AgentFailure::with_detail(code, message))
+        }
+        Err(StartError::Engine(EngineError::Refused { code, message }))
+            if code == crate::launch::PROFILE_UNCONFIRMED =>
+        {
+            Launch::Unknown(AgentFailure::with_detail(code, message))
         }
         Err(StartError::Engine(EngineError::Refused { code, message })) => Launch::Failed(
             AgentFailure::with_detail("agent_start.refused_by_herdr", format!("{code}: {message}")),
@@ -1739,7 +1793,7 @@ fn type_first_prompt(
         raw_pane_id: pane_id.to_owned(),
     };
     match ladder::deliver(engine, &target, prompt) {
-        Delivered::Sent(_) => Launch::Started,
+        Delivered::Sent(_) => Launch::Started(None),
         Delivered::NotYet(cause) | Delivered::Lost(cause) => failed(cause.to_owned()),
     }
 }
@@ -1821,6 +1875,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         if let Some(node) = node.as_deref() {
             folder_present(node, request)?;
         }
+        settle_task_session_profile(target, request)?;
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
             let runtime = target
@@ -1832,9 +1887,11 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 .as_deref()
                 .ok_or_else(|| "session_resume_agent_required".to_owned())?;
             let node = task_session_node(&runtime, request.id, kind)?;
+            let account = task_resume_account(&runtime, request.id, kind, node.as_ref())?;
             crate::live::confirm_session_launch(
                 node.as_ref(),
                 kind,
+                &account,
                 &scope.id,
                 Some(&scope.cwd),
                 request.resume_reference.as_ref(),
@@ -1942,7 +1999,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 .as_ref()
                 .and_then(|start| start.agent_phase.as_deref())
             {
-                Some("started") => TaskAgentOutcome::Started,
+                Some("started") => TaskAgentOutcome::Started(None),
                 Some("failed") | None => {
                     TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.pane_restored"))
                 }
@@ -2038,6 +2095,72 @@ fn task_session_node(
     task_node(&mut runtime, id)
 }
 
+/// Gives task `id`, a resume that names no account
+/// (`TaskAgentLaunch::profile_from_session`), the profile of the account
+/// the machine that holds its session says holds it
+/// ([`crate::launch::session_account`], [`Runtime::settle_session_profile`]),
+/// before its tab is made; the machine's answer is waited for with the
+/// runtime lock released, and the task is checked current after it.
+fn settle_task_session_profile(
+    target: &TabTarget,
+    request: &CheckoutTabRequest,
+) -> Result<(), ControlFailure> {
+    let runtime = target
+        .runtime
+        .upgrade()
+        .ok_or_else(|| "runtime stopped".to_owned())?;
+    let Some(reference) = runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .task_profile_from_session(request.id)
+    else {
+        return Ok(());
+    };
+    let kind = request
+        .agent_kind
+        .as_deref()
+        .ok_or_else(|| "session_resume_agent_required".to_owned())?;
+    let node = task_session_node(&runtime, request.id, kind)?;
+    let account = crate::launch::session_account(node.as_ref(), kind, &reference)
+        .map_err(|refusal| ControlFailure::Definite(refusal.code.to_owned()))?;
+    target.check_current(request.id)?;
+    if !Arc::ptr_eq(&node, &task_session_node(&runtime, request.id, kind)?) {
+        return Err(ControlFailure::Definite(
+            "session_resume_reader_changed".into(),
+        ));
+    }
+    runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .settle_session_profile(request.id, kind, &account)
+        .map_err(|code| ControlFailure::Definite(code.to_owned()))?;
+    Ok(())
+}
+
+/// The account task `id`'s resumed conversation lies in: its profile's,
+/// as the machine that holds the session answers for it now (a profile
+/// that is gone or refused starts nothing, D-27), the default account for
+/// the built-in default (PRD agent-profiles B19).
+fn task_resume_account(
+    runtime: &Arc<Mutex<Runtime>>,
+    id: u64,
+    kind: &str,
+    node: &dyn crate::node_access::NodeLink,
+) -> Result<hide_agent_adapter::AccountKey, String> {
+    let profile = runtime
+        .lock()
+        .map_err(|_| TASK_GONE)?
+        .task_agent_profile(id);
+    if profile.is_none() {
+        return Ok(Default::default());
+    }
+    let launch = crate::launch::resolve(Some(node), &crate::launch::Request::new(kind, profile))
+        .map_err(|refusal| refusal.code.to_owned())?;
+    Ok(crate::launch::LaunchProfile::account_of(
+        launch.record().as_ref(),
+    ))
+}
+
 /// The node of the machine that runs task `id`'s pane.
 fn task_pane_node(
     runtime: &Arc<Mutex<Runtime>>,
@@ -2080,84 +2203,39 @@ fn task_node(
     })
 }
 
-/// How long the helper may take to bring a Home in step: a stat per
-/// project and a link each, at most [`hide_node_link::home::MAX_LINKS`].
-const HOME_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the helper may take to retire the old Home: one stat per entry its
+/// marker lists, at most a search of the agents' session stores, and the
+/// folder.
+const HOME_RETIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A Home start or a new tab in Home (PRD home-device-rail D-04): the
-/// device's registered projects its Home links, and the helper that makes
-/// them.
-pub struct HomeStartRequest {
-    pub id: u64,
-    pub device_id: String,
-    pub projects: Vec<String>,
-    pub host: Arc<dyn crate::node_access::NodeLink>,
-}
-
-/// Brings the device's Home in step with its projects, then opens a tab in
-/// it and starts the task's agent there. The disk work runs on the helper,
-/// off the runtime lock; the lock is taken only to publish each step.
-pub fn spawn_home_start(target: TabTarget, request: HomeStartRequest) -> Result<(), String> {
-    thread::Builder::new()
-        .name("hide-core-home-start".into())
-        .spawn(move || {
-            let HomeStartRequest {
-                id,
-                device_id,
-                projects,
-                host,
-            } = request;
-            let synced = sync_home(host.as_ref(), &projects);
-            let Some(runtime) = target.runtime.upgrade() else {
-                return;
-            };
-            let tab = match runtime.lock() {
-                Ok(mut guard) => guard.ingest_home_start_sync(id, &device_id, &projects, synced),
-                Err(_) => return,
-            };
-            drop(runtime);
-            target.notifier.notify();
-            if let Some(tab) = tab {
-                open_tab_and_start_agent(&target, &tab);
-            }
-        })
-        .map(|_| ())
-        .map_err(|error| format!("Home start worker could not be started: {error}"))
-}
-
-/// Brings a device's Home links in step after its registrations changed
-/// (D-06). Nothing reaches the screen: the answer is the diagnostic log's.
-pub fn spawn_home_link_sync(
+/// Asks a device's helper to retire its old Home (PRD retire-hide-home D-03),
+/// off the runtime lock; the answer is the registration's to settle.
+pub fn spawn_home_retire(
     runtime: Weak<Mutex<Runtime>>,
+    notifier: crate::handle::ChangeNotifier,
     device_id: String,
-    projects: Vec<String>,
+    keep_empty: bool,
+    settle: bool,
     host: Arc<dyn crate::node_access::NodeLink>,
 ) -> Result<(), String> {
     thread::Builder::new()
-        .name("hide-core-home-link-sync".into())
+        .name("hide-core-home-retire".into())
         .spawn(move || {
-            let synced = sync_home(host.as_ref(), &projects);
+            let retired: Result<hide_node_link::home::HomeRetired, _> = crate::node_access::call_as(
+                host.as_ref(),
+                hide_node_link::protocol::Call::HomeRetire { keep_empty, settle },
+                HOME_RETIRE_TIMEOUT,
+            );
             if let Some(runtime) = runtime.upgrade()
                 && let Ok(mut guard) = runtime.lock()
             {
-                guard.ingest_home_link_sync(&device_id, &projects, synced);
+                guard.ingest_home_retired(&device_id, settle, retired);
+                drop(guard);
+                notifier.notify();
             }
         })
         .map(|_| ())
-        .map_err(|error| format!("Home link sync worker could not be started: {error}"))
-}
-
-fn sync_home(
-    host: &dyn crate::node_access::NodeLink,
-    projects: &[String],
-) -> Result<hide_node_link::home::HomeSynced, crate::node_access::LinkError> {
-    crate::node_access::call_as(
-        host,
-        hide_node_link::protocol::Call::HomeSync {
-            projects: projects.to_vec(),
-        },
-        HOME_SYNC_TIMEOUT,
-    )
+        .map_err(|error| format!("Home retire worker could not be started: {error}"))
 }
 
 fn create_checkout_tab(
@@ -3202,7 +3280,6 @@ mod tests {
             session_workspace_ids: vec!["w-purpose".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -3416,7 +3493,6 @@ mod tests {
             session_workspace_ids: vec!["w-purpose".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -3545,7 +3621,6 @@ mod tests {
             session_workspace_ids: vec!["w-outer".to_owned(), "w-authority".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "outer".to_owned(),
@@ -3613,7 +3688,6 @@ mod tests {
             session_workspace_ids: vec!["w-first".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -4496,6 +4570,7 @@ mod tests {
             codex_daemon: Default::default(),
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: None,
+            profile: None,
         };
         let server = server(vec![]);
         assert_eq!(
@@ -4538,6 +4613,7 @@ mod tests {
                 true,
                 7,
                 make(),
+                None,
                 &|| Err("session_resume_intent_changed".into())
             ),
             TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_intent_changed"))
@@ -4555,34 +4631,30 @@ mod tests {
     fn a_first_prompt_rides_the_start_only_where_the_agent_declares_it() {
         // OpenCode takes no model, so its start names none; Pi asks no
         // permission question, so full access adds nothing to it.
-        for (kind, prompt, extra_roots, model, full_access) in [
+        for (kind, prompt, model, full_access) in [
             (
                 "claude",
                 &["--", "-fix the tests"][..],
-                true,
                 Some("fixture-model"),
                 &crate::agent_permission::CLAUDE_FULL_ACCESS[..],
             ),
             (
                 "codex",
                 &["--", "-fix the tests"][..],
-                true,
                 Some("fixture-model"),
                 &crate::agent_permission::CODEX_FULL_ACCESS[..],
             ),
             (
                 "grok",
                 &["--", "-fix the tests"][..],
-                false,
                 Some("fixture-model"),
                 &["--always-approve"],
             ),
-            ("opencode", &[][..], false, None, &["--auto"]),
-            ("pi", &[][..], false, Some("fixture-model"), &[]),
+            ("opencode", &[][..], None, &["--auto"]),
+            ("pi", &[][..], Some("fixture-model"), &[]),
             (
                 "omp",
                 &["--", "-fix the tests"][..],
-                true,
                 Some("fixture-model"),
                 &["--auto-approve"],
             ),
@@ -4595,15 +4667,11 @@ mod tests {
                 replies.extend(typed_replies(kind));
             }
             let server = server(replies);
-            let mut args = crate::runtime::agent_choice::agent_arguments(
+            let args = crate::runtime::agent_choice::agent_arguments(
                 Some(kind),
                 model,
                 &crate::agent_permission::AgentPermission::Full,
             );
-            args.extend(crate::runtime::agent_choice::directory_arguments(
-                Some(kind),
-                &["/work/my app".into()],
-            ));
             let outcome = launch_with_prompt(
                 &*server,
                 Some(&Starts(StartForm::Program)),
@@ -4618,10 +4686,11 @@ mod tests {
                     codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
                     shell: crate::agent_start::ShellStart::Plain,
                     made_worktree: None,
+                    profile: None,
                 },
             );
             assert!(
-                matches!(outcome, TaskAgentOutcome::Started),
+                matches!(outcome, TaskAgentOutcome::Started(_)),
                 "{kind}: {outcome:?}"
             );
             let requests = requests_of(&server);
@@ -4633,9 +4702,6 @@ mod tests {
             assert_eq!(methods_of(&requests), methods, "{kind}");
             let mut expected: Vec<&str> = full_access.to_vec();
             expected.extend(model.into_iter().flat_map(|m| ["--model", m]));
-            if extra_roots {
-                expected.extend(["--add-dir", "/work/my app"]);
-            }
             if !typed {
                 expected.extend(prompt.iter().copied());
             }
@@ -4664,13 +4730,25 @@ mod tests {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: Some(wire.clone()),
+            profile: None,
         };
         // A device start: no agent node (its engine answers for its PATH), a
         // pane node that is the device's.
         let server = server(vec![shell_ready(), started()]);
-        let outcome =
-            launch_with_prompt_checked(&*server, None, Some(&node), false, 7, make(), &|| Ok(()));
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        let outcome = launch_with_prompt_checked(
+            &*server,
+            None,
+            Some(&node),
+            false,
+            7,
+            make(),
+            None,
+            &|| Ok(()),
+        );
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let written: Value =
             serde_json::from_slice(&std::fs::read(home.path().join(".claude.json")).unwrap())
                 .unwrap();
@@ -4682,7 +4760,7 @@ mod tests {
         // With no pane node the start refuses before the engine is asked.
         let server = self::server(vec![]);
         let TaskAgentOutcome::Failed(reason) =
-            launch_with_prompt_checked(&*server, None, None, false, 7, make(), &|| Ok(()))
+            launch_with_prompt_checked(&*server, None, None, false, 7, make(), None, &|| Ok(()))
         else {
             panic!("a start without the pane's machine went ahead")
         };
@@ -4707,6 +4785,7 @@ mod tests {
                 codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(reason) = outcome else {
@@ -4749,6 +4828,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         assert_eq!(
@@ -4813,6 +4893,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         assert_eq!(
@@ -4847,9 +4928,13 @@ mod tests {
                 codex_daemon: crate::codex_launch::CodexDaemon::Present,
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let requests = requests_of(&server);
         assert_eq!(
             requests[1]["params"]["args"],
@@ -4877,9 +4962,13 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let requests = requests_of(&server);
         assert_eq!(methods_of(&requests), ["pane_processes", "start_agent"]);
         assert_eq!(
@@ -4912,6 +5001,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(message) = outcome else {
@@ -4946,6 +5036,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(message) = outcome else {
@@ -4984,6 +5075,7 @@ mod tests {
                 codex_daemon: Default::default(),
                 shell: crate::agent_start::ShellStart::Plain,
                 made_worktree: None,
+                profile: None,
             },
         );
         let TaskAgentOutcome::Failed(message) = outcome else {
@@ -5002,6 +5094,44 @@ mod tests {
             methods_of(&requests_of(&server)),
             ["pane_processes", "start_agent"]
         );
+    }
+
+    /// A task's agent whose profile's program did not start fails the task
+    /// by the profile's own reason, with the executor's sentence; one whose
+    /// start is not known may run, so the task says so rather than failing.
+    #[test]
+    fn a_profiles_program_that_did_not_start_fails_the_task_by_the_profiles_reason() {
+        let sentence = "Claude Code · gw could not start /opt/gw: Bad CPU type in executable";
+        for (code, unknown) in [
+            (crate::launch::PROFILE_REFUSED, false),
+            (crate::launch::PROFILE_UNCONFIRMED, true),
+        ] {
+            let server = server(vec![shell_ready(), refused(code, sentence)]);
+            let outcome = launch_with_prompt(
+                &*server,
+                Some(&Starts(StartForm::Program)),
+                7,
+                PendingAgentStart {
+                    resume_reference: None,
+                    resume_scope: None,
+                    pane_id: "w1:p1".into(),
+                    kind: "claude".into(),
+                    prompt: None,
+                    args: Vec::new(),
+                    codex_daemon: Default::default(),
+                    shell: crate::agent_start::ShellStart::Plain,
+                    made_worktree: None,
+                    profile: None,
+                },
+            );
+            let failure = match outcome {
+                TaskAgentOutcome::Failed(failure) if !unknown => failure,
+                TaskAgentOutcome::Unknown(failure) if unknown => failure,
+                other => panic!("{code}: {other:?}"),
+            };
+            assert_eq!(failure.reason, code);
+            assert_eq!(failure.detail.as_deref(), Some(sentence));
+        }
     }
 
     /// A machine that has the agent and starts it as `0` says.
@@ -5042,6 +5172,7 @@ mod tests {
             codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
             shell: crate::agent_start::ShellStart::Plain,
             made_worktree: None,
+            profile: None,
         }
     }
 
@@ -5055,7 +5186,10 @@ mod tests {
         let server = server(replies);
         let prompt = "50% done, say \"hi\"\nthen stop";
         let outcome = launch_with_prompt(&*server, None, 7, codex_start(prompt));
-        assert!(matches!(outcome, TaskAgentOutcome::Started), "{outcome:?}");
+        assert!(
+            matches!(outcome, TaskAgentOutcome::Started(_)),
+            "{outcome:?}"
+        );
         let requests = requests_of(&server);
         assert_eq!(
             methods_of(&requests),

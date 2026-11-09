@@ -200,6 +200,8 @@ pub struct ReopenedAgent {
     /// The name the reopen started it under.
     pub name: String,
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile it started with, which its pane's record keeps.
+    pub profile: Option<crate::launch::LaunchProfile>,
     pub session_id: Option<String>,
 }
 
@@ -219,9 +221,24 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
             let program = |kind: &str| {
                 crate::start_prompt::start_program_of(context.engine.as_ref(), node, kind)
             };
+            // An agent started again holds its profile while it starts
+            // (`launch::holds`), on this machine, whose node reopens it.
+            let hold = |request: crate::launch::Request| {
+                let runtime = context.runtime.upgrade();
+                let guard = runtime.as_ref().and_then(|runtime| runtime.lock().ok());
+                match guard {
+                    Some(guard) => guard.hold_profile_start(guard.node().as_str(), request),
+                    None => Err(crate::launch::Refusal {
+                        code: crate::launch::PROFILE_UNANSWERED,
+                        detail: "the core stopped before the agent was started again".to_owned(),
+                    }),
+                }
+            };
             let asks = ReopenNode {
+                link: Some(node),
                 folders: &folders,
                 program: &program,
+                hold: &hold,
             };
             let result = run_engine_reopen(context.engine.as_ref(), &asks, &request)
                 .map(FileReopenResultOrEngine::Engine);
@@ -291,8 +308,15 @@ fn run_file_reopen(
 
 /// What a reopen asks of the node that held the closed panes.
 struct ReopenNode<'a> {
+    /// The node itself, which answers for an agent's profile.
+    link: Option<&'a dyn crate::node_access::NodeLink>,
     /// Whether a closed pane's folder is still a directory there.
     folders: &'a dyn Fn(&str) -> bool,
+    /// The start, holding its profile while it starts
+    /// (`Runtime::hold_profile_start`).
+    hold: &'a dyn Fn(
+        crate::launch::Request,
+    ) -> Result<crate::launch::Request, crate::launch::Refusal>,
     /// The file a start of the agent of a kind names there
     /// (`start_prompt::start_program_of`).
     program: &'a dyn Fn(&str) -> Option<crate::engine::StartProgram>,
@@ -683,6 +707,8 @@ fn reopen_pane(
         .and_then(|agent| {
             start_or_degrade_agent(
                 engine,
+                node.link,
+                node.hold,
                 key,
                 0,
                 &restored_pane_id,
@@ -835,6 +861,8 @@ fn reopen_tab(
         if let Some(agent) = &pane.agent {
             agents.extend(start_or_degrade_agent(
                 engine,
+                node.link,
+                node.hold,
                 key,
                 index,
                 new_id,
@@ -891,13 +919,16 @@ fn restored_cwd(
 }
 
 /// Starts `agent` in a restored pane with its conversation, or a new one when
-/// the resume does not take, each with the launch choice it was started
-/// with and the machine's permission choice, naming `program` where the
+/// the resume does not take, each with the launch choice and the profile it
+/// was started with (the profile as `node` answers for it now) and the
+/// machine's permission choice, naming `program` where the
 /// node gave the file its start runs; answers what started, or none when
 /// only the shell was kept.
 #[allow(clippy::too_many_arguments)] // the pane's identity plus its machine's three start facts
 fn start_or_degrade_agent(
     engine: &dyn Engine,
+    node: Option<&dyn crate::node_access::NodeLink>,
+    hold: &dyn Fn(crate::launch::Request) -> Result<crate::launch::Request, crate::launch::Refusal>,
     key: &str,
     index: usize,
     pane_id: &str,
@@ -926,7 +957,35 @@ fn start_or_degrade_agent(
         kind: agent.kind.clone(),
         name: name.clone(),
         launch: agent.launch.clone(),
+        profile: agent.profile.clone(),
         session_id: session_id.cloned(),
+    };
+    // The profile the agent ran with is asked once, before the pane is
+    // touched: one that is gone keeps the shell and says so, rather than
+    // reading as a resume that failed (PRD agent-profiles D-27, B20).
+    let request = hold(crate::launch::Request::recorded(
+        &agent.kind,
+        agent.profile.as_ref(),
+    ));
+    let profile = match request.and_then(|request| {
+        crate::launch::resolve(node, &request).map(|profile| (request, profile))
+    }) {
+        // The start's values carry its hold from here.
+        Ok((_, profile)) => profile,
+        Err(refusal) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "recent_closed",
+                "kind": "reopen.profile_refused",
+                "pane_id": pane_id,
+                "agent": agent.kind,
+                "code": refusal.code,
+            }));
+            notices.push(format!(
+                "Agent could not be started; the shell was kept: {}",
+                refusal.detail
+            ));
+            return None;
+        }
     };
     let interrupted_reused_agent = interrupt_reused_agent(engine, pane_id);
     let pane_was_clear = matches!(&interrupted_reused_agent, Ok(false));
@@ -934,20 +993,37 @@ fn start_or_degrade_agent(
     if let Some(mut args) = resume {
         args.extend(launch.iter().cloned());
         // A resume line is a session id, far under every terminal's line
-        // limit, so the restore asks no node.
-        let result = start_agent(
+        // limit, so the restore asks the node only for the agent's profile.
+        let result = crate::live::start_agent_checked(
             engine,
-            None,
+            node,
             &format!("hide-core:{key}:agent:{index}:resume"),
             pane_id,
             crate::agent_start::ShellStart::Plain,
             crate::agent_start::SHELL_WAIT,
             &name,
-            &agent.kind,
+            profile.clone(),
             args,
             codex_daemon,
             program.clone(),
+            &|| Ok(()),
         );
+        // A profile's program that did not start would not start a new
+        // conversation either, and one whose result is unknown may run:
+        // neither starts again (PRD agent-profiles B22).
+        if let Err(crate::agent_start::StartError::Engine(crate::engine::EngineError::Refused {
+            code,
+            message,
+        })) = &result
+            && crate::launch::ends_a_start(code)
+        {
+            notices.push(if code == crate::launch::PROFILE_UNCONFIRMED {
+                format!("Agent was typed but did not confirm it started; nothing was started again: {message}")
+            } else {
+                format!("Agent could not be started; the shell was kept: {message}")
+            });
+            return None;
+        }
         if result.is_ok() || (pane_was_clear && agent_is_running(engine, pane_id, &agent.kind)) {
             return Some(started(agent.session_id.as_ref()));
         }
@@ -964,22 +1040,23 @@ fn start_or_degrade_agent(
         notices
             .push("Previous conversation could not be resumed; started a new conversation".into());
     }
-    if let Err(message) = start_agent(
+    if let Err(not) = start_agent(
         engine,
-        None,
+        node,
         &format!("hide-core:{key}:agent:{index}:fresh"),
         pane_id,
         crate::agent_start::ShellStart::Plain,
         crate::agent_start::SHELL_WAIT,
         &name,
-        &agent.kind,
+        profile,
         launch,
         codex_daemon,
         program,
     ) && !(pane_was_clear && agent_is_running(engine, pane_id, &agent.kind))
     {
         notices.push(format!(
-            "Agent could not be started; the shell was kept: {message}"
+            "Agent could not be started; the shell was kept: {}",
+            not.refusal
         ));
         return None;
     }
@@ -1075,6 +1152,8 @@ mod tests {
         let mut notices = Vec::new();
         let started = start_or_degrade_agent(
             fake.engine().as_ref(),
+            None,
+            &Ok,
             "key",
             0,
             "pane",
@@ -1082,6 +1161,7 @@ mod tests {
                 kind: "codex".into(),
                 session_id: Some("session".into()),
                 launch: launch.clone(),
+                profile: None,
             },
             crate::codex_launch::CodexDaemon::Unsupported,
             // No saved choice: full access, on the resume and on the new
@@ -1110,12 +1190,72 @@ mod tests {
                 name: "reopen-key-0".into(),
                 launch,
                 session_id: None,
+                profile: None,
             })
         );
         assert_eq!(
             notices.len(),
             1,
             "the lost conversation is said: {notices:?}"
+        );
+    }
+
+    /// A machine whose profile is gone answers every ask that way.
+    struct ProfileGone;
+
+    impl crate::node_access::NodeLink for ProfileGone {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            assert!(matches!(
+                call,
+                hide_node_link::protocol::Call::ProfileLaunch { .. }
+            ));
+            Ok(
+                serde_json::to_value(hide_node_link::profiles::ProfileLaunch::Gone)
+                    .unwrap()
+                    .into(),
+            )
+        }
+    }
+
+    /// A closed agent whose profile is gone keeps its shell and says so
+    /// once, touching nothing in the pane: no resume that reads as failed,
+    /// and no new conversation in another account (PRD agent-profiles B20).
+    #[test]
+    fn a_closed_agent_whose_profile_is_gone_keeps_the_shell_and_says_why() {
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let mut notices = Vec::new();
+        let started = start_or_degrade_agent(
+            fake.engine().as_ref(),
+            Some(&ProfileGone),
+            &Ok,
+            "key",
+            0,
+            "pane",
+            &ClosedAgent {
+                kind: "claude".into(),
+                session_id: Some("session".into()),
+                launch: Default::default(),
+                profile: Some(crate::launch::LaunchProfile {
+                    id: hide_agent_adapter::ProfileId("p-work".into()),
+                    name: "work".into(),
+                    account: hide_agent_adapter::AccountKey::Folder("/home/me/.claude-work".into()),
+                }),
+            },
+            crate::codex_launch::CodexDaemon::Unsupported,
+            &Default::default(),
+            None,
+            &mut notices,
+        );
+        assert_eq!(started, None);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].starts_with("Agent could not be started; the shell was kept: ")
+                && notices[0].contains("profile work is gone"),
+            "{notices:?}"
         );
     }
 
@@ -1147,6 +1287,8 @@ mod tests {
             let mut notices = Vec::new();
             start_or_degrade_agent(
                 fake.engine().as_ref(),
+                None,
+                &Ok,
                 "key",
                 0,
                 "pane",
@@ -1295,8 +1437,10 @@ mod tests {
         let outcome = reopen_pane(
             fake.engine().as_ref(),
             &ReopenNode {
+                link: None,
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
+                hold: &Ok,
             },
             "nested-intent",
             &context,
@@ -1486,8 +1630,10 @@ mod tests {
         let outcome = reopen_pane(
             fake.engine().as_ref(),
             &ReopenNode {
+                link: None,
                 folders: &|path| Path::new(path).is_dir(),
                 program: &|_| None,
+                hold: &Ok,
             },
             "first-attempt",
             &context,

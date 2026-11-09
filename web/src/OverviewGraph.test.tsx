@@ -136,7 +136,7 @@ it("lists a mission waiting on the operator when no session is drawn", async () 
     const item = container.querySelector<HTMLElement>('[data-graph-mission-asks] [data-graph-mission-ask="mission-1"]');
     expect(item?.textContent).toContain("이슈 정리");
     expect(item?.textContent).toContain("API 추가");
-    expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Take over", "Mark done"]);
+    expect([...item!.querySelectorAll("[data-mission-ask-choices] button")].map((button) => button.textContent)).toEqual(["Resume command", "Mark done"]);
     expect(container.querySelector("[data-graph-mission-asks] h3")?.textContent).toBe("Waiting on you 1");
   } finally { await act(async () => root.unmount()); }
 });
@@ -187,7 +187,7 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
   const root = legacyAgentRow({ id: "r", pane_id: "r", identity_label: "배포 확인", agent_kind: "claude", session_id: "native-r", group: "needs_you", demand: "question", mark: "turn" });
   root.state.ask = { verb: "answer", what: "배포 범위를 확인해 주세요", more: 0 };
   const child = legacyAgentRow({ id: "c", pane_id: "c", identity_label: "검증 자식", agent_kind: "codex", session_id: "native-c", group: "working", activity: "working", delegated: true, lineage_parent_pane_id: "r" });
-  const other = legacyAgentRow({ id: "o", pane_id: "o", identity_label: "다른 일", agent_kind: "claude", session_id: "native-o", group: "working", activity: "working" });
+  const other = legacyAgentRow({ id: "o", pane_id: "o", identity_label: "다른 일", agent_kind: "claude", session_id: "native-o", group: "working", activity: "working", profile: "work" });
   const board = (id: string, label: string, agents: typeof root[]): BoardProject => {
     const row = checkout(id);
     return { agents, device: null, workspace: { id, label, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: agents.map((agent) => ({ pane_id: agent.pane_id, project_id: id, checkout_id: row.id })) } } };
@@ -233,6 +233,11 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(team.textContent).toContain("검증 자식");
     const talks = [...preview()!.querySelectorAll(".og-talks > div")].map((row) => row.textContent);
     expect(talks).toEqual(expect.arrayContaining([expect.stringContaining("Sent 1 · Received 2"), expect.stringContaining("Received 1")]));
+    // PRD agent-profiles B17: a counterpart whose logo wears a profile badge says its agent and profile on hover and to assistive technology; a default row keeps its hover.
+    const counterpart = [...preview()!.querySelectorAll<HTMLElement>(".og-talks > div")].find((row) => row.textContent?.includes("다른 일"))!;
+    expect(counterpart.title).toBe("Claude Code · work\nLetters 3");
+    expect(counterpart.querySelector(".sr-only")?.textContent).toBe(", Claude Code · work");
+    expect(ask.querySelector(".og-ask-who")!.hasAttribute("title")).toBe(false);
     expect(preview()!.textContent).not.toContain("request");
     // A team row chooses that descendant.
     await act(async () => team.querySelector<HTMLButtonElement>("button")!.click());
@@ -242,6 +247,8 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(preview()).toBeNull();
     const listed = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("[data-graph-session-list] > button")].find((row) => row.textContent?.includes(name))!;
     expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("true");
+    expect(listed("다른 일").title).toBe("Claude Code · work");
+    expect(listed("검증 자식").hasAttribute("title")).toBe(false);
     // PRD overview-graph-remembered B7, B8: the row holds its name, states and count, with no Fold or Hide words; an eye hides it.
     expect(button("Fold 알파 into one circle")).toBeUndefined();
     expect([...alpha.querySelectorAll("button")].map((one) => one.textContent?.trim())).not.toContain("Hide");

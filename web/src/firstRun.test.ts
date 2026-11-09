@@ -64,26 +64,28 @@ describe("What changes (B11)", () => {
     ];
     expect(whatChanges(agents, new Set(["claude-code", "codex", "opencode", "grok"]), kit)).toEqual({
       rows: [
-        { path: "/home/me/.claude/settings.json", labels: ["claude-code"] },
-        { path: "/home/me/.claude-code/skills/hide", labels: ["claude-code"] },
-        { path: "/home/me/.codex/hooks.json", labels: ["codex"] },
-        { path: "/home/me/.agents/skills/hide/SKILL.md", labels: ["codex", "OpenCode"] },
-        { path: "/home/me/.config/opencode/plugins/hide.js", labels: ["OpenCode"] },
+        { path: "~/.claude/settings.json", labels: ["claude-code"] },
+        { path: "~/.claude-code/skills/hide", labels: ["claude-code"] },
+        { path: "~/.codex/hooks.json", labels: ["codex"] },
+        { path: "~/.agents/skills/hide/SKILL.md", labels: ["codex", "OpenCode"] },
+        { path: "~/.config/opencode/plugins/hide.js", labels: ["OpenCode"] },
       ],
-      cli: "/home/me/.local/bin/hide",
+      cli: "~/.local/bin/hide",
     });
   });
 
   it("writes the account home as ~ on every system, and a place outside it as it is (D-26)", () => {
-    expect(accountHome("/Users/me/hide")).toBe("/Users/me");
-    expect(accountHome("C:\\Users\\me\\hide")).toBe("C:\\Users\\me");
+    expect(accountHome(["/Users/me/.claude/settings.json"])).toBe("/Users/me");
+    expect(accountHome(["C:\\Users\\me\\.codex\\hooks.json"])).toBe("C:\\Users\\me");
+    expect(accountHome(["/opt/hide", "/Users/me/.local/bin/hide"])).toBe("/Users/me");
+    expect(accountHome([])).toBeNull();
     expect(underHome("/Users/me/.claude/settings.json", "/Users/me")).toBe("~/.claude/settings.json");
     expect(underHome("C:\\Users\\me\\.codex\\hooks.json", "C:\\Users\\me")).toBe("~\\.codex\\hooks.json");
     expect(underHome("/Users/alice/.claude", "/Users/al")).toBe("/Users/alice/.claude");
     expect(underHome("/opt/hide", "/Users/me")).toBe("/opt/hide");
     const kit = { components: [{ id: "cli", label: "hide", state: "off", why: null, location: "/Users/me/.local/bin/hide" }] } as unknown as Kit;
     const claude = agent("claude-code", { skill: { state: "off", why: null, location: "/Users/me/.claude/skills/hide" } });
-    expect(whatChanges([claude], new Set(["claude-code"]), kit, "/Users/me")).toEqual({
+    expect(whatChanges([claude], new Set(["claude-code"]), kit)).toEqual({
       rows: [{ path: "~/.claude/skills/hide", labels: ["claude-code"] }],
       cli: "~/.local/bin/hide",
     });

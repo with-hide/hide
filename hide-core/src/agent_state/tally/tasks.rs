@@ -193,9 +193,6 @@ impl<'a> Forest<'a> {
             .filter(|id| self.parent(id).is_none())
         {
             let place = &self.places[root];
-            if place.project.is_home {
-                continue;
-            }
             let members = self.subtree(root);
             let card = self.card(place, &members);
             let key = (place.device_id.to_owned(), place.project.id.clone());
@@ -225,8 +222,9 @@ impl<'a> Forest<'a> {
         result
     }
 
-    /// The order inside each group (B9): Needs You longest waiting first,
-    /// every other group most recent first; and the totals.
+    /// The order inside each group (B9): Needs You the unread asks before
+    /// the read ones, each longest waiting first (operator decision
+    /// 2026-11-08), every other group most recent first; and the totals.
     fn settle(&self, tasks: &mut Tasks) {
         tasks.cards.sort_by(|a, b| {
             a.state.cmp(&b.state).then_with(|| match a.state {
@@ -240,7 +238,7 @@ impl<'a> Forest<'a> {
                             agent.state.request_since
                         }
                     };
-                    since(a).cmp(&since(b))
+                    a.read.cmp(&b.read).then_with(|| since(a).cmp(&since(b)))
                 }
                 // Longest waiting first (PRD revisit-group D-06).
                 TaskState::Revisit => {
@@ -327,7 +325,7 @@ impl<'a> Forest<'a> {
         let mut result: Vec<((String, String), Incoming)> = Vec::new();
         for id in members {
             let row = &self.places[*id];
-            if row.device_id == root.device_id || row.project.is_home {
+            if row.device_id == root.device_id {
                 continue;
             }
             let key = (row.device_id.to_owned(), row.project.id.clone());

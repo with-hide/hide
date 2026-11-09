@@ -189,6 +189,7 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
         brief: Some("fix it".into()),
         task: None,
         beside: false,
+        profile: None,
     };
     // The ledger as the failed start left it: its pane made and its agent
     // started, no child bound and the spawn not completed.

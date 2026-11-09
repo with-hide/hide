@@ -63,12 +63,7 @@ pub(crate) const SHELL_WAIT: Duration = Duration::from_secs(30);
 /// so how long it holds the start's name while no agent shows. Long, because
 /// typing a long first prompt into a slow shell takes most of it.
 pub(crate) const AGENT_START_DEADLINE: Duration = Duration::from_secs(120);
-/// How long a caller waits for the answer to a start that waits out
-/// [`AGENT_START_DEADLINE`]: a little longer, so a slow start is not
-/// reported as an unanswered one.
-pub(crate) const START_ANSWER_WAIT: Duration =
-    Duration::from_secs(AGENT_START_DEADLINE.as_secs() + 5);
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A typed start is not proof that its program exists. Keep the fork's node
@@ -247,10 +242,13 @@ pub(crate) enum StartError {
 /// Nothing is asked for a kind that never asks; a trust that cannot be
 /// recorded refuses the start with its reason, so no agent waits unseen on
 /// its trust question (PRD antigravity-first-class B20).
+/// `profile` is the profile the start runs with, whose account the node
+/// writes the trust in (docs/agent-hooks.md, Profile accounts).
 pub(crate) fn trust_worktree(
     node: Option<&dyn crate::node_access::NodeLink>,
     kind: &str,
     path: &str,
+    profile: Option<&hide_agent_adapter::ProfileId>,
 ) -> Result<(), TrustRefusal> {
     let Some((adapter, agent)) = hide_agent_adapter::adapter(kind).and_then(|adapter| {
         let agent = hide_agent_hooks::folder_trust::Agent::of(adapter.start?)?;
@@ -268,6 +266,7 @@ pub(crate) fn trust_worktree(
             agent: adapter.id.to_owned(),
             path: path.to_owned(),
             trusted: true,
+            profile: profile.cloned(),
         },
         // The node may wait for another start's change of the same agent's
         // trust before its own (a Codex app-server each), and the link
@@ -385,7 +384,6 @@ pub(crate) fn start_at_shell_checked(
     correlation_id: &str,
     shell: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
     start_at_shell_within(
@@ -394,7 +392,6 @@ pub(crate) fn start_at_shell_checked(
         correlation_id,
         shell,
         start,
-        answer_timeout,
         SHELL_WAIT,
         check,
     )
@@ -412,7 +409,6 @@ pub(crate) fn start_at_shell_within(
     correlation_id: &str,
     shell: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     shell_wait: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
@@ -422,7 +418,6 @@ pub(crate) fn start_at_shell_within(
         correlation_id,
         shell,
         start,
-        answer_timeout,
         shell_wait.min(SHELL_WAIT),
         Duration::ZERO,
         check,
@@ -441,7 +436,6 @@ pub(crate) fn start_at_shell_reusing_name(
     correlation_id: &str,
     shell: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<StartedAgent, StartError> {
     start_within(
@@ -450,7 +444,6 @@ pub(crate) fn start_at_shell_reusing_name(
         correlation_id,
         shell,
         start,
-        answer_timeout,
         SHELL_WAIT,
         NAME_RELEASE_WAIT,
         check,
@@ -468,7 +461,6 @@ pub(crate) fn start_within(
     correlation_id: &str,
     shell_start: ShellStart,
     start: &PreparedStart,
-    answer_timeout: Duration,
     wait: Duration,
     name_release_wait: Duration,
     check: &dyn Fn() -> Result<(), String>,
@@ -498,7 +490,9 @@ pub(crate) fn start_within(
     loop {
         shell.wait(started, deadline)?;
         check().map_err(StartError::refused)?;
-        match engine.start_agent(Wait::Each(answer_timeout), start) {
+        // The engine's start ends by the caller's own deadline: a start with a
+        // profile waits within it for what came of its attempt.
+        match engine.start_agent(Wait::By(deadline), start) {
             // The engine refused before typing anything: something besides the
             // shell runs in the pane. A prompt hook can take the terminal
             // between the read and the start, and on Windows the engine refuses a
@@ -543,7 +537,21 @@ pub(crate) fn start_within(
                     return Err(StartError::Engine(EngineError::Refused { code, message }));
                 }
             }
-            answer => return answer.map_err(StartError::Engine),
+            answer => {
+                // A start that may have run keeps its hold on the profile
+                // until the runtime sees what came of it; one refused
+                // before it ran, or whose attempt failed, lets it go with
+                // its values (`launch::holds`).
+                let ran_nothing = matches!(
+                    &answer,
+                    Err(EngineError::Refused { code, .. })
+                        if code != crate::launch::PROFILE_UNCONFIRMED
+                );
+                if !ran_nothing {
+                    start.launch().launch.typed(pane_id);
+                }
+                return answer.map_err(StartError::Engine);
+            }
         }
     }
 }
@@ -808,7 +816,7 @@ mod tests {
             .prepare_start(crate::engine::AgentLaunch {
                 pane_id: text("pane_id", "w1:p1"),
                 name: text("name", "agent"),
-                kind: text("kind", "claude"),
+                launch: crate::launch::Launch::default_of(&text("kind", "claude")),
                 args: params["args"]
                     .as_array()
                     .map(|args| {
@@ -1008,7 +1016,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             wait,
             Duration::ZERO,
             &|| Ok(()),
@@ -1022,7 +1029,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             Duration::from_secs(5),
             name_wait,
             &|| Ok(()),
@@ -1129,7 +1135,6 @@ mod tests {
                 ShellStart::Plain,
                 &prepared(json!({"pane_id":"w1:p1"})),
                 Duration::from_secs(5),
-                Duration::from_secs(5),
                 Duration::ZERO,
                 &|| {
                     let count = checks.get();
@@ -1222,7 +1227,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1", "name": "factory-hide-t1", "kind": "claude"})),
-            Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::ZERO,
             &|| Ok(()),
@@ -1374,7 +1378,6 @@ mod tests {
             "test:start",
             ShellStart::Plain,
             &prepared(json!({"pane_id": "w1:p1", "args": ["--", "가".repeat(bytes / 3)]})),
-            Duration::from_secs(5),
             wait,
             Duration::ZERO,
             &|| Ok(()),
@@ -1491,7 +1494,6 @@ mod tests {
                 program: "zsh".into(),
             },
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             wait,
             Duration::ZERO,
             &|| Ok(()),
@@ -1622,7 +1624,6 @@ mod tests {
                 program: "powershell".into(),
             },
             &prepared(json!({"pane_id": "w1:p1"})),
-            Duration::from_secs(5),
             Duration::from_millis(300),
             Duration::ZERO,
             &|| Ok(()),
@@ -1707,7 +1708,7 @@ mod tests {
         std::fs::create_dir_all(tree("plain")).unwrap();
         // Grok keeps a worktree's trust under its repository's main checkout,
         // which `tree-1` is itself.
-        trust_worktree(Some(&node), "grok", &wire("tree-1")).unwrap();
+        trust_worktree(Some(&node), "grok", &wire("tree-1"), None).unwrap();
         // Its format and spelling are `folder_trust`'s tests'.
         let grok = std::fs::read_to_string(home.path().join(".grok/trusted_folders.toml")).unwrap();
         assert!(
@@ -1715,14 +1716,14 @@ mod tests {
             "{grok}"
         );
         assert!(!agy.exists() && !claude.exists());
-        trust_worktree(Some(&node), "antigravity", &wire("tree-1")).unwrap();
+        trust_worktree(Some(&node), "antigravity", &wire("tree-1"), None).unwrap();
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&agy).unwrap()).unwrap();
         assert_eq!(
             written["trustedWorkspaces"],
             serde_json::json!([resolved("tree-1")])
         );
-        trust_worktree(Some(&node), "claude", &wire("tree-1")).unwrap();
+        trust_worktree(Some(&node), "claude", &wire("tree-1"), None).unwrap();
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&claude).unwrap()).unwrap();
         let key = if cfg!(windows) {
@@ -1737,20 +1738,21 @@ mod tests {
         // A folder that is not a worktree is never trusted.
         for kind in ["antigravity", "claude", "grok"] {
             let refused =
-                String::from(trust_worktree(Some(&node), kind, &wire("plain")).unwrap_err());
+                String::from(trust_worktree(Some(&node), kind, &wire("plain"), None).unwrap_err());
             assert!(refused.starts_with("agent_trust_failed"), "{refused}");
         }
         // A trust that cannot be recorded stops the start with its reason,
         // naming the agent.
         std::fs::write(&agy, "{ not json").unwrap();
-        let refused =
-            String::from(trust_worktree(Some(&node), "antigravity", &wire("tree-2")).unwrap_err());
+        let refused = String::from(
+            trust_worktree(Some(&node), "antigravity", &wire("tree-2"), None).unwrap_err(),
+        );
         assert!(
             refused.starts_with("agent_trust_failed: Antigravity's trust of"),
             "{refused}"
         );
         assert!(
-            trust_worktree(None, "claude", &wire("tree-2"))
+            trust_worktree(None, "claude", &wire("tree-2"), None)
                 .unwrap_err()
                 .code
                 == "agent_trust_unavailable"

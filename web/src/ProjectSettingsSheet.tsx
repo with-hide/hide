@@ -1,6 +1,8 @@
 import { BrainIcon, FolderGit2Icon, FolderIcon, GitBranchIcon, LinkIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
+import { projectAccountChoices } from "./agentProfiles";
+import { ProjectAgentAccounts } from "./components/agent-profiles";
 import { Group, Note, Row, Status, Value } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
@@ -32,7 +34,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const live = useShellStore((state) => state.connection === "live");
-  const current = catalogWorkspaces(rest).find((row) => row.device_id === target.deviceId && row.path === target.root && !row.is_home) ?? null;
+  const current = catalogWorkspaces(rest).find((row) => row.device_id === target.deviceId && row.path === target.root) ?? null;
   const lastWorkspace = useRef(current);
   if (current) lastWorkspace.current = current;
   const workspace = current ?? lastWorkspace.current;
@@ -64,6 +66,9 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
     setIntent({ id, field, part, patch, state: sent ? "pending" : "failed" });
   };
   const guardrails = projectGuardrails(record);
+  // Working style › Agent accounts (PRD agent-profiles B15): each agent the project's machine keeps profiles for.
+  const machine = rest?.navigator?.devices?.find((device) => device.id === target.deviceId);
+  const agentAccounts = projectAccountChoices(machine, record?.agent_profiles);
   // A receipt read back without its intent (the dialog reopened) is shown beside the control it moved.
   const receiptPart = (patch: ProjectSettingsPatch | undefined) => patch?.guardrails ? guardPartOf(patch.guardrails, guardrails) : undefined;
   const stateFor = (field: keyof ProjectSettingsPatch, part?: GuardPart): ReactNode => {
@@ -187,6 +192,9 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                     <Switch aria-label={t("projectSettings.autoFetch")} checked={workspace?.is_git ? record?.auto_fetch ?? true : false} disabled={blocked || !workspace?.is_git} onCheckedChange={(checked) => save("auto_fetch", { auto_fetch: checked })} />
                   </Row>
                 </Group>
+                <ProjectAgentAccounts rows={agentAccounts} disabled={blocked}
+                  onChange={(agent, profile) => save("agent_profiles", { agent_profiles: { [agent]: profile } })}
+                  status={(agent) => (intent?.field === "agent_profiles" ? agent in (intent.patch.agent_profiles ?? {}) : write?.patch?.agent_profiles && agent in write.patch.agent_profiles) ? stateFor("agent_profiles") : null} />
                 <ProjectGuardrails rules={guardrails} isGit={workspace?.is_git ?? false} base={workspace ? guardedBase(rest, workspace, record) : null} disabled={blocked}
                   unguarded={unguardedAgents(rest?.navigator?.devices?.find((device) => device.id === target.deviceId)?.kit?.agents)}
                   save={(part, rules: Guardrails) => save("guardrails", { guardrails: rules }, part)} stateFor={(part) => stateFor("guardrails", part)}

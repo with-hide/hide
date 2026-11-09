@@ -890,6 +890,8 @@ mod tests {
             actor: actor.clone(),
             session: Some(session(device)),
             agent_id: None,
+            profile: None,
+            profile_unknown: false,
         };
         mission.nodes = vec![
             serde_json::from_value(json!({
@@ -1523,6 +1525,7 @@ mod tests {
             resume_path: Some(format!("/home/me/.claude/{terminal}.jsonl")),
             provider: "claude".to_owned(),
             name: "worker".to_owned(),
+            profile: None,
         }
     }
 

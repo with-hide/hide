@@ -70,10 +70,18 @@ export const SUGGESTED_INSTALLS = ["claude-code", "codex"] as const;
 /** One place under What changes: the path Hide writes and the agents it writes it for, with no piece named (B11). */
 export type ChangeRow = { path: string; labels: string[] };
 
-export function accountHome(homeFolder: string | null | undefined): string | null {
-  if (!homeFolder) return null;
-  const cut = Math.max(homeFolder.lastIndexOf("/"), homeFolder.lastIndexOf("\\"));
-  return cut > 0 ? homeFolder.slice(0, cut) : null;
+/**
+ * The account home, read from the places the kit reports: every one sits in a
+ * dot folder directly under it (`~/.claude`, `~/.codex`, `~/.config`,
+ * `~/.local`), so what comes before the first dot folder is the home on every
+ * system. Null when no place says.
+ */
+export function accountHome(locations: readonly string[]): string | null {
+  for (const location of locations) {
+    const match = /^(.+?)[\\/]\.[^\\/]/.exec(location);
+    if (match?.[1]) return match[1];
+  }
+  return null;
 }
 
 /** `path` with the account `home` written as `~`, on every system (D-26); a path outside it as it is. */
@@ -92,8 +100,10 @@ export function underHome(path: string, home: string | null): string {
  * link. Each place is where the kit reports it, with the account home as `~`
  * (B11, D-26). A piece the agent does not have here (`absent`) writes nothing.
  */
-export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>, kit: Kit | null | undefined, home: string | null = null): { rows: ChangeRow[]; cli: string | null } {
+export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>, kit: Kit | null | undefined): { rows: ChangeRow[]; cli: string | null } {
   const rows: ChangeRow[] = [];
+  const cli = kit?.components.find((component) => component.id === "cli")?.location ?? null;
+  const home = accountHome([...agents.flatMap((agent) => [agent.hook?.location, agent.skill?.location]), cli].filter((location): location is string => !!location));
   for (const agent of agents) {
     if (!on.has(agent.id)) continue;
     const pieces: (KitPiece | null | undefined)[] = [agent.hook, agent.skill];
@@ -105,7 +115,6 @@ export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>
       else rows.push({ path, labels: [agent.label] });
     }
   }
-  const cli = kit?.components.find((component) => component.id === "cli")?.location ?? null;
   return { rows, cli: cli === null ? null : underHome(cli, home) };
 }
 

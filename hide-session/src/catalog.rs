@@ -1,8 +1,10 @@
+use crate::account::Accounts;
 use crate::file_cache;
 use crate::{
     Agent, ConversationCheckpoint, ConversationCursor, ConversationEvent, EventKind, ParsedSession,
     SESSION_READ_LIMIT_BYTES, SessionError, parse_events, read_bounded,
 };
+use hide_agent_adapter::AccountKey;
 use hide_project::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,6 +88,11 @@ pub struct ProjectSession {
     /// and every row of a node that predates the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stamp: Option<String>,
+    /// The account the session was kept in (`crate::Accounts`), which a
+    /// resume of it starts in; left out for the agent's default account and
+    /// by a node that predates the field.
+    #[serde(default, skip_serializing_if = "AccountKey::is_default")]
+    pub account: AccountKey,
 }
 
 #[derive(Debug)]
@@ -168,14 +175,15 @@ pub struct WorkedFolders {
 }
 
 pub struct SessionCatalog {
-    home: PathBuf,
+    accounts: Accounts,
     device_id: String,
 }
 
 impl SessionCatalog {
-    pub fn new(home: &Path, device_id: impl Into<String>) -> Self {
+    /// A catalog of the sessions every account of `accounts` keeps.
+    pub fn new(accounts: &Accounts, device_id: impl Into<String>) -> Self {
         Self {
-            home: home.to_path_buf(),
+            accounts: accounts.clone(),
             device_id: device_id.into(),
         }
     }
@@ -188,20 +196,30 @@ impl SessionCatalog {
         let files = self.session_files(&mut visited)?;
 
         let mut refusals = Vec::new();
-        let mut sessions = crate::opencode::catalog(
-            &self.home,
-            &self.device_id,
-            project,
-            &mut visited,
-            SESSION_DISCOVERY_LIMIT,
-        )?
-        .unwrap_or_else(|reason| {
-            refusals.push(SessionStoreRefusal {
-                agent: Agent::OpenCode,
-                reason,
-            });
-            Vec::new()
-        });
+        let mut sessions = Vec::new();
+        for (account, accounts) in self.accounts.each(Agent::OpenCode) {
+            match crate::opencode::catalog(
+                &accounts,
+                &self.device_id,
+                project,
+                &mut visited,
+                SESSION_DISCOVERY_LIMIT,
+            )? {
+                Ok(rows) => sessions.extend(rows.into_iter().map(|row| ProjectSession {
+                    account: account.clone(),
+                    ..row
+                })),
+                Err(reason) => {
+                    let refusal = SessionStoreRefusal {
+                        agent: Agent::OpenCode,
+                        reason,
+                    };
+                    if !refusals.contains(&refusal) {
+                        refusals.push(refusal);
+                    }
+                }
+            }
+        }
         // Every listed file is one this call saw, so a kept fact for any
         // other file is for a file that left the listing.
         let listed = files
@@ -210,17 +228,22 @@ impl SessionCatalog {
             .collect::<HashSet<_>>();
         for (agent, path) in files {
             if agent.requires_native_file_proof()
-                && crate::native_file::inside_root(&self.home, agent, &path).is_err()
+                && crate::native_file::inside_root(&self.accounts, agent, &path).is_err()
             {
                 continue;
             }
+            let account = self
+                .accounts
+                .account_of(agent, &path)
+                .cloned()
+                .unwrap_or_default();
             // Taken before the bytes are read: a change during the read
             // leaves a stamp older than the bytes, so the next call reads again.
             let stamp = crate::stamp::stamp_at(&path);
             let kept_stamp = file_cache::keeps(agent).then(|| stamp.clone()).flatten();
             let cwd = match self.file_cwd(agent, &path, kept_stamp.clone()) {
                 Ok(Some(cwd)) => cwd,
-                Ok(None) | Err(HeaderError::Unreadable(_)) => continue,
+                Ok(None) | Err(HeaderError::Unreadable(_) | HeaderError::NoFolder) => continue,
                 // A file whose header is refused belongs to no Project the
                 // listing can name, so its refusal is the store's, once.
                 Err(HeaderError::Refused(reason)) => {
@@ -242,14 +265,22 @@ impl SessionCatalog {
                     list_transcript(agent, &path, &cwd, earlier.and_then(|(_, kept)| kept))
                 }))
             } else {
-                read_project_session(&self.home, agent, path.clone(), cwd.clone())
+                read_project_session(&self.accounts, agent, path.clone(), cwd.clone())
             }
-            .map(|session| ProjectSession { stamp, ..session });
+            .map(|session| ProjectSession {
+                stamp,
+                account,
+                ..session
+            });
             if let Some(session) = session {
                 sessions.push(session);
             }
         }
-        file_cache::retain(&self.home, &listed);
+        for agent in FILE_AGENTS {
+            for store in self.agent_stores(agent) {
+                file_cache::retain(&store, &listed);
+            }
+        }
         sessions.sort_by(|left, right| {
             right
                 .updated_at_unix_ms
@@ -281,16 +312,15 @@ impl SessionCatalog {
         Ok(files)
     }
 
-    /// The folder one agent of [`FILE_AGENTS`] keeps its session files in,
-    /// when that agent has one here.
-    fn agent_store(&self, agent: Agent) -> Option<PathBuf> {
+    /// The folders one agent of [`FILE_AGENTS`] keeps its session files in,
+    /// one per account the node registered, when that agent has them here.
+    fn agent_stores(&self, agent: Agent) -> Vec<PathBuf> {
         match agent {
-            Agent::Claude => Some(self.home.join(crate::CLAUDE_SESSIONS)),
-            Agent::Codex => Some(self.home.join(crate::CODEX_SESSIONS)),
+            Agent::Claude | Agent::Codex => crate::session_roots(&self.accounts, agent),
             Agent::Pi | Agent::Omp | Agent::Grok | Agent::Cursor => {
-                crate::native_file::root(&self.home, agent).ok()
+                crate::native_file::roots(&self.accounts, agent)
             }
-            Agent::OpenCode | Agent::Antigravity => None,
+            Agent::OpenCode | Agent::Antigravity => Vec::new(),
         }
     }
 
@@ -302,16 +332,18 @@ impl SessionCatalog {
         visited: &mut usize,
     ) -> Result<(), SessionCatalogError> {
         let limit = SESSION_DISCOVERY_LIMIT;
-        let Some(root) = self.agent_store(agent) else {
-            return Ok(());
-        };
-        match agent {
-            Agent::Claude | Agent::Cursor => collect_jsonl(&root, agent, 2, files, visited, limit),
-            Agent::Codex => collect_jsonl(&root, agent, 4, files, visited, limit),
-            Agent::Pi | Agent::Omp => collect_jsonl(&root, agent, 1, files, visited, limit),
-            Agent::Grok => collect_grok(&root, files, visited, limit),
-            Agent::OpenCode | Agent::Antigravity => Ok(()),
+        for root in self.agent_stores(agent) {
+            match agent {
+                Agent::Claude | Agent::Cursor => {
+                    collect_jsonl(&root, agent, 2, files, visited, limit)?
+                }
+                Agent::Codex => collect_jsonl(&root, agent, 4, files, visited, limit)?,
+                Agent::Pi | Agent::Omp => collect_jsonl(&root, agent, 1, files, visited, limit)?,
+                Agent::Grok => collect_grok(&root, files, visited, limit)?,
+                Agent::OpenCode | Agent::Antigravity => {}
+            }
         }
+        Ok(())
     }
 
     /// The working directory session file `path` of `agent` names, kept
@@ -323,9 +355,16 @@ impl SessionCatalog {
         stamp: Option<String>,
     ) -> Result<Option<PathBuf>, HeaderError> {
         if agent == Agent::Cursor {
-            return crate::cursor::header(&self.home, path)
+            return crate::cursor::header(self.accounts.home(), path)
                 .map(|header| Some(header.cwd))
-                .map_err(|error| HeaderError::Unreadable(error.to_string()));
+                .map_err(|error| match &error {
+                    SessionError::Checkpoint(reason)
+                        if reason == crate::cursor::CWD_UNCONFIRMED =>
+                    {
+                        HeaderError::NoFolder
+                    }
+                    _ => HeaderError::Unreadable(error.to_string()),
+                });
         }
         file_cache::header_cwd(path, stamp, || session_cwd(agent, path))
     }
@@ -340,7 +379,10 @@ impl SessionCatalog {
     /// more than that once per store: one whose store cannot be listed or
     /// is past its budget, or whose session files cannot be read, is a
     /// refusal beside what the others found, and every agent not reached
-    /// by `deadline` is refused as late, so the call ends by then. The kept
+    /// by `deadline` is refused as late, so the call ends by then. A session
+    /// file that names no folder a session could be placed in (Hide's own
+    /// label session, a subagent's, a folder that cannot be confirmed) is
+    /// skipped, as it is work in no folder. The kept
     /// headers of each store listed whole are pruned to that listing, as a
     /// project's listing prunes them, whatever another store did.
     pub fn worked_folders(&self, since_unix_ms: u64, deadline: Instant) -> WorkedFolders {
@@ -363,8 +405,8 @@ impl SessionCatalog {
                 refuse(agent, error.to_string());
                 continue;
             }
-            if let Some(store) = self.agent_store(agent) {
-                let listed = files.iter().map(|(_, path)| path.clone()).collect();
+            let listed = files.iter().map(|(_, path)| path.clone()).collect();
+            for store in self.agent_stores(agent) {
                 file_cache::retain(&store, &listed);
             }
             for (_, path) in files {
@@ -373,7 +415,7 @@ impl SessionCatalog {
                     continue;
                 }
                 if agent.requires_native_file_proof()
-                    && crate::native_file::inside_root(&self.home, agent, &path).is_err()
+                    && crate::native_file::inside_root(&self.accounts, agent, &path).is_err()
                 {
                     continue;
                 }
@@ -395,6 +437,9 @@ impl SessionCatalog {
                         *entry = (*entry).max(changed);
                     }
                     Ok(None) => {}
+                    // A file that names no folder to place a session in is no
+                    // work in any folder, so it is neither one nor a refusal.
+                    Err(HeaderError::NoFolder) => {}
                     Err(HeaderError::Refused(reason) | HeaderError::Unreadable(reason)) => {
                         refuse(agent, format!("a session file could not be read: {reason}"));
                     }
@@ -404,18 +449,27 @@ impl SessionCatalog {
         let opencode = if late() {
             Err(LATE.to_owned())
         } else {
-            crate::opencode::worked_directories(
-                &self.home,
-                since_unix_ms,
-                &mut 0,
-                SESSION_DISCOVERY_LIMIT,
-            )
-            .unwrap_or_else(|error| Err(error.to_string()))
+            let mut rows = Vec::new();
+            let mut failed = None;
+            for (_, accounts) in self.accounts.each(Agent::OpenCode) {
+                match crate::opencode::worked_directories(
+                    &accounts,
+                    since_unix_ms,
+                    &mut 0,
+                    SESSION_DISCOVERY_LIMIT,
+                )
+                .unwrap_or_else(|error| Err(error.to_string()))
+                {
+                    Ok(found) => rows.extend(found),
+                    Err(reason) => failed = failed.or(Some(reason)),
+                }
+            }
+            failed.map_or(Ok(rows), Err)
         };
         let antigravity = if late() {
             Err(LATE.to_owned())
         } else {
-            crate::antigravity::worked_folders(&self.home, since_unix_ms)
+            crate::antigravity::worked_folders(self.accounts.home(), since_unix_ms)
         };
         for (agent, read) in [
             (Agent::OpenCode, opencode),
@@ -589,11 +643,16 @@ fn collect_grok(
 /// Why a session file's header named no folder: refused by rule for its
 /// bytes (Codex's `session_meta` over the record cap), which holds while the
 /// file does, or not read at all (the file could not be opened, or its
-/// header is not one), which is tried again on the next listing.
+/// header is not one), which is tried again on the next listing, or read
+/// whole and naming no folder a session could be placed in: not a session of
+/// the operator's (Hide's own label session, a subagent's), or a folder that
+/// cannot be confirmed. Such a file is no refusal of its store: it is work in
+/// no folder, whichever walk reads it.
 #[derive(Clone, Debug)]
 pub(crate) enum HeaderError {
     Refused(String),
     Unreadable(String),
+    NoFolder,
 }
 
 /// The cwd a session file names, or why its header named none.
@@ -603,7 +662,13 @@ fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, HeaderError
         Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
             crate::source::facts::header(agent, path)
                 .map(|header| Some(header.cwd))
-                .map_err(|error| unreadable(&error))
+                .map_err(|error| {
+                    if crate::grok::places_in_no_folder(&error.to_string()) {
+                        HeaderError::NoFolder
+                    } else {
+                        unreadable(&error)
+                    }
+                })
         }
         Agent::Codex => {
             let file = crate::source::open(path).map_err(|error| unreadable(&error))?;
@@ -629,12 +694,13 @@ fn session_cwd(agent: Agent, path: &Path) -> Result<Option<PathBuf>, HeaderError
 /// A session of an agent other than Claude Code and Codex
 /// ([`list_transcript`]), read whole on every listing.
 fn read_project_session(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: PathBuf,
     cwd: PathBuf,
 ) -> Option<ProjectSession> {
     if agent == Agent::Cursor {
+        let home = accounts.home();
         let header = crate::cursor::header(home, &path).ok()?;
         let scope = crate::SessionReadScope {
             id: header.id.clone(),
@@ -664,6 +730,7 @@ fn read_project_session(
             event_count: events.len(),
             availability,
             stamp: None,
+            account: AccountKey::Default,
         });
     }
     let metadata = fs::metadata(&path).ok();
@@ -677,7 +744,7 @@ fn read_project_session(
         return None;
     }
     let pi_before = (agent.requires_native_file_proof())
-        .then(|| crate::confirm_session_file(home, agent, &path, Some(&id), cwd.to_str()));
+        .then(|| crate::confirm_session_file(accounts, agent, &path, Some(&id), cwd.to_str()));
     let stamp = crate::stamp::stamp_at(&path);
     // When the session itself was made, where its file says so apart from
     // its records: a Pi or Grok fork copies its parent's records with their
@@ -719,7 +786,7 @@ fn read_project_session(
         (_, None) => (None, Some("session_missing".to_owned())),
     };
     if let Some(Ok(before)) = pi_before {
-        let after = crate::confirm_session_file(home, agent, &path, Some(&id), cwd.to_str());
+        let after = crate::confirm_session_file(accounts, agent, &path, Some(&id), cwd.to_str());
         if !after
             .map(|after| crate::label_owner::same_read(&path, &before, &after, stamp.as_deref()))
             .unwrap_or(false)
@@ -758,6 +825,7 @@ fn read_project_session(
             SessionAvailability::Unavailable { reason }
         }),
         stamp: None,
+        account: AccountKey::Default,
     })
 }
 
@@ -893,6 +961,7 @@ fn list_transcript(
             },
         },
         stamp: None,
+        account: AccountKey::Default,
     };
     (session, read.ok())
 }
@@ -971,7 +1040,7 @@ mod tests {
             home.join(".codex/sessions/2026/09/21/rollout.jsonl"),
             format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-1\",\"cwd\":{}}}}}\n{{\"type\":\"response_item\",\"timestamp\":\"2026-09-21T02:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"beta request\"}}]}}}}\n", serde_json::to_string(&project_root).unwrap()),
         ).unwrap();
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         let sessions = catalog.project_sessions(&project).unwrap().sessions;
         assert_eq!(
             sessions
@@ -1043,7 +1112,8 @@ mod tests {
             .unwrap();
 
         let since = system_time_ms(now - window).unwrap();
-        let read = SessionCatalog::new(&home, "local").worked_folders(since, far_deadline());
+        let read = SessionCatalog::new(&Accounts::new(&home), "local")
+            .worked_folders(since, far_deadline());
         let mut found = read
             .folders
             .iter()
@@ -1088,7 +1158,7 @@ mod tests {
         // folder should, which fails the same listing a folder without
         // read permission does, on every system and under any user).
         fs::create_dir_all(home.join(".claude")).unwrap();
-        fs::write(home.join(crate::CLAUDE_SESSIONS), "").unwrap();
+        fs::write(home.join(".claude/projects"), "").unwrap();
         codex_session(&home, "codex-1", &beta);
         // A Codex file that is no file cannot be read and is said, once.
         #[cfg(unix)]
@@ -1098,7 +1168,7 @@ mod tests {
             assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         }
 
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         let read = catalog.worked_folders(0, far_deadline());
         let found = read
             .folders
@@ -1130,14 +1200,15 @@ mod tests {
         let home = root.path().join("home");
         let beta = root.path().join("beta");
         fs::create_dir_all(&beta).unwrap();
-        let claude = home.join(crate::CLAUDE_SESSIONS);
+        let claude = home.join(".claude/projects");
         fs::create_dir_all(&claude).unwrap();
         for index in 0..=SESSION_DISCOVERY_LIMIT {
             fs::write(claude.join(format!("entry-{index}")), "").unwrap();
         }
         codex_session(&home, "codex-1", &beta);
 
-        let read = SessionCatalog::new(&home, "local").worked_folders(0, far_deadline());
+        let read =
+            SessionCatalog::new(&Accounts::new(&home), "local").worked_folders(0, far_deadline());
         let found = read
             .folders
             .iter()
@@ -1160,10 +1231,10 @@ mod tests {
         fs::create_dir_all(&beta).unwrap();
         // Claude's store can never be listed; Codex's is pruned all the same.
         fs::create_dir_all(home.join(".claude")).unwrap();
-        fs::write(home.join(crate::CLAUDE_SESSIONS), "").unwrap();
+        fs::write(home.join(".claude/projects"), "").unwrap();
         let first = codex_session(&home, "one", &beta);
         codex_session(&home, "two", &beta);
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         catalog.worked_folders(0, far_deadline());
         assert_eq!(crate::file_cache::kept(&home), (2, 0));
 
@@ -1188,7 +1259,7 @@ mod tests {
             home.join(".claude/projects/p/claude-1.jsonl"),
             format!("{{\"type\":\"user\",\"cwd\":{},\"timestamp\":\"2026-09-21T01:00:00Z\",\"origin\":{{\"kind\":\"human\"}},\"message\":{{\"role\":\"user\",\"content\":\"alpha request\"}}}}\n", serde_json::to_string(&project_root).unwrap()),
         ).unwrap();
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         let read = |catalog: &SessionCatalog| {
             let read = catalog.project_sessions(&project).unwrap();
             let ids = read
@@ -1262,7 +1333,7 @@ mod tests {
         )
         .unwrap();
 
-        let sessions = SessionCatalog::new(&home, "local")
+        let sessions = SessionCatalog::new(&Accounts::new(&home), "local")
             .project_sessions(&project)
             .unwrap()
             .sessions;
@@ -1312,7 +1383,7 @@ mod tests {
         };
         fs::write(&file, record("alpha request")).unwrap();
         let modified = fs::metadata(&file).unwrap().modified().unwrap();
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         let first = catalog.project_sessions(&project).unwrap().sessions;
         assert_eq!(
             first[0].first_human_request.as_deref(),
@@ -1366,7 +1437,7 @@ mod tests {
             format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-unreadable\",\"cwd\":{cwd}}}}}\n{{\"type\":\"response_item\",\"timestamp\":\"2026-09-21T02:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"beta request\"}}]}}}}\n"),
         )
         .unwrap();
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         let set_mode = |mode: u32| {
             for path in [&claude, &codex] {
                 fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
@@ -1438,7 +1509,7 @@ mod tests {
         )
         .unwrap();
 
-        let listed = SessionCatalog::new(&home, "local")
+        let listed = SessionCatalog::new(&Accounts::new(&home), "local")
             .project_sessions(&project)
             .unwrap();
         let mut agents = listed
@@ -1479,7 +1550,7 @@ mod tests {
         let removed_file = folder.join("claude-removed.jsonl");
         fs::write(&kept_file, record("alpha request")).unwrap();
         fs::write(&removed_file, record("beta request")).unwrap();
-        let catalog = SessionCatalog::new(&home, "local");
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
         assert_eq!(
             catalog.project_sessions(&project).unwrap().sessions.len(),
             2
@@ -1569,7 +1640,7 @@ mod tests {
         }
 
         fn list(&self) -> Vec<ProjectSession> {
-            SessionCatalog::new(&self.home, "local")
+            SessionCatalog::new(&crate::Accounts::new(&self.home), "local")
                 .project_sessions(&self.project)
                 .unwrap()
                 .sessions

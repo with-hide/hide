@@ -699,7 +699,6 @@ fn runtime_before_the_catalog(path: &std::path::Path) -> Runtime {
         path: path.to_string_lossy().into_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     }];
     runtime.rebuild_catalog();
     assert!(runtime.worktree_catalog.projects.is_empty());

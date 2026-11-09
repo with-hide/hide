@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use hide_node_link::disk::{DiskUsage, Layer};
+use hide_node_link::disk::{DiskUsage, HOME_FOLDER_CODE, Layer};
 use hide_platform::fs::identity::FileId;
 use hide_platform::fs::space;
 
@@ -125,6 +125,7 @@ pub fn read_with(
     read_limited(
         request,
         RequestBudget::new(REQUEST_ENTRY_LIMIT, REQUEST_SEEN_LIMIT, REQUEST_TIME_LIMIT),
+        hide_platform::host::home_dir().ok().as_deref(),
         finished,
     )
 }
@@ -132,6 +133,7 @@ pub fn read_with(
 fn read_limited(
     request: &DiskRequest,
     mut budget: RequestBudget,
+    home: Option<&Path>,
     mut finished: impl FnMut(&DiskUsage) -> bool,
 ) -> Vec<DiskUsage> {
     // The deepest explicitly requested root owns its subtree. Shared Git and
@@ -161,7 +163,15 @@ fn read_limited(
     let mut result = Vec::new();
     for root in &roots {
         let layered = !request.shared_git.contains(root);
-        let row = measure_root(root, &root_set, &mut budget, layered);
+        let row = if home.is_some_and(|home| crate::register::is_home(root, home)) {
+            DiskUsage {
+                path: Some(root.to_string_lossy().into_owned()),
+                unavailable_code: Some(HOME_FOLDER_CODE.to_owned()),
+                ..Default::default()
+            }
+        } else {
+            measure_root(root, &root_set, &mut budget, layered)
+        };
         let row = DiskUsage {
             measured_at_unix_ms: measured_at,
             volume_free_bytes: free,
@@ -648,6 +658,7 @@ mod tests {
                 ..Default::default()
             },
             RequestBudget::new(8, 1_000, Duration::from_secs(60)),
+            None,
             |_| true,
         );
         let measured = rows.iter().filter(|row| row.total_bytes.is_some()).count();
@@ -698,6 +709,34 @@ mod tests {
         let measured = &measured[0];
         assert_eq!(measured.total_bytes, None);
         assert!(measured.unavailable_reason.is_some());
+    }
+
+    /// PRD home-folder-project B11: the home folder is not walked, and its
+    /// row carries no size and no reason; a folder inside it is measured.
+    #[test]
+    fn the_home_folder_is_not_measured_and_a_folder_in_it_is() {
+        let (_folder, home) = fixture("home");
+        write(&home.join("app/file"), 4096);
+        let request = DiskRequest {
+            paths: vec![home.clone(), home.join("app")],
+            ..Default::default()
+        };
+        let rows = read_limited(
+            &request,
+            RequestBudget::new(REQUEST_ENTRY_LIMIT, REQUEST_SEEN_LIMIT, REQUEST_TIME_LIMIT),
+            Some(&home),
+            |_| true,
+        );
+        let at = |path: &Path| {
+            rows.iter()
+                .find(|row| row.path.as_deref() == path.to_str())
+                .unwrap()
+        };
+        let whole = at(&home);
+        assert_eq!(whole.total_bytes, None);
+        assert_eq!(whole.unavailable_reason, None);
+        assert_eq!(whole.unavailable_code.as_deref(), Some(HOME_FOLDER_CODE));
+        assert!(at(&home.join("app")).total_bytes.is_some());
     }
 
     #[test]

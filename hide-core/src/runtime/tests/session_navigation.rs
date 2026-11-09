@@ -677,7 +677,6 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
             path: path_a.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         },
         WorkspaceRegistration {
             primary_checkout_id: None,
@@ -686,7 +685,6 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
             path: path_b.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         },
     ];
     runtime.rebuild_catalog();
@@ -3536,7 +3534,6 @@ fn a_plain_terminal_pane_cwd_is_reconciled_into_its_checkout() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     }];
     runtime.rebuild_catalog();
     let checkout_id =
@@ -3671,7 +3668,6 @@ fn a_returned_pane_id_selects_its_layout_when_other_panes_share_the_cwd() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let selected_workspace = workspace(
         &workspace_id,
@@ -3794,7 +3790,6 @@ fn a_missing_selected_pane_reports_without_falling_back_to_a_same_cwd_pane() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let selected_workspace = workspace(
         &workspace_id,

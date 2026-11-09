@@ -30,6 +30,10 @@ pub struct AgentView {
     /// The spawner, independently of responsibility; null for ordinary roots.
     pub origin: Option<String>,
     pub project: Option<String>,
+    /// The profile the agent runs with, named after its agent (`Claude ·
+    /// work`); null for its agent's built-in default (PRD agent-profiles
+    /// B17).
+    pub profile: Option<String>,
     pub runtime: Runtime,
     pub connection: Connection,
     pub registered: bool,
@@ -132,6 +136,9 @@ pub struct Waiting {
     /// A short line saying what is asked, when the core has one. Copy for a
     /// reader, never a reason to act: `cause` is.
     pub text: Option<String>,
+    /// For `human_turn`: the declaration, its kind, place and when it was
+    /// made (PRD ask-human B7). The device is the agent's `machine`.
+    pub human: Option<crate::coordination::human_turn::HumanTurn>,
 }
 
 /// The causes an agent waits by: its own demand (docs/status-model.md, Where
@@ -148,6 +155,9 @@ pub enum WaitCause {
     MissionDecision,
     MissionAttention,
     InputUnconfirmed,
+    /// The agent declared a step only a person can take (`hide agent
+    /// ask-human`), its own or, for a delegated child, raised to the operator.
+    HumanTurn,
     Draft,
     ParentBlocked,
     BellExhausted,
@@ -414,6 +424,7 @@ pub fn answer_schemas() -> Value {
         "watch": schemars::schema_for!(Watch),
         "watch_list": schemars::schema_for!(Vec<Watch>),
         "stopped": schemars::schema_for!(Stopped),
+        "ask_human": schemars::schema_for!(crate::coordination::human_turn::AskHumanAnswer),
     });
     present(&mut schemas);
     schemas
@@ -508,6 +519,7 @@ mod tests {
             (None, Some("agent-1")),
         ] {
             let agent = AgentView {
+                profile: None,
                 names: None,
                 id: "agent-2".into(),
                 name: "worker".into(),

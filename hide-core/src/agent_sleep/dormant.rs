@@ -186,6 +186,11 @@ pub struct DormantRecord {
     /// in the project list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<DormantOwner>,
+    /// The profile the agent runs with, which its wake starts it with again
+    /// (PRD agent-profiles D-27); none, as in a record from before profiles,
+    /// for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 impl DormantRecord {
@@ -520,6 +525,7 @@ pub(crate) fn fixture_record(pane: &str) -> DormantRecord {
         registration: None,
         launch: Default::default(),
         owner: None,
+        profile: None,
     }
 }
 

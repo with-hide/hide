@@ -97,11 +97,17 @@ fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String
 /// hold of the runtime's lock so the two agree.
 pub(super) fn registrations(
     client: &Client,
-) -> Result<(Arc<crate::delivery::ledger::Ledger>, super::Sleeping), String> {
+) -> Result<
+    (
+        Arc<crate::delivery::ledger::Ledger>,
+        super::RegistrationFacts,
+    ),
+    String,
+> {
     let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
     let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
     let ledger = runtime.delivery_state()?;
-    let sleeping = runtime.sleeping_registrations(&ledger.agents);
+    let sleeping = runtime.registration_facts(&ledger.agents);
     Ok((ledger, sleeping))
 }
 /// `hide agent show <key>`, read only: a registration by its id (or the
@@ -121,7 +127,7 @@ fn show(client: &Client, actor: &Actor, key: &str) -> Result<Value, String> {
 /// runtime's lock.
 pub(crate) struct Shown {
     ledger: Arc<crate::delivery::ledger::Ledger>,
-    sleeping: super::Sleeping,
+    sleeping: super::RegistrationFacts,
     found: Found,
 }
 
@@ -142,7 +148,7 @@ impl Shown {
     ) -> Result<Self, String> {
         use crate::runtime::agent_show::spawns_of;
         let ledger = runtime.delivery_state()?;
-        let sleeping = runtime.sleeping_registrations(&ledger.agents);
+        let sleeping = runtime.registration_facts(&ledger.agents);
         let registered = |record: &AgentRecord| {
             let facts =
                 runtime.agent_state_facts(&record.actor, &spawns_of(&ledger, Some(&record.id)));
@@ -189,9 +195,15 @@ impl Shown {
         match self.found {
             Found::Agent(record, facts) => {
                 let life = super::life(&record, &self.sleeping);
+                let mut state = facts.state(Some(life), record.parent.as_deref());
+                // The declaration is the ledger's, so it is said whether or
+                // not a row shows it now: asleep, or on a device away.
+                if let Some(turn) = self.ledger.human_turns.get(&record.id) {
+                    state.waiting = Some(crate::delivery::answer::Waiting::human(turn));
+                }
                 json!(crate::delivery::answer::AgentShow {
                     agent: super::agent_view(&record, &self.ledger, &self.sleeping),
-                    state: facts.state(Some(life), record.parent.as_deref()),
+                    state,
                 })
             }
             Found::Spawn(spawn, facts) => {
@@ -289,6 +301,56 @@ pub(crate) fn mutate(
         STORE_TIMEOUT,
     )
 }
+/// What the caller hands a child of `kind` it starts on its own machine
+/// (D-32): the profile it runs with when it is an agent of `kind` too.
+fn caller_profile(
+    client: &Client,
+    actor: &Actor,
+    kind: &str,
+) -> Result<crate::launch::Parent, String> {
+    Ok(client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .caller_launch_profile(actor, kind))
+}
+
+/// `request` holding its profile on `device` while it starts
+/// (`launch::holds`).
+fn hold_start(
+    client: &Client,
+    device: &str,
+    request: crate::launch::Request,
+) -> Result<crate::launch::Request, String> {
+    client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .hold_profile_start(device, request)
+        .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))
+}
+
+/// The profile Project settings choose for `kind` in the project of `repo`
+/// on `device` (D-31), when they choose one.
+fn project_profile(
+    client: &Client,
+    device: &str,
+    repo: &str,
+    kind: &str,
+) -> Result<Option<hide_agent_adapter::ProfileId>, String> {
+    Ok(client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .project_agent_profile(device, repo, kind))
+}
+
 pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
     client
         .runtime
@@ -671,6 +733,24 @@ pub(crate) fn run(
             }))
         }
         Command::Show { id } => show(&client, &actor, &id),
+        Command::AskHuman { kind, place } => {
+            let kind = super::human_turn::HumanKind::parse(&kind)?;
+            let place = super::human_turn::place_of(&place)?;
+            mutate(
+                &client,
+                &authority,
+                &actor,
+                Mutation::AskHuman {
+                    turn: Some((kind, place)),
+                },
+            )
+        }
+        Command::AskHumanClear => mutate(
+            &client,
+            &authority,
+            &actor,
+            Mutation::AskHuman { turn: None },
+        ),
         Command::End {
             id,
             actor: asserted,
@@ -1056,6 +1136,7 @@ fn spawn(
         path,
         args,
         launch,
+        profile,
         task,
         brief,
         mission: _,
@@ -1182,6 +1263,15 @@ fn spawn(
             )?;
         }
     }
+    // A profile named by a name its machine does not list is refused before
+    // anything is reserved, so the same command with the right name is the
+    // same intent (B16).
+    if let Some(name) = profile.as_deref() {
+        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+        let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        crate::launch::chosen(kind, name, locked.machine_profiles(child_machine))?;
+    }
     // The child's hook is judged before anything is made for it, on every
     // attempt that has not typed its start yet: one that has is past what a
     // hook changes (with-hide/hide-private#661, #662).
@@ -1252,6 +1342,7 @@ fn spawn(
         permissions,
         on_node,
         node,
+        profiles,
     } = context(client, &child_device).map_err(|reason| {
         if reserved.machine.is_some() {
             "machine_unavailable".to_owned()
@@ -1259,6 +1350,33 @@ fn spawn(
             reason
         }
     })?;
+    // The profile the child runs with (PRD agent-profiles D-32, B16): the
+    // one named, else its caller's, the built-in default included, when the
+    // caller is the same agent on the same machine, else the default Project
+    // settings choose for the repository's project there, else the agent's
+    // default there.
+    let agent = crate::launch::pick(
+        kind,
+        profile
+            .as_deref()
+            .map(|name| crate::launch::chosen(kind, name, profiles.as_ref()))
+            .transpose()?,
+        &if reserved.machine.is_none() {
+            caller_profile(client, actor, kind)?
+        } else {
+            crate::launch::Parent::None
+        },
+        project_profile(client, &child_device, repo, kind)?.as_ref(),
+        profiles.as_ref(),
+    );
+    // The start holds its profile from here, so a removal planned
+    // meanwhile is refused, and one under way refuses it (B27).
+    let agent = hold_start(client, &child_device, agent)?;
+    // The child's machine answers for its profile before the spawn makes
+    // its pane, so a profile that is gone or a program that cannot run
+    // leaves no pane behind (PRD agent-profiles B20, B22).
+    let launch = crate::launch::resolve(node.as_deref(), &agent)
+        .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))?;
     // A device that stops answering partway leaves the spawn reserved and
     // resumable: the caller is told the device is unavailable, and the same
     // command continues once it answers again.
@@ -1475,7 +1593,12 @@ fn spawn(
                 (created.path, tab.pane_id, seed_tab, true)
             };
             if made {
-                crate::agent_start::trust_worktree(node.as_deref(), kind, &checkout)?;
+                crate::agent_start::trust_worktree(
+                    node.as_deref(),
+                    kind,
+                    &checkout,
+                    agent.profile().map(|(id, _)| id).as_ref(),
+                )?;
             }
             // The terminal is recorded with the pane, so a later attempt can
             // tell this pane from another terminal that later answers to the same id.
@@ -1582,7 +1705,7 @@ fn spawn(
                     "pane_id": pane,
                 }));
             }
-            crate::live::start_agent(
+            let started = crate::live::start_agent(
                 engine.as_ref(),
                 node.as_deref(),
                 &reserved.id,
@@ -1590,18 +1713,19 @@ fn spawn(
                 shell,
                 answer_by.saturating_duration_since(Instant::now()),
                 name,
-                kind,
+                launch.clone(),
                 start_args,
                 codex_daemon,
                 form.as_ref()
                     .and_then(|form| crate::engine::StartProgram::of(&program, form)),
             )
-            .inspect_err(|code| {
-                // A pane a start of this spawn was typed into keeps it: the
+            .map_err(|not| {
+                // A pane nothing of this start is left in closes, so the
+                // spawn leaves no shell behind (PRD agent-profiles B22) and
+                // the same intent starts again in a new one. A pane an
+                // earlier start of this spawn was typed into keeps it: the
                 // engine may still hold the agent's name there.
-                if reserved.typed == 0
-                    && super::split_refusal(code).0 == crate::agent_start::SHELL_STARTING
-                {
+                if let Some(why) = not.unused.filter(|_| reserved.typed == 0) {
                     close_unstarted_pane(
                         client,
                         authority,
@@ -1609,8 +1733,10 @@ fn spawn(
                         engine.as_ref(),
                         &reserved,
                         pane,
+                        why,
                     );
                 }
+                not.refusal
             })?;
             reserved = serde_json::from_value(mutate(
                 client,
@@ -1618,6 +1744,7 @@ fn spawn(
                 actor,
                 Mutation::Typed {
                     id: reserved.id.clone(),
+                    profile: started.profile,
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
@@ -1789,7 +1916,14 @@ fn spawn(
             runtime
                 .lock()
                 .map_err(|_| "delivery_unavailable")?
-                .record_pane_launch(&pane_id, kind, name, &reserved.launch, None);
+                .record_pane_launch(
+                    &pane_id,
+                    kind,
+                    name,
+                    &reserved.launch,
+                    reserved.started_profile.as_ref(),
+                    None,
+                );
         }
         let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
         {
@@ -2153,11 +2287,11 @@ fn close_unstarted_attempts(
     }
 }
 
-/// Closes the pane `reserved` made, whose shell had not finished starting
-/// when its start's wait ran out, so nothing was typed there (a startup file
-/// stopped at a question or blocked), and takes it off the spawn: the
-/// attempt leaves no tab, and the same intent opens a new pane with a new
-/// shell. A pane that no longer runs the terminal the spawn recorded is left
+/// Closes the pane `reserved` made, which nothing of its start is left in
+/// (`why`: a shell that had not finished starting when the start's wait ran
+/// out, so nothing was typed, or a profile's program that did not start, so
+/// the pane is a shell again), and takes it off the spawn: the attempt
+/// leaves no tab, and the same intent opens a new pane with a new shell. A pane that no longer runs the terminal the spawn recorded is left
 /// alone. Every outcome is logged; the caller's refusal says why either way.
 fn close_unstarted_pane(
     client: &Client,
@@ -2166,6 +2300,7 @@ fn close_unstarted_pane(
     engine: &dyn Engine,
     reserved: &SpawnRecord,
     pane: &str,
+    why: &str,
 ) {
     let closed = same_terminal(engine, reserved, pane)
         .and_then(|()| close_pane(engine, pane))
@@ -2182,8 +2317,8 @@ fn close_unstarted_pane(
             .map(drop)
         });
     crate::diagnostic!(json!({
-        "component": "spawn", "kind": "shell_starting.close", "spawn": reserved.id,
-        "pane_id": pane, "closed": closed.is_ok(), "reason": closed.err(),
+        "component": "spawn", "kind": "unstarted_pane.close", "spawn": reserved.id,
+        "pane_id": pane, "why": why, "closed": closed.is_ok(), "reason": closed.err(),
     }));
 }
 
@@ -2866,6 +3001,7 @@ mod tests {
                         task: None,
                         brief: None,
                         beside: false,
+                        profile: None,
                     },
                 },
                 1,
@@ -3115,6 +3251,7 @@ mod tests {
                 task: None,
                 brief: None,
                 beside: false,
+                profile: None,
             };
             let spawn = super::super::apply(
                 &mut state,

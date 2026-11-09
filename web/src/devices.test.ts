@@ -2,7 +2,7 @@ import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deviceScope } from "./agentScope";
-import { badgeText, deviceConnected, frontDeviceId, frontTitle as frontTitleIn, homeOf, railShown, readsHere, sidebarBody, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
+import { badgeText, deviceConnected, frontDeviceId, frontTitle as frontTitleIn, railShown, readsHere, sidebarBody, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { numberedDevices } from "./numbering";
 import { contextAgents, contextWorkspaces } from "./remote";
@@ -30,12 +30,11 @@ function rest(devices: string[] = ["mini", "build-box"]): SnapshotRest {
     { id: "build-box", label: "build-box", kind: "remote", state: "unavailable", message: null },
   ].filter((device) => device.kind === "local" || devices.includes(device.id));
   return {
-    navigator: { focused_device_id: "local", devices: all, workspaces: [{ agent_scope: emptyScope(), id: "home", label: "hide", is_home: true, device_id: "local", checkouts: [] }] },
+    navigator: { focused_device_id: "local", devices: all },
     ui_state: {
       workspace_registrations: [
         { id: "a", label: "a", path: "/a", device_id: "local", pinned: false },
         { id: "b", label: "b", path: "/b", device_id: "local", pinned: false },
-        { id: "home", label: "hide", path: "/Users/example/hide", device_id: "local", pinned: false, home: true },
         { id: "m", label: "m", path: "/m", device_id: "mini", pinned: false },
       ],
     },
@@ -97,11 +96,6 @@ describe("the device rail's facts (quick device-rail-badges)", () => {
     expect(tileHint("build-box", false, { needs_you: 3, done: 0 })).toBe("build-box · Not connected");
     expect(tileHintIn("mini", true, { needs_you: 12, done: 1 }, korean)).toBe("mini · 내 차례 12 · 읽을 것 1");
     expect(tileHint("This Mac", true, { needs_you: 0, done: 0 })).toBe("This Mac");
-  });
-
-  it("finds a device's Home once it exists, and none before", () => {
-    expect(homeOf(rest(), "local")?.id).toBe("home");
-    expect(homeOf(rest(), "mini")).toBeNull();
   });
 
   it("titles the sidebar's top line by the device in front (B3)", () => {

@@ -20,7 +20,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
-import { AgentHead, DETAIL_INSET, Place } from "./parts";
+import { AgentHead, DETAIL_INSET, PhoneHumanTurn, Place } from "./parts";
 import { closeLook, loadMore, loadOlder, onReplyResult, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
@@ -134,6 +134,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
           <div className="mt-xs flex flex-col gap-xs">
             <AgentHead agent={agent} large />
             <Place agent={agent} inset={DETAIL_INSET} />
+            <PhoneHumanTurn agent={agent} inset={DETAIL_INSET} />
           </div>
         ) : null}
       </header>

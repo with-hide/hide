@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { askParts } from "./components/agent-tree";
+import { askSubjectLead, askSubjectNotice } from "./askSubject";
 import { lineText } from "./agentRow";
 import { createInterfaceI18n } from "./i18n/instance";
 
@@ -28,6 +29,15 @@ describe("a mission node raised to the operator, laid on its Conductor's row (PR
     expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: raised })).toEqual({ lead: null, text: "device-row-simple · PR 머지됨, 기준 기록이 없거나 실패", tail: null });
     expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...raised, reason: "worker_ended" } })).toEqual({ lead: null, text: "device-row-simple · Worker ended with work left", tail: null });
   });
+
+  it("says a refused close as work done with check records missing, and how many nodes lack one when the core counted", async () => {
+    const { t: ko } = await createInterfaceI18n("ko");
+    const { t: en } = await createInterfaceI18n("en");
+    const refused = { cause: "mission_attention", node: "calls", reason: "close_refused" } as const;
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: refused }).text).toBe("calls · 작업은 끝남 · 확인 기록 빠짐");
+    expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: { ...refused, unmet: 3 } }).text).toBe("calls · 작업은 끝남 · 확인 기록 빠짐 3개");
+    expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...refused, unmet: 3 } }).text).toBe("calls · Work is done · 3 check records missing");
+  });
 });
 
 describe("a brief or a letter the agent has not confirmed, laid on its row", () => {
@@ -40,5 +50,18 @@ describe("a brief or a letter the agent has not confirmed, laid on its row", () 
     expect(askParts(ko, { verb: "answer", what: null, more: 0, subject: { ...brief, input: "letter", spent: true } }).text).toBe("편지 확인 안 됨 · 재시도 다 씀");
     expect(askParts(en, { verb: "answer", what: null, more: 0, subject: brief }).text).toBe("Brief not confirmed");
     expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...brief, held: true } }).text).toBe("Brief not received");
+  });
+});
+
+describe("a person's turn an agent declared (PRD ask-human B9, B13)", () => {
+  it("says its kind's word and place on a row, and adds the device in a notification, in every language", async () => {
+    const { t: ko } = await createInterfaceI18n("ko");
+    const { t: en } = await createInterfaceI18n("en");
+    const turn = { cause: "human_turn", id: "a.1", kind: "auth", place: "github.com/login", device: "mini" } as const;
+    expect(askParts(ko, { verb: "answer", what: null, more: 1, subject: turn })).toEqual({ lead: null, text: "인증 · github.com/login", tail: "외 1건" });
+    expect(askParts(en, { verb: "answer", what: null, more: 0, subject: { ...turn, kind: "permission" } }).text).toBe("Permission · github.com/login");
+    expect(askSubjectNotice(ko, turn)).toBe("인증 · github.com/login · mini");
+    expect(askSubjectNotice(ko, { ...turn, device: undefined })).toBe("인증 · github.com/login");
+    expect(askSubjectLead(ko, turn)).toBe("사람 차례");
   });
 });

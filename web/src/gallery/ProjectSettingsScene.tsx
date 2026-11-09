@@ -6,7 +6,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { ProjectSettingsSheet } from "../ProjectSettingsSheet";
 import { DEFAULT_GUARD_PATHS, settingsTarget, type ProjectSettings, type ProjectSettingsPatch, type ProjectSettingsWrite } from "../projectSettings";
-import type { KitAgent, KitPiece } from "../snapshot";
+import type { AgentProfileWire, KitAgent, KitPiece, MachineAgentProfiles } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { memorySceneProject } from "./MemoryScene";
@@ -22,13 +22,13 @@ export function ProjectSettingsScene({ params }: { params: URLSearchParams }) {
   const scene = useMemo(() => {
     const fixture = sidebarScene(content, REFERENCE_FOLDS, Date.now(), "one");
     if (content === "long") {
-      const project = fixture.rest.navigator!.workspaces!.find((row) => !row.is_home && row.is_git)!;
+      const project = fixture.rest.navigator!.workspaces!.find((row) => row.is_git)!;
       project.label = "프로젝트 설정과 여러 기기에서 이어지는 아주 긴 한국어 작업 이름";
       project.path = "/fixture/projects/프로젝트-설정-검증을-위한-아주-긴-경로/여러-체크아웃을-함께-사용하는-프로젝트";
     }
     return fixture;
   }, [content]);
-  const workspace = scene.rest.navigator!.workspaces!.find((row) => !row.is_home && row.is_git)!;
+  const workspace = scene.rest.navigator!.workspaces!.find((row) => row.is_git)!;
   const target = settingsTarget(workspace);
   const actions = useMemo(() => createActions((event) => {
     if (event.kind === "project_settings_set") {
@@ -42,7 +42,10 @@ export function ProjectSettingsScene({ params }: { params: URLSearchParams }) {
         const saved = shell.rest?.ui_state?.project_settings?.example;
         // A record that carries guardrails is version 2, as the core writes it.
         const version = request.patch.guardrails || saved?.guardrails ? 2 : 1;
-        return { rest: { ...shell.rest, ui_state: { ...shell.rest?.ui_state, project_settings: { example: { device_id: workspace.device_id, root: workspace.path, ...saved, ...request.patch, version } }, project_settings_writes: { example: { device_id: workspace.device_id, root: workspace.path, request_id: request.request_id, state: "saved", error: null } } } } };
+        // An agent's null profile follows the agent's default again, as the core merges it.
+        const { agent_profiles: profiles, ...patch } = request.patch;
+        const agentProfiles = Object.fromEntries(Object.entries({ ...saved?.agent_profiles, ...profiles }).filter((entry): entry is [string, string] => entry[1] !== null));
+        return { rest: { ...shell.rest, ui_state: { ...shell.rest?.ui_state, project_settings: { example: { device_id: workspace.device_id, root: workspace.path, ...saved, ...patch, agent_profiles: agentProfiles, version } }, project_settings_writes: { example: { device_id: workspace.device_id, root: workspace.path, request_id: request.request_id, state: "saved", error: null } } } } };
       });
     }
     return true;
@@ -54,7 +57,9 @@ export function ProjectSettingsScene({ params }: { params: URLSearchParams }) {
       : state === "guard-failed" ? { example: { device_id: workspace.device_id, root: workspace.path, request_id: "scene-intent", state: "failed", error: "project_settings_policy_failed", patch: { guardrails: { ...guard!, git_commands: true } } } } : {};
     const settings: Record<string, ProjectSettings> = guard ? { example: { version: 2, device_id: workspace.device_id, root: workspace.path, guardrails: guard } } : {};
     // The coverage line names the agents of this machine the guardrails do not reach (B25).
-    const devices = scene.rest.navigator!.devices!.map((device) => device.id === workspace.device_id && guard ? { ...device, kit: { unavailable: null, busy: false, components: [], agents: sceneAgents(state === "guard-uncovered"), offers_reinstall: false, shares_account_with: null } } : device);
+    // Agent accounts draws only on a machine that keeps a profile of its own (agent-profiles B15).
+    const profiled = state === "agent-accounts";
+    const devices = scene.rest.navigator!.devices!.map((device) => device.id === workspace.device_id && (guard || profiled) ? { ...device, kit: { unavailable: null, busy: false, components: [], agents: sceneAgents(state === "guard-uncovered"), offers_reinstall: false, shares_account_with: null, profiles: profiled ? SCENE_PROFILES : undefined } } : device);
     const rest = { ...scene.rest, navigator: { ...scene.rest.navigator, workspaces, devices }, ui_state: { ...scene.rest.ui_state, interface_language: lang as "en" | "ko" | "ja" | "zh-CN", project_settings: settings, project_settings_writes: receipt } };
     useShellStore.setState({ rest, agents: scene.agents, connection: state === "unavailable" ? "gone" : "live", memory: { project: { ...memorySceneProject(state === "memory-off" ? "off" : "empty"), workspace_id: workspace.id } } });
     useUiStore.setState({ overlay: "project_settings", projectSettingsTarget: target });
@@ -62,7 +67,7 @@ export function ProjectSettingsScene({ params }: { params: URLSearchParams }) {
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [scene, workspace, theme, scale, lang, state]);
-  const page = state === "work" || state.startsWith("guard") ? "work" : state.startsWith("memory") ? "memory" : "connections";
+  const page = state === "work" || state === "agent-accounts" || state.startsWith("guard") ? "work" : state.startsWith("memory") ? "memory" : "connections";
   return <TooltipProvider><InterfaceLanguageBoundary /><div className="h-screen w-full" data-gallery-scene="project-settings" data-scene-ready="true"><ProjectSettingsSheet actions={actions} initialPage={page} /></div></TooltipProvider>;
 }
 
@@ -79,6 +84,10 @@ const GUARD_STATES: Record<string, ProjectSettings["guardrails"]> = {
 };
 
 const installed: KitPiece = { state: "installed", why: null, location: null };
+
+const profile = (id: string, name: string): AgentProfileWire => ({ id, kind: "claude-code", name, account: `~/accounts/claude-${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: installed, skill: installed });
+/** Claude Code's two profiles on this machine, `side` its default; Codex and Grok keep none. */
+const SCENE_PROFILES: MachineAgentProfiles = { state: "listed", version: 2, profiles: [profile("p-work", "work"), profile("p-side", "side")], defaults: { "claude-code": "p-side" } };
 
 /** This machine's agents: every hook in place, or Codex's untrusted and Grok switched off. */
 function sceneAgents(uncovered: boolean): KitAgent[] {

@@ -185,13 +185,15 @@ pub struct ServerPong {
 }
 
 /// One agent to start in a pane's shell: the name the engine knows it by,
-/// its kind, the arguments after its program, and how a Codex start reaches
-/// its daemon.
+/// the agent and the profile it runs with as its machine answered for them
+/// (`crate::launch::resolve`, the only way to make a [`crate::launch::Launch`]),
+/// the arguments after its program, and how a Codex start reaches its
+/// daemon.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentLaunch {
     pub(crate) pane_id: String,
     pub(crate) name: String,
-    pub(crate) kind: String,
+    pub(crate) launch: crate::launch::Launch,
     pub(crate) args: Vec<String>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
     /// The start wakes a sleeping session: an agent whose integration

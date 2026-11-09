@@ -18,12 +18,12 @@ export const STRAYS_SHOWN = 5;
 /** The tasks the panel lists as the costliest (B25). */
 export const COSTLY_SHOWN = 3;
 
-/** The Project of the checkout in front, or null at Home or in a device's Home folder. */
+/** The Project of the checkout in front, or null when none is. */
 export function frontProject(rest: SnapshotRest | null): Workspace | null {
   const front = frontCheckout(rest);
   if (!front) return null;
   const project = catalogWorkspaces(rest).find((row) => row.id === front.workspace_id && row.checkouts.some((checkout) => checkout.id === front.id));
-  return project && !project.is_home ? project : null;
+  return project ?? null;
 }
 
 /** The 흘린 것 rows drawn (B8): five until `open`, and how many the core sent past them or left past its cap. */

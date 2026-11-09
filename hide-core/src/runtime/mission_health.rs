@@ -48,7 +48,7 @@ pub(crate) struct HealthMadeFrom {
     /// Held, so its address is not reused by a later ledger and two
     /// publishes cannot read as one.
     ledger: Option<Arc<crate::delivery::ledger::Ledger>>,
-    sleeping: crate::coordination::Sleeping,
+    sleeping: crate::coordination::RegistrationFacts,
     present: Vec<bool>,
     stale: Vec<bool>,
     made: bool,
@@ -130,7 +130,13 @@ pub(super) fn raise_for(
         }));
         return Vec::new();
     }
-    let raise_key = act_key(&mission.nodes[at], &format!("raise:{cause}"));
+    let mut raise_key = act_key(&mission.nodes[at], &format!("raise:{cause}"));
+    // A refused close is about the whole mission as it stands: one raised
+    // again after a node went back to work and finished again is another
+    // question, with its own letter and history entry.
+    if reason == AttentionReason::CloseRefused {
+        raise_key = format!("{raise_key}:{}", close_key(mission));
+    }
     // A cause the node cannot remember is not raised: raised with no
     // memory of it, it would come again once settled (B27).
     if !mission.nodes[at].note_handled(cause) {
@@ -261,6 +267,27 @@ pub(super) fn settle(mission: &str, node: &mut MissionNode, by: &str) {
             "mission": mission, "node": node.key, "reason": attention.reason.as_str(),
             "by": by,
         }));
+    }
+}
+
+/// Goes past each of `node`'s lines named in `keys`, as the operator's own
+/// decision, with the time it was made (D-15).
+fn skip_lines(node: &mut MissionNode, keys: &[String], now: u64) {
+    for line in node
+        .criteria
+        .iter_mut()
+        .filter(|line| keys.contains(&line.key))
+    {
+        line.skip(
+            "운영자 판단".to_owned(),
+            None,
+            crate::mission_criteria::Recorded {
+                role: crate::mission_criteria::Role::Operator,
+                name: "operator".to_owned(),
+                agent_id: None,
+                at_unix_ms: now,
+            },
+        );
     }
 }
 
@@ -646,7 +673,7 @@ impl Runtime {
         &self,
         mission: &Mission,
         ledger: Option<&crate::delivery::ledger::Ledger>,
-    ) -> crate::coordination::Sleeping {
+    ) -> crate::coordination::RegistrationFacts {
         self.sleeping_registrations(
             mission
                 .nodes
@@ -660,7 +687,7 @@ impl Runtime {
         &'a self,
         mission: &Mission,
         ledger: Option<&crate::delivery::ledger::Ledger>,
-        sleeping: &crate::coordination::Sleeping,
+        sleeping: &crate::coordination::RegistrationFacts,
     ) -> Facts<'a> {
         let pulls = self.mission_pulls(mission);
         let nodes = mission
@@ -763,7 +790,20 @@ impl Runtime {
                     let Some(mission) = self.missions.book.get_mut(id) else {
                         continue;
                     };
+                    let cleared = mission.nodes[node]
+                        .attention
+                        .as_ref()
+                        .map(|attention| (attention.reason, attention.cause()));
                     settle(id, &mut mission.nodes[node], "hide");
+                    // A refused close that stopped holding because a node
+                    // went back to work did not end the mission's closing:
+                    // the next refusal is raised again, not held back as
+                    // the one already handled.
+                    if let Some((AttentionReason::CloseRefused, cause)) = cleared {
+                        mission.nodes[node]
+                            .handled
+                            .retain(|handled| *handled != cause);
+                    }
                     changed = true;
                 }
                 Act::Wake {
@@ -1246,6 +1286,25 @@ impl Runtime {
         }
         let mut events = Vec::new();
         let mut next = node.clone();
+        // 완료로 닫기 on a refused close passes the empty lines of every
+        // finished node, as this node's own are, and closes the mission.
+        let closes = payload.action == OperatorAction::Done
+            && attention
+                .as_ref()
+                .is_some_and(|attention| attention.reason == AttentionReason::CloseRefused);
+        // The question was asked of a mission with every node finished; a
+        // node taken back to work since leaves nothing to pass or close.
+        if closes && mission.nodes.iter().any(|node| !node.status.finished()) {
+            return Err("mission_attention_moved".into());
+        }
+        let others: Vec<(usize, Vec<String>)> = if closes {
+            self.unmet_done_nodes(mission)
+                .into_iter()
+                .filter(|(index, _)| *index != at)
+                .collect()
+        } else {
+            Vec::new()
+        };
         match payload.action {
             OperatorAction::Done => {
                 // Past each line left open, as the operator's own decision,
@@ -1253,22 +1312,7 @@ impl Runtime {
                 let mut done = next.clone();
                 done.status = NodeStatus::Done;
                 let unmet = self.node_unmet(mission, &done);
-                for line in next
-                    .criteria
-                    .iter_mut()
-                    .filter(|line| unmet.contains(&line.key))
-                {
-                    line.skip(
-                        "운영자 판단".to_owned(),
-                        None,
-                        crate::mission_criteria::Recorded {
-                            role: crate::mission_criteria::Role::Operator,
-                            name: "operator".to_owned(),
-                            agent_id: None,
-                            at_unix_ms: now,
-                        },
-                    );
-                }
+                skip_lines(&mut next, &unmet, now);
                 next.status = NodeStatus::Done;
                 next.finished_at_unix_ms = Some(now);
                 let skipped = unmet.join(", ");
@@ -1327,6 +1371,16 @@ impl Runtime {
             .ok_or("mission_unknown")?;
         settle(&payload.mission, &mut next, "operator");
         mission.nodes[at] = next;
+        for (index, unmet) in &others {
+            let other = &mut mission.nodes[*index];
+            skip_lines(other, unmet, now);
+            let skipped = unmet.join(", ");
+            let mut event = MissionEvent::new(now, EventKind::Resolved)
+                .node(&other.key)
+                .line(Some(skipped.as_str()));
+            event.action = Some(payload.action);
+            events.push(event);
+        }
         mission.updated_at_unix_ms = now;
         prune_attention_wakes(mission);
         // The Conductor is told what the operator settled (B17).
@@ -1351,6 +1405,12 @@ impl Runtime {
             );
         }
         self.record_mission_events(&payload.mission, events);
+        // The lines are passed, so the close that was refused is made now
+        // rather than at the next pass; a refusal again is logged and
+        // raised as before.
+        if closes {
+            self.hide_close(&payload.mission, now);
+        }
         self.flush_mission_wakes();
         Ok(true)
     }

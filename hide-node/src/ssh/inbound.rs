@@ -200,6 +200,7 @@ mod tests {
                 os: "macos".to_owned(),
                 arch: "aarch64".to_owned(),
                 home: None,
+                home_real: None,
                 machine_identity: MachineIdentity::Available { id: machine },
                 reader_features: None,
                 windows_drives: None,

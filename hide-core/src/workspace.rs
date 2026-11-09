@@ -137,7 +137,6 @@ pub fn registration(
         path: path::to_wire_lossy(&path),
         device_id: device_id.to_owned(),
         pinned: false,
-        home: false,
     })
 }
 
@@ -168,7 +167,6 @@ pub fn inspect_registered(
         paths,
     );
     workspace.pinned = registration.pinned;
-    workspace.is_home = registration.home;
     apply_primary_checkout(&mut workspace, registration.primary_checkout_id.as_deref());
     workspace
 }
@@ -555,6 +553,7 @@ pub fn build_catalog(
         paths,
         spaces,
         worktrees,
+        registrations,
     };
     let mut result: Vec<WorkspaceSnapshot> = Vec::new();
     for space in spaces {
@@ -642,9 +641,26 @@ struct Places<'a> {
     paths: &'a PathIndex,
     spaces: &'a [SessionSpace],
     worktrees: &'a WorktreeCatalogSnapshot,
+    registrations: &'a [WorkspaceRegistration],
 }
 
 impl Places<'_> {
+    /// The deepest folder project registered on `node` that holds `folder`
+    /// (comparison form), when `folder` is in no repository: a pane in
+    /// `~/notes` is the registered `~`'s, and one in `~/work/app/src` the
+    /// registered `~/work/app`'s, not a project row of its own (PRD
+    /// home-folder-project D-07). A registered repository is placed by Git,
+    /// never here.
+    fn registered_folder(&self, node: &NodeId, folder: &str) -> Option<String> {
+        self.registrations
+            .iter()
+            .filter(|registration| *node == registration.device_id)
+            .filter(|registration| self.place(&registration.path).is_none())
+            .map(|registration| self.paths.comparison(&registration.path))
+            .filter(|root| Path::new(folder).starts_with(root))
+            .max_by_key(String::len)
+    }
+
     /// The repository `path` is in, and the working tree holding it.
     fn place(&self, path: &str) -> Option<Cow<'_, RepositoryPlace>> {
         if let Some(place) = self.paths.place(path) {
@@ -743,7 +759,6 @@ fn adopt_registration(workspace: &mut WorkspaceSnapshot, registration: &Workspac
     workspace.registered = true;
     workspace.temporary = false;
     workspace.pinned = registration.pinned;
-    workspace.is_home = registration.home;
     workspace.device_id = registration.device_id.clone();
     workspace.remote_target_id = None;
     for checkout in &mut workspace.checkouts {
@@ -785,7 +800,13 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<Wo
                         crate::checkout_owner::marked_folder(node.as_str(), mark, &folder)
                     })
                     .map(str::to_owned);
-                owned.unwrap_or(folder)
+                // The deepest registered folder places the pane for the
+                // screen; the owner mark stays the engine's binding, which
+                // only a folder no registration holds still decides.
+                places
+                    .registered_folder(node, &folder)
+                    .or(owned)
+                    .unwrap_or(folder)
             }
         };
         let project_comparison = repository
@@ -827,7 +848,6 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<Wo
                     last_activity_unix_ms: None,
                     checkouts: Vec::new(),
                     pinned: false,
-                    is_home: false,
                     inactive_checkouts: Default::default(),
                     session_folds: Default::default(),
                     removal: Default::default(),
@@ -1141,7 +1161,6 @@ fn inspect(
         session_workspace_ids: Vec::new(),
         last_activity_unix_ms: None,
         pinned: false,
-        is_home: false,
         checkouts,
         inactive_checkouts: Default::default(),
         session_folds: Default::default(),
@@ -1820,7 +1839,6 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: Vec::new(),
             pinned: false,
-            is_home: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -1889,7 +1907,6 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: Vec::new(),
             pinned: false,
-            is_home: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -2236,6 +2253,61 @@ mod tests {
             checkout: None,
             owner_mark: None,
         }
+    }
+
+    // A pane in a folder no repository places belongs to the deepest folder
+    // registered above it, not to a project row of its own (PRD
+    // home-folder-project D-07, B12, B13).
+    #[test]
+    fn a_pane_below_a_registered_folder_is_that_folders_not_a_row_of_its_own() {
+        let paths = answered(&[], &[]);
+        let node = crate::node::TEST_NODE;
+        let registrations = [
+            registration("/home/me", "home", node).expect("home"),
+            registration("/home/me/work/app", "app", node).expect("app"),
+        ];
+        // A pane the engine bound to `~` by its owner mark, and one in a
+        // folder an earlier owner held that is no longer registered, are
+        // placed by the registrations too.
+        let marked = |id: &str, cwd: &str| SessionSpace {
+            owner_mark: Some(crate::checkout_owner::owner_mark(
+                crate::node::TEST_NODE,
+                "/home/me",
+            )),
+            ..space_in(id, cwd)
+        };
+        let spaces = [
+            space_in("w1", "/home/me/notes"),
+            marked("w2", "/home/me/work/app/src"),
+            space_in("w3", "/srv/elsewhere"),
+        ];
+
+        let catalog = build_catalog(
+            &crate::node::test_node(),
+            &registrations,
+            &spaces,
+            &no_worktrees(),
+            &paths,
+        );
+
+        let rows = catalog
+            .iter()
+            .map(|project| {
+                (
+                    project.path.as_str(),
+                    project.registered,
+                    project.session_workspace_ids.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                ("/home/me/work/app", true, vec!["w2".to_owned()]),
+                ("/srv/elsewhere", false, vec!["w3".to_owned()]),
+                ("/home/me", true, vec!["w1".to_owned()]),
+            ]
+        );
     }
 
     #[test]

@@ -145,12 +145,12 @@ export function onCDrive(path: string, drives: string | null | undefined): boole
 }
 
 /** A refusal as one line, for a reason code hided answered or the shell's own `already_registered`. */
-export function refusalText(reason: string, t: TFunction<"translation">): string {
+export function refusalText(reason: string, t: TFunction<"translation">, home = false): string {
   switch (reason) {
     case "already_registered":
       return t("addProject.refusal.alreadyRegistered");
     case "needs_confirmation":
-      return t("addProject.confirmOutside");
+      return t(home ? "addProject.confirmHome" : "addProject.confirmOutside");
     case "outside_home":
       return t("addProject.refusal.outsideHome");
     case "home_root":
@@ -238,9 +238,8 @@ export function cloneUrlDraft(raw: string): string {
  * worktree folder, a scratch checkout) does not move where the next one goes.
  */
 export function defaultProjectParent(registrations: readonly WorkspaceRegistration[], node: string): string {
-  // The Home (`~/hide`) is no project, so it is not where the next one is expected to live.
   const parents = registrations
-    .filter((row) => row.device_id === node && !row.home)
+    .filter((row) => row.device_id === node)
     .map((row) => {
       const path = trimFolder(row.path);
       const cut = path.lastIndexOf("/");

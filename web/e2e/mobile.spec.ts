@@ -648,12 +648,15 @@ test("the phone caches group and row status words in the desktop language", asyn
         status_waiting: "대기",
         status_stopped: "멈춤",
         status_unfinished: "일 남음",
+        subject_human_turn: "사람 차례",
+        subject_human_turn_auth: "인증",
+        subject_human_turn_permission: "허용",
         subject_input_unconfirmed_brief: "브리프 확인 안 됨",
         subject_input_unconfirmed_letter: "편지 확인 안 됨",
         subject_input_unconfirmed_brief_held: "브리프 못 받음",
         subject_input_unconfirmed_letter_held: "편지 못 받음",
         subject_mission_attention: "확인 필요",
-        subject_mission_attention_close_refused: "미션을 닫지 못함",
+        subject_mission_attention_close_refused: "작업은 끝남 · 확인 기록 빠짐",
         subject_mission_attention_conductor_failed: "Conductor가 실패로 기록함",
         subject_mission_attention_merged_unproven: "PR 머지됨, 기준 기록이 없거나 실패",
         subject_mission_attention_pr_closed: "PR 머지 없이 닫힘",
@@ -792,7 +795,7 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
   }
 });
 
-test("the phone's start sheet starts an agent in a checkout and in Home, and keeps its text while the phone is away", async ({ browser, page }) => {
+test("the phone's start sheet starts an agent in a checkout, lists no Home, and keeps its text while the phone is away", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
@@ -811,13 +814,15 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await phone.locator('[data-phone-pair="true"]').tap();
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
 
-    // B42: + opens the sheet; the target is This Mac's Home, the kind and model the remembered choice.
+    // B42: + opens the sheet; the target is a checkout on This Mac (no Home is listed), the kind and model the remembered choice.
     await phone.locator('[data-phone-start="true"]').tap();
     const sheet = phone.locator('[data-phone-start-sheet="true"]');
     await expect(sheet).toBeVisible();
     const target = sheet.locator('[data-phone-start-target="true"]');
-    await expect(target).toHaveValue(`home:${daemon.node}`, { timeout: 20_000 });
-    await expect(target.locator("option:checked")).toHaveText(`${THIS_MACHINE} · Home`);
+    await expect(target).not.toHaveValue("", { timeout: 20_000 });
+    await expect(target.locator("option:checked")).toContainText(`${THIS_MACHINE} · `);
+    await expect(target.locator("option", { hasText: "Home" })).toHaveCount(0);
+    await expect(target.locator('option[value^="home:"]')).toHaveCount(0);
     await expect(sheet.locator('[data-phone-start-kind="true"]')).toHaveValue("claude");
     await expect(sheet.locator('[data-phone-start-submit="true"]')).toBeDisabled();
     // B46: the Korean text and a long checkout name stay inside the phone's width.
@@ -846,17 +851,17 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await phone.locator('[data-phone-start="true"]').tap();
     await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("");
     await expect(sheet.locator('[data-phone-start-model="true"]')).toHaveValue("opus", { timeout: 20_000 });
-    await sheet.locator('[data-phone-start-text="true"]').fill("Home에서 시작");
+    await sheet.locator('[data-phone-start-text="true"]').fill("오프라인 초안");
     await phoneContextA.setOffline(true);
     await expect(sheet.locator('[data-phone-start-unreachable="true"]')).toBeVisible({ timeout: 30_000 });
     await expect(sheet.locator('[data-phone-start-submit="true"]')).toBeDisabled();
-    await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("Home에서 시작");
+    await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("오프라인 초안");
     await screenshot(phone, "mobile-phone-start-offline");
     await phoneContextA.setOffline(false);
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 30_000 });
 
-    // B42, B43: This Mac's Home is the default target; the start lands on its agent.
-    await expect(target).toHaveValue(`home:${daemon.node}`);
+    // B42, B43: the first checkout is the default target again; the start lands on its agent.
+    await expect(target).not.toHaveValue("");
     await sheet.locator('[data-phone-start-submit="true"]').tap();
     await expect(detail).toBeVisible({ timeout: 45_000 });
     await expect(detail).not.toHaveAttribute("data-phone-detail", new RegExp(`\\|${pane}$`));

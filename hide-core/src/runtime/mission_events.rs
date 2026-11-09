@@ -1,7 +1,8 @@
 //! A mission's events and the operator's answer from the banner (PRD
 //! mission-plan-visibility D-13, D-15, D-20, D-22, D-30): which change of
 //! the record is an event, the decision a `decide` asks, the answer the
-//! banner sends, and the events of the mission open in the 보기 slot.
+//! banner sends, and the events of the mission shown, on the mission
+//! screen or in the front Agent tab's 보기 slot.
 //!
 //! An answer is typed into the Conductor's conversation as the operator's
 //! own input by the doorbell's thread, under the doorbell's rules: at rest,
@@ -10,7 +11,7 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::Runtime;
@@ -184,6 +185,14 @@ fn answer_line(question: &str, answer: &str, language: crate::model::InterfaceLa
             format!("[Decision answer] {question} → {answer}")
         }
     }
+}
+
+/// `mission_shown`: the mission the page's mission screen shows in its
+/// detail, or `None` once the detail closes or the page leaves the screen.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionShownPayload {
+    pub mission: Option<String>,
 }
 
 impl Runtime {
@@ -756,18 +765,35 @@ impl Runtime {
         self.announce_missions();
     }
 
-    /// Makes the published events those of the mission open in the 보기
-    /// slot, when it or its events moved.
+    /// `mission_shown`: the mission the page's mission screen shows in its
+    /// detail, or none (PRD mission-screen D-16). Whether it changed. Only a
+    /// mission the book holds is kept, so the value is bounded by the book: a
+    /// page naming one just deleted reads as showing none.
+    pub(super) fn mission_shown(&mut self, payload: MissionShownPayload) -> bool {
+        let shown = payload
+            .mission
+            .filter(|id| self.missions.book.get(id).is_some());
+        if self.missions.shown == shown {
+            return false;
+        }
+        self.missions.shown = shown;
+        true
+    }
+
+    /// Makes the published events those of the mission shown, when it or its
+    /// events moved: the mission screen's detail while the page names one,
+    /// else the card on top of the front Agent tab's 보기 slot while the slot
+    /// is drawn (operator decision 2026-11-09). The slot is the core's, so its
+    /// card needs no page round trip; the screen is the page's, so it names
+    /// its detail (PRD mission-screen D-16).
     pub(super) fn refresh_mission_events(&mut self) {
-        let slot = &self.snapshot.ui_state.detail;
-        let open = slot
-            .items
-            .last()
-            .filter(|_| slot.shown)
-            .and_then(|item| match item {
-                DetailItem::Mission { mission } => Some(mission.clone()),
+        let open = self.missions.shown.clone().or_else(|| {
+            let slot = &self.snapshot.ui_state.detail;
+            match slot.top().filter(|_| slot.shown) {
+                Some(DetailItem::Mission { mission }) => Some(mission.clone()),
                 _ => None,
-            });
+            }
+        });
         if self.missions.events_made == (open.clone(), self.missions.events_edit) {
             return;
         }

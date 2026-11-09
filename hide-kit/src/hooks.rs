@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use hide_agent_hooks::account::AccountAt;
 use hide_agent_hooks::route::HookTarget;
 use hide_agent_hooks::{AgentRuntime, HookStatus, InstallFailure};
 
@@ -18,7 +19,9 @@ fn helper(target: &KitTarget) -> PathBuf {
     target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME)
 }
 
-pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
+/// The hook in the account `at`: the default account under the target's
+/// home, or a profile's.
+pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime, at: AccountAt<'_>) -> Observed {
     let wanted = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target =
@@ -27,7 +30,7 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
             Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
         };
     let install = Some(target.install.as_str());
-    let status = hide_agent_hooks::install::status(runtime, &target.home, install);
+    let status = hide_agent_hooks::install::status(runtime, at, install);
     let observed = match status {
         HookStatus::RuntimeAbsent => {
             return Observed::Absent(Reason::new(
@@ -55,16 +58,12 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
             return Observed::Blocked(Reason::new(PartCause::Unreadable, reason.message()));
         }
         HookStatus::Installed { .. } => {
-            match hide_agent_hooks::installed_helper_path(runtime, &target.home, install) {
+            match hide_agent_hooks::installed_helper_path(runtime, at, install) {
                 Some(found) if Path::new(&found) == wanted => {
-                    if hide_agent_hooks::install::matches_install(
-                        runtime,
-                        &target.home,
-                        hook_target,
-                    ) {
+                    if hide_agent_hooks::install::matches_install(runtime, at, hook_target) {
                         Observed::Current
                     } else if HookTarget::new(&wanted, &state).is_ok_and(|unnamed| {
-                        hide_agent_hooks::install::matches_install(runtime, &target.home, unnamed)
+                        hide_agent_hooks::install::matches_install(runtime, at, unnamed)
                     }) {
                         // An earlier build's entries, the same but for naming
                         // no installation (docs/agent-hooks.md, More than one
@@ -74,10 +73,7 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
                             "the hook was written by a build that names no installation",
                         ))
                     } else if hide_agent_hooks::install::matches_helper(
-                        runtime,
-                        &target.home,
-                        &wanted,
-                        install,
+                        runtime, at, &wanted, install,
                     ) {
                         Observed::Stale(Reason::new(
                             PartCause::RouteChanged,
@@ -132,11 +128,15 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
     observed
 }
 
-pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), String> {
+pub(crate) fn install(
+    target: &KitTarget,
+    runtime: AgentRuntime,
+    at: AccountAt<'_>,
+) -> Result<(), String> {
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target = HookTarget::new(&helper, &state)?.of_install(&target.install)?;
-    hide_agent_hooks::install(runtime, &target.home, hook_target)
+    hide_agent_hooks::install(runtime, at, hook_target)
         .map(|_| ())
         .map_err(|failure| failure.message())
 }
@@ -144,9 +144,17 @@ pub(crate) fn install(target: &KitTarget, runtime: AgentRuntime) -> Result<(), S
 /// Takes out Hide's hook entries and, with them, the folder trust Hide
 /// recorded for the worktrees it started this agent in, as switching agy off
 /// does (docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
-pub(crate) fn remove(target: &KitTarget, runtime: AgentRuntime) -> RemoveOutcome {
+///
+/// In a profile's account (`at`) only the hook entries come out here: its
+/// folder trust goes with the account's other pieces once they are judged
+/// (`targets::take_out`).
+pub(crate) fn remove(
+    target: &KitTarget,
+    runtime: AgentRuntime,
+    at: AccountAt<'_>,
+) -> RemoveOutcome {
     use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-    let removed = match hide_agent_hooks::remove(runtime, &target.home, Some(&target.install)) {
+    let removed = match hide_agent_hooks::remove(runtime, at, Some(&target.install)) {
         Ok(outcome) => outcome.removed_entries,
         Err(failure) => {
             return RemoveOutcome::Failed {
@@ -154,6 +162,13 @@ pub(crate) fn remove(target: &KitTarget, runtime: AgentRuntime) -> RemoveOutcome
             };
         }
     };
+    if !at.is_default() {
+        return if removed > 0 {
+            RemoveOutcome::Removed
+        } else {
+            RemoveOutcome::Absent
+        };
+    }
     let agent = match runtime {
         AgentRuntime::ClaudeCode => Agent::ClaudeCode,
         // Codex's trust is taken out by Codex itself; with no Codex left to
@@ -185,7 +200,7 @@ pub(crate) fn remove(target: &KitTarget, runtime: AgentRuntime) -> RemoveOutcome
 /// part then reads Off, and no pass puts it back until the operator switches
 /// the agent on.
 pub(crate) fn turn_off(target: &KitTarget, runtime: AgentRuntime) -> Result<(), String> {
-    match remove(target, runtime) {
+    match remove(target, runtime, (&target.home).into()) {
         RemoveOutcome::Removed | RemoveOutcome::Absent => Ok(()),
         RemoveOutcome::Kept { reason } | RemoveOutcome::Failed { reason } => Err(reason),
     }

@@ -223,12 +223,18 @@ test("practice first ends the wizard over the empty Home and opens the practice 
   await expect(wizard).toHaveCount(0);
   // Opening the chapter is practicing: the sidebar's invitation is gone with it.
   await expect(page.locator("[data-practice-invite]")).toHaveCount(0);
-  // The practice window is named apart and smaller, against the main window's lower right, so the main window shows beside it.
-  const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((window) => ({ practice: window.webContents.getURL().includes("practice=1"), title: window.getTitle(), bounds: window.getBounds() })));
+  // The practice window is named apart, 85% of the main window's size against its lower right, so the main
+  // window's title row shows above it, but never narrower than 1280 px where the screen has the room: on a
+  // CI runner's 1024-point screen it takes the screen's width, as wide as the main window.
+  const { windows, work } = await app.evaluate(({ BrowserWindow, screen }) => {
+    const windows = BrowserWindow.getAllWindows().map((window) => ({ practice: window.webContents.getURL().includes("practice=1"), title: window.getTitle(), bounds: window.getBounds() }));
+    return { windows, work: screen.getDisplayMatching(windows.find((window) => !window.practice)!.bounds).workArea };
+  });
   const main = windows.find((window) => !window.practice)!.bounds;
   const beside = windows.find((window) => window.practice)!;
   expect(beside.title).toMatch(/^(Practice Hide|Hide 연습)$/);
-  expect(beside.bounds.width).toBeLessThan(main.width);
+  expect(beside.bounds.height).toBeLessThan(main.height);
+  expect(beside.bounds.width).toBe(Math.min(work.width, Math.max(1280, Math.round(main.width * 0.85))));
   expect(beside.bounds.x + beside.bounds.width).toBe(main.x + main.width);
   expect(beside.bounds.y + beside.bounds.height).toBe(main.y + main.height);
   // Back to Hide closes it and leaves the main window.

@@ -63,6 +63,11 @@ pub struct Opener {
     /// still called by.
     #[serde(default)]
     pub name: String,
+    /// The profile the agent ran with, which `Reopen and send` resumes it
+    /// with (PRD agent-profiles D-27); none for the built-in default, as for
+    /// every opener recorded before profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 impl Opener {

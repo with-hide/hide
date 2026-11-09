@@ -25,6 +25,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+use hide_agent_adapter::AccountPath;
 use hide_agent_hooks::guidance::GuidanceAgent;
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
@@ -59,24 +60,30 @@ impl SkillDir {
     }
 
     /// The folder the skill folder sits in: the shared `~/.agents`, which no
-    /// one agent owns, or the agent's own folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), the one its hooks and
-    /// go into.
+    /// one agent owns, or the agent's own folder in its default account
+    /// (`AccountPath::State`), the one its hooks go into.
     fn folder(self, home: &Path) -> PathBuf {
-        match self {
-            Self::Shared => home.join(".agents"),
-            Self::Claude => hide_agent_adapter::AgentId::ClaudeCode
-                .adapter()
-                .install_home(home),
-            Self::Antigravity => hide_agent_adapter::AgentId::Antigravity
-                .adapter()
-                .install_home(home),
+        match self.agent() {
+            None => home.join(".agents"),
+            Some(agent) => agent.adapter().place_in(home, AccountPath::State),
         }
     }
 
-    /// `<folder>/skills`.
+    /// The skill folder: `<folder>/skills`, the agent's own from its default
+    /// account (`AccountPath::Skills`).
     pub fn path(self, home: &Path) -> PathBuf {
-        self.folder(home).join("skills")
+        match self.agent() {
+            None => self.folder(home).join("skills"),
+            Some(agent) => agent.adapter().place_in(home, AccountPath::Skills),
+        }
+    }
+
+    fn agent(self) -> Option<hide_agent_adapter::AgentId> {
+        match self {
+            Self::Shared => None,
+            Self::Claude => Some(hide_agent_adapter::AgentId::ClaudeCode),
+            Self::Antigravity => Some(hide_agent_adapter::AgentId::Antigravity),
+        }
     }
 
     /// Whether the folder can be written without creating the agent's own
@@ -220,19 +227,21 @@ pub struct Skill {
 /// routes browser and mission work to their own guides.
 pub const GUIDE_SKILL: Skill = Skill {
     name: "hide",
-    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
+    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, read or add Project Memory, and keep an agent's accounts apart as profiles. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, Project Memory, or another account of an agent (a shell alias that starts one, or a new account to connect), or when you need to know what Hide offers here.",
     // The intent table is the session-start note's own (PRD
     // agent-beside-and-session-guide D-14); version 1 had none, and version
     // 2 opened files and pages with the --beside open no longer takes (PRD
     // unseen-agent-views D-24); version 4 drops the Herdr commands the
     // table named for Hide's own (PRD engine-bundle-1 D-6), and version 5
     // adds the row for splitting the work across agents (PRD
-    // hide-plan-delegate D-11), and version 6 names `hide task` for it.
+    // hide-plan-delegate D-11), version 6 names `hide task` for it, and
+    // version 7 sends an alias or a new account to the guide's profiles
+    // (PRD agent-profiles D-33, D-34).
     body: concat!(
-        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff and how to use Project Memory, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
+        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 6,
+    version: 7,
 };
 
 /// The Conductor's stub: a mission of agents, which `hide mission help`
@@ -367,6 +376,12 @@ impl AgentAdapter {
     /// The existing wire field carries the Basic collaboration grade.
     pub fn partial(&self) -> bool {
         self.declaration.basic()
+    }
+
+    /// The agent's declaration, which resolves a profile's account
+    /// (`hide_agent_adapter::AgentAdapter::resolve`).
+    pub(crate) fn declaration(&self) -> &'static hide_agent_adapter::AgentAdapter {
+        self.declaration
     }
 
     /// The documented ways of installing the CLI Hide can tell apart, each
@@ -687,7 +702,12 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
 /// ones Hide wrote; an edited stub only when the operator asked for it again
 /// (`reinstall`), and an operator's file never.
 pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Result<(), String> {
-    let root = dir.path(home);
+    install_skill_in(&dir.path(home), reinstall)
+}
+
+/// [`install_skill`] for any skills folder: a profile account's own.
+pub(crate) fn install_skill_in(root: &Path, reinstall: bool) -> Result<(), String> {
+    let root = root.to_path_buf();
     for skill in SKILLS {
         let write = match skill.observe_in(&root) {
             SkillObserved::Missing | SkillObserved::Stale => true,
@@ -734,6 +754,16 @@ pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
         }
     }
     Ok(retire_in(root)? || removed)
+}
+
+/// Every file [`install_skill_in`] and [`remove_skill_in`] write or take out
+/// in the skills folder `root`: each stub, and each retired one.
+pub(crate) fn skill_files_in(root: &Path) -> Vec<PathBuf> {
+    SKILLS
+        .iter()
+        .map(|skill| skill.file_in(root))
+        .chain(RETIRED_SKILLS.iter().map(|skill| skill.file_in(root)))
+        .collect()
 }
 
 /// The skills folder the stubs are in.

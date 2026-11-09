@@ -30,6 +30,15 @@ pub fn spawn_agent_fork(context: LiveContext, request: ForkRequest) -> Result<()
                     context.engine.as_ref(),
                     context.node.as_ref(),
                     &request,
+                    // The fork holds its profile while it starts
+                    // (`launch::holds`), on this machine.
+                    &|start| {
+                        let runtime = context.runtime.upgrade().ok_or("runtime stopped")?;
+                        let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+                        runtime
+                            .hold_profile_start(runtime.node().as_str(), start)
+                            .map_err(String::from)
+                    },
                     &|| fork_execution_current(&context, &request),
                     |tab_id, pane_id| {
                         let Some(runtime) = context.runtime.upgrade() else {
@@ -148,6 +157,7 @@ fn run_agent_fork_with_registration(
     engine: &dyn Engine,
     node: &dyn crate::node_access::NodeLink,
     request: &ForkRequest,
+    hold: &dyn Fn(crate::launch::Request) -> Result<crate::launch::Request, String>,
     current: &(dyn Fn() -> Result<(), String> + Sync),
     created: impl FnOnce(Option<&str>, &str),
     register: impl FnOnce(&str, &str) -> Result<(), String>,
@@ -161,6 +171,7 @@ fn run_agent_fork_with_registration(
         confirm_session_launch(
             node,
             request.agent.kind(),
+            &crate::launch::LaunchProfile::account_of(request.profile.as_ref()),
             &request.session_id,
             request.cwd.as_deref(),
             request.source_reference.as_ref(),
@@ -177,7 +188,20 @@ fn run_agent_fork_with_registration(
         &request.launch,
         &request.permission,
     )?;
-    let (mut args, made) = fork_arguments(node, request)?;
+    // The profile the fork runs with is answered before anything happens
+    // outside Hide: a profile that is gone or refused ends the fork before
+    // OpenCode's server makes a session, and the OpenCode that makes it runs
+    // with the profile the fork's agent starts with (PRD agent-profiles
+    // D-26, D-27).
+    let agent = crate::launch::resolve(
+        Some(node),
+        &hold(crate::launch::Request::recorded(
+            request.agent.kind(),
+            request.profile.as_ref(),
+        ))?,
+    )
+    .map_err(String::from)?;
+    let (mut args, made) = fork_arguments(node, request, &agent)?;
     args.extend(choice);
     // Everything after an OpenCode 2 fork can still fail (the parent's tab,
     // the new tab, the agent's start, or the parent closed meanwhile), and the
@@ -264,12 +288,13 @@ fn run_agent_fork_with_registration(
             shell,
             crate::agent_start::SHELL_WAIT,
             &request.name,
-            request.agent.kind(),
+            agent.clone(),
             args,
             request.codex_daemon,
             crate::start_prompt::start_program_of(mutation_engine, node, request.agent.kind()),
             &check,
         )
+        .map(|started| started.pane_id)
         .map_err(start_error_message);
         let started = started.and_then(|pane_id| {
             if request.agent == crate::fork::ForkableAgent::Antigravity {
@@ -351,6 +376,7 @@ fn opencode_fork_left(request: &ForkRequest, session: &str, error: String) -> St
 fn fork_arguments(
     node: &dyn crate::node_access::NodeLink,
     request: &ForkRequest,
+    launch: &crate::launch::Launch,
 ) -> Result<(Vec<String>, Option<String>), String> {
     if request.agent != crate::fork::ForkableAgent::OpenCode {
         return Ok((request.agent.resume_arguments(&request.session_id), None));
@@ -366,6 +392,7 @@ fn fork_arguments(
         || hide_node_link::protocol::Call::OpenCodeFork {
             source: request.session_id.clone(),
             cwd: cwd.to_owned(),
+            profile: launch.start().cloned(),
         },
         hide_node_link::protocol::OPENCODE_FORK_TIMEOUT,
         Instant::now() + Duration::from_secs(10),
@@ -750,12 +777,14 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let created = std::cell::RefCell::new(Vec::new());
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -940,11 +969,13 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -991,6 +1022,9 @@ mod tests {
     struct OpenCodeForking {
         inner: hide_node::Local,
         answer: Result<hide_node_link::protocol::OpenCodeFork, &'static str>,
+        /// How the node answers a profile's start; the node's own
+        /// profiles when `None`.
+        profile: Option<hide_node_link::profiles::ProfileLaunch>,
         log: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1000,13 +1034,27 @@ mod tests {
             call: hide_node_link::protocol::Call,
             timeout: Duration,
         ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
-            let hide_node_link::protocol::Call::OpenCodeFork { source, cwd } = &call else {
+            if let (hide_node_link::protocol::Call::ProfileLaunch { .. }, Some(answer)) =
+                (&call, &self.profile)
+            {
+                return Ok(serde_json::to_value(answer).unwrap().into());
+            }
+            let hide_node_link::protocol::Call::OpenCodeFork {
+                source,
+                cwd,
+                profile,
+            } = &call
+            else {
                 return self.inner.call(call, timeout);
             };
+            let profile = profile
+                .as_ref()
+                .map(|profile| format!(" with {}", profile.name))
+                .unwrap_or_default();
             self.log
                 .lock()
                 .unwrap()
-                .push(format!("opencode_fork {source} {cwd}"));
+                .push(format!("opencode_fork {source} {cwd}{profile}"));
             match &self.answer {
                 Ok(fork) => Ok(serde_json::to_value(fork).unwrap().into()),
                 Err(reason) => Err(crate::node_access::LinkError::Refused(
@@ -1050,6 +1098,7 @@ mod tests {
                         id: "ses_fork".into(),
                     })
                 },
+                profile: None,
                 log: Arc::clone(&log),
             };
             let engine_log = Arc::clone(&log);
@@ -1102,11 +1151,13 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| Ok(()),
                 |_, _| {},
                 |_, _| Ok(()),
@@ -1142,6 +1193,111 @@ mod tests {
                     closed.push("close_pane");
                     assert_eq!(*log.lock().unwrap(), closed);
                 }
+            }
+        }
+    }
+
+    /// A fork's profile is answered before OpenCode's server makes anything:
+    /// one that is gone ends the fork with no session made and no tab, and
+    /// the OpenCode that makes the session runs with the profile the fork's
+    /// agent starts with (PRD agent-profiles D-26, D-27).
+    #[test]
+    fn an_opencode_fork_answers_its_profile_before_its_server_forks() {
+        for gone in [true, false] {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = hide_platform::fs::identity::canonical(home.path()).unwrap();
+            let checkout = cwd.display().to_string();
+            crate::fixture::opencode_2_database(
+                home.path(),
+                &[("ses_root", None, checkout.as_str())],
+            );
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let node = OpenCodeForking {
+                inner: hide_node::Local::new(Some(home.path().to_path_buf()))
+                    .with_shell(crate::fixture::integrated_shell(home.path())),
+                answer: Ok(hide_node_link::protocol::OpenCodeFork::Forked {
+                    id: "ses_fork".into(),
+                }),
+                profile: Some(if gone {
+                    hide_node_link::profiles::ProfileLaunch::Gone
+                } else {
+                    hide_node_link::profiles::ProfileLaunch::Ready(
+                        hide_node_link::profiles::ProfileStart {
+                            name: "gw".into(),
+                            account: hide_agent_adapter::AccountKey::Default,
+                            version: 1,
+                            env: vec![("OPENCODE_SERVER".into(), "http://gw".into())],
+                            program: None,
+                            exec: "/opt/hide/hide".into(),
+                        },
+                    )
+                }),
+                log: Arc::clone(&log),
+            };
+            let engine_log = Arc::clone(&log);
+            let fake = FakeEngine::start(move |method, _| {
+                engine_log.lock().unwrap().push(method.to_owned());
+                match method {
+                    "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
+                        "workspaces": [], "tabs": [], "panes": [], "agents": [],
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
+                            "focused_pane_id": "parent-pane",
+                            "panes": [{"pane_id":"parent-pane", "focused":true,
+                                "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
+                    }}))),
+                    "launch_tab" => reply(("w1:t2".to_owned(), "child-pane".to_owned())),
+                    "pane_processes" => reply(processes(
+                        &json!({"type":"pane_process_info","process_info":{
+                        "pane_id":"child-pane","shell_pid":42,"foreground_process_group_id":42,
+                        "foreground_processes":[{"pid":42,"name":"zsh"}]}}),
+                    )),
+                    "pane_token" => reply(Some("1".to_owned())),
+                    "start_agent" => started(),
+                    other => panic!("unexpected {other}"),
+                }
+            });
+            let request = ForkRequest {
+                source_reference: Some(crate::sidebar::SessionAgentSessionPayload {
+                    kind: "id".into(),
+                    value: "ses_root".into(),
+                }),
+                connection_generation: 0,
+                codex_daemon: Default::default(),
+                parent_pane_id: "parent-pane".into(),
+                agent: crate::fork::ForkableAgent::OpenCode,
+                session_id: "ses_root".into(),
+                cwd: Some(checkout.clone()),
+                name: "fork-opencode-gw".into(),
+                tab_label: Some("Tab 2".into()),
+                placement: ForkPlacement::Tab,
+                launch: Default::default(),
+                permission: Default::default(),
+                profile: Some(crate::launch::LaunchProfile {
+                    id: hide_agent_adapter::ProfileId("p-gw".into()),
+                    name: "gw".into(),
+                    account: hide_agent_adapter::AccountKey::Default,
+                }),
+            };
+            let result = run_agent_fork_with_registration(
+                fake.engine().as_ref(),
+                &node,
+                &request,
+                &Ok,
+                &|| Ok(()),
+                |_, _| {},
+                |_, _| Ok(()),
+            );
+            if gone {
+                let error = result.unwrap_err();
+                assert!(error.starts_with("profile_gone: "), "{error}");
+                assert!(log.lock().unwrap().is_empty(), "nothing was forked or made");
+            } else {
+                assert_eq!(result.unwrap(), "child-pane");
+                assert_eq!(
+                    log.lock().unwrap()[0],
+                    format!("opencode_fork ses_root {checkout} with gw")
+                );
             }
         }
     }
@@ -1234,11 +1390,13 @@ mod tests {
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
                 permission: Default::default(),
+                profile: None,
             };
             let result = run_agent_fork_with_registration(
                 fake.engine().as_ref(),
                 &node,
                 &request,
+                &Ok,
                 &|| {
                     if changed.load(std::sync::atomic::Ordering::SeqCst) {
                         Err("session_fork_execution_changed".into())
@@ -1437,6 +1595,7 @@ mod tests {
                 tab_label: Some("Tab 2".into()),
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                profile: None,
                 permission: Default::default(),
             };
             let result = fork_antigravity(fake.engine().as_ref(), &node, &request, "child-pane");
@@ -1565,8 +1724,14 @@ mod tests {
                     kind: "id".into(),
                     value: id.into(),
                 };
-                let result =
-                    confirm_session_launch(&node, agent, id, cwd.to_str(), Some(&reference));
+                let result = confirm_session_launch(
+                    &node,
+                    agent,
+                    &Default::default(),
+                    id,
+                    cwd.to_str(),
+                    Some(&reference),
+                );
                 assert_eq!(result.is_ok(), proven, "{agent} {code:?}: {result:?}");
                 assert_eq!(
                     node.left.load(std::sync::atomic::Ordering::SeqCst),
@@ -1609,9 +1774,14 @@ mod tests {
                 tab_label: None,
                 placement: ForkPlacement::Tab,
                 launch: Default::default(),
+                profile: None,
                 permission: Default::default(),
             };
-            let result = fork_arguments(&node, &request);
+            let result = fork_arguments(
+                &node,
+                &request,
+                &crate::launch::Launch::default_of("opencode"),
+            );
             assert_eq!(result.is_ok(), forked, "{code:?}: {result:?}");
             assert_eq!(
                 node.left.load(std::sync::atomic::Ordering::SeqCst),
@@ -1687,6 +1857,7 @@ mod tests {
             tab_label: None,
             placement: ForkPlacement::Side,
             launch: Default::default(),
+            profile: None,
             permission: Default::default(),
         };
 
@@ -1694,6 +1865,7 @@ mod tests {
             fake.engine().as_ref(),
             &hide_node::Local::new(None),
             &request,
+            &Ok,
             &|| Ok(()),
             |_, _| {},
             |_, _| Err("ledger_unavailable".into()),

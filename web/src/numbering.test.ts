@@ -150,7 +150,7 @@ describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
     const folded = projectListNumbers(numbered, projectRows(workspaces, {}, listed), workspaces);
     expect(folded("d4", null)).toBeNull();
     expect(folded("d4", "main")).toBe(4);
-    const opened = projectListNumbers(numbered, projectRows(workspaces, {}, listed, null, ["done"]), workspaces);
+    const opened = projectListNumbers(numbered, projectRows(workspaces, {}, listed, ["done"]), workspaces);
     expect(opened("d4", null)).toBe(4);
     expect(opened("d4", "main")).toBeNull();
   });

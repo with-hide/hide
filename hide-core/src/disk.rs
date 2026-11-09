@@ -161,7 +161,11 @@ fn read_with(
     match answer {
         Ok(rows) => {
             for row in &rows {
-                if let Some(code) = &row.unavailable_code {
+                if let Some(code) = row
+                    .unavailable_code
+                    .as_ref()
+                    .filter(|code| *code != hide_node_link::disk::HOME_FOLDER_CODE)
+                {
                     crate::diagnostic!(serde_json::json!({
                         "component": "disk",
                         "kind": "disk.measure_failed",

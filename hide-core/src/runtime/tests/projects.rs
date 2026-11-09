@@ -535,7 +535,6 @@ fn a_stale_precomputed_catalog_keeps_the_last_accepted_one() {
             path: cwd.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         }],
         workspaces: Vec::new(),
         paths: Default::default(),
@@ -1146,7 +1145,6 @@ fn workspace_creation_failures_retire_inflight_and_keep_partial_registration_vis
         path: partial_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     runtime
         .workspace_creations_in_flight
@@ -1534,6 +1532,8 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
 /// with requests that arrive while it waits, is what these tests read.
 struct JudgingNode {
     judged: Option<hide_node_link::ErrorCode>,
+    /// The refusal is the machine's home asked about in its own words.
+    home: bool,
     open: std::sync::Mutex<bool>,
     opened: std::sync::Condvar,
     asked: std::sync::atomic::AtomicUsize,
@@ -1543,7 +1543,19 @@ impl JudgingNode {
     fn new(judged: Option<hide_node_link::ErrorCode>, open: bool) -> Arc<Self> {
         Arc::new(Self {
             judged,
+            home: false,
             open: std::sync::Mutex::new(open),
+            opened: std::sync::Condvar::new(),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// A machine whose home is the folder asked about.
+    fn asking_about_home() -> Arc<Self> {
+        Arc::new(Self {
+            judged: Some(hide_node_link::ErrorCode::NeedsConfirmation),
+            home: true,
+            open: std::sync::Mutex::new(true),
             opened: std::sync::Condvar::new(),
             asked: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -1574,6 +1586,9 @@ impl crate::node_access::NodeLink for JudgingNode {
         match self.judged {
             None => Ok(crate::node_access::LinkAnswer::Parsed(
                 serde_json::json!({"root": path, "is_git": false}),
+            )),
+            Some(_) if self.home => Err(crate::node_access::LinkError::Refused(
+                hide_node_link::HostError::home_needs_confirmation(format!("{path} is home")),
             )),
             Some(code) => Err(crate::node_access::LinkError::Refused(
                 hide_node_link::HostError::new(code, format!("{path} was judged")),
@@ -1786,7 +1801,6 @@ fn pinning_an_unregistered_row_registers_and_pins_it_in_one_event() {
             path: alpha.path.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: true,
-            home: false,
         }]
     );
     let pinned = row(&runtime, "hide-context-alpha");
@@ -2895,7 +2909,6 @@ fn a_registration_the_engine_already_has_a_workspace_for_is_listed_once() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     }];
 
     let catalog = workspace::build_catalog(
@@ -2944,6 +2957,28 @@ fn a_row_outside_home_is_not_registered_by_a_pin_or_a_closing_pane() {
             .map(|error| error.kind.as_str()),
         Some("workspace.pin_refused.needs_confirmation")
     );
+
+    runtime.snapshot.status.last_error = None;
+    runtime.retain_project_before_last_pane_closes("w1:p1");
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert!(runtime.snapshot.status.last_error.is_none());
+}
+
+/// PRD home-folder-project B6: a pin of a row whose folder is the machine's
+/// home registers nothing and says so in the home folder's own words, which a
+/// closing pane only logs.
+#[test]
+fn a_row_that_is_home_is_not_registered_by_a_pin_and_the_refusal_says_home() {
+    let mut runtime = runtime();
+    runtime.own_node = JudgingNode::asking_about_home();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+
+    assert!(runtime.dispatch_json(&pin_event(&alpha, true)));
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "workspace.pin_refused.needs_confirmation");
+    assert!(error.home);
 
     runtime.snapshot.status.last_error = None;
     runtime.retain_project_before_last_pane_closes("w1:p1");
@@ -3061,7 +3096,6 @@ fn closing_the_last_projected_pane_leaves_an_empty_checkout_without_an_error() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let previous_workspace = workspace(
         &workspace_id,
@@ -3142,7 +3176,6 @@ fn a_foreign_stale_projection_is_not_mistaken_for_checkout_pane_retirement() {
         path: checkout_path.to_owned(),
         device_id: crate::node::TEST_NODE.to_owned(),
         pinned: false,
-        home: false,
     };
     let previous_workspace = workspace(
         &workspace_id,
@@ -3591,7 +3624,9 @@ fn a_plain_folder_tab_goes_to_its_marked_workspace_and_marks_a_new_one_when_the_
 /// folder's tab whose only pane sits in a plain folder below it stays in the
 /// folder because its workspace carries the folder's owner mark, which the
 /// core's own engine saves; no row is made for the subfolder. A workspace
-/// without the mark is placed by its pane's cwd, as before.
+/// without the mark is placed by the deepest registered folder holding its
+/// pane's cwd, so it makes no row for the subfolder either (PRD
+/// home-folder-project B12, B13).
 #[test]
 fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_subfolder() {
     let path = owner_fixture("subfolder", false);
@@ -3653,7 +3688,8 @@ fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_su
     let mut unmarked = runtime();
     unmarked.snapshot.ui_state.workspace_registrations = vec![registration];
     assert!(unmarked.ingest_session(Ok(payload(serde_json::json!({})))));
-    assert_eq!(holding(&unmarked).as_deref(), Some(sub.as_str()));
+    assert_eq!(holding(&unmarked).as_deref(), Some(path.as_str()));
+    assert_eq!(rows(&unmarked), vec![path.clone()]);
     let _ = std::fs::remove_dir_all(&path);
 }
 
@@ -3705,6 +3741,7 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             prompt.map(str::to_owned),
             Vec::new(),
             Default::default(),
+            None,
         );
         assert!(runtime.ingest_task_operation_result(
             id,
@@ -3741,10 +3778,10 @@ fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prom
             "{prompt:?} before the start's answer"
         );
         // The start's answer lands before the engine reports the agent.
-        assert!(
-            runtime
-                .ingest_task_agent_result(id, crate::worktree_control::TaskAgentOutcome::Started)
-        );
+        assert!(runtime.ingest_task_agent_result(
+            id,
+            crate::worktree_control::TaskAgentOutcome::Started(None)
+        ));
         assert!(runtime.ingest_session(Ok(starting_task_agent(
             Some("claude"),
             "unknown",
@@ -3878,6 +3915,7 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
             },
             // An agent started in a checkout Hide did not make trusts nothing.
             made_worktree: None,
+            profile: None,
         })
     );
     // A concurrent kit inspection can learn about Codex while this Claude

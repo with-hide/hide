@@ -9,9 +9,9 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MissionMap } from "./MissionMap";
+import { missionOf } from "./missions";
 import { PlanMap } from "./PlanMap";
 import { ProjectCostView, RemainsView, WorktreesView } from "./ProjectDetail";
-import { missionOf } from "./missions";
 import { BranchCardView } from "./BranchCard";
 import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
@@ -22,12 +22,12 @@ import { catalogWorkspaces, type DetailItem, type DetailSlot, type WorkSession }
 import { useShellStore } from "./store";
 
 // The lane's 보기 slot (PRD sidebar-task-lens D-50, B46-B49): one pull
-// request's card, one session's record, a mission's map (PRD
-// software-factory-conductor D-14), a session's plan (PRD hide-plan B11),
+// request's card, one session's record, a mission's map (operator decision
+// 2026-11-09), a session's plan (PRD hide-plan B11),
 // a project's worktrees or cost (PRD lane-two-columns B30, B31), or a
 // Hide AI branch's card (PRD hide-ai-branch-first-apply B4), a
-// window's and no checkout's, so
-// it stays when the Agent tab or the checkout changes. The core keeps what
+// the front Agent tab's: each tab keeps its own and
+// another tab in front shows its own or none. The core keeps what
 // it holds and its history; this draws the item in front under the slot's
 // head of ←, its name, GitHub for a card, and ✕.
 
@@ -55,7 +55,7 @@ function useItemTitle(item: DetailItem | null, bare = false): string {
     }
     if (item.kind === "mission") {
       const title = missionOf(s.rest, item.mission)?.title ?? item.mission;
-      return bare ? title : t("detail.mission", { title });
+      return bare ? title : t("missionScreen.card", { title });
     }
     if (item.kind === "branch") {
       const row = s.suggestions?.project?.workspace_id === item.workspace_id ? s.suggestions.project.rows.find((candidate) => candidate.id === item.row) : undefined;
@@ -138,17 +138,24 @@ export function DetailPanel({ actions }: { actions: Actions }) {
           )}
           <span className="min-w-0 truncate" title={title}>{item.kind === "mission" || item.kind === "plan" ? name : title}</span>
         </span>
+        {item.kind === "mission" ? (
+          <>
+            {/* The sidebar's 미션 row's own mark, so the button reads as the way to the same screen. */}
+            <Button variant="secondary" size="sm" className="mr-xxs" onClick={() => actions.openMissions()} data-detail-all-missions="true">
+              <WaypointsIcon aria-hidden="true" />
+              {t("missionScreen.allMissions")}
+            </Button>
+            <Hint label={t("missionScreen.settings")}>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("missionScreen.settings")} onClick={() => actions.openMissionSettings()} data-detail-conductor-settings="true">
+                <SettingsIcon />
+              </Button>
+            </Hint>
+          </>
+        ) : null}
         {url ? (
           <Hint label={t("detail.github")}>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("detail.github")} onClick={() => actions.openLink(url, true)} data-detail-github="true">
               <ExternalLinkIcon />
-            </Button>
-          </Hint>
-        ) : null}
-        {item.kind === "mission" ? (
-          <Hint label={t("mission.settings")}>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("mission.settings")} onClick={() => actions.openMissionSettings()} data-detail-conductor-settings="true">
-              <SettingsIcon />
             </Button>
           </Hint>
         ) : null}

@@ -245,6 +245,11 @@ pub struct SleepRecord {
         skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
     )]
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile the agent runs with, which its wake starts it with again
+    /// (PRD agent-profiles D-27); none, as in a record from before profiles,
+    /// for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 impl SleepRecord {
@@ -288,6 +293,7 @@ impl SleepRecord {
             reason: None,
             pending_wake: None,
             launch: Default::default(),
+            profile: None,
         })
     }
 
@@ -713,6 +719,7 @@ mod tests {
 
     fn agent(pane_id: &str) -> SidebarAgentSnapshot {
         SidebarAgentSnapshot {
+            profile: None,
             device_id: Default::default(),
             device_pane_id: Default::default(),
             record_connection: None,
@@ -728,6 +735,8 @@ mod tests {
             escalation: None,
             letters_waiting: None,
             raised: Vec::new(),
+            human_below: Vec::new(),
+            declared_human_turn: None,
             pulls: None,
             descendant_mark: None,
             descendant_line: None,
@@ -760,6 +769,7 @@ mod tests {
             ask_subject: None,
             laid_since_unix_ms: None,
             laid_more: 0,
+            human_turn: None,
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),
             last_prompt_at_unix_ms: None,

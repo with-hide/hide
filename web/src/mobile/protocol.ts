@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, GithubStatus, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -43,6 +43,8 @@ export type PhoneAgent = {
   holds_notification: boolean;
   /** Its live descendants by state, for a parent's pills; absent when it has none. */
   descendants?: Descendants;
+  /** The person's turn the row leads with, its own or a descendant's, which the phone draws with Done (PRD ask-human B19); absent when none stands. */
+  human_turn?: HumanTurnLead;
   /** The children listed under it in the sidebar's order (two levels, five to a parent), and the ones behind its "더 보기". */
   children?: PhoneAgent[];
   more_children?: PhoneAgent[];
@@ -231,11 +233,11 @@ export type StartKind = string;
 
 /** One place a start can go; the folder it names never reaches the phone. */
 export type StartTarget = {
-  /** `home:<device_id>` for a device's Home, else the checkout's id. */
+  /** The checkout's id. */
   id: string;
   device_id: string;
-  /** The place on the device; null is the device's Home. */
-  place: string | null;
+  /** The place on the device: `project · branch`, or a folder's name. */
+  place: string;
   /** The device's name; null is the core's own machine, named from the catalog's `core_platform`. */
   device_label: string | null;
   connected: boolean;
@@ -291,6 +293,7 @@ export type ServerFrame =
   | { type: "look_chunk"; request_id: string; seq: number; data: string }
   | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
+  | { type: "human_turn_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
   | ({ type: "start_catalog" } & StartCatalog)
@@ -316,6 +319,7 @@ export type PhoneMessage =
   | { type: "look_seen"; device_id: string; pane_id: string; view_id: string }
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
+  | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
   /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }

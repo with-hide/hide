@@ -352,7 +352,37 @@ use crate::error::HostError;
 /// hooks could not send in time (`hide_agent_hooks::owed::take`), which the
 /// core asks once the pane rests (`docs/delivery.md`, A confirmation that
 /// missed its hook); a helper on 83 would refuse it, so it upgrades.
-pub const PROTOCOL_VERSION: u32 = 84;
+/// 85: the home folder is a project (PRD home-folder-project). `Registrable`
+/// asks about it instead of refusing it (`HostError::home`), `Index` carries
+/// the other projects of the node (`others`) so the home project's walk
+/// skips them, and Home never links it; a helper on 84 would refuse the
+/// home folder as a project, so it upgrades.
+/// 86: a node keeps its machine's agent profiles (`ProfileList`,
+/// `ProfileApply`, `ProfileInstall`, PRD agent-profiles D-04) and its kit
+/// installs into each profile's account; a helper on 85 would refuse the
+/// calls, so it upgrades, and a node the core still admits on an older
+/// protocol answers them unrun, which the core reads as no profiles there.
+/// 87: `home_retire` replaces `home_sync` (PRD retire-hide-home): the core no
+/// longer keeps a Home folder, and asks each helper once to remove what
+/// Hide's marker lists in `~/hide`; a helper on 86 would refuse the call, so
+/// it upgrades first and keeps its `~/hide` until then.
+/// 88: a node answers how a start of one of its profiles runs there
+/// (`ProfileLaunch`, PRD agent-profiles D-26): the profile's variables and
+/// program, checked on that machine, and the `hide` beside the node that
+/// starts it (`hide agent exec`); a helper on 87 would refuse the call, so
+/// it upgrades, and a node the core still admits on an older protocol
+/// answers it unrun, which the core reads as a machine that starts only each
+/// agent's built-in default profile. The same step lets the core read one
+/// process of a pane fresh (`holders::PaneCall::Process`) and carries the
+/// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
+/// `executor`), by which the core decides what came of that start.
+/// 89: a node answers which account it registered holds a session a resume
+/// names by its file or id alone (`SessionAccount`, PRD agent-profiles
+/// B19), so a session line resumes with the profile of its own account; a
+/// helper on 88 keeps profiles but would refuse the call, so it upgrades,
+/// and a node the core still admits on an older protocol keeps no profile,
+/// which the core reads as the default account.
+pub const PROTOCOL_VERSION: u32 = 89;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -515,8 +545,14 @@ pub enum Call {
     },
     /// Every file under the root the ignore files admit, capped
     /// (`hide_host::index::walk`), for the ⌘P palette.
+    ///
+    /// When the root is the node's home folder the walk leaves out its
+    /// top-level hidden names and app-data folder and every folder in
+    /// `others`, the other projects registered on the node.
     Index {
         root: RootRef,
+        #[serde(default)]
+        others: Vec<String>,
     },
     OpenDocument {
         root: RootRef,
@@ -660,11 +696,16 @@ pub enum Call {
         name: String,
         kind: crate::browse::NewFolderKind,
     },
-    /// Makes this host's Hide Home folder (`~/hide`) hold one link per
-    /// project in `projects` and nothing Hide did not make
-    /// (`hide_host::home::sync`).
-    HomeSync {
-        projects: Vec<String>,
+    /// Retires this host's old Hide Home folder (`~/hide`) once: removes the
+    /// entries Hide's marker lists as its own and, unless something else is
+    /// there or `keep_empty`, the folder (`hide_host::home::retire`).
+    /// Repeating it changes nothing more.
+    HomeRetire {
+        keep_empty: bool,
+        /// The second call for a folder that stays: the first leaves the
+        /// marker until the caller has saved the answer, this one removes it.
+        #[serde(default)]
+        settle: bool,
     },
     /// A branch measured against `base` in the repository at `root`
     /// (`hide_host::branch_merge::facts`): how far ahead, whether it is in
@@ -773,6 +814,38 @@ pub enum Call {
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,
+    },
+    /// The machine's agent profiles (`crate::profiles::ProfileList`), each
+    /// with its pieces as the kit judges them; `values` adds each variable's
+    /// value, for the screen that edits a profile.
+    ProfileList {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        values: bool,
+    },
+    /// Changes the machine's profiles and installs or takes out the pieces
+    /// of the accounts it touches (`crate::profiles::ProfileApplied`).
+    /// `expected_version` is the list's version the caller changes; a list
+    /// that has moved since is refused as a conflict.
+    ProfileApply {
+        /// Named `change` because a call's own tag is `op`.
+        change: crate::profiles::ProfileOp,
+        expected_version: u64,
+    },
+    /// Reinstall of one profile's pieces, even those the operator took out;
+    /// answers the list. Named `profile` because a request's own `id` sits
+    /// beside a call's fields on the wire.
+    ProfileInstall {
+        profile: hide_agent_adapter::ProfileId,
+    },
+    /// How a start of the agent `kind` with the profile `profile` runs on
+    /// this machine (`crate::profiles::ProfileLaunch`): ready, gone, or
+    /// refused when the profile is being removed or another agent's, when its
+    /// account or variables no longer resolve here, or when its program is
+    /// not found. The built-in default profile is never asked: it starts as
+    /// the agent always has.
+    ProfileLaunch {
+        kind: String,
+        profile: hide_agent_adapter::ProfileId,
     },
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
@@ -994,19 +1067,27 @@ pub enum Call {
     /// an [`OpenCodeFork`]: decided by the schema of the database holding it
     /// (`hide_session::opencode::fork_route`), and for OpenCode 2.x made by its
     /// server before the answer, within the node's own bound.
+    /// `profile` is the profile the fork's agent starts with, as its
+    /// machine answered it ([`Call::ProfileLaunch`]): OpenCode runs with its
+    /// variables and program, as the agent will (PRD agent-profiles D-26).
     #[serde(rename = "opencode_fork")]
     OpenCodeFork {
         source: String,
         cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<crate::profiles::ProfileStart>,
     },
     /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
-    /// made, in the node account's own settings of that agent
-    /// (`hide_agent_hooks::folder_trust`). `agent` is the start's kind, as
-    /// the adapter names it.
+    /// made, in the agent's settings of the account the start runs in
+    /// (`hide_agent_hooks::folder_trust`): the account of `profile` when the
+    /// start names one, the node account's default one otherwise. `agent` is
+    /// the start's kind, as the adapter names it.
     AgentTrust {
         agent: String,
         path: String,
         trusted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<hide_agent_adapter::ProfileId>,
     },
     /// Answers the account's exact normal shell recipe and readiness policy.
     /// Tries Hide's first-prompt integration, otherwise preserves the same
@@ -1061,7 +1142,9 @@ pub enum Call {
     /// The helper keeps nothing between reads; it answers events and the
     /// next checkpoint, never a path.
     LabelTranscript {
-        request: hide_session::label_transcript::LabelTranscriptRequest,
+        /// Boxed: the request is the largest a node takes, and the call
+        /// enum is as large as its largest variant.
+        request: Box<hide_session::label_transcript::LabelTranscriptRequest>,
     },
     /// The one original turn a backlog item came from, for its panel's
     /// origin and the Start prompt. No other turn is returned.
@@ -1071,6 +1154,11 @@ pub enum Call {
     /// Metadata-only activity using the same native ownership proof as labels.
     SessionActivity {
         request: hide_session::session_activity::SessionActivityRequest,
+    },
+    /// The account the node registered that holds the session a resume
+    /// names by its file or id alone (`hide_session::session_account::read`).
+    SessionAccount {
+        request: hide_session::session_account::SessionAccountRequest,
     },
     /// The device's session files changed since a time and, for a later
     /// page, up to one, newest first and capped
@@ -1330,7 +1418,7 @@ impl Call {
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
-            | Self::HomeSync { .. }
+            | Self::HomeRetire { .. }
             | Self::HomeList { .. }
             | Self::ImportableProjects { .. }
             | Self::NewFolderTarget { .. }
@@ -1345,6 +1433,10 @@ impl Call {
             | Self::WorktreeRemove { .. }
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
+            | Self::ProfileList { .. }
+            | Self::ProfileApply { .. }
+            | Self::ProfileInstall { .. }
+            | Self::ProfileLaunch { .. }
             | Self::HookDiagnosis
             | Self::OwedConfirmations { .. }
             | Self::HerdrSave
@@ -1378,6 +1470,7 @@ impl Call {
             | Self::LabelTranscript { .. }
             | Self::SessionWorkTurn { .. }
             | Self::SessionActivity { .. }
+            | Self::SessionAccount { .. }
             | Self::LinkFiles { .. }
             | Self::LinkRead { .. }
             | Self::UsageFiles { .. }
@@ -1494,6 +1587,14 @@ pub struct Hello {
     /// The home directory of the account the helper runs as, the boundary
     /// the device's own registration listing applies (PRD S5.5 B24).
     pub home: Option<String>,
+    /// The same folder as the node's filesystem names it (every link
+    /// resolved, on-disk case), so a registered folder, which a node
+    /// answers resolved the same way, is the home folder when the two
+    /// are equal; the core measures no size for it (PRD home-folder-project
+    /// D-06). Absent from a node older than protocol 85, or when the home
+    /// cannot be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_real: Option<String>,
     /// Read once when this connection starts; a failure leaves lineage
     /// unresolved without making the file helper unavailable.
     pub machine_identity: MachineIdentity,
@@ -1672,6 +1773,79 @@ mod tests {
             assert!(call.answered_by_device());
             assert!(!call.runs_until_stopped() && !call.is_control() && !call.is_background());
         }
+    }
+
+    /// The profile calls cross the link as whole requests: a call's fields
+    /// sit beside the request's own `id` and `op`, so none may be named
+    /// either, and each one reads back as it was sent.
+    #[test]
+    fn the_profile_calls_round_trip_as_requests_and_a_device_answers_them() {
+        use crate::profiles::ProfileOp;
+        use hide_agent_adapter::{AccountRef, ProfileId};
+        let calls = [
+            Call::ProfileList { values: true },
+            Call::ProfileList { values: false },
+            Call::ProfileApply {
+                change: ProfileOp::Add {
+                    kind: "claude-code".into(),
+                    name: "work".into(),
+                    account: Some(AccountRef::Folder("~/work/".into())),
+                    program: Some("claude-gw".into()),
+                    env: vec![("ANTHROPIC_BASE_URL".into(), "https://gw.example".into())],
+                    default: true,
+                },
+                expected_version: 3,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Edit {
+                    id: ProfileId("p-1".into()),
+                    name: "office".into(),
+                    program: None,
+                    env: Vec::new(),
+                },
+                expected_version: 4,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Default {
+                    kind: "omp".into(),
+                    id: ProfileId::default_profile(),
+                },
+                expected_version: 5,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Remove {
+                    id: ProfileId("p-1".into()),
+                },
+                expected_version: 6,
+            },
+            Call::ProfileInstall {
+                profile: ProfileId("p-wire-probe".into()),
+            },
+            Call::ProfileLaunch {
+                kind: "claude-code".into(),
+                profile: ProfileId("p-1".into()),
+            },
+        ];
+        for call in calls {
+            let request = Request { id: 991, call };
+            let text = serde_json::to_string(&request).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Request>(&text).unwrap(),
+                request,
+                "{text}"
+            );
+            assert!(request.call.answered_by_device());
+        }
+        assert_eq!(
+            serde_json::to_value(Request {
+                id: 991,
+                call: Call::ProfileInstall {
+                    profile: ProfileId("p-wire-probe".into()),
+                },
+            })
+            .unwrap(),
+            serde_json::json!({"id": 991, "op": "profile_install", "profile": "p-wire-probe"})
+        );
     }
 
     #[test]

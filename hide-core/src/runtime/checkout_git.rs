@@ -81,7 +81,7 @@ impl Runtime {
             }
             let (workspace, checkout) = self.front_checkout_owned()?;
             let (project, _) = self.catalog_checkout(&workspace, &checkout)?;
-            if !project.is_git || project.is_home {
+            if !project.is_git {
                 return None;
             }
             let root = self.document_root(&workspace, &checkout).ok()?;

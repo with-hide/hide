@@ -32,6 +32,7 @@ export function leadSession(agents: AgentRow[]): WorkSession {
   return { device_id: "local", agent: lead?.agent_kind ?? "claude", session_id: lead?.session_id ?? sessionId(LEAD_PANE) };
 }
 
+/** What the 보기 slot holds in a lane shot: the card, the record, or the Conductor's mission map beside its pane. */
 export function laneItem(lane: LandingLane, agents: AgentRow[]): DetailItem {
   if (lane === "pr") return { kind: "pull_request", workspace_id: PROJECT, number: 431 };
   if (lane === "record") return { kind: "record", session: leadSession(agents) };

@@ -431,6 +431,10 @@ pub struct AttentionView {
     pub item: bool,
     /// The operator's choices for it, in order (`AttentionReason::choices`).
     pub choices: Vec<crate::missions::OperatorAction>,
+    /// For a refused close, how many finished nodes have a line empty now,
+    /// read from the book the way the close reads it, so the row can say
+    /// how much is missing; 0 for every other reason.
+    pub unmet_nodes: u32,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -472,7 +476,7 @@ pub(crate) struct MissionRuntime {
     /// inputs did not move makes nothing (docs/PERFORMANCE_TESTING.md).
     views: ViewsMadeFrom,
     /// Each mission's events (PRD mission-plan-visibility D-22), saved by
-    /// their own store; only the mission open in the 보기 slot sends them.
+    /// their own store; only the mission the page's detail shows sends them.
     pub(crate) events: HashMap<String, History>,
     pub(crate) event_store: Option<crate::mission_events::MissionEventStore>,
     /// Counts the events' changes, for the published section.
@@ -491,6 +495,10 @@ pub(crate) struct MissionRuntime {
     pub(crate) answer_absent_since: HashMap<String, u64>,
     /// The mission and events edit the published events were made from.
     pub(crate) events_made: (Option<String>, u64),
+    /// The mission the page's mission screen shows in its detail
+    /// (`mission_shown`, PRD mission-screen D-16): page navigation the core
+    /// holds only to send that one mission's events, never saved (D-10).
+    pub(crate) shown: Option<String>,
     /// The outside nodes' reads (B19, B20).
     pub(super) outside: super::mission_outside::Outside,
     /// The nodes finished as the book last read, by mission and node, so a
@@ -547,7 +555,7 @@ struct ViewsMadeFrom {
     /// its mission's cap (`MISSION_RESERVATION_HOLD_MS`).
     until: u64,
     /// The missions' workers Hide holds asleep, which their cards read.
-    sleeping: crate::coordination::Sleeping,
+    sleeping: crate::coordination::RegistrationFacts,
     /// The rows carrying a core question, which decide whether a node's
     /// attention is on a row (`on_row`).
     laid: Vec<String>,
@@ -2041,11 +2049,77 @@ impl Runtime {
                 .find(|record| !record.ended && record.actor.same_identity(&actor))
                 .map(|record| record.id.clone())
         });
+        // The profile its pane's launch record says the session started
+        // with, by the rule a child's start reads its parent's.
+        let (profile, profile_unknown) = match self.caller_launch_profile(&actor, &actor.kind) {
+            crate::launch::Parent::Profile(profile) => (Some(profile), false),
+            crate::launch::Parent::Default | crate::launch::Parent::None => (None, false),
+            crate::launch::Parent::Unknown => (None, true),
+        };
         Conductor {
             actor,
             session,
             agent_id,
+            profile,
+            profile_unknown,
         }
+    }
+
+    /// The profile a resume of the session `payload` names by its id alone
+    /// (이어받기, PRD mission-tool D-11) runs with when a mission's
+    /// Conductor record names that session on that machine: the one the
+    /// record kept, `None` for the built-in default (PRD agent-profiles
+    /// D-27); no record that knows its profile names it is `Ok(None)`.
+    /// Records that name it with different profiles answer none of them.
+    pub(super) fn conductor_resume_profile(
+        &self,
+        payload: &super::events::AgentStartInCheckoutPayload,
+    ) -> Result<Option<Option<crate::launch::LaunchProfile>>, &'static str> {
+        let Some(session_id) = payload.resume_session_id.as_deref() else {
+            return Ok(None);
+        };
+        // A resume that names its file is the file's (`SessionAccount`).
+        if payload
+            .resume_session_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+        {
+            return Ok(None);
+        }
+        let Some(agent) = hide_session::Agent::from_kind(&payload.provider) else {
+            return Ok(None);
+        };
+        let device = payload
+            .device_id
+            .as_deref()
+            .filter(|device| !device.is_empty())
+            .unwrap_or(self.node.as_str());
+        let mut found: Option<&Option<crate::launch::LaunchProfile>> = None;
+        // A record that does not know its Conductor's profile says nothing
+        // of it; the session's machine answers then.
+        for conductor in self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| &mission.conductor)
+            .filter(|conductor| {
+                !conductor.profile_unknown
+                    && conductor.session.as_ref().is_some_and(|session| {
+                        session.device_id == device
+                            && session.agent == agent.as_str()
+                            && session.session_id == session_id
+                    })
+            })
+        {
+            match found {
+                Some(profile) if *profile != conductor.profile => {
+                    return Err("agent_start.invalid_resume");
+                }
+                _ => found = Some(&conductor.profile),
+            }
+        }
+        Ok(found.cloned())
     }
 
     /// What GitHub says now of pull request `number` in `mission`'s
@@ -2107,11 +2181,18 @@ impl Runtime {
         let now = crate::delivery::worker::now();
         let mut moved = false;
         for (id, pane, actor) in moves {
-            let conductor = self.conductor_of(device, &pane, actor);
+            let mut conductor = self.conductor_of(device, &pane, actor);
             let agent_id = conductor.agent_id.clone();
             let Some(mission) = self.missions.book.get_mut(&id) else {
                 continue;
             };
+            // The conversation that came back is the one the record named:
+            // a pane whose own record does not say its profile keeps what
+            // the mission knew of the one the conversation started with.
+            if conductor.profile_unknown && conductor.session == mission.conductor.session {
+                conductor.profile = mission.conductor.profile.clone();
+                conductor.profile_unknown = mission.conductor.profile_unknown;
+            }
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
             if let Err(code) =
@@ -2283,7 +2364,8 @@ impl Runtime {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "missions.deleted_with_session", "count": dropped,
         }));
-        // A slot item of a mission that is gone would draw nothing.
+        // A slot card of a mission that is gone would draw nothing, and the
+        // mission screen's detail of it sends nothing.
         let known: Vec<String> = self
             .missions
             .book
@@ -2295,6 +2377,14 @@ impl Runtime {
             DetailItem::Mission { mission } => known.contains(mission),
             _ => true,
         });
+        if self
+            .missions
+            .shown
+            .as_ref()
+            .is_some_and(|shown| gone.contains(shown))
+        {
+            self.missions.shown = None;
+        }
         self.save_missions();
         true
     }
@@ -2917,7 +3007,7 @@ impl Runtime {
         &self,
         mission: &Mission,
         agents: &HashMap<&str, &crate::coordination::AgentRecord>,
-        sleeping: &crate::coordination::Sleeping,
+        sleeping: &crate::coordination::RegistrationFacts,
         ledger: Option<&crate::delivery::ledger::Ledger>,
     ) -> MissionView {
         let github = self.github_project_on(&mission.device_id, &mission.project);
@@ -3040,6 +3130,14 @@ impl Runtime {
                                 && mission.status.asks()
                                 && node.status != NodeStatus::Dropped,
                             choices: attention.reason.choices(conductor_present),
+                            unmet_nodes: if attention.reason
+                                == crate::missions::AttentionReason::CloseRefused
+                            {
+                                u32::try_from(self.unmet_done_nodes(mission).len())
+                                    .unwrap_or(u32::MAX)
+                            } else {
+                                0
+                            },
                         }
                     }),
                     hide: node.hide.clone(),

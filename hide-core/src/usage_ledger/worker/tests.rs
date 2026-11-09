@@ -47,7 +47,7 @@ fn fixture(home: &std::path::Path, id: &str) -> PathBuf {
 }
 
 fn fixture_at(home: &std::path::Path, id: &str, at: jiff::Timestamp) -> PathBuf {
-    let folder = home.join(hide_session::CLAUDE_SESSIONS);
+    let folder = home.join(".claude/projects");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join(format!("{id}.jsonl"));
     let line = serde_json::json!({"type":"assistant", "sessionId":"fixture", "requestId":id, "timestamp":at.to_string(), "message":{"id":id,"model":"fixture-model","content":[{"text":"PRIVATE_BODY_SENTINEL"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":900,"cache_creation_input_tokens":30}}});

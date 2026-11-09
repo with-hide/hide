@@ -1079,7 +1079,6 @@ pub(super) fn register_folder(runtime: &mut Runtime, name: &str) -> String {
             path: path.clone(),
             device_id: crate::node::TEST_NODE.to_owned(),
             pinned: false,
-            home: false,
         });
     runtime.rebuild_catalog();
     workspace::checkout_id_for_path(&id, Path::new(&path))
@@ -1582,6 +1581,7 @@ fn pending_fork(runtime: &mut Runtime, source: &str, request_id: Option<&str>) {
             kind: "claude".into(),
             name: "fork-fixture".into(),
             launch: Default::default(),
+            profile: None,
         },
     );
     if let Some(request_id) = request_id {

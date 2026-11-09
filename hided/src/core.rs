@@ -108,11 +108,22 @@ enum Command {
         report: hide_node_link::panes::HookStatusReport,
         reply: Sender<Result<(), &'static str>>,
     },
+    AgentExec {
+        device_id: String,
+        pane_id: String,
+        report: hide_core::engine::AgentExecReport,
+        reply: Sender<Result<(), &'static str>>,
+    },
     /// A read of the operator's agent definition folder, made off the owner
     /// thread with the development switch on.
     AgentDefinitions {
         home: std::path::PathBuf,
         read: Result<hide_agent_adapter::definition::Catalog, String>,
+    },
+    AgentProfile {
+        device_id: String,
+        command: hide_core::agent_profiles::ProfileCommand,
+        reply: Sender<Result<hide_core::agent_profiles::Prepared, String>>,
     },
     AgentCatalog {
         device_id: String,
@@ -569,6 +580,26 @@ impl CoreHandle {
         result.recv().map_err(|_| "hook_status_unavailable")?
     }
 
+    /// What `hide agent exec` in a pane reported of its profile's start,
+    /// handed to the pane's engine on the owner thread.
+    pub fn agent_exec(
+        &self,
+        device: &str,
+        pane: &str,
+        report: hide_core::engine::AgentExecReport,
+    ) -> Result<(), &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentExec {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                report,
+                reply,
+            })
+            .map_err(|_| "agent_exec_unavailable")?;
+        result.recv().map_err(|_| "agent_exec_unavailable")?
+    }
+
     /// `hide agent catalog`, read on the owner thread. While the core says a
     /// read of the model lists is on its way, the answer is asked again
     /// every `CATALOG_POLL` until it landed or `CATALOG_WAIT` is over, off
@@ -624,6 +655,26 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "catalog_unavailable".to_owned())?
+    }
+
+    /// `hide agent profile`, planned on the owner thread; the caller runs
+    /// the plan (`Prepared::run`) on its own.
+    pub fn prepare_agent_profile(
+        &self,
+        device: &str,
+        command: hide_core::agent_profiles::ProfileCommand,
+    ) -> Result<hide_core::agent_profiles::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentProfile {
+                device_id: device.to_owned(),
+                command,
+                reply,
+            })
+            .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?;
+        result
+            .recv()
+            .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?
     }
 
     /// `hide agent sleep`, run on the owner thread.
@@ -1499,7 +1550,22 @@ fn owner_loop(
             } => {
                 let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
             }
+            Command::AgentExec {
+                device_id,
+                pane_id,
+                report,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_exec(&device_id, &pane_id, report));
+            }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
+            Command::AgentProfile {
+                device_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_agent_profile(&device_id, command));
+            }
             Command::AgentCatalog {
                 device_id,
                 machine,

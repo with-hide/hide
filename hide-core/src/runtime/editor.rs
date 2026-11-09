@@ -914,6 +914,7 @@ impl Runtime {
                         kind: agent.agent_kind.clone(),
                         session_id: agent.session_id.clone(),
                         launch: self.launch_choice_of(agent),
+                        profile: self.launch_profile_of(agent),
                     });
                 ClosedPane {
                     pane_id: pane.id.clone(),
@@ -2963,6 +2964,7 @@ impl Runtime {
                         &agent.kind,
                         &agent.name,
                         &agent.launch,
+                        agent.profile.as_ref(),
                         agent.session_id.as_deref(),
                     );
                 }

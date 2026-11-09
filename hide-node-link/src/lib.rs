@@ -37,6 +37,7 @@ pub mod mutate;
 pub mod panes;
 pub mod ports;
 pub mod process;
+pub mod profiles;
 pub mod project;
 pub mod protocol;
 pub mod readers;

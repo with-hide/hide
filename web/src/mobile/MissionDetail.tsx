@@ -21,7 +21,7 @@ import { cn } from "../lib/utils";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } from "../missionAnswer";
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
-import { attentionReasonText, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
+import { attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
 import { answerMission, openDetail, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
@@ -105,7 +105,7 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
             <h2 className="flex items-center justify-between gap-md pb-xs text-body text-muted-foreground">
               <span>{t("mobile.mission.finished", { count: steps.done.length })}</span>
               <Button variant="text" size="inline" aria-expanded={doneOpen} className="min-h-(--size-touch-target)" data-phone-fold={foldKey} onClick={() => setMissionFold(foldKey, !doneOpen)}>
-                {doneOpen ? t("missionTool.fewer") : t("mobile.mission.unfold")}
+                {doneOpen ? t("missionScreen.fewer") : t("mobile.mission.unfold")}
               </Button>
             </h2>
             {doneOpen ? (
@@ -310,7 +310,7 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
       case "attention":
         return attentionReasonText(reason.attention.reason, reason.attention.pr, t);
       case "worker":
-        return reason.escalation.line ?? t(`mission.turn.cause.${reason.escalation.cause}`);
+        return escalationWhy(reason.escalation, t);
       case "decision":
         return t("mobile.mission.waitsDecision");
       default:

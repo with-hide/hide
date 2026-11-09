@@ -212,6 +212,13 @@
                         "null"
                     ]
                 },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "project": {
                     "type": [
                         "string",
@@ -250,6 +257,7 @@
                 "parent",
                 "origin",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
@@ -553,6 +561,13 @@
                         "null"
                     ]
                 },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "project": {
                     "type": [
                         "string",
@@ -592,6 +607,7 @@
                 "parent",
                 "origin",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
@@ -681,6 +697,13 @@
                                 "null"
                             ]
                         },
+                        "profile": {
+                            "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "project": {
                             "type": [
                                 "string",
@@ -719,6 +742,7 @@
                         "parent",
                         "origin",
                         "project",
+                        "profile",
                         "runtime",
                         "connection",
                         "registered",
@@ -853,6 +877,55 @@
             "title": "AgentList",
             "type": "object"
         },
+        "agent_profile": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "profile": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "profile"
+            ],
+            "type": "object"
+        },
+        "agent_profile_removed": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "projects_back_to_default": {
+                    "type": "object"
+                },
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "removed",
+                "projects_back_to_default"
+            ],
+            "type": "object"
+        },
+        "agent_profiles": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "profiles": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "profiles"
+            ],
+            "type": "object"
+        },
         "agent_register_check": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide agent register --check` for a caller not yet registered.",
@@ -978,6 +1051,52 @@
                     ],
                     "type": "string"
                 },
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "InputKind": {
                     "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
                     "enum": [
@@ -1087,28 +1206,50 @@
                 },
                 "WaitCause": {
                     "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).",
-                    "enum": [
-                        "unknown",
-                        "question",
-                        "approval",
-                        "blocked",
-                        "plan_review",
-                        "mission_decision",
-                        "mission_attention",
-                        "input_unconfirmed",
-                        "draft",
-                        "parent_blocked",
-                        "bell_exhausted",
-                        "undelivered",
-                        "observer_unconfirmed"
-                    ],
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "unknown",
+                                "question",
+                                "approval",
+                                "blocked",
+                                "plan_review",
+                                "mission_decision",
+                                "mission_attention",
+                                "input_unconfirmed",
+                                "draft",
+                                "parent_blocked",
+                                "bell_exhausted",
+                                "undelivered",
+                                "observer_unconfirmed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The agent declared a step only a person can take (`hide agent ask-human`), its own or, for a delegated child, raised to the operator.",
+                            "enum": [
+                                "human_turn"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "Waiting": {
                     "description": "What an agent waits on, by the core's own cause.",
                     "properties": {
                         "cause": {
                             "$ref": "#/definitions/WaitCause"
+                        },
+                        "human": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/HumanTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "For `human_turn`: the declaration, its kind, place and when it was made (PRD ask-human B7). The device is the agent's `machine`."
                         },
                         "letter_id": {
                             "description": "The letter the wait is about.",
@@ -1153,7 +1294,8 @@
                         "since_unix_ms",
                         "letter_id",
                         "spawn_id",
-                        "text"
+                        "text",
+                        "human"
                     ],
                     "type": "object"
                 },
@@ -1277,6 +1419,13 @@
                         "null"
                     ]
                 },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "project": {
                     "type": [
                         "string",
@@ -1319,12 +1468,142 @@
                 "parent",
                 "origin",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
                 "watch"
             ],
             "title": "AgentShow",
+            "type": "object"
+        },
+        "ask_human": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "description": "What a declaration did (B1, B5, B6).",
+                    "oneOf": [
+                        {
+                            "description": "A new declaration; the operator is told.",
+                            "enum": [
+                                "declared"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same kind and place as the standing one: nothing moved.",
+                            "enum": [
+                                "unchanged"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "A different declaration replaced the standing one; the operator is told again.",
+                            "enum": [
+                                "replaced"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "`--clear` took the standing declaration down.",
+                            "enum": [
+                                "cleared"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "`--clear` found no declaration to take down. Not a failure.",
+                            "enum": [
+                                "nothing_to_clear"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "description": "What `hide agent ask-human` answers.",
+            "properties": {
+                "agent": {
+                    "description": "The caller's registration.",
+                    "type": "string"
+                },
+                "declaration": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/HumanTurn"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The declaration standing after the command; null once cleared."
+                },
+                "machine": {
+                    "description": "The device the agent runs on, which the operator goes to.",
+                    "type": "string"
+                },
+                "operator_notified": {
+                    "description": "Whether the operator was told: a new or replacing declaration.",
+                    "type": "boolean"
+                },
+                "outcome": {
+                    "$ref": "#/definitions/Outcome"
+                }
+            },
+            "required": [
+                "outcome",
+                "agent",
+                "machine",
+                "declaration",
+                "operator_notified"
+            ],
+            "title": "AskHumanAnswer",
             "type": "object"
         },
         "confirmed": {
@@ -2839,6 +3118,52 @@
                     ],
                     "type": "object"
                 },
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "InputKind": {
                     "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
                     "enum": [
@@ -2972,28 +3297,50 @@
                 },
                 "WaitCause": {
                     "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).",
-                    "enum": [
-                        "unknown",
-                        "question",
-                        "approval",
-                        "blocked",
-                        "plan_review",
-                        "mission_decision",
-                        "mission_attention",
-                        "input_unconfirmed",
-                        "draft",
-                        "parent_blocked",
-                        "bell_exhausted",
-                        "undelivered",
-                        "observer_unconfirmed"
-                    ],
-                    "type": "string"
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "unknown",
+                                "question",
+                                "approval",
+                                "blocked",
+                                "plan_review",
+                                "mission_decision",
+                                "mission_attention",
+                                "input_unconfirmed",
+                                "draft",
+                                "parent_blocked",
+                                "bell_exhausted",
+                                "undelivered",
+                                "observer_unconfirmed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The agent declared a step only a person can take (`hide agent ask-human`), its own or, for a delegated child, raised to the operator.",
+                            "enum": [
+                                "human_turn"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "Waiting": {
                     "description": "What an agent waits on, by the core's own cause.",
                     "properties": {
                         "cause": {
                             "$ref": "#/definitions/WaitCause"
+                        },
+                        "human": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/HumanTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "For `human_turn`: the declaration, its kind, place and when it was made (PRD ask-human B7). The device is the agent's `machine`."
                         },
                         "letter_id": {
                             "description": "The letter the wait is about.",
@@ -3038,7 +3385,8 @@
                         "since_unix_ms",
                         "letter_id",
                         "spawn_id",
-                        "text"
+                        "text",
+                        "human"
                     ],
                     "type": "object"
                 }
@@ -3327,6 +3675,384 @@
     "commands": [
         {
             "answers": [
+                "agent_profiles"
+            ],
+            "arguments": [],
+            "command": "agent profile list",
+            "options": [
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile add",
+            "options": [
+                {
+                    "name": "--account",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--program",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--default",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile edit",
+            "options": [
+                {
+                    "name": "--rename",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-program"
+                    ],
+                    "name": "--program",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--program"
+                    ],
+                    "name": "--no-program",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--unset-env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile default",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile reinstall",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "agent",
                 "agent_register_check"
             ],
@@ -3475,6 +4201,70 @@
             "refusals": [
                 "agent_pane_required",
                 "caller_identity_conflict",
+                "participant_unavailable",
+                "participant_ended",
+                "participant_session_changed",
+                "ambiguous_participant"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "ask_human"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "where",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent ask-human",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "human_kind_unknown",
+                "human_place_required",
+                "human_place_too_long",
+                "agent_pane_required",
+                "participant_unavailable",
+                "participant_ended",
+                "participant_session_changed",
+                "ambiguous_participant"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "ask_human"
+            ],
+            "arguments": [],
+            "command": "agent ask-human --clear",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
                 "participant_unavailable",
                 "participant_ended",
                 "participant_session_changed",
@@ -3720,6 +4510,14 @@
                     }
                 },
                 {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
                     "name": "--model",
                     "required": false,
                     "requires": [],
@@ -3815,7 +4613,13 @@
                 "plan_delegate_full",
                 "plan_delegate_not_permitted",
                 "plan_unavailable",
-                "plan_session_unknown"
+                "plan_session_unknown",
+                "profile_gone",
+                "profiles_unsupported",
+                "profile_refused",
+                "profile_unanswered",
+                "profile_unconfirmed",
+                "launch_records_full"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -4339,7 +5143,8 @@
             "refusals": [
                 "composer_not_empty",
                 "composer_unconfirmed",
-                "force_target_asleep"
+                "force_target_asleep",
+                "intent_conflict"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5720,7 +6525,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b194bf360ee8e74ff079638c028552c2e216ec75cee8e3389cbea962dca71a0f",
+    "digest": "sha256:cc697d232f460d8e7595ebad8ca69c1914cc02b5c35d8b22839a8399e2d7154f",
     "envelopes": {
         "agent": {
             "answer": "value",

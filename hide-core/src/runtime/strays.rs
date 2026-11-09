@@ -185,7 +185,6 @@ impl Runtime {
             target: None,
             checkout_path: Some(path),
             device_id: (!local).then_some(device_id),
-            home: false,
             provider,
             prompt: Some(words),
             model: None,
@@ -193,6 +192,7 @@ impl Runtime {
             resume_session_id: None,
             resume_session_path: None,
             stay_behind: true,
+            profile: None,
         });
         let refused = self
             .snapshot

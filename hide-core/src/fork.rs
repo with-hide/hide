@@ -140,6 +140,9 @@ pub struct ForkRequest {
     /// The model and effort the source was started with, which the fork
     /// starts with after its resume arguments.
     pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile the source runs with, which the fork runs with: the
+    /// conversation it forks is in that profile's account (D-27).
+    pub(crate) profile: Option<crate::launch::LaunchProfile>,
     /// The machine's 권한 for the agent as the fork was asked for.
     pub(crate) permission: crate::agent_permission::AgentPermission,
 }
@@ -333,6 +336,7 @@ mod tests {
             tab_label: Some("Tab 2".to_owned()),
             placement: ForkPlacement::Tab,
             launch: Default::default(),
+            profile: None,
             permission: Default::default(),
         }
     }

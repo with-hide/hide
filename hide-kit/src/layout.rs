@@ -24,6 +24,19 @@ pub fn product_analytics_disabled(home: &Path) -> PathBuf {
     hide_home(home).join("product-analytics-disabled")
 }
 
+/// What a device's helper writes before it sets the old `~/hide` folder aside
+/// (PRD retire-hide-home): the name it is set aside under and its identity,
+/// the only claim on a folder of that name. Removed when the retirement ends.
+pub fn home_retirement(home: &Path) -> PathBuf {
+    hide_home(home).join("home-retiring.json")
+}
+
+/// Where the helper writes the old Home's marker whole before it renames it
+/// back into a folder that lost it; only the helper writes here.
+pub fn home_retirement_marker(home: &Path) -> PathBuf {
+    hide_home(home).join("home-retiring-marker.json")
+}
+
 /// Pinned CLIs shared by local keyless journey runs, never operator executables.
 pub fn journey_cli_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/journey-clis")
@@ -226,6 +239,12 @@ pub fn global_instruction(state_dir: &Path) -> PathBuf {
 
 /// Its name, the global instruction guard's (`hide_agent_hooks::global_guard`).
 pub const GLOBAL_INSTRUCTION: &str = hide_agent_hooks::global_guard::FILE_NAME;
+
+/// The machine's agent profiles, owned by the node that runs on it (PRD
+/// agent-profiles D-04; `hide_host::profiles`).
+pub fn agent_profiles(state_dir: &Path) -> PathBuf {
+    state_dir.join("agent-profiles.json")
+}
 
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";

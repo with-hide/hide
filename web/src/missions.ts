@@ -10,8 +10,9 @@ import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
+import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -279,8 +280,8 @@ export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly
 /**
  * Why a step waits on someone, in the order a step is read: a node raised
  * to the operator or the Conductor (`! 나`, `! Conductor`), a working step
- * whose worker the core raised past its parent (one of the seven escalation
- * causes, the same worker `내 차례` lists), or the working step the open
+ * whose worker the core raised past its parent (one of the escalation
+ * causes; a person's turn says what and where, PRD ask-human B25), or the working step the open
  * decision stopped. Null for a step nobody has to look at.
  */
 export type HoldReason = { kind: "attention"; attention: Omit<MissionAttention, "choices"> } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
@@ -600,7 +601,8 @@ export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
  * What only the operator can do now (B25; PRD mission-node-simple B14): answer
  * the decision, take over a mission no Conductor holds, settle a node the
  * core raised to the operator (`! 나`), clear a worker the core raised past
- * its parent (one of the seven escalation causes), and merge or join what
+ * its parent (one of the escalation causes, a person's turn aside: its step
+ * says it and the Conductor's row carries it), and merge or join what
  * waits for main. What waits on the Conductor stays on its card, and a
  * finished or cancelled mission has nothing here.
  */
@@ -612,14 +614,21 @@ export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
   | { kind: "landing"; nodes: N[]; git: boolean };
 
-/** A worker row the core raised past its parent: the cause, and the line its blocked turn left. */
-export type WorkerEscalation = { cause: EscalationCause; line: string | null };
+/** A worker row the core raised past its parent: the cause, the line its blocked turn left, and for a person's turn what and where (PRD ask-human B25). */
+export type WorkerEscalation = { cause: EscalationCause; line: string | null; human?: { kind: HumanKind; place: string } | null };
 
 /** The escalation of a node's worker row, as the `내 차례` rule reads it; none for a row that was not raised. */
-export function workerEscalation(row: Pick<AgentRow, "escalation" | "request"> | null | undefined): WorkerEscalation | null {
+export function workerEscalation(row: Pick<AgentRow, "escalation" | "request" | "human_turn"> | null | undefined): WorkerEscalation | null {
   if (!row?.escalation) return null;
   const request = row.request;
-  return { cause: row.escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null };
+  const human = row.escalation.cause === "human_turn" && row.human_turn ? { kind: row.human_turn.kind, place: row.human_turn.place } : null;
+  return { cause: row.escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null, human };
+}
+
+/** Why a raised worker waits, as a step says it: a person's turn's kind and place, else its blocked turn's line, else its cause. */
+export function escalationWhy(escalation: WorkerEscalation, t: TFunction<"translation">): string {
+  if (escalation.human) return humanTurnText(t, escalation.human);
+  return escalation.line ?? t(`mission.turn.cause.${escalation.cause}`);
 }
 
 /** The escalations a held letter to the parent raises. */
@@ -650,7 +659,8 @@ export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, 
   }
   for (const node of orderedNodes(mission)) {
     const escalation = node.status === "working" ? shownEscalation(mission, escalationOf(node)) : null;
-    if (escalation) items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
+    // A worker's person's turn is its step's waiting reason only: the Conductor's row carries it to Needs You, with Done (PRD ask-human D-18, B25).
+    if (escalation && escalation.cause !== "human_turn") items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);
@@ -811,7 +821,9 @@ function prWords(pr: number | null, t: TFunction<"translation">): string {
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">): string {
+export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+  // A refused close says how many finished nodes have a line empty when the core counted them.
+  if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
   return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });
 }
 
@@ -863,7 +875,7 @@ export function projectAsks(asks: readonly MissionAsk[], projectId: string | nul
 export function attentionWords(node: MissionNode, t: TFunction<"translation">): { who: string; why: string } | null {
   const attention = node.attention;
   if (!attention) return null;
-  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t) };
+  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes) };
 }
 
 /**

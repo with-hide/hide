@@ -110,7 +110,7 @@ export type AgentRow = {
   resolved_recent?: boolean;
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
-  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
+  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
   /** On a lineage root: every raised descendant, lead first. */
@@ -123,6 +123,8 @@ export type AgentRow = {
   id: string;
   pane_id: string;
   identity_label: string;
+  /** The name of the profile the agent runs with (`b`), absent on its agent's built-in default; the title stays the default's (PRD agent-profiles B17). */
+  profile?: string;
   /** Conversation display provenance, independent of lifecycle and hook health. */
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;
@@ -148,6 +150,8 @@ export type AgentRow = {
   user_turn?: UserTurnFact;
   /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
   ask_subject?: AskSubject;
+  /** The person's turn this row leads with, its own or a descendant's (PRD ask-human); absent when none stands. */
+  human_turn?: HumanTurnLead;
   /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
   /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
@@ -200,9 +204,21 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed"] as const;
-/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), or a brief or letter Hide typed that the agent never took. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean };
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string };
+
+export const HUMAN_KINDS = ["auth", "permission"] as const;
+/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
+export type HumanKind = typeof HUMAN_KINDS[number];
+
+/**
+ * The person's turn a row leads with (`HumanTurnLead`, PRD ask-human D-09,
+ * D-17, D-20): on the agent that declared it and on its lineage root. Done
+ * settles `id`; `device_id` is where the declaring pane runs, absent for
+ * this machine, and Done waits while it is not connected (D-21).
+ */
+export type HumanTurnLead = { id: string; kind: HumanKind; place: string; pane_id: string; title: string; device_id?: string; since_unix_ms: number | null; own: boolean };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
@@ -755,7 +771,7 @@ export type PaneRow = {
   fork?: PaneFork;
 };
 
-export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code"> & { state: Pick<AgentState, "mark_tone"> };
+export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code" | "profile"> & { state: Pick<AgentState, "mark_tone"> };
 
 export type Tab = {
   /** `named_by_operator`: the manual name is one the operator gave through Rename, which keeps the tab when its agents leave. */
@@ -918,8 +934,6 @@ export type Workspace = {
   registered: boolean;
   temporary: boolean;
   pinned: boolean;
-  /** The device's Hide Home (`~/hide`, PRD home-device-rail D-01): drawn as the Home row, never in the Projects list. */
-  is_home?: boolean;
   last_activity_unix_ms?: number | null;
   /** What `Remove project…` would close, counted by the core (D-10). */
   removal?: { pane_count: number; running_agent_count: number };
@@ -1159,8 +1173,6 @@ export type WorkspaceRegistration = {
   path: string;
   device_id: string;
   pinned: boolean;
-  /** This registration is the device's Home (`~/hide`). */
-  home?: boolean;
 };
 
 export type PaneFind = {
@@ -1281,6 +1293,7 @@ export type StrayHandOff = { request_id: string; checkout_id: string; state: "se
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
+  /** A Conductor's mission map, opened wherever a mission is pressed outside the mission screen's table. */
   | { kind: "mission"; mission: string }
   /** A project's worktrees and their disk use, from the Project tool's Git tile (PRD lane-two-columns B30). */
   | { kind: "worktrees"; workspace_id: string }
@@ -1332,7 +1345,7 @@ export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
 /** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[] };
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
@@ -2131,6 +2144,59 @@ export type Kit = {
   codex_daemon_on?: boolean | null;
   /** The last turn-off of the shared server on this machine; absent until one was asked. */
   codex_daemon_off?: CodexDaemonOff | null;
+  /** The machine's agent profiles as its node lists them (PRD agent-profiles D-04); null until first read. */
+  profiles?: MachineAgentProfiles | null;
+};
+
+/** Whether a machine's profiles could be read (`contracts/snapshot-wire-enums.json`: `profiles_state`). */
+export type AgentProfilesState = "listed" | "unsupported" | "unreadable";
+/** Where a profile's pieces are (`profile_install`): the agent's own account, one of its own, or a state of removal. */
+export type AgentProfileInstall = "default" | "own" | "refused" | "removing" | "remove_failed";
+
+/** One profile as the core lists it (`ProfileSnapshot`): no variable's value. */
+export type AgentProfileWire = {
+  id: string;
+  /** The agent's id. */
+  kind: string;
+  name: string;
+  /** The folder or omp name it runs in; null for the agent's own account. */
+  account: string | null;
+  program: string | null;
+  env_keys: string[];
+  version: number;
+  /** Null until the kit judged this version. */
+  install: AgentProfileInstall | null;
+  folder: string | null;
+  hook: KitPiece | null;
+  skill: KitPiece | null;
+};
+
+export type MachineAgentProfiles = {
+  state: AgentProfilesState;
+  version: number;
+  profiles: AgentProfileWire[];
+  /** Each agent's default profile where it is not the built-in one, by agent id. */
+  defaults: Record<string, string>;
+};
+
+/** What Settings › Agents' last profile request came to (`status.agent_profile_answer`). */
+export type AgentProfileAnswer = {
+  request_id: string;
+  device_id: string;
+  state: "pending" | "done" | "refused";
+  code?: string;
+  field?: "kind" | "name" | "account" | "program" | "env" | "profile";
+  env_key?: string;
+  /** The machine's English words, for the log and the CLI; the screen words `reason`. */
+  text?: string;
+  reason?: "kind_unknown" | "profiles_full" | "name_empty" | "name_long" | "name_control" | "name_builtin" | "name_taken" | "program_long" | "profile_builtin" | "profile_missing" | "profile_removing" | "profile_other_kind" | "node_variable" | "account_home_missing" | "account_unsupported" | "account_needs_folder" | "account_needs_name" | "account_empty" | "account_relative" | "account_is_default" | "account_name" | "account_unprepared" | "env_too_many" | "env_name" | "env_reserved" | "env_repeated" | "env_value" | "other";
+  /** The bound a `*_long`, `profiles_full` or `env_too_many` reason crossed. */
+  limit?: number;
+  /** Agents running with it, and starts holding it with no pane yet (`starting`). */
+  in_use?: { pane_id: string; title: string; place: string; asleep: boolean; starting?: boolean }[];
+  projects?: string[];
+  values?: [string, string][];
+  added?: string;
 };
 
 /** One pane's rectangle in a remote tab, as fractions of the tab's area (`RemotePaneLayoutFrame`). */
@@ -3241,7 +3307,7 @@ export type SnapshotRest = {
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
     practice_invite_closed?: boolean;
-    /** The lane's 보기 slot (D-50), one per window. */
+    /** The lane's 보기 slot (D-50) of the Agent tab in front; each tab keeps its own in the core. */
     detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
     overview_graph?: OverviewGraphChoices;
@@ -3318,6 +3384,8 @@ export type SnapshotRest = {
     /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
     herdr_profiles?: MachineProfiles;
+    /** What Settings › Agents' last profile request came to; absent until one was made. */
+    agent_profile_answer?: AgentProfileAnswer;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     /** Bounded read-only hover text; never an attachment or a focus request. */
@@ -3331,7 +3399,7 @@ export type SnapshotRest = {
     /** The adds that named a request id (Add a project's importable list), oldest first and bounded, each with its own outcome (PRD device-add-project B25). */
     project_adds?: ProjectAddReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
-    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
+    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null; home?: true } | null;
   };
   recent_closed?: RecentClosed;
   explorer_operation?: ExplorerOperation | null;

@@ -13,9 +13,10 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::holders::{
-    HolderError, HolderIntent, HolderProcesses, HolderProof, HolderRecovery, HolderRenewal,
-    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneCall, PaneEnded,
-    PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules, StyledRead,
+    HolderError, HolderIntent, HolderProcess, HolderProcesses, HolderProof, HolderRecovery,
+    HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneCall,
+    PaneEnded, PaneFactsSink, PaneHolders, PaneInput, PaneText, PaneWatchReport, ScreenRules,
+    StyledRead,
 };
 use crate::link::{LinkAnswer, LinkError, NodeLink};
 use crate::protocol::{Call, ShellLaunch};
@@ -390,6 +391,21 @@ impl PaneHolders for LinkPanes {
         self.answer(
             PaneCall::Processes {
                 pane: pane.to_owned(),
+            },
+            within.min(ASK_WAIT),
+        )
+    }
+
+    fn process(
+        &self,
+        pane: &str,
+        pid: u32,
+        within: Duration,
+    ) -> Result<Option<HolderProcess>, HolderError> {
+        self.answer(
+            PaneCall::Process {
+                pane: pane.to_owned(),
+                pid,
             },
             within.min(ASK_WAIT),
         )

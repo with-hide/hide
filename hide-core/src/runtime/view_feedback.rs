@@ -243,6 +243,7 @@ impl Runtime {
             resume_path,
             provider: agent.agent_kind.clone(),
             name: agent.identity_label.clone(),
+            profile: self.launch_profile_of(agent),
         })
     }
 
@@ -945,20 +946,27 @@ impl Runtime {
         }
         let start_request = format!("view-feedback-reopen-{request_id}");
         let before = self.snapshot.status.last_error.clone();
-        self.agent_start_in_checkout(super::events::AgentStartInCheckoutPayload {
-            target: None,
-            confirm_only: false,
-            checkout_path: Some(key.1.clone()),
-            device_id: Some(key.0.clone()),
-            home: false,
-            provider: opener.provider.clone(),
-            prompt: None,
-            model: None,
-            request_id: Some(start_request.clone()),
-            resume_session_id: opener.resume.clone(),
-            resume_session_path: opener.resume_path.clone(),
-            stay_behind: false,
-        });
+        // The opener resumes with the profile it ran with, which its machine
+        // refuses by name once it is gone (D-27, B20).
+        self.start_in_checkout(
+            super::events::AgentStartInCheckoutPayload {
+                target: None,
+                confirm_only: false,
+                checkout_path: Some(key.1.clone()),
+                device_id: Some(key.0.clone()),
+                provider: opener.provider.clone(),
+                prompt: None,
+                model: None,
+                request_id: Some(start_request.clone()),
+                resume_session_id: opener.resume.clone(),
+                resume_session_path: opener.resume_path.clone(),
+                stay_behind: false,
+                profile: None,
+            },
+            true,
+            None,
+            super::projects::StartProfile::Recorded(opener.profile.as_ref()),
+        );
         let refused = self.snapshot.status.last_error != before
             && self
                 .snapshot
@@ -1024,7 +1032,9 @@ impl Runtime {
         })
     }
 
-    fn device_label(&self, device: &str) -> Option<String> {
+    /// A device's name as the operator registered it; none for the core's
+    /// own machine.
+    pub(super) fn device_label(&self, device: &str) -> Option<String> {
         (device != self.node.as_str()).then(|| {
             self.snapshot
                 .ui_state
@@ -2251,6 +2261,40 @@ mod tests {
             guard.view_opener_snapshot(&opener).pane_id.as_deref(),
             Some("sender")
         );
+        drop(guard);
+        drop(worker);
+    }
+
+    /// An opener keeps the profile its agent ran with, which `Reopen and
+    /// send` resumes the closed agent with (PRD agent-profiles D-27, B18).
+    #[test]
+    fn an_opener_keeps_the_profile_its_agent_ran_with() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, worker, _) = send_fixture(root.path());
+        let mut guard = runtime.lock().unwrap();
+        let profile = crate::launch::LaunchProfile {
+            id: hide_agent_adapter::ProfileId("p-work".into()),
+            name: "work".into(),
+            account: hide_agent_adapter::AccountKey::Folder("/home/me/.codex-work".into()),
+        };
+        guard.record_pane_launch(
+            "recipient",
+            "codex",
+            "worker",
+            &hide_agent_adapter::LaunchChoice::default(),
+            Some(&profile),
+            Some("native-recipient"),
+        );
+        let view = opened_view(&mut guard);
+        let opener = guard
+            .view_layout_of(&key())
+            .unwrap()
+            .display(&view)
+            .unwrap()
+            .opener
+            .clone()
+            .unwrap();
+        assert_eq!(opener.profile, Some(profile));
         drop(guard);
         drop(worker);
     }

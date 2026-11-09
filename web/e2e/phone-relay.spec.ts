@@ -249,7 +249,7 @@ test("start and wake use the same encrypted command path", async ({ page, relay 
   await page.locator("[data-phone-start-submit]").click();
   await expect(page.locator('[data-phone-detail="test-device|pane-one"]')).toBeVisible();
   expect(relay.received.filter((frame) => frame.type === "wake_agent")).toHaveLength(1);
-  expect(relay.received.filter((frame) => frame.type === "start_agent")).toMatchObject([{ text: "Start the next task", target: "home:test-device" }]);
+  expect(relay.received.filter((frame) => frame.type === "start_agent")).toMatchObject([{ text: "Start the next task", target: "checkout-one" }]);
 });
 
 test("an HTML file is drawn in the bundle's sandboxed look frame, running its script in an origin of its own", async ({ page, relay }) => {

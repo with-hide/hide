@@ -84,6 +84,9 @@
 /* The orb's ring says the state: working, my turn, a result to read, quiet. */
 .og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border: var(--graph-edge-flow-width) solid var(--border); border-radius: 50%; background: var(--secondary); }
 .og-orb .og-provider { width: 60%; height: 60%; }
+/* A profile agent's logo wears its badge in a wrapper (`AgentMark`): the wrapper takes the logo's place and the logo fills it. */
+.og-orb [data-agent-mark-badged] { width: 60%; height: 60%; }
+.og-orb [data-agent-mark-badged] > .og-provider { width: 100%; height: 100%; }
 .og-session[data-mark="going"] .og-orb, .og-session[data-mark="waiting"] .og-orb { border-color: var(--agent-working); }
 .og-session[data-mark="waiting"] .og-orb { border-style: dashed; }
 .og-session[data-mark="turn"] .og-orb, .og-session[data-mark="look"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }

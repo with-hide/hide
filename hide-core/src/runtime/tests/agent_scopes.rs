@@ -217,6 +217,71 @@ fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
 }
 
 #[test]
+fn needs_you_puts_read_asks_below_unread_ones_each_oldest_first() {
+    // Operator decision 2026-11-08: an ask the operator already read sinks
+    // below every unread one, however long it has waited.
+    use crate::agent_state::sessions::Revisit;
+    let mut runtime = runtime();
+    let mut base = rows().remove(1);
+    base.lineage_parent_pane_id = None;
+    let unread = |id: &str, since: u64| {
+        let mut agent = base.clone();
+        agent.pane_id = id.into();
+        agent.group = "needs_you".into();
+        agent.state.request_since = Some(since);
+        agent
+    };
+    let read = |id: &str, since: u64| {
+        let mut agent = base.clone();
+        agent.pane_id = id.into();
+        agent.group = "seen".into();
+        agent.demand = "none".into();
+        agent.activity = "stopped".into();
+        agent.revisit = Some(Revisit {
+            starred: false,
+            read_ask: true,
+            since_unix_ms: since,
+        });
+        agent
+    };
+    runtime.snapshot.navigator.agents = vec![
+        read("read_old", 5),
+        unread("unread_new", 30),
+        read("read_new", 15),
+        unread("unread_old", 10),
+    ];
+    let names = ["read_old", "unread_new", "read_new", "unread_old"];
+    let checkouts: Vec<_> = names
+        .iter()
+        .map(|name| {
+            checkout(
+                "project",
+                name,
+                &format!("/{name}"),
+                Some(pane(name, &format!("/{name}"))),
+            )
+        })
+        .collect();
+    runtime.snapshot.navigator.workspaces =
+        vec![workspace("project", "Project", "/fixture", checkouts)];
+    assert!(runtime.refresh_agent_scopes());
+    let tasks = &runtime.snapshot.navigator.workspaces[0].agent_scope.tasks;
+    assert_eq!(
+        tasks
+            .cards
+            .iter()
+            .map(|c| (c.root.as_str(), c.state, c.read))
+            .collect::<Vec<_>>(),
+        [
+            ("unread_old", TaskState::NeedsYou, false),
+            ("unread_new", TaskState::NeedsYou, false),
+            ("read_old", TaskState::NeedsYou, true),
+            ("read_new", TaskState::NeedsYou, true),
+        ]
+    );
+}
+
+#[test]
 fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
     // B7, B9: Needs You, blocked, working, waiting, done, then resting and
     // the cleanup fold; the stage bar follows the task's PRs and worktrees.

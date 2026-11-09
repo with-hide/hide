@@ -1065,7 +1065,7 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
         model: Some("sonnet".into()),
         effort: Some("high".into()),
     };
-    runtime.record_pane_launch("w1:p2", "claude", "agent-w1:p2", &launch, None);
+    runtime.record_pane_launch("w1:p2", "claude", "agent-w1:p2", &launch, None, None);
     let mut payload = session(&[("w1:p1", "claude", true), ("w1:p2", "claude", false)]);
     payload["agents"][1]["agent_session"]["value"] = json!(SESSION_ID);
     payload["agents"][1]["name"] = json!("agent-w1:p2");

@@ -499,6 +499,18 @@ impl Panes {
             } else {
                 None
             };
+            // An executor's report is taken only from that attempt's
+            // executor, as this machine's kernel names the caller.
+            let executor = match (&proved, request.hook.as_ref().map(|hook| &hook.command)) {
+                (
+                    Proved::Pane(_),
+                    Some(hide_node_link::panes::HookCommand::AgentExec { attempt, .. }),
+                ) => Some(hide_agent_hooks::hook_request::executor_process(
+                    peer as u32,
+                    attempt,
+                )?),
+                _ => None,
+            };
             self.sweep_references(output)
                 .map_err(|_| "bridge_unavailable")?;
             let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -512,6 +524,7 @@ impl Panes {
                     nonce: request.nonce.clone(),
                     one_shot: request.one_shot,
                     hook: request.hook.clone(),
+                    executor,
                 },
                 Proved::Checkout(path) => NodeEvent::CheckoutProof {
                     request: id,

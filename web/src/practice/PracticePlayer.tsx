@@ -17,6 +17,7 @@ import { useShellStore } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
+import { MissionScreen } from "../MissionScreen";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
@@ -45,6 +46,8 @@ type Props = {
 
 export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, onLeave }: Props) {
   const [model, setModel] = useState<unknown>(() => chapter.world.initial());
+  // The sidebar's 미션 row shows the mission screen in the Workspace's place, as in the shell (PRD mission-screen B2).
+  const missionsShown = useUiStore((s) => s.screen?.kind === "missions");
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
@@ -71,7 +74,8 @@ export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, on
     const { rest, agents, focused, usage } = chapter.world.snapshot(model, Date.now());
     // The practice screen is the practice: its sidebar never invites to practice.
     const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
-    useShellStore.setState({ rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+    // A world with no missions holds an empty book, so the sidebar's 미션 row opens the quiet empty table, as in Hide.
+    useShellStore.setState({ rest: { missions: { items: [] }, ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
@@ -115,7 +119,7 @@ export function PracticePlayer({ chapter, operator, onStep, onMission, onHub, on
         <TitleRow actions={actions} />
         <div className="flex min-h-0 min-w-0 flex-1">
           <Sidebar actions={actions} />
-          <WorkspaceScreen actions={actions} />
+          {missionsShown ? <MissionScreen actions={actions} /> : <WorkspaceScreen actions={actions} />}
         </div>
         <OverviewModal actions={actions} />
         <Palette actions={actions} />

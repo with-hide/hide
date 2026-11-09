@@ -269,22 +269,25 @@ impl AttentionReason {
     /// the mission, which hands the raise to it, or for an unplanned pull
     /// request, which it leaves outside the nodes; then what the reason
     /// takes; `drop` last, which the screen sends only on a second press. A
-    /// failed Conductor's raise has no one to hand it to. The one list the
-    /// view sends and the operator's answer is checked against.
+    /// failed Conductor's raise has no one to hand it to. A refused close
+    /// has its one way out first (`done`, which closes the mission as done
+    /// with the empty lines passed on the operator's word) and no `drop`,
+    /// since every node's work is finished. The one list the view sends and
+    /// the operator's answer is checked against.
     pub fn choices(self, conductor: bool) -> Vec<OperatorAction> {
         use OperatorAction::{Attach, Done, Drop, Leave, Resume};
         let own: &[OperatorAction] = match self {
-            Self::MergedUnproven => &[Done],
-            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused | Self::CloseRefused => &[Drop],
+            Self::MergedUnproven | Self::CloseRefused => &[Done],
+            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused => &[Drop],
             Self::UnplannedPr => &[Attach],
             Self::ConductorFailed => &[Resume, Drop],
         };
         let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
-        leave
-            .then_some(Leave)
-            .into_iter()
-            .chain(own.iter().copied())
-            .collect()
+        let leave = leave.then_some(Leave).into_iter();
+        if self == Self::CloseRefused {
+            return own.iter().copied().chain(leave).collect();
+        }
+        leave.chain(own.iter().copied()).collect()
     }
 
     pub fn as_str(self) -> &'static str {
@@ -440,7 +443,9 @@ pub struct HideMark {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatorAction {
-    /// 끝으로: past the lines left open, as the operator's decision.
+    /// 끝으로: past the lines left open, as the operator's decision; for a
+    /// refused close, 완료로 닫기, which does it for every finished node and
+    /// closes the mission.
     Done,
     /// 노드 제외.
     Drop,
@@ -803,6 +808,15 @@ pub struct MissionNode {
     /// mission's machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_folder: Option<(String, String)>,
+    /// The commit the node's work folder was on when it was done, for a
+    /// node without a pull request: the commit its check command is judged
+    /// against from then on, because the folder keeps moving after a finish
+    /// (the worker merges into main, later commits, the folder goes away)
+    /// and a finish does not lose its proof to that. Gone once the node is
+    /// not done; a node done before this field existed has none, and its
+    /// check is judged against the folder as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_head: Option<String>,
     /// The proof that a direct change's branch is in main, which a mission
     /// waiting for its branches waits on (B17, B18): of that branch only,
     /// while the node stays done.
@@ -1013,6 +1027,7 @@ impl MissionNode {
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
+        self.done_head = None;
     }
 
     /// A change at work delivered by pull request: the node a push is asked
@@ -1055,6 +1070,18 @@ pub struct Conductor {
     pub session: Option<crate::links::ledger::SessionIdentity>,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// The profile the session's start ran with, as its pane's launch record
+    /// kept it, which 이어받기's resume of the session runs with again
+    /// (PRD agent-profiles D-27); `None` for the built-in default, as for
+    /// every mission recorded before profiles, unless `profile_unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
+    /// No launch record describes the session's start (a Conductor started
+    /// by hand), so the account it runs in is not known: 이어받기 asks the
+    /// session's machine, as a resume that names the session by id alone
+    /// does, never assuming the built-in default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_unknown: bool,
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -2109,6 +2136,7 @@ pub(crate) fn apply_plan(
                 commit: None,
                 folder: None,
                 remote_folder: None,
+                done_head: None,
                 in_main: None,
                 branch_ahead: None,
                 outside_round: 0,
@@ -2347,6 +2375,11 @@ pub(crate) fn apply_patch(
     // branch, or the node at work again, waits for a read of its own (B17).
     if next.branch != node.branch || next.status != NodeStatus::Done {
         next.in_main = None;
+    }
+    // The proof frozen at a finish goes with it: work taken up again is
+    // judged against its folder, and a fresh check.
+    if next.status != NodeStatus::Done {
+        next.done_head = None;
     }
     Ok(next)
 }
@@ -2967,6 +3000,10 @@ pub(crate) mod tests {
             AttentionReason::ConductorFailed.choices(true),
             [Resume, Drop]
         );
+        // A refused close closes as done first, hands on after, and never
+        // drops a node whose work is finished.
+        assert_eq!(AttentionReason::CloseRefused.choices(true), [Done, Leave]);
+        assert_eq!(AttentionReason::CloseRefused.choices(false), [Done]);
     }
     use super::*;
 
@@ -3011,6 +3048,8 @@ pub(crate) mod tests {
                 actor: actor("w1:p1"),
                 session: None,
                 agent_id: None,
+                profile: None,
+                profile_unknown: false,
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
@@ -3751,5 +3790,41 @@ pub(crate) mod tests {
             purpose: "screens".into(),
         };
         assert!(settings.validate().is_ok());
+    }
+
+    /// A Conductor recorded before profiles names none and reads as the
+    /// built-in default's; one that names a profile keeps it (PRD
+    /// agent-profiles D-27). An older build reads both, the field unknown to
+    /// it left out.
+    #[test]
+    fn a_conductor_recorded_before_profiles_reads_as_the_built_in_default() {
+        let old = serde_json::json!({"actor": serde_json::to_value(actor("w1:p1")).unwrap()});
+        let conductor: Conductor = serde_json::from_value(old).unwrap();
+        assert_eq!(conductor.profile, None);
+        assert!(
+            serde_json::to_value(&conductor)
+                .unwrap()
+                .get("profile")
+                .is_none()
+        );
+
+        let work = Conductor {
+            profile: Some(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p-work".into()),
+                name: "work".into(),
+                account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+            }),
+            ..conductor.clone()
+        };
+        let saved = serde_json::to_value(&work).unwrap();
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), work);
+        assert!(!conductor.profile_unknown, "a mission kept before profiles");
+        let unknown = Conductor {
+            profile_unknown: true,
+            ..conductor
+        };
+        let saved = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(saved["profile_unknown"], true);
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), unknown);
     }
 }

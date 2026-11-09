@@ -26,6 +26,7 @@ import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
+import { useMissionTurnCount } from "./MissionScreen";
 import { TreeRails } from "./components/agent-tree";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
@@ -56,7 +57,7 @@ import {
 import { editorHost, revealHost } from "./host";
 import { commandLabel } from "./shortcutLabels";
 import type { Digit } from "./shortcuts";
-import { contextAgents, contextAllWorkspaces, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
+import { contextAgents, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
 import { agentReference } from "./agentReference";
 import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, type MenuHost, type MenuItem } from "./workspaceManage";
 import { projectIssueSource, projectRepository, settingsTarget } from "./projectSettings";
@@ -100,6 +101,9 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
   const overviewCount = useOverviewCount();
   const overviewSelected = useUiStore((s) => s.overviewOpen || s.screen?.kind === "main");
+  const missionsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "missions");
+  const missionsCount = useMissionTurnCount();
+  const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
   const storedWidth = useShellStore((s) => s.rest?.ui_state?.sidebar_width ?? null);
   const columns = useSidebarColumns();
   // A drag draws the nav alone at the width under the pointer, over the
@@ -151,6 +155,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
+            missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
@@ -331,7 +336,7 @@ function SidebarEdge({
 function useFocusRowPane(): string | null {
   const workspaceScreen = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
   const focusedPaneId = useShellStore((s) => s.focusedPaneId);
-  const workspaces = useShellStore((s) => contextAllWorkspaces(s.rest));
+  const workspaces = useShellStore((s) => contextWorkspaces(s.rest));
   const agents = useShellStore((s) => contextAgents(s.rest, s.agents));
   const scope = useShellStore((s) => deviceScope(s.rest, frontDeviceId(s.rest)));
   const drawn = useMemo(() => sidebarPanes(workspaces, scope), [workspaces, scope]);
@@ -728,6 +733,7 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
       menu={context.agentRowMenu}
       pulls={context.familyOf(agent)}
       onOpenMission={(id) => context.actions.openMission(id)}
+      actions={context.actions}
     />
   );
 }
@@ -738,7 +744,8 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
 // agent marks on the checkout name's column. A plain folder's row keeps its
 // glyph, which says the checkout's kind (D-07). Every row ends the
 // same way, agent rows included: its time, then its fold slot, so the times
-// and the chevrons stand in one column each. A row's menu opens on a
+// stand in one column and checkout chevrons in another; an agent root's
+// chevron stands at its left, on its tab's guide. A row's menu opens on a
 // right-click, or the menu key or ⇧F10 on the focused row; nothing on the
 // row stands for it.
 /** Where a project's name, a checkout's kind glyph, a plain folder's glyph, a group header's chevron and every fold start. */
@@ -1522,7 +1529,7 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, ins
     {groups.map((group, index) => (
       <li key={group.tab?.id ?? "unplaced"} className={cn("relative", groupTabs && index > 0 && "mt-sm")} data-sidebar-tab-group={group.tab?.id ?? undefined}>
         {groupTabs ? <TabSegmentHead group={group} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={glyphColumn} context={context} /> : null}
-        <AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={group.rows} inset={inset} context={context} />
+        <AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={group.rows} inset={inset} fold={guideCenter(glyphColumn, "var(--size-checkout-icon)")} context={context} />
       </li>
     ))}
     {sleeping.map((session) => <SleepingSessionRow key={session.sleep_id} session={session} actions={context.actions} inset={inset} />)}
@@ -1543,10 +1550,15 @@ function CollectionRows({ checkout, deviceId, collection, inset, guideColumn, gu
     {group.tabs.map((id) => {
       if (drafts.includes(id)) return <li key={id}><RowButton data-sidebar-tab={id} className="h-(--size-sidebar-line) rounded-sm py-0 text-caption text-subtle-foreground" style={{ paddingLeft: inset }} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select", tab_id: id })}><PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{t("groups.newTab")}</span></RowButton></li>;
       const segment = segments.find((candidate) => candidate.tab?.id === id);
-      return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={guideColumn} glyphSize={guideSize} context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} context={context} /></li> : null;
+      return segment ? <li key={id} className="relative" data-sidebar-tab-group={id}><TabSegmentHead group={segment} checkout={checkout} deviceId={deviceId} inset={inset} glyphColumn={guideColumn} glyphSize={guideSize} context={context} /><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} fold={guideCenter(guideColumn, guideSize)} context={context} /></li> : null;
     })}
-    {segments.filter((segment) => segment.tab === null || !placed.has(segment.tab.id!)).map((segment) => <li key={segment.tab?.id ?? "unplaced"}><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} context={context} /></li>)}
+    {segments.filter((segment) => segment.tab === null || !placed.has(segment.tab.id!)).map((segment) => <li key={segment.tab?.id ?? "unplaced"}><AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} agentRows={segment.rows} inset={inset} fold={guideCenter(guideColumn, guideSize)} context={context} /></li>)}
   </>;
+}
+
+/** The center of a guide column: a tab's guide hangs there, and a root's chevron stands on it. */
+function guideCenter(column: string, size: string): string {
+  return `calc(${column} + ${size} / 2)`;
 }
 
 /** A tab's quiet line: a sidebar line and a hairline of air. */
@@ -1566,7 +1578,7 @@ function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSi
   const name = naming ? naming.manual_name ?? t("sidebar.tabNumber", { number: naming.number }) : checkout.strip.find((entry) => entry.source_id === tab?.id)?.label ?? t("groups.newTab");
   // A tab the operator kept with no agent left says its name alone, never a count of none.
   const label = group.count === 0 ? name : t("sidebar.tabAgents", { name, count: group.count });
-  const center = `calc(${glyphColumn} + ${glyphSize} / 2)`;
+  const center = guideCenter(glyphColumn, glyphSize);
   const open = () => context.actions.openSurface(tabSurface(checkout, tab!.id!, deviceId));
   if (!group.glyph) return null;
   return (
@@ -1584,7 +1596,8 @@ function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSi
   );
 }
 
-function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { checkoutId: string; deviceId: string; agentRows: BoardRow[]; inset: string; context: TreeContext }) {
+/** `fold` is the center of the column a root's chevron stands on: its tab's guide. */
+function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }: { checkoutId: string; deviceId: string; agentRows: BoardRow[]; inset: string; fold: string; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
   const siblings = useShellStore((s) => siblingsShown(s.rest));
@@ -1615,12 +1628,14 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
           : null;
         const tree: SidebarTreeSlot = {
           place: line.place,
+          fold,
           open: hasChildren ? depth < 2 && !agent.lineage_collapsed : null,
           onToggle: () => context.actions.toggleAgentTree(agent.pane_id),
           popover: hasChildren && depth >= 2 ? {
             agents: context.agents,
             onOpenChild: (id, label) => context.actions.followRelation(agent.pane_id, id, label),
             onTask: () => context.actions.revealTask(agent.pane_id),
+            actions: context.actions,
           } : null,
         };
         return (
@@ -1642,6 +1657,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             menu={context.agentRowMenu}
             pulls={context.familyOf(agent)}
             onOpenMission={depth === 0 ? (id) => context.actions.openMission(id) : undefined}
+            actions={context.actions}
           />
         );
       })}

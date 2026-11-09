@@ -107,6 +107,14 @@ pub(crate) struct DeviceKitCall {
     pub(crate) connect_attempt: Option<u64>,
 }
 
+/// What a node answered for its profiles (`crate::kit::read_profiles`).
+pub(crate) enum ProfilesRead {
+    Listed(hide_node_link::profiles::ProfileList),
+    /// The node predates profiles.
+    Unsupported,
+    Unreadable(String),
+}
+
 /// What a device's kit call answered.
 pub(crate) enum DeviceKitAnswer {
     Report(Result<KitReport, String>),
@@ -446,6 +454,14 @@ impl Runtime {
             }));
         }
         let mut snapshot = KitSnapshot::from_report(report);
+        // The list is the node's to answer; a pass judges the profiles in it.
+        snapshot.profiles = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.profiles.clone());
+        if let Some(profiles) = snapshot.profiles.as_mut() {
+            profiles.judged(&report.profiles);
+        }
         self.diagnose_kit_reasons(device_id, report);
         self.install_updated_agents(device_id, &snapshot);
         snapshot.busy = self.kit_install_queued(device_id);
@@ -527,6 +543,68 @@ impl Runtime {
             changed |= self.settle_first_run_apply();
         }
         changed
+    }
+
+    /// Whether a kit answer for `device_id` is followed by a read of its
+    /// profiles: after every pass, which may have settled a removal, and
+    /// after a read until a list was read once. A read's judgment of each
+    /// profile comes with the kit's own report.
+    pub(crate) fn profiles_due(&self, device_id: &str, job: &KitJob) -> bool {
+        matches!(job, KitJob::Apply(_))
+            || self
+                .kit_states
+                .get(device_id)
+                .is_none_or(|state| state.profiles.is_none())
+    }
+
+    /// What the node of `device_id` answered for its profiles. A list that
+    /// cannot be read keeps the last one and says so; why goes to the log.
+    pub(crate) fn ingest_profiles(&mut self, device_id: &str, read: ProfilesRead) -> bool {
+        // A device that went while the read ran keeps no kit state.
+        if device_id != self.node.as_str()
+            && (!self.device_registration_exists(device_id) || self.device_kit_removing(device_id))
+        {
+            return false;
+        }
+        let mut state = self.kit_state(device_id);
+        let profiles = match read {
+            ProfilesRead::Listed(list) => {
+                if let Some(reason) = &list.unjudged {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "kit",
+                        "kind": "profiles.unjudged",
+                        "device_id": device_id,
+                        "reason": reason,
+                    }));
+                }
+                // What the list says of the removals under way
+                // (`launch::holds`).
+                self.profile_holds.listed(device_id, list.version, |id| {
+                    list.profiles
+                        .iter()
+                        .find(|profile| profile.id == *id)
+                        .map(|profile| profile.removing)
+                });
+                crate::model::ProfilesSnapshot::from_list(&list)
+            }
+            ProfilesRead::Unsupported => crate::model::ProfilesSnapshot::unsupported(),
+            ProfilesRead::Unreadable(reason) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "profiles.unreadable",
+                    "device_id": device_id,
+                    "reason": reason,
+                }));
+                let mut kept = state
+                    .profiles
+                    .clone()
+                    .unwrap_or_else(crate::model::ProfilesSnapshot::unsupported);
+                kept.state = crate::model::ProfilesState::Unreadable;
+                kept
+            }
+        };
+        state.profiles = Some(profiles);
+        self.set_kit_state(device_id, state)
     }
 
     /// An agent that is on, whose pieces waited on something the operator

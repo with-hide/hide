@@ -1507,6 +1507,9 @@ mod tests {
                     "device_id": devices[index], "checkout_id": checkouts[index],
                     "project_name": "p", "branch": "main", "device_name": "d",
                 })).collect::<Vec<_>>(),
+                "home_retire": (0..3).map(|index| json!({
+                    "device_id": devices[index], "registration_id": registrations[index],
+                })).collect::<Vec<_>>(),
                 "expanded_paths": [M_ROOT],
                 "device_expanded_paths": {ALIAS: [C_ROOT], X: [X_ROOT]},
                 "selected_path": M_ROOT,
@@ -1569,6 +1572,18 @@ mod tests {
                 "stray_dismissals": dismissals,
                 "session_open_folds": before("fold"),
             });
+            // The Agent tab the front 보기 slot belongs to, and the slots of
+            // the tabs not in front.
+            let tabs = before("tab");
+            core["detail_home"] = json!(tabs[0]);
+            core["detail_tabs"] = Value::Object(
+                (0..3)
+                    .map(|index| (tabs[index].clone(), json!({"items": [
+                        {"kind": "remains", "workspace_id": registrations[index], "checkout_id": checkouts[index]},
+                        {"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},
+                    ], "shown": false})))
+                    .collect(),
+            );
             core["agent_permissions"] = permissions;
             core["device_agent_permissions"] = device_permissions;
             core

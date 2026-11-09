@@ -147,7 +147,7 @@ export async function startPhoneRelay(port = 0) {
       if (state.dropInputReply) { state.offline = true; active.get(id)?.close(); return; }
       await send(id, { type: "input_result", request_id: String(data.request_id), ok: true, reason: null });
     }
-    else if (data.type === "start_sheet" && data.open) await send(id, { type: "start_catalog", targets: [{ id: "home:test-device", device_id: "test-device", place: null, device_label: null, connected: true }], core_platform: "macos aarch64", kinds: [{ id: "claude", models: [] }], remembered: { kind: "claude", models: {} } });
+    else if (data.type === "start_sheet" && data.open) await send(id, { type: "start_catalog", targets: [{ id: "checkout-one", device_id: "test-device", place: "project · main", device_label: null, connected: true }], core_platform: "macos aarch64", kinds: [{ id: "claude", models: [] }], remembered: { kind: "claude", models: {} } });
     else if (data.type === "start_agent") await send(id, { type: "start_result", request_id: String(data.request_id), ok: true, reason: null, device_id: agent.device_id, pane_id: agent.pane_id });
     else if (data.type === "answer_mission") await send(id, { type: "mission_result", request_id: String(data.request_id), mission: String(data.mission), ok: !state.refuseMission, reason: state.refuseMission || null });
     else if (data.type === "wake_agent") { state.sleeping = false; await send(id, { type: "sleep_result", request_id: String(data.request_id), sleep_id: `${agent.device_id}|${agent.pane_id}`, ok: true, reason: null }); await send(id, groups()); }

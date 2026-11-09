@@ -28,6 +28,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub mod account;
 pub mod antigravity;
 pub mod bell_line;
 pub mod call_shell;
@@ -48,6 +49,7 @@ mod native_file;
 pub mod opencode;
 pub mod pasted;
 mod refusal;
+pub mod session_account;
 pub mod session_activity;
 mod sightings;
 mod source;
@@ -58,6 +60,7 @@ pub mod tools;
 pub mod turns;
 pub mod usage;
 
+pub use account::Accounts;
 pub use bell_line::{bell_sender, is_bell_line};
 pub use envelope::{
     envelope_from_operator, envelope_header, envelope_names, envelope_sender, is_letter,
@@ -74,7 +77,7 @@ pub use source::window::{
 
 pub use label_owner::{
     ConfirmedLabelSession, SessionReadScope, confirm_label_session, confirm_session_file,
-    label_reference_token, read_session_file, valid_native_id,
+    label_reference_token, read_session_file, valid_native_id, valid_plain_id,
 };
 
 pub use conversation_cursor::{
@@ -144,29 +147,53 @@ pub const SESSION_INCREMENT_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 /// Largest individual JSONL record retained or parsed by a cursor.
 pub const SESSION_LINE_LIMIT_BYTES: usize = 256 * 1024;
 
-/// Claude Code's transcript folder, under the home folder.
-pub const CLAUDE_SESSIONS: &str = ".claude/projects";
-/// Codex CLI's transcript folder, under the home folder.
-pub const CODEX_SESSIONS: &str = ".codex/sessions";
-/// Pi's default native session root. Custom session directories grant no trust.
-pub const PI_SESSIONS: &str = ".pi/agent/sessions";
-/// Grok's default native root; a `GROK_HOME` elsewhere grants no trust.
-pub const GROK_SESSIONS: &str = ".grok/sessions";
-/// omp's default native root; profiles and custom session roots grant no trust.
-pub const OMP_SESSIONS: &str = ".omp/agent/sessions";
-
-/// The folder in `home` that holds `agent`'s session files, `None` for an
-/// agent that keeps no file per session.
-pub fn session_root(home: &Path, agent: Agent) -> Option<PathBuf> {
+/// The folder that holds `agent`'s session files in the account a read of
+/// it locates in (`Accounts::reading`, the default unless a read named
+/// another), `None` for an agent that keeps no file per session: that
+/// account's `sessions` place ([`account`]). Retired Cursor's is below the
+/// home.
+pub fn session_root(accounts: &Accounts, agent: Agent) -> Option<PathBuf> {
     match agent {
-        Agent::Claude => Some(home.join(CLAUDE_SESSIONS)),
-        Agent::Codex => Some(home.join(CODEX_SESSIONS)),
-        Agent::Grok => Some(home.join(GROK_SESSIONS)),
-        Agent::Pi => Some(home.join(PI_SESSIONS)),
-        Agent::Omp => Some(home.join(OMP_SESSIONS)),
-        Agent::Cursor => Some(home.join(cursor::SESSIONS)),
-        Agent::Antigravity => Some(home.join(antigravity::SESSIONS)),
+        Agent::Cursor => Some(accounts.home().join(cursor::SESSIONS)),
         Agent::OpenCode => None,
+        _ => accounts
+            .root(agent)
+            .ok()
+            .flatten()
+            .map(|root| root.place.clone()),
+    }
+}
+
+/// Every folder `agent` keeps its session files in, one per account the node
+/// registered, the default first; a path a caller names is read only inside
+/// one of them. A profile's folder is listed only once it is proven down
+/// from the account's folder with no link on the way (D-36); the default
+/// account's is listed as it is, a link followed (B29).
+pub(crate) fn session_roots(accounts: &Accounts, agent: Agent) -> Vec<PathBuf> {
+    match agent {
+        Agent::Cursor | Agent::OpenCode => session_root(accounts, agent).into_iter().collect(),
+        _ => accounts
+            .roots(agent)
+            .filter(|(key, root)| {
+                key.is_default()
+                    || native_file::checked_path_under(&root.anchor, root.suffix(), &root.place)
+                        .is_ok()
+            })
+            .map(|(_, root)| root.place.clone())
+            .collect(),
+    }
+}
+
+/// The default account's folders of `agent` that [`inside_session_root`]
+/// resolves a path against, every link followed.
+fn default_session_roots(accounts: &Accounts, agent: Agent) -> Vec<PathBuf> {
+    match agent {
+        Agent::Cursor | Agent::OpenCode => session_root(accounts, agent).into_iter().collect(),
+        _ => accounts
+            .roots(agent)
+            .filter(|(key, _)| key.is_default())
+            .map(|(_, root)| root.place.clone())
+            .collect(),
     }
 }
 
@@ -199,10 +226,16 @@ impl RootRefusal {
 }
 
 /// `path` with every link resolved, refused unless it lies under one of
-/// `agents`' session folders in `home`: a path a caller names, or a link
-/// planted inside a folder, never makes a reader open a file elsewhere.
+/// `agents`' session folders in an account the node registered: a path a
+/// caller names, or a link planted inside a folder, never makes a reader
+/// open a file elsewhere. A path in a profile's account is proven down from
+/// the account's folder, the innermost account that holds it
+/// ([`Accounts::account_of`]), with no link and no `..` on the way (D-36),
+/// as the readers of Pi, omp and Grok prove every account's. Claude Code's
+/// and Codex's default account keeps following every link, as before
+/// profiles (B29): an operator's `~/.claude/projects` may be a link.
 pub fn inside_session_root(
-    home: &Path,
+    accounts: &Accounts,
     agents: &[Agent],
     path: &Path,
 ) -> std::result::Result<PathBuf, RootRefusal> {
@@ -210,16 +243,24 @@ pub fn inside_session_root(
         .iter()
         .filter(|agent| agent.requires_native_file_proof())
     {
-        let checked = native_file::inside_root(home, agent, path);
+        let checked = native_file::inside_root(accounts, agent, path);
         if agents.len() == 1 || checked.is_ok() {
             return checked;
         }
     }
-    let roots = agents
+    let mut roots = Vec::new();
+    for &agent in agents
         .iter()
         .filter(|agent| !agent.requires_native_file_proof())
-        .filter_map(|agent| session_root(home, *agent))
-        .collect::<Vec<_>>();
+    {
+        if let Some((_, root)) = accounts
+            .innermost(agent, path)
+            .filter(|(key, _)| !key.is_default())
+        {
+            return native_file::checked_path_under(&root.anchor, root.suffix(), path);
+        }
+        roots.extend(default_session_roots(accounts, agent));
+    }
     if roots.is_empty() {
         return Err(
             if agents
@@ -749,7 +790,7 @@ pub struct CursorCheckpoint {
 
 /// Resolve the engine's session identity and working directory to local files.
 pub struct SessionLocator {
-    home: PathBuf,
+    accounts: Accounts,
     resolved: HashMap<String, PathBuf>,
 }
 
@@ -764,9 +805,11 @@ impl SessionLocator {
         self.resolved.retain(|id, _| live(id));
     }
 
-    pub fn new(home: &Path) -> Self {
+    /// A locator that reads in `accounts` (`Accounts::reading` names the
+    /// account a pane's agent runs in).
+    pub fn new(accounts: &Accounts) -> Self {
         Self {
-            home: home.to_path_buf(),
+            accounts: accounts.clone(),
             resolved: HashMap::new(),
         }
     }
@@ -781,7 +824,7 @@ impl SessionLocator {
         // Pi's lossy folder and file names are never native ownership proof.
         if agent.requires_native_file_proof() {
             return native_file::locate(
-                &self.home,
+                &self.accounts,
                 agent,
                 identity,
                 cwd,
@@ -842,7 +885,7 @@ impl SessionLocator {
                 Agent::Claude => self.claude_path_for_id(cwd, id, budget),
                 Agent::Codex => self.codex_path_for_id(id, budget),
                 Agent::Grok | Agent::Pi | Agent::Omp | Agent::Cursor | Agent::Antigravity => {
-                    native_file::locate(&self.home, agent, Some(identity), cwd, budget)
+                    native_file::locate(&self.accounts, agent, Some(identity), cwd, budget)
                 }
                 Agent::OpenCode => Err(SessionError::UnsupportedSessionKind),
             },
@@ -850,11 +893,11 @@ impl SessionLocator {
     }
 
     fn claude_root(&self) -> PathBuf {
-        self.home.join(CLAUDE_SESSIONS)
+        session_root(&self.accounts, Agent::Claude).expect("Claude keeps a file per session")
     }
 
     fn codex_root(&self) -> PathBuf {
-        self.home.join(CODEX_SESSIONS)
+        session_root(&self.accounts, Agent::Codex).expect("Codex keeps a file per session")
     }
 
     fn claude_path_for_id(
@@ -907,7 +950,7 @@ impl SessionLocator {
             )?)),
             Agent::Codex => self.newest_codex_session(cwd, budget),
             Agent::Grok | Agent::Pi | Agent::Omp | Agent::Cursor | Agent::Antigravity => {
-                native_file::locate(&self.home, agent, None, Some(cwd), budget).map(Some)
+                native_file::locate(&self.accounts, agent, None, Some(cwd), budget).map(Some)
             }
             Agent::OpenCode => Err(SessionError::UnsupportedSessionKind),
         }
@@ -2577,7 +2620,7 @@ mod tests {
         fs::create_dir_all(&claude_dir).unwrap();
         let session = claude_dir.join("claude-id.jsonl");
         fs::write(&session, b"").unwrap();
-        let mut locator = SessionLocator::new(home.path());
+        let mut locator = SessionLocator::new(&crate::Accounts::new(home.path()));
         assert_eq!(
             locator
                 .locate("pane-new", Agent::Claude, None, Some(cwd))
@@ -2601,7 +2644,7 @@ mod tests {
             b"{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/Users/example\"}}\n",
         )
         .unwrap();
-        let mut locator = SessionLocator::new(home.path());
+        let mut locator = SessionLocator::new(&crate::Accounts::new(home.path()));
         assert_eq!(
             locator
                 .locate(
@@ -2637,7 +2680,7 @@ mod tests {
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
         fs::File::open(&quiet).unwrap().set_modified(old).unwrap();
         fs::write(&busy, b"").unwrap();
-        let mut locator = SessionLocator::new(home.path());
+        let mut locator = SessionLocator::new(&crate::Accounts::new(home.path()));
         assert_eq!(
             locator
                 .locate(
@@ -2667,7 +2710,7 @@ mod tests {
         fs::create_dir_all(&claude_dir).unwrap();
         let busy = claude_dir.join("busy-id.jsonl");
         fs::write(&busy, b"").unwrap();
-        let mut locator = SessionLocator::new(home.path());
+        let mut locator = SessionLocator::new(&crate::Accounts::new(home.path()));
         let unborn = SessionIdentity::id("unborn-id");
         assert!(matches!(
             locator.locate(

@@ -1331,6 +1331,16 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "machine_unknown" => {
             "Use the device id from hide workspace info or hide agent list with --machine, then retry"
         }
+        // `hide agent ask-human` (PRD ask-human B2, B3).
+        "human_kind_unknown" => {
+            "hide agent ask-human takes auth (a sign-in, a re-authentication, an unlock) or permission (an app connection, an OS permission); for a decision or anything else, send your parent a letter with hide request send"
+        }
+        "human_place_required" => {
+            "Name where the person acts: the page's address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"
+        }
+        "human_place_too_long" => {
+            "Name the place in at most 300 characters: the page's address, the app or the setting"
+        }
         "machine_unavailable" => {
             "Check that the device is connected in Settings > Devices and its helper is allowed, then run the same command again"
         }
@@ -1360,7 +1370,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Run the command from an agent on the machine that runs Hide, or leave out --machine"
         }
         "intent_conflict" => {
-            "Use a new intent, or repeat the request this intent was first used for"
+            "Use a new --intent for each new letter or spawn; send or spawn again with this intent only to repeat exactly what it was first used for (the same recipient, kind and body, or the same spawn)"
         }
         "desk_spawn_args" => {
             "Desk passes no words to an agent's own CLI after `--`; choose the model and effort with --model and --effort and run the spawn again without `--`, or ask the operator to start that session themselves"
@@ -1455,6 +1465,27 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
+        }
+        // A spawn's agent profile (docs/ARCHITECTURE.md, Starting an agent
+        // with a profile): only an unanswered machine is worth the same
+        // intent again as it is.
+        "profile_gone" => {
+            "That machine no longer has the profile; spawn with another --profile, or without --profile for the agent's default there"
+        }
+        "profiles_unsupported" => {
+            "That machine's Hide predates agent profiles; update Hide there, or spawn without --profile"
+        }
+        "profile_refused" => {
+            "The profile cannot start its program on that machine (the detail says why); fix that program or the profile, or spawn with another --profile, since the same intent fails the same way until then"
+        }
+        "profile_unanswered" => {
+            "That machine did not answer for the profile; check that it is connected, then run the same command again with the same intent"
+        }
+        "profile_unconfirmed" => {
+            "The agent's start was typed but Hide could not confirm its program runs; look at the agent's pane before starting it again, since it may be running"
+        }
+        "launch_records_full" => {
+            "Hide keeps as many records of how its agents started as it can, so an agent with a profile does not start; close agents you no longer need, then run the same command again"
         }
         "beside_pane_unavailable" => {
             "The engine could not split your pane (it closed, or the engine refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
@@ -1578,6 +1609,8 @@ enum ScopedRequest {
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
+    /// `hide agent profile`: planned on the owner thread, run off it.
+    AgentProfile(hide_core::agent_profiles::ProfileCommand),
     /// `hide ps [--all]`: the live panes and agents, read from the core's
     /// own state.
     Ps {
@@ -1622,6 +1655,7 @@ impl ScopedRequest {
                 | Self::Mission(..)
                 | Self::Plan(..)
                 | Self::AgentCatalog(..)
+                | Self::AgentProfile(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::AgentArchive { .. }
@@ -1739,6 +1773,12 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("agent_profile") => serde_json::from_value::<
+                            hide_core::agent_profiles::ProfileCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(hide_core::agent_profiles::ProfileCommand::valid)
+                        .map(ScopedRequest::AgentProfile),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -1948,6 +1988,16 @@ async fn scoped_client_loop(
                                     core.plan(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|code| {
                                             let next = hide_core::plans::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AgentProfile(command) => {
+                                    core.prepare_agent_profile(&cap.context.device_id, command)
+                                        .and_then(hide_core::agent_profiles::Prepared::run)
+                                        .map_err(|code| {
+                                            let next = hide_core::agent_profiles::next_action(
                                                 hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)
@@ -3736,14 +3786,29 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     };
     let root_path = hide_platform::path::to_wire_lossy(&known);
     let walk_root = known.clone();
+    let (core, node, home) = (
+        Arc::clone(&state.core),
+        state.boundary.node().as_str().to_owned(),
+        state.boundary.home().to_path_buf(),
+    );
     let answer = state.index.query(
         state.boundary.node().as_str(),
         &root_path,
         &query,
         move || {
+            // The other projects of this machine, which the home project's
+            // walk leaves to their own (PRD home-folder-project D-05); asked
+            // here, on the walk's worker, once per walk.
+            let others: Vec<PathBuf> = core
+                .registered_paths(&node)?
+                .iter()
+                .filter_map(|path| hide_host::root::native_absolute(path))
+                .collect();
             Ok(hide_host::index::walk(
                 &cap_std::fs::Dir::from_std_file(opened),
                 &walk_root,
+                Some(&home),
+                &others,
             ))
         },
     );
@@ -3831,7 +3896,10 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
         let channel = core
             .node_link(&walk_device)
             .map_err(|message| log("link.not_connected", message))?;
-        hide_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+        let others = core
+            .registered_paths(&walk_device)
+            .map_err(|message| log("core.unavailable", message))?;
+        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
             log(
                 &hide_core::node_access::link_failure_code(&error),
                 error.to_string(),
@@ -4488,6 +4556,11 @@ fn register(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Value>
         Err(Unregistrable::ConfirmProject(root)) => {
             let mut frame = refused(kind, &raw, Refusal::NeedsConfirmation);
             frame["payload"]["confirm"] = Value::String(hide_platform::path::to_wire_lossy(&root));
+            Some(frame)
+        }
+        Err(Unregistrable::ConfirmHome) => {
+            let mut frame = refused(kind, &raw, Refusal::NeedsConfirmation);
+            frame["payload"]["home"] = Value::Bool(true);
             Some(frame)
         }
     }

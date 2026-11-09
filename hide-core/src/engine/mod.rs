@@ -143,6 +143,20 @@ pub(crate) fn same_engine(left: &SharedEngine, right: &SharedEngine) -> bool {
 pub(crate) use answers::*;
 pub use answers::{PaneProof, PaneSession, PaneSessionKind, PaneText, ServerPong};
 
+/// What `hide agent exec` reported of a profile's start
+/// (`HookCommand::AgentExec`), with the process that sent it as the pane's
+/// machine says it is that attempt's executor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentExecReport {
+    pub attempt: String,
+    pub event: hide_node_link::panes::AgentExecEvent,
+    pub executor: hide_node_link::panes::ExecProcess,
+}
+
+/// The refusal of an [`AgentExecReport`] for an attempt that is not, or no
+/// longer, running in its pane.
+pub const ATTEMPT_UNKNOWN: &str = "attempt_unknown";
+
 /// The environment a new pane's shell starts with, beside its own.
 pub(crate) type Env = BTreeMap<String, String>;
 
@@ -185,6 +199,19 @@ pub(crate) trait Engine: Send + Sync {
     /// engine-bundle-4-herdr-removal D-22), which the core then tells.
     fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<bool> {
         Ok(false)
+    }
+
+    /// What `hide agent exec` reported of the profile's start this engine
+    /// typed in `pane` (PRD agent-profiles B22), kept with that start's
+    /// attempt, whose result the engine reads from the executor's process
+    /// ([`Self::start_agent`]). Refused when the pane has no such attempt
+    /// running, which tells a `Ready` executor not to start its program;
+    /// an engine that types no profile's start has none.
+    fn agent_exec(&self, _pane: &str, report: AgentExecReport) -> Answer<()> {
+        Err(EngineError::Refused {
+            code: ATTEMPT_UNKNOWN.to_owned(),
+            message: format!("no start with attempt {} runs here", report.attempt),
+        })
     }
 
     // The session as a whole.

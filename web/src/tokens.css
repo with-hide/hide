@@ -6,6 +6,7 @@
 @custom-variant pane-head-tight (@container pane (width < 300px));
 @custom-variant mission-wide (@container mission (min-width: 900px));
 @custom-variant mission-panel-words (@container mission-panel (min-width: 480px));
+@custom-variant missions-split (@container missions (min-width: 760px));
 @custom-variant task-table-wide (@container task-table (min-width: 520px));
 
 @theme static {
@@ -293,6 +294,7 @@
   --size-compact-agent-row-vpad: 5px;
   --size-hide-badge: 11px;
   --size-hide-badge-mark: 9px;
+  --text-badge: 8px;
   --size-view-opener-mark: 14px;
   --size-view-note: 320px;
   --size-agent-badge-compact: 16px;
@@ -321,6 +323,11 @@
   --size-mission-side: 320px;
   --size-mission-wide: 900px;
   --size-mission-panel-words: 480px;
+  --size-mission-list: 288px;
+  --size-missions-split: 760px;
+  --size-mission-table-project: 144px;
+  --size-mission-table-steps: 168px;
+  --size-mission-table-time: 72px;
   --size-task-column: 56px;
   --size-legend-mark: 8px;
   --size-task-table-wide: 520px;

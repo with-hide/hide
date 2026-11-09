@@ -1093,12 +1093,25 @@ impl LinkStore {
         let projects = self.projects()?;
         let mut owner: HashMap<SessionKey, usize> = HashMap::new();
         let sessions = self.all_sessions()?;
-        for (index, project) in projects.iter().enumerate() {
-            let paths = self.project_paths(project)?;
-            for session in &sessions {
-                if session.inside(&paths) {
-                    owner.entry(session.key.clone()).or_insert(index);
-                }
+        // The project whose place is the deepest one holding the session's
+        // folder owns it, so a project inside the home folder keeps its own
+        // sessions' retention (PRD home-folder-project D-07).
+        let mut places: Vec<(String, DevicePath)> = Vec::new();
+        for project in &projects {
+            for path in self.project_paths(project)? {
+                places.push((project.key.clone(), path));
+            }
+        }
+        for session in &sessions {
+            let Some(key) = session
+                .cwd
+                .as_deref()
+                .and_then(|cwd| deepest_owner(&places, &session.key.device, cwd))
+            else {
+                continue;
+            };
+            if let Some(index) = projects.iter().position(|project| project.key == *key) {
+                owner.insert(session.key.clone(), index);
             }
         }
         // Per project, the latest end among the pull requests each session
@@ -1795,7 +1808,7 @@ impl LinkStore {
                     Some(places) => places,
                     None => places.insert(self.registered_places()?),
                 };
-                deepest_owner(places, &row.key.device, &place) == Some(project.key.as_str())
+                deepest_owner(places, &row.key.device, &place) == Some(&project.key)
             } else {
                 names.contains(&row.repo_name)
             };
@@ -3193,16 +3206,16 @@ struct NamedRow {
 
 /// The project whose registered place holding `place` on `device` is the
 /// deepest, so a folder inside a project nested in another is the inner one's.
-fn deepest_owner<'a>(
-    places: &'a [(String, DevicePath)],
+pub(super) fn deepest_owner<'a, K>(
+    places: &'a [(K, DevicePath)],
     device: &str,
     place: &str,
-) -> Option<&'a str> {
+) -> Option<&'a K> {
     places
         .iter()
         .filter(|(_, (at, path))| at == device && within(place, path))
         .max_by_key(|(_, (_, path))| path.trim_end_matches('/').len())
-        .map(|(key, _)| key.as_str())
+        .map(|(key, _)| key)
 }
 
 /// What a pass over one project's pull requests reads once: the project row,

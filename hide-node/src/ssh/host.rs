@@ -2694,6 +2694,7 @@ mod tests {
             os: "linux".to_owned(),
             arch: "x86_64".to_owned(),
             home: None,
+            home_real: None,
             machine_identity: hide_node_link::protocol::MachineIdentity::Unavailable {
                 reason: "fixture identity is unavailable".to_owned(),
             },

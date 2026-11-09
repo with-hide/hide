@@ -78,8 +78,8 @@ pub struct Snapshot {
     /// Each Conductor's mission as its map draws it (PRD
     /// software-factory-conductor D-14).
     pub missions: crate::runtime::missions::MissionsSnapshot,
-    /// The events of the mission open in the 보기 slot only (PRD
-    /// mission-plan-visibility D-22).
+    /// The events of the mission the page's mission screen shows only (PRD
+    /// mission-plan-visibility D-22; PRD mission-screen D-16).
     pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
     /// The brief of the one node whose folded box the operator opened.
     pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
@@ -310,7 +310,7 @@ pub struct WorkspaceViewSnapshot {
     /// drawn over the agents only once a call opened it (right-lane D-02).
     pub open: bool,
     /// Whether the viewing column shows the checkout's documents; the
-    /// window's 보기 slot, while shown, stands in front of them (D-04).
+    /// front tab's 보기 slot, while shown, stands in front of them (D-04).
     pub documents: bool,
     /// The tool column's tool, or null while there is none.
     pub tool: Option<crate::workspace_views::Tool>,
@@ -1087,6 +1087,171 @@ pub struct KitSnapshot {
     /// what stopped it, for one line with Try again. The parts and agents
     /// are then empty, and the kit's own words are in the log.
     pub refused: Option<KitRefusalSnapshot>,
+    /// The machine's agent profiles as its node lists them (PRD
+    /// agent-profiles D-04); `None` until they were first read.
+    pub profiles: Option<ProfilesSnapshot>,
+}
+
+/// A machine's agent profiles: what its node lists, never a variable's
+/// value, each with its pieces as the kit last judged them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfilesSnapshot {
+    pub state: ProfilesState,
+    /// The list's version, which a change names (`ProfileApply`).
+    pub version: u64,
+    pub profiles: Vec<ProfileSnapshot>,
+    /// Each agent's default profile where it is not the built-in one, by
+    /// agent id.
+    pub defaults: BTreeMap<String, String>,
+}
+
+/// Whether the machine's profiles could be read
+/// (`contracts/snapshot-wire-enums.json`: `profiles_state`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfilesState {
+    Listed,
+    /// The machine's node predates profiles: only each agent's built-in
+    /// default profile runs there.
+    Unsupported,
+    /// The list could not be read; the last list read stays, and why is in
+    /// the log.
+    Unreadable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfileSnapshot {
+    pub id: String,
+    /// The agent's id.
+    pub kind: String,
+    pub name: String,
+    /// The folder or omp name it runs in; `None` for the agent's default
+    /// account.
+    pub account: Option<String>,
+    pub program: Option<String>,
+    /// The names of the variables it adds; their values stay on the node.
+    pub env_keys: Vec<String>,
+    pub version: u64,
+    /// Where its pieces are; `None` until the kit judged this version.
+    pub install: Option<ProfileInstall>,
+    /// The account's own folder, for a profile whose account is its own.
+    pub folder: Option<String>,
+    pub hook: Option<KitPieceSnapshot>,
+    pub skill: Option<KitPieceSnapshot>,
+}
+
+/// Where a profile's pieces are (`contracts/snapshot-wire-enums.json`:
+/// `profile_install`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileInstall {
+    /// The agent's default account: its pieces are the agent's own row.
+    Default,
+    /// An account of its own, with its pieces in `hook` and `skill`.
+    Own,
+    /// Nothing can be judged or put in its account; why is in the log.
+    Refused,
+    /// Being removed.
+    Removing,
+    /// Being removed, and Hide's pieces could not all leave its account;
+    /// why is in the log, and the next pass tries again.
+    RemoveFailed,
+}
+
+impl ProfilesSnapshot {
+    pub fn unsupported() -> Self {
+        Self {
+            state: ProfilesState::Unsupported,
+            version: 0,
+            profiles: Vec::new(),
+            defaults: BTreeMap::new(),
+        }
+    }
+
+    pub fn from_list(list: &hide_node_link::profiles::ProfileList) -> Self {
+        let mut snapshot = Self {
+            state: ProfilesState::Listed,
+            version: list.version,
+            profiles: list
+                .profiles
+                .iter()
+                .map(|profile| ProfileSnapshot {
+                    id: profile.id.0.clone(),
+                    kind: profile.kind.clone(),
+                    name: profile.name.clone(),
+                    account: profile.account.as_ref().map(|account| match account {
+                        hide_agent_adapter::AccountRef::Folder(text)
+                        | hide_agent_adapter::AccountRef::Name(text) => text.clone(),
+                    }),
+                    program: profile.program.clone(),
+                    env_keys: profile.env_keys.clone(),
+                    version: profile.version,
+                    install: profile.removing.then_some(ProfileInstall::Removing),
+                    folder: None,
+                    hook: None,
+                    skill: None,
+                })
+                .collect(),
+            defaults: list
+                .defaults
+                .iter()
+                .map(|(kind, id)| (kind.clone(), id.0.clone()))
+                .collect(),
+        };
+        let places: Vec<hide_kit::ProfileReport> = list
+            .profiles
+            .iter()
+            .filter_map(|profile| {
+                Some(hide_kit::ProfileReport {
+                    id: profile.id.clone(),
+                    version: profile.version,
+                    place: profile.place.clone()?,
+                })
+            })
+            .collect();
+        snapshot.judged(&places);
+        snapshot
+    }
+
+    /// Takes the kit's judgment of each profile, where it is about the
+    /// profile's version this list holds; one about an older version is a
+    /// late answer and is dropped (D-30).
+    pub fn judged(&mut self, reports: &[hide_kit::ProfileReport]) {
+        for profile in &mut self.profiles {
+            let Some(report) = reports
+                .iter()
+                .find(|report| report.id.0 == profile.id && report.version == profile.version)
+            else {
+                continue;
+            };
+            let (install, folder, hook, skill) = match &report.place {
+                hide_kit::ProfilePlace::Default => (ProfileInstall::Default, None, None, None),
+                hide_kit::ProfilePlace::Own {
+                    folder,
+                    hook,
+                    skill,
+                } => (
+                    ProfileInstall::Own,
+                    Some(folder.clone()),
+                    hook.as_ref().map(Into::into),
+                    skill.as_ref().map(Into::into),
+                ),
+                hide_kit::ProfilePlace::Refused { .. } => {
+                    (ProfileInstall::Refused, None, None, None)
+                }
+                hide_kit::ProfilePlace::Removing { failure: None } => {
+                    (ProfileInstall::Removing, None, None, None)
+                }
+                hide_kit::ProfilePlace::Removing { failure: Some(_) } => {
+                    (ProfileInstall::RemoveFailed, None, None, None)
+                }
+            };
+            profile.install = Some(install);
+            profile.folder = folder;
+            profile.hook = hook;
+            profile.skill = skill;
+        }
+    }
 }
 
 /// Why a machine's kit pass stopped, as the screen words it (`hide_kit::KitRefusal`
@@ -1305,6 +1470,7 @@ impl KitSnapshot {
             checking: false,
             check_failed: None,
             refused: report.refused.as_deref().map(Into::into),
+            profiles: None,
         }
     }
 
@@ -1458,9 +1624,14 @@ pub enum AskSubject {
     MissionDecision { line: String },
     /// A node of the mission waits on the operator to look (PRD
     /// mission-node-simple D-05, B14): its title and why.
+    ///
+    /// `unmet` is, for a refused close, how many finished nodes have a line
+    /// empty now (0 for every other reason and then left off the wire).
     MissionAttention {
         node: String,
         reason: crate::missions::AttentionReason,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        unmet: u32,
     },
     /// Hide typed a brief or a letter's bell into the agent and the agent
     /// has not recorded it, and no parent cleared it (`delivery::typed`).
@@ -1472,6 +1643,67 @@ pub enum AskSubject {
         spent: bool,
         held: bool,
     },
+    /// The agent declared that its next step is one only a person can take
+    /// (`hide agent ask-human`, PRD ask-human): the declaration's id, which
+    /// Done names, its kind, where the person acts, and the name of the
+    /// device the agent runs on (none for the core's own machine), which a
+    /// notification says.
+    HumanTurn {
+        id: String,
+        kind: crate::coordination::human_turn::HumanKind,
+        place: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+    },
+}
+
+/// A person's turn a row's own agent declared, as the row carries it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeclaredHumanTurn {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The device the agent runs on, by its name; absent for the core's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub since_unix_ms: u64,
+}
+
+impl DeclaredHumanTurn {
+    /// The question it asks of the operator, as a surface words it.
+    pub fn subject(&self) -> AskSubject {
+        AskSubject::HumanTurn {
+            id: self.id.clone(),
+            kind: self.kind,
+            place: self.place.clone(),
+            device: self.device.clone(),
+        }
+    }
+}
+
+/// The person's turn a row leads with (PRD ask-human D-09, D-17, D-20):
+/// on the agent that declared it and on its lineage root, never on a
+/// parent between them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HumanTurnLead {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The agent that declared it: this row's own pane, or the raised
+    /// descendant's, which Open goes to.
+    pub pane_id: String,
+    /// That agent's title, for a root's band and hover.
+    pub title: String,
+    /// The device that pane is on, read by the one address owner
+    /// (`crate::address`); absent for the core's own node. Done is disabled
+    /// while it is not connected (D-21).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    /// Whether this row's own agent declared it.
+    pub own: bool,
 }
 
 /// A published value the core derives from other fields of its row before
@@ -1543,6 +1775,25 @@ pub struct SidebarAgentSnapshot {
     pub letters_waiting: Option<u32>,
     /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
     pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// On a parent between a declaring descendant and its lineage root: the
+    /// person's turns raised below it, oldest first, which its pane's head
+    /// draws as the root's does (PRD ask-human B15). Its row stays as it was;
+    /// only the head reads this.
+    #[serde(skip)]
+    pub human_below: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// The person's turn this row's own agent declared (PRD ask-human D-07),
+    /// laid from the ledger in a field of its own: the row's own question,
+    /// `ask_subject` and demand stay as they are, and every reading of the
+    /// row looks here first and counts them behind it. Absent while none
+    /// stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declared_human_turn: Option<DeclaredHumanTurn>,
+    /// Derived: the person's turn this row leads with (PRD ask-human), its
+    /// own declaration or the oldest one its descendants raised to it, which
+    /// draws the key, the `<kind> · <place>` line and Done. Absent from the
+    /// wire while there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_turn: Option<HumanTurnLead>,
     /// The pull requests this row's session holds or made and every
     /// descendant's, live or ended (`agent_state::work::family`): the one
     /// list every PR mark of the row draws. Laid with the lineage pass.
@@ -1618,8 +1869,16 @@ pub struct SidebarAgentSnapshot {
     /// must wait for a fresh status rather than assuming the pane is idle.
     pub requires_close_status_check: bool,
     /// The title every surface calls this agent by; `sidebar.rs` owns the
-    /// ladder that picks it (PRD D-01).
+    /// ladder that picks it (PRD D-01). A profile agent's title is the one
+    /// its agent would have with the built-in default.
     pub identity_label: String,
+    /// The name of the profile the agent runs with, when it is not the
+    /// agent's built-in default (PRD agent-profiles B17): the screens mark
+    /// the agent with it beside its logo, and `hide agent list` names it
+    /// after its agent (`Claude · work`). Laid from the pane's launch record
+    /// (`Runtime::lay_profiles`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// The label's one-line progress sentence (`labels`).
     #[serde(skip_serializing)]
     pub progress: Option<String>,
@@ -1986,11 +2245,6 @@ pub struct WorkspaceSnapshot {
     /// (D-07), so an unregistered workspace is never pinned.
     #[serde(default)]
     pub pinned: bool,
-    /// This row is its device's Home (`~/hide`, PRD home-device-rail D-01):
-    /// the registration's flag carried onto the row. The shell draws it as
-    /// the Home row and never lists or counts it as a project.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub is_home: bool,
     pub checkouts: Vec<CheckoutSnapshot>,
     /// Checkout rows grouped after the active rows in this project. The full
     /// rows stay in `checkouts`, which remains the authority for focus,
@@ -2539,6 +2793,10 @@ pub struct TabAgentSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<AgentWait>,
     pub status_code: AgentStatusCode,
+    /// The row's profile name, which the tab's logo wears as its badge
+    /// (`SidebarAgentSnapshot::profile`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
@@ -2554,6 +2812,7 @@ impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
             emphasized: agent.emphasized,
             wait: agent.wait,
             status_code: agent.status_code,
+            profile: agent.profile.clone(),
         }
     }
 }
@@ -3496,6 +3755,10 @@ pub struct SessionRowSnapshot {
     pub updated_at_unix_ms: u64,
     pub title: Option<String>,
     pub unavailable_reason: Option<String>,
+    /// The account the session was listed in, which its detail is read in
+    /// (PRD agent-profiles B19); the shell does not see it.
+    #[serde(skip)]
+    pub account: hide_agent_adapter::AccountKey,
 }
 
 /// Project Memory on the wire: the Project a shell opened Memory for in its
@@ -4231,7 +4494,9 @@ pub enum DetailItem {
     Record {
         session: crate::links::ledger::SessionIdentity,
     },
-    /// A Conductor's mission map (PRD software-factory-conductor D-14).
+    /// A Conductor's mission map, opened from wherever a mission is pressed
+    /// outside the mission screen's table (operator decision 2026-11-09,
+    /// replacing PRD mission-screen D-09).
     Mission { mission: String },
     /// A session's own plan, drawn large (PRD hide-plan B11).
     Plan {
@@ -4415,11 +4680,22 @@ pub struct UiStateSnapshot {
     /// opened a chapter loses it through `practice` instead.
     #[serde(default)]
     pub practice_invite_closed: bool,
-    /// The lane's 보기 slot (D-50): a pull request's card or a session's
-    /// record, one per window and no checkout's or Agent tab's, so it stays
-    /// when either changes.
+    /// The lane's 보기 slot (D-50) of the Agent tab in front: a pull
+    /// request's card or a session's record, which belongs to the tab that
+    /// was in front when it was opened (`detail_home`). Another tab in front
+    /// swaps its own slot in (`Runtime::sync_detail_home`), so the wire and
+    /// the shell see only the front tab's.
     #[serde(default)]
     pub detail: DetailSlot,
+    /// The Agent tab `detail` belongs to; none until a tab is in front after
+    /// a launch, when a slot kept window-wide by an older build attaches to
+    /// the tab then in front. Core only.
+    #[serde(default, skip_serializing)]
+    pub detail_home: Option<String>,
+    /// The 보기 slots of the tabs not in front, by tab id; a slot ends with
+    /// its tab, so the map holds at most one per open tab. Core only.
+    #[serde(default, skip_serializing)]
+    pub detail_tabs: BTreeMap<String, DetailSlot>,
     /// The Overview Work map's filter, hidden and folded projects, hand
     /// team folds and dragged places (PRD overview-graph-remembered D-05).
     #[serde(default)]
@@ -4647,6 +4923,11 @@ pub struct UiStateSnapshot {
     /// recorded, is not the operator's. Persisted and never on the wire.
     #[serde(default, skip_serializing)]
     pub operator_tab_names: BTreeMap<String, String>,
+    /// The devices whose old Home still waits for their helper's one-time
+    /// retirement (`runtime/home_retire.rs`). Only a store written by the
+    /// release before this one makes an entry; the answer removes it.
+    #[serde(default, skip_serializing)]
+    pub home_retire: Vec<HomeRetirement>,
 }
 
 /// The most checkouts the recent list keeps; the oldest leave first.
@@ -4722,6 +5003,10 @@ pub struct PaneReadRecord {
     /// since is the pane moving on, which its own change already says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks_ended: Option<ChecksEnded>,
+    /// The person's turn the pane's agent had declared when it was read
+    /// (PRD ask-human): another declaration is news, as a new demand is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_turn: Option<String>,
 }
 
 /// A pane whose last stop finished work, as Hide last saw it. A
@@ -4757,6 +5042,10 @@ pub struct PaneLaunch {
     /// name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The profile the agent runs with (PRD agent-profiles D-27); `None`, as
+    /// in every record written before profiles, for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// The scale a pane has until the user zooms it.
@@ -5383,6 +5672,8 @@ impl Default for UiStateSnapshot {
             practice: BTreeMap::new(),
             practice_invite_closed: false,
             detail: DetailSlot::default(),
+            detail_home: None,
+            detail_tabs: BTreeMap::new(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
             selected_pane_id: None,
@@ -5433,6 +5724,7 @@ impl Default for UiStateSnapshot {
             recent_checkouts: Vec::new(),
             recent_pane_ids: Vec::new(),
             operator_tab_names: BTreeMap::new(),
+            home_retire: Vec::new(),
         }
     }
 }
@@ -5453,11 +5745,17 @@ pub struct WorkspaceRegistration {
     /// takes the pin with it; nothing else about the pin is stored.
     #[serde(default)]
     pub pinned: bool,
-    /// The device's Home folder (`~/hide`), registered by its first Home
-    /// start (PRD home-device-rail D-01, D-04). Absent in every other
-    /// registration and in stores written before Home existed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub home: bool,
+}
+
+/// A device's old Home registration (`~/hide`) whose retirement the helper has
+/// not yet answered (PRD retire-hide-home D-03, D-04). The registration is an
+/// ordinary pinned project meanwhile; the answer decides whether it stays.
+/// Persisted and never on the wire.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HomeRetirement {
+    pub device_id: String,
+    /// The registration that was the device's Home.
+    pub registration_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -6920,6 +7218,10 @@ pub struct StatusSnapshot {
     pub ssh_hosts: SshHostsSnapshot,
     #[serde(rename = "herdr_profiles")]
     pub machine_profiles: MachineProfilesSnapshot,
+    /// What Settings › Agents' last profile request came to (PRD
+    /// agent-profiles B2-B13); absent until one was made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer>,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -7553,6 +7855,10 @@ pub struct LastErrorSnapshot {
     /// device's home that folder belongs to (PRD wsl-device B15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<String>,
+    /// A `workspace.create_refused.needs_confirmation` whose folder is the
+    /// device's home itself, which the shell asks about in its own words.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home: bool,
 }
 
 impl Snapshot {
@@ -7670,6 +7976,7 @@ impl Snapshot {
                 background_ai: BackgroundAiSnapshot::unread(),
                 ssh_hosts: SshHostsSnapshot::default(),
                 machine_profiles: MachineProfilesSnapshot::default(),
+                agent_profile_answer: None,
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -8325,11 +8632,18 @@ mod wire_enum_tests {
             AskSubject::MissionAttention {
                 node: "node".into(),
                 reason: crate::missions::AttentionReason::WorkerEnded,
+                unmet: 0,
             },
             AskSubject::InputUnconfirmed {
                 input: crate::delivery::typed::InputKind::Brief,
                 spent: false,
                 held: false,
+            },
+            AskSubject::HumanTurn {
+                id: "agent-1.1".into(),
+                kind: crate::coordination::human_turn::HumanKind::Auth,
+                place: "github.com/login".into(),
+                device: Some("mini".into()),
             },
         ];
         for variant in &subjects {
@@ -8337,7 +8651,8 @@ mod wire_enum_tests {
                 AskSubject::PlanReview { .. }
                 | AskSubject::MissionDecision { .. }
                 | AskSubject::MissionAttention { .. }
-                | AskSubject::InputUnconfirmed { .. } => {}
+                | AskSubject::InputUnconfirmed { .. }
+                | AskSubject::HumanTurn { .. } => {}
             }
         }
         let causes = subjects
@@ -8346,6 +8661,16 @@ mod wire_enum_tests {
             .collect::<Vec<_>>();
         assert_wire(&contract, "ask_subject_cause", &causes);
         checked.insert("ask_subject_cause");
+
+        use crate::coordination::human_turn::HumanKind;
+        let human_kinds = [HumanKind::Auth, HumanKind::Permission];
+        for variant in human_kinds {
+            match variant {
+                HumanKind::Auth | HumanKind::Permission => {}
+            }
+        }
+        assert_wire(&contract, "human_kind", &human_kinds);
+        checked.insert("human_kind");
 
         let statuses = [
             ChangedFileStatus::Modified,
@@ -8786,6 +9111,142 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "kit_component_state", &kit_states);
         checked.insert("kit_component_state");
+
+        let profiles_states = [
+            ProfilesState::Listed,
+            ProfilesState::Unsupported,
+            ProfilesState::Unreadable,
+        ];
+        for variant in profiles_states {
+            match variant {
+                ProfilesState::Listed | ProfilesState::Unsupported | ProfilesState::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "profiles_state", &profiles_states);
+        checked.insert("profiles_state");
+
+        let installs = [
+            ProfileInstall::Default,
+            ProfileInstall::Own,
+            ProfileInstall::Refused,
+            ProfileInstall::Removing,
+            ProfileInstall::RemoveFailed,
+        ];
+        for variant in installs {
+            match variant {
+                ProfileInstall::Default
+                | ProfileInstall::Own
+                | ProfileInstall::Refused
+                | ProfileInstall::Removing
+                | ProfileInstall::RemoveFailed => {}
+            }
+        }
+        assert_wire(&contract, "profile_install", &installs);
+        checked.insert("profile_install");
+
+        use crate::agent_profiles::AnswerState as ProfileAnswerState;
+        let answers = [
+            ProfileAnswerState::Pending,
+            ProfileAnswerState::Done,
+            ProfileAnswerState::Refused,
+        ];
+        for variant in answers {
+            match variant {
+                ProfileAnswerState::Pending
+                | ProfileAnswerState::Done
+                | ProfileAnswerState::Refused => {}
+            }
+        }
+        assert_wire(&contract, "profile_answer_state", &answers);
+        checked.insert("profile_answer_state");
+
+        use hide_node_link::profiles::ProfileField;
+        let fields = [
+            ProfileField::Kind,
+            ProfileField::Name,
+            ProfileField::Account,
+            ProfileField::Program,
+            ProfileField::Env,
+            ProfileField::Profile,
+        ];
+        for variant in fields {
+            match variant {
+                ProfileField::Kind
+                | ProfileField::Name
+                | ProfileField::Account
+                | ProfileField::Program
+                | ProfileField::Env
+                | ProfileField::Profile => {}
+            }
+        }
+        assert_wire(&contract, "profile_field", &fields);
+        checked.insert("profile_field");
+
+        use hide_node_link::profiles::ProfileReason;
+        let reasons = [
+            ProfileReason::KindUnknown,
+            ProfileReason::ProfilesFull,
+            ProfileReason::NameEmpty,
+            ProfileReason::NameLong,
+            ProfileReason::NameControl,
+            ProfileReason::NameBuiltin,
+            ProfileReason::NameTaken,
+            ProfileReason::ProgramLong,
+            ProfileReason::ProfileBuiltin,
+            ProfileReason::ProfileMissing,
+            ProfileReason::ProfileRemoving,
+            ProfileReason::ProfileOtherKind,
+            ProfileReason::NodeVariable,
+            ProfileReason::AccountHomeMissing,
+            ProfileReason::AccountUnsupported,
+            ProfileReason::AccountNeedsFolder,
+            ProfileReason::AccountNeedsName,
+            ProfileReason::AccountEmpty,
+            ProfileReason::AccountRelative,
+            ProfileReason::AccountIsDefault,
+            ProfileReason::AccountName,
+            ProfileReason::AccountUnprepared,
+            ProfileReason::EnvTooMany,
+            ProfileReason::EnvName,
+            ProfileReason::EnvReserved,
+            ProfileReason::EnvRepeated,
+            ProfileReason::EnvValue,
+            ProfileReason::Other,
+        ];
+        for variant in reasons {
+            match variant {
+                ProfileReason::KindUnknown
+                | ProfileReason::ProfilesFull
+                | ProfileReason::NameEmpty
+                | ProfileReason::NameLong
+                | ProfileReason::NameControl
+                | ProfileReason::NameBuiltin
+                | ProfileReason::NameTaken
+                | ProfileReason::ProgramLong
+                | ProfileReason::ProfileBuiltin
+                | ProfileReason::ProfileMissing
+                | ProfileReason::ProfileRemoving
+                | ProfileReason::ProfileOtherKind
+                | ProfileReason::NodeVariable
+                | ProfileReason::AccountHomeMissing
+                | ProfileReason::AccountUnsupported
+                | ProfileReason::AccountNeedsFolder
+                | ProfileReason::AccountNeedsName
+                | ProfileReason::AccountEmpty
+                | ProfileReason::AccountRelative
+                | ProfileReason::AccountIsDefault
+                | ProfileReason::AccountName
+                | ProfileReason::AccountUnprepared
+                | ProfileReason::EnvTooMany
+                | ProfileReason::EnvName
+                | ProfileReason::EnvReserved
+                | ProfileReason::EnvRepeated
+                | ProfileReason::EnvValue
+                | ProfileReason::Other => {}
+            }
+        }
+        assert_wire(&contract, "profile_reason", &reasons);
+        checked.insert("profile_reason");
 
         let onboarding = [AgentOnboarding::Pending, AgentOnboarding::Done];
         for variant in onboarding {

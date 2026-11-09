@@ -393,6 +393,7 @@ impl Runtime {
             depth: 0,
             closed: false,
             resume: Resume::Idle,
+            profile: self.launch_profile_of(agent),
         }
     }
 
@@ -1578,7 +1579,6 @@ impl Runtime {
                 confirm_only: false,
                 checkout_path: Some(member.checkout_path.clone()),
                 device_id: (!local).then(|| member.machine.clone()),
-                home: false,
                 provider: member.kind.clone(),
                 prompt: None,
                 model: None,
@@ -1587,9 +1587,11 @@ impl Runtime {
                 resume_session_path,
                 // A descendant opens behind the root resumed before it (B23).
                 stay_behind: !front,
+                profile: None,
             },
             false,
             member.cwd.clone(),
+            super::projects::StartProfile::Recorded(member.profile.as_ref()),
         );
         if let Some(operation) = self
             .snapshot
@@ -1665,6 +1667,10 @@ impl Runtime {
             None,
             arguments,
             hide_agent_adapter::LaunchChoice::default(),
+            member
+                .profile
+                .as_ref()
+                .map(|profile| (profile.id.clone(), profile.name.clone())),
         );
         if let Some(launch) = self.task_agent_launch.as_mut() {
             launch.resume_reference = member.source_reference.clone();

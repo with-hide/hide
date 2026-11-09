@@ -498,22 +498,22 @@ const BUSY_AGENTS: AgentRow[] = [
   agent({ pane_id: "remote:mini:working:2", identity_label: "로그 수집", agent_kind: "codex", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2m" }),
 ];
 
-/** The registration the core keeps for a project on `deviceId`; `home` marks the device's Home. */
-function registrationOf(workspace: Workspace, deviceId: string, extra: { home?: boolean } = {}) {
-  return { id: workspace.id, label: workspace.label, path: workspace.path, device_id: deviceId, pinned: workspace.pinned, ...extra };
+/** The registration the core keeps for a project on `deviceId`. */
+function registrationOf(workspace: Workspace, deviceId: string) {
+  return { id: workspace.id, label: workspace.label, path: workspace.path, device_id: deviceId, pinned: workspace.pinned };
 }
 
 /**
- * The devices of the two-device scene: a Home on this Mac (its agents are the
- * Home row's children), a connected `mini` with its own project, Home and
- * agents, and a registered device that is not connected, named at length to
+ * The devices of the two-device scene: a folder project `hide` on this Mac
+ * (the Home an earlier release kept, now an ordinary project), a connected
+ * `mini` with its own projects and agents, and a registered device that is not connected, named at length to
  * try the rail's and the header's truncation.
  */
 function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number, folds: SceneFolds, busy: boolean) {
   const offlineLabel = content === "long" ? "연구실 빌드 서버 자동화 장비 (긴 이름 확인용)" : "build-box";
   const home = workspace(
     "home",
-    { label: "hide", path: `${ROOT}/hide`, is_home: true, is_git: false, checkouts: [checkout({ id: "home:folder", workspace: "home", branch: null, folder: true, panes: ["h1", "h2"], marks: { turn: 1, quiet: 1 } }, now)] },
+    { label: "hide", path: `${ROOT}/hide`, is_git: false, checkouts: [checkout({ id: "home:folder", workspace: "home", branch: null, folder: true, panes: ["h1", "h2"], marks: { turn: 1, quiet: 1 } }, now)] },
     folds,
   );
   const remoteWorkspace = (id: string, label: string, extra: Partial<Workspace>, panes: string[]): Workspace => ({
@@ -526,7 +526,7 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
   const miniWorkspaces = [
     // Busy, the extra agents run in web too, so its Projects list raises them past the Needs You cap.
     remoteWorkspace("remote:mini:workspace:web", "web", {}, ["remote:mini:pane:1", "remote:mini:pane:2", ...(busy ? BUSY_AGENTS.map((row) => row.pane_id) : [])]),
-    { ...remoteWorkspace("remote:mini:workspace:home", "hide", { is_home: true, is_git: false }, []), path: "/Users/example/hide" },
+    { ...remoteWorkspace("remote:mini:workspace:home", "hide", { is_git: false }, []), path: "/Users/example/hide" },
   ];
   return {
     home,
@@ -536,9 +536,9 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
     ],
     registrations: [
       ...workspaces.map((row) => registrationOf(row, "local")),
-      registrationOf(home, "local", { home: true }),
+      registrationOf(home, "local"),
       registrationOf(miniWorkspaces[0]!, "mini"),
-      registrationOf(miniWorkspaces[1]!, "mini", { home: true }),
+      registrationOf(miniWorkspaces[1]!, "mini"),
     ],
     remote: [
       {

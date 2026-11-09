@@ -407,6 +407,14 @@ pub(super) struct PaneTargetPayload {
     pub(super) pane_id: String,
 }
 
+/// The operator's Done on a person's turn (PRD ask-human B18), by the
+/// declaration it settles.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HumanTurnDonePayload {
+    pub(super) declaration: String,
+}
+
 /// Every agent the phones have open now, by the core's pane id; hided sends
 /// the whole list each time it changes, so a repeat converges.
 #[derive(Debug, Deserialize)]
@@ -917,9 +925,6 @@ pub(super) struct AgentStartInCheckoutPayload {
     /// home-device-rail D-22).
     #[serde(default)]
     pub(super) device_id: Option<String>,
-    /// Start in the device's Home rather than a checkout (D-04, D-13).
-    #[serde(default)]
-    pub(super) home: bool,
     pub(super) provider: String,
     /// The agent's first prompt, sent once the agent is ready (an issue
     /// started on a checkout that is not a new worktree).
@@ -945,6 +950,10 @@ pub(super) struct AgentStartInCheckoutPayload {
     /// tab, keyboard focus and the engine's focus stay where they are.
     #[serde(default)]
     pub(super) stay_behind: bool,
+    /// The profile the start panel's `▾` chose, by id on the checkout's
+    /// machine (PRD agent-profiles B14); absent picks it (`launch::pick`).
+    #[serde(default)]
+    pub(super) profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -982,6 +991,10 @@ pub(super) struct CreateWorktreePayload {
     /// keyboard focus and the engine's focus stay where they are.
     #[serde(default)]
     pub(super) stay_behind: bool,
+    /// The profile the start panel's `▾` chose, by id on the repository's
+    /// machine (PRD agent-profiles B14); absent picks it (`launch::pick`).
+    #[serde(default)]
+    pub(super) profile: Option<String>,
 }
 
 /// `issue_source_set`: a project's issue source chosen in Settings › Issues;
@@ -1662,6 +1675,7 @@ pub(super) enum Event {
     ResolveSession(PaneTargetPayload),
     RevisitStar(PaneTargetPayload),
     RevisitDone(PaneTargetPayload),
+    HumanTurnDone(HumanTurnDonePayload),
     StrayDismiss(super::strays::StrayPayload),
     StrayRestore(super::strays::StrayPayload),
     StrayHandOff(super::strays::StrayHandOffPayload),
@@ -1784,6 +1798,7 @@ pub(super) enum Event {
     CreateWorktree(CreateWorktreePayload),
     IssueSourceSet(IssueSourceSetPayload),
     ProjectSettingsSet(super::project_settings::SetPayload),
+    AgentProfileChange(super::agent_profiles::ProfileChangePayload),
     IssueSettingsSet(IssueSettingsSetPayload),
     ConductorSettingsSet(ConductorSettingsSetPayload),
     MissionAnswer(MissionAnswerPayload),
@@ -1791,6 +1806,9 @@ pub(super) enum Event {
     MissionAttention(super::mission_health::MissionAttentionPayload),
     /// `mission_brief_read`: the operator opened the folded brief of a node.
     MissionBriefRead(super::mission_brief::BriefReadPayload),
+    /// `mission_shown`: the mission the page's mission screen shows in its
+    /// detail, or none (PRD mission-screen D-16).
+    MissionShown(super::mission_events::MissionShownPayload),
     /// `mission_reopen`: the operator opens a closed mission again (PRD
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
@@ -1961,6 +1979,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
         "revisit_star" => decode!(PaneTargetPayload, RevisitStar),
         "revisit_done" => decode!(PaneTargetPayload, RevisitDone),
+        "human_turn_done" => decode!(HumanTurnDonePayload, HumanTurnDone),
         "stray_dismiss" => decode!(super::strays::StrayPayload, StrayDismiss),
         "stray_restore" => decode!(super::strays::StrayPayload, StrayRestore),
         "stray_hand_off" => decode!(super::strays::StrayHandOffPayload, StrayHandOff),
@@ -2140,6 +2159,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "create_worktree" => decode!(CreateWorktreePayload, CreateWorktree),
         "issue_source_set" => decode!(IssueSourceSetPayload, IssueSourceSet),
         "project_settings_set" => decode!(super::project_settings::SetPayload, ProjectSettingsSet),
+        "agent_profile_change" => decode!(
+            super::agent_profiles::ProfileChangePayload,
+            AgentProfileChange
+        ),
         "issue_settings_set" => decode!(IssueSettingsSetPayload, IssueSettingsSet),
         "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
         "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
@@ -2149,6 +2172,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             MissionAttention
         ),
         "mission_brief_read" => decode!(super::mission_brief::BriefReadPayload, MissionBriefRead),
+        "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
@@ -2403,6 +2427,7 @@ impl Runtime {
             ),
             Event::RevisitStar(payload) => self.star_session(&payload.pane_id),
             Event::RevisitDone(payload) => self.finish_revisit(&payload.pane_id),
+            Event::HumanTurnDone(payload) => self.human_turn_done(&payload.declaration),
             Event::StrayDismiss(payload) => self.dismiss_stray(payload),
             Event::StrayRestore(payload) => self.restore_stray(payload),
             Event::StrayHandOff(payload) => self.hand_off_stray(payload),
@@ -3373,6 +3398,7 @@ impl Runtime {
                 // A choice the agent does not take is refused before any pane
                 // is made for the fork.
                 let launch = self.launch_choice_of(agent);
+                let profile = self.launch_profile_of(agent);
                 let permission = self.agent_permission_for_pane(&pane_id, agent_kind.kind());
                 if let Err(detail) =
                     super::agent_choice::launch_arguments(agent_kind.kind(), &launch, &permission)
@@ -3424,6 +3450,7 @@ impl Runtime {
                         kind: agent.agent_kind.clone(),
                         name: name.clone(),
                         launch: launch.clone(),
+                        profile: profile.clone(),
                     },
                 );
                 let Some(context) = self.live.as_ref().cloned() else {
@@ -3450,6 +3477,7 @@ impl Runtime {
                     placement: payload.placement,
                     codex_daemon: self.codex_daemon_for_pane(&pane_id),
                     launch,
+                    profile,
                     permission,
                 };
                 // Keys typed between the press and the agent's start wait for
@@ -4078,6 +4106,7 @@ impl Runtime {
             Event::SetCheckoutIssue(payload) => self.set_checkout_issue(payload),
             Event::IssueSourceSet(payload) => self.set_issue_source(payload),
             Event::ProjectSettingsSet(payload) => self.set_project_settings(payload),
+            Event::AgentProfileChange(payload) => self.change_agent_profile(payload),
             Event::IssueSettingsSet(payload) => self.set_issue_settings(payload),
             Event::ConductorSettingsSet(payload) => {
                 let mut settings = self.snapshot.ui_state.conductor_settings.clone();
@@ -4111,6 +4140,7 @@ impl Runtime {
             Event::MissionEnd(payload) => self.mission_end_event(&payload.mission),
             Event::MissionAttention(payload) => self.mission_attention_event(payload),
             Event::MissionBriefRead(payload) => self.mission_brief_read(payload),
+            Event::MissionShown(payload) => self.mission_shown(payload),
             Event::MissionReopen(payload) => self.mission_reopen_event(&payload.mission),
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)
@@ -4408,6 +4438,8 @@ impl Runtime {
                     session_open_folds: current.session_open_folds,
                     // Recorded by the core when a Rename lands.
                     operator_tab_names: current.operator_tab_names,
+                    // Settled by the helper's answer.
+                    home_retire: current.home_retire,
                     expanded_paths: payload.expanded_paths,
                     device_expanded_paths: payload
                         .device_expanded_paths
@@ -4439,6 +4471,8 @@ impl Runtime {
                     practice: current.practice,
                     practice_invite_closed: current.practice_invite_closed,
                     detail: current.detail,
+                    detail_home: current.detail_home,
+                    detail_tabs: current.detail_tabs,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the

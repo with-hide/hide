@@ -341,6 +341,17 @@ impl Runtime {
                 .map(str::to_owned);
             unreadable_moved |=
                 previous.and_then(|old| old.unreadable.as_deref()) != unreadable.as_deref();
+            // Every read of the agent's session is made in the account its
+            // profile names (PRD agent-profiles B19).
+            let account = self.pane_account(
+                &pane_id,
+                kind,
+                agent.name.as_deref(),
+                agent
+                    .agent_session
+                    .as_ref()
+                    .map(|reference| reference.value.as_str()),
+            );
             let session = session_kind
                 .filter(|kind| kind.has_session_file())
                 .zip(agent.agent_session.as_ref())
@@ -351,6 +362,7 @@ impl Runtime {
                 .map(|(agent_kind, reference)| {
                     hide_session::session_activity::SessionActivityRequest {
                         agent: agent_kind,
+                        account: account.clone(),
                         reference_kind: reference.kind.clone(),
                         reference_value: reference.value.clone(),
                         cwd: agent.cwd.clone().filter(|cwd| cwd.len() <= 4096),
@@ -404,7 +416,7 @@ impl Runtime {
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 hide_typed_at_unix_ms: previous.map_or(0, |old| old.hide_typed_at_unix_ms),
                 session,
-                thread: super::session_thread::ThreadReference::of(agent),
+                thread: super::session_thread::ThreadReference::of(agent, account),
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),
@@ -1552,16 +1564,35 @@ impl Runtime {
         }
         // A spawn of Desk's past its places waits in Desk's queue (B21).
         let queued = self.desk_spawn_admission(&actor, &command)?;
+        // A send under an intent its sender already used is a retry only of
+        // the same letter; another recipient, kind or body is refused here,
+        // before a target is looked for.
         let repeated = match &command {
-            Command::Send { intent, .. } => self.delivery_ledger.as_ref().is_ok_and(|ledger| {
-                crate::delivery::mailbox::existing_intent(
+            Command::Send {
+                target,
+                intent,
+                kind,
+                body,
+                ..
+            } => match self.delivery_ledger.as_ref() {
+                Ok(ledger) => crate::delivery::mailbox::retried_send(
                     ledger,
                     &actor,
                     intent,
+                    kind,
+                    body,
+                    None,
+                    |stored| {
+                        qualify(target) == stored.pane_id
+                            || *target == stored.name
+                            || crate::coordination::resolve_registered(ledger, target)
+                                .is_some_and(|registered| registered.same_identity(stored))
+                    },
                     unix_milliseconds(),
-                )
-                .is_some()
-            }),
+                )?
+                .is_some(),
+                Err(_) => false,
+            },
             _ => false,
         };
         let target = match &command {
@@ -1924,10 +1955,15 @@ impl Runtime {
         }
         self.hide_started = started;
         let feedback = self.observe_feedback_letters(&ledger);
+        // A person's turn declared, replaced or taken down, or its agent's
+        // registration moved to another pane, lays the rows again (PRD
+        // ask-human).
+        let human_moved = self.read_human_turns(&ledger);
         self.delivery_ledger = Ok(ledger);
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
-        let lineage = (waiters_moved || started_moved) && self.refresh_agent_lineage();
+        let lineage =
+            (waiters_moved || started_moved || human_moved) && self.refresh_agent_lineage();
         // A plan step's child moved by its letters or its end (PRD
         // hide-plan-delegate B16, B17).
         let plans = self.fold_delegations();
@@ -1938,6 +1974,7 @@ impl Runtime {
             | continued
             | lineage
             | plans
+            | (human_moved && self.refresh_pane_read_state())
             | self.sync_session_state()
             | self.refresh_agent_scopes()
     }
@@ -1972,6 +2009,54 @@ impl Runtime {
         target: &str,
         command: crate::delivery::Command,
     ) -> Result<crate::delivery::worker::Prepared, String> {
+        let target = self
+            .delivery_observations
+            .get(target)
+            .cloned()
+            .ok_or("target_unavailable")?;
+        self.operator_prepared(target, command)
+    }
+
+    /// The operator's letter to the agent in `target`, awake or asleep: a
+    /// Done on its person's turn, which wakes it (PRD ask-human B20).
+    pub(super) fn operator_prepare_waking(
+        &self,
+        target: &str,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        let target = match self.delivery_observations.get(target) {
+            Some(observation) => observation.clone(),
+            None => self
+                .delivery_ledger
+                .as_ref()
+                .ok()
+                .and_then(|ledger| {
+                    let registered = crate::coordination::resolve_registered(ledger, target);
+                    self.sleeping_target(ledger, registered, target)
+                })
+                .ok_or("target_unavailable")?,
+        };
+        self.operator_prepared(target, command)
+    }
+
+    fn operator_prepared(
+        &self,
+        target: Observation,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        let (client, authority, actor) = self.operator_authority()?;
+        Ok(crate::delivery::worker::Prepared::new(
+            client,
+            authority,
+            actor,
+            Some(target),
+            command,
+        ))
+    }
+
+    /// The delivery client and the operator's own identity and authority,
+    /// which only the shell's events act with.
+    pub(crate) fn operator_authority(&self) -> Result<(Client, Authority, Actor), String> {
         let actor = Actor::operator(self.node.as_str());
         let context = Context {
             device_id: self.node.as_str().into(),
@@ -1979,12 +2064,7 @@ impl Runtime {
             checkout_id: actor.pane_id.clone(),
             checkout_path: String::new(),
         };
-        let target = self
-            .delivery_observations
-            .get(target)
-            .cloned()
-            .ok_or("target_unavailable")?;
-        Ok(crate::delivery::worker::Prepared::new(
+        Ok((
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
                 caller: actor.pane_id.clone(),
@@ -1992,8 +2072,6 @@ impl Runtime {
                 also_reads: Vec::new(),
             },
             actor,
-            Some(target),
-            command,
         ))
     }
 
@@ -2349,6 +2427,7 @@ impl Runtime {
             permissions: self.agent_permissions_of(device),
             on_node,
             node,
+            profiles: self.machine_profiles(device).cloned(),
         })
     }
 }
@@ -2426,6 +2505,10 @@ pub(crate) struct CoordinationContext {
     /// pane's shell is reading; none for a device whose helper is not
     /// connected now, since a spawn starts no helper.
     pub(crate) node: Option<Arc<dyn crate::node_access::NodeLink>>,
+    /// The machine's agent profiles as its node last listed them, which a
+    /// spawn's profile is picked from (PRD agent-profiles D-32); `None` until
+    /// they were read.
+    pub(crate) profiles: Option<crate::model::ProfilesSnapshot>,
 }
 
 #[cfg(test)]
@@ -2524,7 +2607,6 @@ pub(crate) mod tests {
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: false,
-            is_home: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".into(),
                 workspace_id: "workspace".into(),

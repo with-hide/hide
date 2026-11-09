@@ -31,8 +31,21 @@ impl Runtime {
     ) -> RemoteSessionSnapshot {
         let empty = DeviceFacts::default();
         let facts = self.device_facts.get(target).unwrap_or(&empty);
-        let mut session =
-            device_catalog::group(target, raw, facts, self.device_worktrees.get(target));
+        let folders = self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .filter(|registration| registration.device_id == target)
+            .map(|registration| PathBuf::from(&registration.path))
+            .collect::<Vec<_>>();
+        let mut session = device_catalog::group(
+            target,
+            raw,
+            facts,
+            self.device_worktrees.get(target),
+            &folders,
+        );
         device_catalog::apply_registrations(
             target,
             &mut session,
@@ -928,6 +941,7 @@ impl Runtime {
     pub(super) fn forget_device_directories(&mut self, target: &str) {
         self.device_facts.remove(target);
         self.device_worktrees.remove(target);
+        self.device_homes.remove(target);
     }
 }
 
@@ -1105,14 +1119,15 @@ impl Runtime {
                 REGISTRABLE_TIMEOUT,
             )
             .map_err(|error| {
-                let confirm = match &error {
-                    LinkError::Refused(refused) => refused.confirm.clone(),
-                    _ => None,
+                let (confirm, home) = match &error {
+                    LinkError::Refused(refused) => (refused.confirm.clone(), refused.home),
+                    _ => (None, false),
                 };
                 (
                     registration_refusal_kind(&error),
                     error.to_string(),
                     confirm,
+                    home,
                 )
             })
         };
@@ -1277,7 +1292,7 @@ impl Runtime {
         }
         let registrable = match answer {
             Ok(registrable) => registrable,
-            Err((kind, message, confirm)) => {
+            Err((kind, message, confirm, home)) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "registration", "kind": "create.refused",
                     "target": device, "message": message,
@@ -1285,6 +1300,7 @@ impl Runtime {
                 self.set_error(kind, message, false);
                 if let Some(error) = self.snapshot.status.last_error.as_mut() {
                     error.confirm = confirm;
+                    error.home = home;
                 }
                 self.settle_project_open(device, requested, Err(kind), Forward::No);
                 return true;
@@ -1322,7 +1338,6 @@ impl Runtime {
                 path: registrable.root,
                 device_id: device.to_owned(),
                 pinned: false,
-                home: false,
             });
         self.persist_ui_state();
         crate::diagnostic!(serde_json::json!({
@@ -1510,7 +1525,7 @@ const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
 /// A device helper's refusal of a registration: the core's kind for it, the
 /// helper's sentence for the diagnostic log, and the folder the helper asks
 /// the operator about instead of the one sent (`HostError::confirm`).
-type RegistrationRefusal = (&'static str, String, Option<String>);
+type RegistrationRefusal = (&'static str, String, Option<String>, bool);
 
 pub(super) fn registration_refusal_kind(error: &LinkError) -> &'static str {
     match error {

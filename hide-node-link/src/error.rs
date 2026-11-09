@@ -17,6 +17,10 @@ pub struct HostError {
     /// to, which is what a registration would add.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<String>,
+    /// A `NeedsConfirmation` refusal whose folder is the host's home itself,
+    /// which the operator is asked about in its own words.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -42,9 +46,6 @@ pub enum ErrorCode {
     Unsupported,
     /// The host is at its concurrency or queue limit; nothing was started.
     Busy,
-    /// `~/hide` exists and is not a Home Hide made, or its marker cannot be
-    /// read; nothing was written.
-    HomeConflict,
     /// A folder outside the host's home was named without the operator's
     /// confirmation of it; nothing there was read.
     NeedsConfirmation,
@@ -72,7 +73,6 @@ impl ErrorCode {
             Self::TooLarge => "too_large",
             Self::Unsupported => "unsupported",
             Self::Busy => "busy",
-            Self::HomeConflict => "home_conflict",
             Self::NeedsConfirmation => "needs_confirmation",
             Self::ProjectHoldsHome => "project_holds_home",
             Self::Cancelled => "cancelled",
@@ -90,6 +90,7 @@ impl HostError {
             message: message.into(),
             actual_revision: None,
             confirm: None,
+            home: false,
         }
     }
 
@@ -102,12 +103,22 @@ impl HostError {
         }
     }
 
+    /// The host's home itself asked about: it is a project only when the
+    /// operator confirms it.
+    pub fn home_needs_confirmation(message: impl Into<String>) -> Self {
+        Self {
+            home: true,
+            ..Self::new(ErrorCode::NeedsConfirmation, message)
+        }
+    }
+
     pub fn conflict(actual_revision: Option<String>, message: impl Into<String>) -> Self {
         Self {
             code: ErrorCode::Conflict,
             message: message.into(),
             actual_revision,
             confirm: None,
+            home: false,
         }
     }
 
@@ -157,7 +168,6 @@ mod tests {
             ErrorCode::TooLarge,
             ErrorCode::Unsupported,
             ErrorCode::Busy,
-            ErrorCode::HomeConflict,
             ErrorCode::Cancelled,
             ErrorCode::Io,
         ] {

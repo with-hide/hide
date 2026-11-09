@@ -108,7 +108,7 @@ fn started(kind: &str, launch: Option<&LaunchChoice>) -> (Runtime, tempfile::Tem
     if let Some(launch) = launch {
         // What the task start, the spawn executor and every restart do once
         // the agent is running in the pane.
-        runtime.record_pane_launch(AGENT, kind, NAME, launch, None);
+        runtime.record_pane_launch(AGENT, kind, NAME, launch, None, None);
     }
     runtime.ingest_session(Ok(session(&checkout, kind, true)));
     (runtime, folder)
@@ -213,6 +213,7 @@ fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
                 name: NAME.to_owned(),
                 choice: launch,
                 session: Some(SESSION.to_owned()),
+                profile: None,
             }),
             "{kind}"
         );
@@ -233,7 +234,7 @@ fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
     kit.codex_daemon = Some(false);
     runtime.set_kit_state(crate::node::TEST_NODE, kit);
     // What the spawn writes once its start is typed, before any session.
-    runtime.record_pane_launch(AGENT, "codex", NAME, &launch, None);
+    runtime.record_pane_launch(AGENT, "codex", NAME, &launch, None, None);
     runtime.ingest_session(Ok(hosting(&checkout, Some(("codex", Some(NAME), None)))));
     assert_eq!(
         runtime.snapshot().ui_state.pane_launches[AGENT].session,
@@ -298,7 +299,16 @@ fn a_wake_of_an_agent_with_no_recorded_choice_resumes_as_before() {
     let (fake, starts) = starting_engine();
     wake(&mut runtime, &fake);
     assert_eq!(next_start(&starts).1, resumed("claude", &[]));
-    assert!(runtime.snapshot().ui_state.pane_launches.is_empty());
+    // Its pane records the start on the CLI's defaults and the built-in
+    // profile, which a child it starts reads (D-32).
+    assert!(
+        runtime
+            .snapshot()
+            .ui_state
+            .pane_launches
+            .values()
+            .all(|launch| launch.choice.is_default() && launch.profile.is_none())
+    );
 }
 
 #[test]
@@ -415,6 +425,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
             kind: "claude".into(),
             session_id: Some(SESSION.into()),
             launch: launch.clone(),
+            profile: None,
         })
     );
 
@@ -445,6 +456,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
                         name: "reopen-closed-0".into(),
                         launch: launch.clone(),
                         session_id: Some(SESSION.into()),
+                        profile: None,
                     }],
                 }
             )
@@ -461,6 +473,7 @@ fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
             name: "reopen-closed-0".into(),
             choice: launch,
             session: Some(SESSION.into()),
+            profile: None,
         })
     );
 }
@@ -494,6 +507,7 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
             name: NAME.into(),
             choice: launch.clone(),
             session: Some(SESSION.into()),
+            profile: None,
         })
     );
     assert_eq!(described(&runtime), launch);
@@ -529,18 +543,18 @@ fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
     assert!(launches(&runtime).is_empty());
 
     // Started under another name (another Hide start, or a reused pane id).
-    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None);
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, None);
     runtime.ingest_session(Ok(hosting(
         &checkout,
         Some(("claude", Some("other"), None)),
     )));
     assert!(launches(&runtime).is_empty());
 
-    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None);
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, None);
     runtime.ingest_session(Ok(session(&checkout, "codex", true)));
     assert!(launches(&runtime).is_empty());
 
-    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, Some(SESSION));
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, Some(SESSION));
     runtime.ingest_session(Ok(tab_order_payload(
         &checkout,
         &TABS[..1],
@@ -572,17 +586,24 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
             host_consent: None,
         });
     let remote = format!("remote:{device}:pane:w1:p1");
-    runtime.record_pane_launch(&remote, "claude", "hide-claude-w1-p1", &launch, None);
+    runtime.record_pane_launch(&remote, "claude", "hide-claude-w1-p1", &launch, None, None);
     assert!(runtime.dispatch_json(&event("remove_device", json!({"device_id": device}))));
     let launches = &runtime.snapshot().ui_state.pane_launches;
     assert!(!launches.contains_key(&remote));
     assert!(launches.contains_key(AGENT), "this machine's record stays");
 
     for index in launches.len()..crate::runtime::agent_choice::PANE_LAUNCH_LIMIT {
-        runtime.record_pane_launch(&format!("w9:p{index}"), "claude", "name", &launch, None);
+        runtime.record_pane_launch(
+            &format!("w9:p{index}"),
+            "claude",
+            "name",
+            &launch,
+            None,
+            None,
+        );
     }
     let ((), records) = crate::diagnostics::capture(|| {
-        runtime.record_pane_launch("w9:over", "claude", "name", &launch, None);
+        runtime.record_pane_launch("w9:over", "claude", "name", &launch, None, None);
     });
     let launches = &runtime.snapshot().ui_state.pane_launches;
     assert_eq!(
@@ -737,4 +758,164 @@ fn a_permission_is_kept_per_agent_and_machine_and_refused_when_it_names_nothing_
         runtime.agent_permission(node, "codex"),
         crate::agent_permission::AgentPermission::Full
     );
+}
+
+/// B17: an agent started with a profile keeps the title it would have with
+/// the built-in default (`Claude`, then its task's), and its row names the
+/// profile beside it (`a`), which the screens mark beside its logo and
+/// `hide agent list` names after its agent (`Claude · a`); an agent on its
+/// built-in default reads as before.
+#[test]
+fn a_profile_agent_keeps_its_title_and_its_row_names_the_profile_beside_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let checkout = checkout_of(&folder);
+    let (mut runtime, _) = live_tab_order_runtime(&checkout);
+    let untitled = || {
+        let mut payload = tab_order_payload(&checkout, &TABS, &TABS, "w-order:t1");
+        payload.agents.push(
+            serde_json::from_value(json!({
+                "id": NAME, "name": NAME, "pane_id": AGENT, "agent": "claude",
+                "agent_status": "idle", "state_change_seq": 4, "cwd": checkout,
+            }))
+            .unwrap(),
+        );
+        payload
+    };
+    // The row's title and profile, and the tab's agent wears the same profile.
+    let row = |runtime: &Runtime| {
+        let row = runtime.agent_row(AGENT).unwrap();
+        let tab = runtime
+            .snapshot()
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.checkouts.iter())
+            .flat_map(|checkout| checkout.tabs.iter())
+            .find(|tab| tab.panes.iter().any(|pane| pane.id == AGENT))
+            .and_then(|tab| tab.agent.clone())
+            .unwrap();
+        assert_eq!(
+            tab.profile, row.profile,
+            "the tab's logo wears the row's profile"
+        );
+        (row.identity_label.clone(), row.profile.clone())
+    };
+
+    runtime.record_pane_launch(AGENT, "claude", NAME, &LaunchChoice::default(), None, None);
+    runtime.ingest_session(Ok(untitled()));
+    assert_eq!(row(&runtime), ("Claude".to_owned(), None));
+
+    let profile = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-a".to_owned()),
+        name: "a".to_owned(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/a".to_owned()),
+    };
+    runtime.record_pane_launch(
+        AGENT,
+        "claude",
+        NAME,
+        &LaunchChoice::default(),
+        Some(&profile),
+        None,
+    );
+    runtime.ingest_session(Ok(untitled()));
+    assert_eq!(row(&runtime), ("Claude".to_owned(), Some("a".to_owned())));
+
+    runtime.ingest_session(Ok(session(&checkout, "claude", true)));
+    assert_eq!(
+        row(&runtime),
+        ("Review the parser".to_owned(), Some("a".to_owned())),
+        "a title names the agent; the profile stays beside it"
+    );
+
+    let record: crate::coordination::AgentRecord = serde_json::from_value(json!({
+        "id": "agent-1", "name": NAME, "machine": crate::node::TEST_NODE,
+        "host_scope": "scope", "native_machine": crate::node::TEST_NODE,
+        "session": SESSION, "instance": AGENT, "pane": AGENT,
+        "parent": null, "project": null, "ended": false,
+        "actor": {"pane_id": AGENT, "name": NAME, "kind": "claude",
+                  "device_id": crate::node::TEST_NODE, "session": null},
+    }))
+    .unwrap();
+    let ledger = crate::delivery::ledger::Ledger::default();
+    let facts = runtime.registration_facts(std::slice::from_ref(&record));
+    assert_eq!(
+        crate::coordination::agent_view(&record, &ledger, &facts).profile,
+        Some("Claude · a".to_owned())
+    );
+}
+
+/// A session line's resume runs with the profile of the account its machine
+/// says holds the session: the built-in default for the default account, as
+/// for a session recorded before profiles; that agent's profile of the
+/// account, the agent's default among two first; and none for an account
+/// whose profile is gone or going, rather than another account (PRD
+/// agent-profiles B19).
+#[test]
+fn a_session_line_resumes_with_the_profile_of_the_account_that_holds_it() {
+    use hide_agent_adapter::AccountKey;
+    let (mut runtime, _) = live_tab_order_runtime("/repo");
+    let profile = |id: &str, kind: &str, account: &str| crate::model::ProfileSnapshot {
+        id: id.to_owned(),
+        kind: kind.to_owned(),
+        name: id.to_owned(),
+        account: Some(account.to_owned()),
+        program: None,
+        env_keys: Vec::new(),
+        version: 1,
+        install: None,
+        folder: None,
+        hook: None,
+        skill: None,
+    };
+    let going = crate::model::ProfileSnapshot {
+        install: Some(crate::model::ProfileInstall::Removing),
+        ..profile("going", "claude-code", "/accounts/going")
+    };
+    let mut kit = runtime.kit_state(crate::node::TEST_NODE);
+    kit.profiles = Some(crate::model::ProfilesSnapshot {
+        state: crate::model::ProfilesState::Listed,
+        version: 1,
+        profiles: vec![
+            profile("work", "claude-code", "/accounts/work"),
+            profile("shared", "claude-code", "/accounts/shared"),
+            profile("shared-default", "claude-code", "/accounts/shared"),
+            profile("codex-work", "codex", "/accounts/work"),
+            profile("opencode-work", "opencode", "/accounts/opencode-work"),
+            going,
+        ],
+        defaults: [("claude-code".to_owned(), "shared-default".to_owned())].into(),
+    });
+    runtime.set_kit_state(crate::node::TEST_NODE, kit);
+    let folder = |path: &str| AccountKey::Folder(path.to_owned());
+    let resumed = |kind: &str, account: &AccountKey| {
+        runtime
+            .session_profile(crate::node::TEST_NODE, kind, account)
+            .map(|profile| profile.map(|(id, _)| id.0))
+    };
+
+    assert_eq!(resumed("claude", &AccountKey::Default), Ok(None));
+    assert_eq!(
+        resumed("claude", &folder("/accounts/work")),
+        Ok(Some("work".to_owned()))
+    );
+    assert_eq!(
+        resumed("claude", &folder("/accounts/shared")),
+        Ok(Some("shared-default".to_owned()))
+    );
+    assert_eq!(
+        resumed("opencode", &folder("/accounts/opencode-work")),
+        Ok(Some("opencode-work".to_owned()))
+    );
+    for gone in [
+        "/accounts/removed",
+        "/accounts/going",
+        "/accounts/opencode-work",
+    ] {
+        assert_eq!(
+            resumed("claude", &folder(gone)),
+            Err(crate::launch::PROFILE_GONE),
+            "{gone}"
+        );
+    }
 }

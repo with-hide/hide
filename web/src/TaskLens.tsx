@@ -7,10 +7,11 @@ import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
-import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
+import { agentWithProfile, backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { AskLine, askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark } from "./components/pr-mark";
@@ -111,8 +112,8 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const everyAsk = useEveryDeviceMissionAsks(deviceId);
   const asks = filter ? ownAsks : everyAsk;
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
-  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, byPane, projects, view, archived, asks, elsewhere]);
-  const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
+  const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
+  const noProject = rest !== null && projects.every((project) => project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view}>
@@ -218,7 +219,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const numbers = numbered ? numberedPanes(drawnTasks(shown).map(({ agent }) => agent.pane_id)) : null;
   const siblings = useShellStore((s) => siblingsShown(s.rest));
   const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll, siblings) }));
-  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => ({ state: band.state, missions: band.missions, trees: treesOf(band.entries) })), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
+  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => { const trees = treesOf(band.entries); return { state: band.state, trees, rows: band.rows.map((row) => (row.kind === "mission" ? row : { kind: "task" as const, tree: trees[band.entries.indexOf(row.entry)]! })) }; }), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
   const restingTrees = treesOf(shown.resting);
   const cleanupTrees = treesOf(shown.cleanup);
   const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting, ...cleanup]), ...restingTrees, ...cleanupTrees]
@@ -252,8 +253,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
           <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
-            {band.missions.map((ask) => <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />)}
-            {rows(band.trees)}
+            {band.rows.map((row) => (row.kind === "mission"
+              ? <SidebarMissionRow key={`mission:${row.ask.mission.id}`} ask={row.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
+              : rows([row.tree])[0]))}
           </ul>
         </Fragment>
       ))}
@@ -429,7 +431,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : read ? t("agents.mark.turn") : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
-  const name = [agent.identity_label, entry.device, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
+  const name = [agent.identity_label, entry.device, forkLabel(t, agent), agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
@@ -438,12 +440,12 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
       <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
-            title={[agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
+            title={[agent.identity_label, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read /> : <StatusMark mark={agent.mark} className={markTone(agent)} />}
-            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} />}
+            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} profile={agent.profile} />
             <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
@@ -453,7 +455,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} read={read} />
+        <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -558,7 +560,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask in 내 차례
     // also offers 치우기, which puts it away until the agent asks something new (needs-you-cleanup B15).
     if (root) entries.push(revisitEntry(agent, disabled, t));
-    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "unstar", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
+    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "put_away", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
@@ -656,7 +658,7 @@ function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
  */
-function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; showProject: boolean; read?: boolean }) {
+function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
   const { agent, card, project } = entry;
@@ -664,11 +666,16 @@ function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; sh
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
   if (!parts && !(showProject && project)) return null;
+  // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
+  const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
-    <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
-      {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-      {parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
-    </div>
+    <>
+      <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
+        {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
+        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+      </div>
+      {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
+    </>
   );
 }
 
@@ -716,12 +723,12 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
       <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
-            aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
-            title={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
+            aria-label={[child.identity_label, forkLabel(t, child), agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
+            title={[child.identity_label, agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            <StatusMark mark={child.mark} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} />
+            <StatusMark mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} profile={child.profile} />
             <AgentRecordTitle agent={child} className={cn("text-caption", quiet ? "text-subtle-foreground" : "text-foreground")} />
             <AgentForkMark agent={child} />
           </button>
@@ -729,16 +736,23 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
           <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
-        <ChildLine child={child} />
+        <ChildLine child={child} actions={actions} />
         {child.state.branch_badge ? <BranchLine agent={child} branch={child.state.branch_badge} /> : null}
       </div>
     </li>
   );
 }
 
-function ChildLine({ child }: { child: AgentRow }) {
+function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown());
+  // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
+  if (child.human_turn) {
+    return <>
+      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /></div>
+      <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
+    </>;
+  }
   const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
   const parts: LineParts | null = ask ? askParts(t, ask) : agentLineParts(t, child);
   if (!parts) return null;

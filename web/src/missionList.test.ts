@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { groupMissions, missionEntry, missionPillKey, projectMissions, rowLine, rowLineText, shownMission, turnCount } from "./missionList";
+import { deviceMissions, groupMissions, listedMissions, missionEntry, missionPillKey, missionProjects, rowLine, rowLineText, turnCount } from "./missionList";
 import { workerEscalation } from "./missions";
 import type { AgentRow, Mission, MissionNode } from "./snapshot";
 
-// The Mission tool's list (PRD mission-tool D-08, D-09, B2, B5, B7, B23): which
-// missions it lists, the group each stands in, and the rail's number.
+// The mission screen's table (PRD mission-screen D-06, B1, B3-B5, B10, B11;
+// PRD mission-tool B5, B7): which missions a device lists, its project chips,
+// the group each stands in, the sidebar row's number and the list's order.
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
   return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
@@ -17,14 +18,18 @@ function mission(id: string, extra: Partial<Mission> = {}): Mission {
 const noRows = () => null;
 const group = (m: Mission, rows: (node: MissionNode) => AgentRow | null = noRows) => missionEntry(m, (n) => workerEscalation(rows(n))).group;
 
-describe("the missions it lists (D-09)", () => {
-  it("takes the front project's missions on its device, in any of its checkouts, and no other project's", () => {
-    const project = { id: "w", path: "/repo", device_id: "mac" };
-    const mine = mission("a", { checkout_path: "/repo-wt/feature" });
-    const registeredLater = mission("b", { workspace_id: "", project: "/repo" });
-    const other = mission("c", { workspace_id: "w2", project: "/other" });
-    const otherDevice = mission("d", { workspace_id: "w9", device_id: "mini", project: "/repo" });
-    expect(projectMissions([mine, registeredLater, other, otherDevice], project).map((m) => m.id)).toEqual(["a", "b"]);
+describe("the missions a device lists (D-06, B3)", () => {
+  it("takes every project's missions of the device and none of another device's", () => {
+    const missions = [mission("a"), mission("b", { workspace_id: "w2", project: "/other" }), mission("c", { device_id: "mini" })];
+    expect(deviceMissions(missions, "mac").map((m) => m.id)).toEqual(["a", "b"]);
+    expect(deviceMissions(missions, "mini").map((m) => m.id)).toEqual(["c"]);
+    expect(deviceMissions(missions, "gone")).toEqual([]);
+  });
+
+  it("offers each project once as a chip, by its catalog name or else its folder's", () => {
+    const missions = [mission("a"), mission("b", { workspace_id: "w2", project: "/work/atorni-ax" }), mission("c")];
+    expect(missionProjects(missions, [{ id: "w", label: "herdr-ide" }])).toEqual([{ id: "w2", label: "atorni-ax" }, { id: "w", label: "herdr-ide" }]);
+    expect(missionProjects([mission("d", { workspace_id: "w3", project: "C:\\work\\billing" })], [])).toEqual([{ id: "w3", label: "billing" }]);
   });
 });
 
@@ -72,12 +77,13 @@ describe("the list's order (B5, B7)", () => {
   });
 });
 
-describe("the selected row (B6, B23)", () => {
-  it("is the mission the 보기 slot shows, whichever place opened it, and none while the slot shows something else or is folded", () => {
-    expect(shownMission({ items: [{ kind: "mission", mission: "m1" }], shown: true })).toBe("m1");
-    expect(shownMission({ items: [{ kind: "mission", mission: "m1" }, { kind: "pull_request", workspace_id: "w", number: 2 }], shown: true })).toBeNull();
-    expect(shownMission({ items: [{ kind: "mission", mission: "m1" }], shown: false })).toBeNull();
-    expect(shownMission(null)).toBeNull();
+describe("the list beside the detail (B10, B11)", () => {
+  it("walks the groups top down, 끝남 cut to its newest three until 모두 ›", () => {
+    const closed = (id: string, at: number) => mission(id, { status: "done", closed_at_unix_ms: at });
+    const entries = [mission("run"), mission("ask", { decision: "Which?" }), closed("c1", 10), closed("c2", 40), closed("c3", 30), closed("c4", 20)].map((m) => missionEntry(m, noRows));
+    const groups = groupMissions(entries);
+    expect(listedMissions(groups, false).map((entry) => entry.mission.id)).toEqual(["ask", "run", "c2", "c3", "c4"]);
+    expect(listedMissions(groups, true).map((entry) => entry.mission.id)).toEqual(["ask", "run", "c2", "c3", "c4", "c1"]);
   });
 });
 
@@ -89,8 +95,24 @@ describe("a mission whose Conductor has not got its letters (hide-private issue 
     const entry = missionEntry(held, () => null);
     expect(entry.group).toBe("turn");
     expect(turnCount([entry])).toBe(1);
-    expect(missionPillKey(held, entry.turn[0] ?? null)).toBe("missionTool.pill.letters");
+    expect(missionPillKey(held, entry.turn[0] ?? null)).toBe("missionScreen.pill.letters");
     expect(rowLineText(rowLine(held, entry.turn[0] ?? null)!, t)).toBe("Letters waiting for the Conductor: 4 · three bells went unanswered: tell the Conductor to read its letters");
     expect(group(mission("a", { conductor_letters: null }))).toBe("running");
+  });
+});
+
+describe("the turn pill words the operator's action (B6)", () => {
+  it("names the action in every language, and says 지휘 다시 열기 for a mission no Conductor holds", async () => {
+    const { initializeInterfaceI18n } = await import("./i18n/instance");
+    const asked = mission("a", { decision: "?" });
+    const word = (language: "en" | "ko" | "zh-CN" | "ja", turn: Parameters<typeof missionPillKey>[1]) => initializeInterfaceI18n(language).getFixedT(null, "translation")(missionPillKey(asked, turn));
+    const turns = [{ kind: "decision" }, { kind: "landing" }, { kind: "landing", git: true }, { kind: "worker_blocked" }, { kind: "letters" }, { kind: "attention" }, { kind: "takeover" }] as const;
+    const words = (language: "en" | "ko" | "zh-CN" | "ja") => turns.map((turn) => word(language, turn));
+    expect(words("ko")).toEqual(["답하기", "머지하기", "합치기", "막힌 곳 보기", "편지 읽기", "확인하기", "지휘 다시 열기"]);
+    expect(words("en")).toEqual(["Answer", "Merge", "Join", "See what's stuck", "Read letters", "Take a look", "Resume command"]);
+    expect(words("zh-CN")).toEqual(["去回答", "去合并", "去汇合", "查看受阻处", "读信件", "去查看", "重新开启指挥"]);
+    expect(words("ja")).toEqual(["答える", "マージする", "合流する", "停止箇所を見る", "手紙を読む", "確認する", "指揮を再開"]);
+    expect(missionPillKey(mission("b", {}), null)).toBe("mission.pill.running");
+    initializeInterfaceI18n("en");
   });
 });

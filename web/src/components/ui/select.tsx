@@ -26,15 +26,20 @@ function SelectValue(props: ComponentProps<typeof SelectPrimitive.Value>) {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />;
 }
 
-function SelectTrigger({ className, size = "default", children, ...props }: ComponentProps<typeof SelectPrimitive.Trigger> & { size?: "sm" | "default" }) {
+/**
+ * `ghost` drops the field's frame for a quiet word that lights on hover, for a
+ * menu that sits among words in a composer's row (the start panel's agent and model).
+ */
+function SelectTrigger({ className, size = "default", variant = "default", children, ...props }: ComponentProps<typeof SelectPrimitive.Trigger> & { size?: "sm" | "default"; variant?: "default" | "ghost" }) {
   const layer = useContext(SelectLayerContext);
   return (
     <SelectPrimitive.Trigger
       ref={layer?.trigger}
       data-slot="select-trigger"
       data-size={size}
+      data-variant={variant}
       className={cn(
-        "flex w-(--size-settings-control-w) max-w-full items-center justify-between gap-xs whitespace-nowrap rounded-sm border border-input bg-background px-sm text-body text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-(--opacity-disabled) aria-invalid:border-destructive data-[placeholder]:text-muted-foreground data-[size=default]:h-(--size-control) data-[size=sm]:h-(--size-control-sm) *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-xs [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-(--size-icon) [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex w-(--size-settings-control-w) max-w-full items-center justify-between gap-xs whitespace-nowrap rounded-sm border border-input bg-background px-sm text-body text-foreground outline-none data-[variant=ghost]:border-transparent data-[variant=ghost]:bg-transparent data-[variant=ghost]:px-xs data-[variant=ghost]:text-subtle-foreground data-[variant=ghost]:hover:bg-accent data-[variant=ghost]:hover:text-accent-foreground data-[variant=ghost]:data-[state=open]:bg-accent transition-colors focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-(--opacity-disabled) aria-invalid:border-destructive data-[placeholder]:text-muted-foreground data-[size=default]:h-(--size-control) data-[size=sm]:h-(--size-control-sm) *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-xs [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-(--size-icon) [&_svg:not([class*='text-'])]:text-muted-foreground",
         className,
       )}
       {...props}

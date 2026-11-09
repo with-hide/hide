@@ -175,6 +175,7 @@ fn claude_reads_the_trust_hide_recorded(engine: &dyn Engine, home: &Path) {
         Some(&node),
         "claude",
         &hide_platform::path::to_wire(&task).unwrap(),
+        None,
     )
     .unwrap();
 

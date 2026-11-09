@@ -86,6 +86,14 @@ pub struct ProjectSettings {
     /// version 1 record reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guardrails: Option<Rules>,
+    /// The profile each agent starts with in this project, by agent id
+    /// (PRD agent-profiles D-31): the profile's id on the project's machine.
+    /// An agent it does not name, or a profile its machine no longer lists,
+    /// starts with the agent's default (`launch::pick`). Absent when empty,
+    /// so a record without it is written as before, and an older build keeps
+    /// it among `unknown` and reads the record at the same version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_profiles: BTreeMap<String, String>,
     /// Fields a newer build wrote, kept so this one's save of the record
     /// loses none of them (a record of a newer version is read-only here).
     #[serde(flatten, default)]
@@ -120,6 +128,10 @@ pub struct Patch {
     /// The whole set of protections, replacing the record's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guardrails: Option<Rules>,
+    /// Each agent named here starts with this profile in the project; `null`
+    /// gives the agent its default back. Agents not named keep theirs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_profiles: Option<BTreeMap<String, Option<String>>>,
 }
 
 impl ProjectSettings {
@@ -136,6 +148,7 @@ impl ProjectSettings {
             auto_fetch: None,
             link_scopes: BTreeMap::new(),
             guardrails: None,
+            agent_profiles: BTreeMap::new(),
             unknown: serde_json::Map::new(),
         }
     }
@@ -198,6 +211,20 @@ impl ProjectSettings {
             next.guardrails = Some(rules);
             next.version = VERSION;
         }
+        for (agent, profile) in patch.agent_profiles.unwrap_or_default() {
+            if hide_agent_adapter::adapter(&agent).is_none_or(|adapter| adapter.id != agent) {
+                return Err("project_settings_invalid_agent");
+            }
+            match profile {
+                Some(profile) if valid_profile_id(&profile) => {
+                    next.agent_profiles.insert(agent, profile);
+                }
+                Some(_) => return Err("project_settings_invalid_profile"),
+                None => {
+                    next.agent_profiles.remove(&agent);
+                }
+            }
+        }
         Ok(next)
     }
 
@@ -205,6 +232,11 @@ impl ProjectSettings {
     pub(crate) fn rules(&self) -> Option<&Rules> {
         self.guardrails.as_ref().filter(|rules| rules.any())
     }
+}
+
+/// A profile id as a node makes them: short, with no control character.
+fn valid_profile_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
 }
 
 /// The name kept for what the operator typed: trimmed, none when nothing is
@@ -222,8 +254,7 @@ fn display_name(typed: &str) -> Result<Option<String>, &'static str> {
 
 /// Gives each project the name the operator set for it on its device and
 /// root. A project without one keeps the label the catalog gave it, its
-/// registration's or its folder's; the Home is Hide's own folder and keeps
-/// its name.
+/// registration's or its folder's.
 pub(crate) fn apply_names(
     records: &BTreeMap<String, ProjectSettings>,
     projects: &mut [crate::model::WorkspaceSnapshot],
@@ -231,7 +262,7 @@ pub(crate) fn apply_names(
     if records.values().all(|record| record.name.is_none()) {
         return;
     }
-    for project in projects.iter_mut().filter(|project| !project.is_home) {
+    for project in projects.iter_mut() {
         if let Some(name) = get(records, &project.device_id, &project.path)
             .and_then(|record| record.name.as_deref())
         {
@@ -316,7 +347,107 @@ pub(crate) fn auto_fetch(
         .unwrap_or(true)
 }
 
+/// The profile `agent` starts with in the project at `root` on `device`
+/// (D-31), by the id its record keeps; whether the machine still lists it
+/// is the start's to judge (`launch::pick`).
+pub(crate) fn agent_profile<'a>(
+    records: &'a BTreeMap<String, ProjectSettings>,
+    device: &str,
+    root: &str,
+    agent: &str,
+) -> Option<&'a str> {
+    get(records, device, root)?
+        .agent_profiles
+        .get(agent)
+        .map(String::as_str)
+}
+
 /// A path can carry several branches and each branch can acquire a new bare token.
 pub(crate) fn link_scope_key(path: &str, branch: Option<&str>, number: u32) -> String {
     format!("{path}\0{}\0{number}", branch.unwrap_or(""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RELEASED: &str = include_str!("../tests/fixtures/release-1.2.4/project-settings.json");
+
+    /// The released 1.2.4 record as that build declares it: its own fields,
+    /// and every other one kept in `unknown`.
+    #[derive(Deserialize, Serialize)]
+    struct Released {
+        version: u32,
+        device_id: String,
+        root: String,
+        #[serde(flatten)]
+        unknown: serde_json::Map<String, serde_json::Value>,
+    }
+
+    fn released() -> BTreeMap<String, serde_json::Value> {
+        serde_json::from_str(RELEASED).unwrap()
+    }
+
+    #[test]
+    fn a_record_without_agent_profiles_is_written_as_the_released_build_wrote_it() {
+        for (name, written) in released() {
+            let record: ProjectSettings = serde_json::from_value(written.clone()).unwrap();
+            assert!(record.agent_profiles.is_empty(), "{name}");
+            assert_eq!(serde_json::to_value(&record).unwrap(), written, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_record_with_agent_profiles_keeps_its_version_and_the_released_build_keeps_the_field() {
+        for (name, written) in released() {
+            let record: ProjectSettings = serde_json::from_value(written).unwrap();
+            let patched = record
+                .patched(Patch {
+                    agent_profiles: Some(BTreeMap::from([(
+                        "claude-code".to_owned(),
+                        Some("p-work".to_owned()),
+                    )])),
+                    ..Patch::default()
+                })
+                .unwrap();
+            // No version change: 1.2.4 reads versions 1 and 2 (D-31).
+            assert_eq!(patched.version, record.version, "{name}");
+            let new = serde_json::to_value(&patched).unwrap();
+            assert_eq!(new["agent_profiles"]["claude-code"], "p-work", "{name}");
+            // 1.2.4 reads it, and its save writes the field back unchanged.
+            let old: Released = serde_json::from_value(new.clone()).unwrap();
+            assert_eq!(old.version, record.version);
+            assert_eq!(serde_json::to_value(&old).unwrap(), new, "{name}");
+            // Clearing the agent's choice writes the record as before.
+            let cleared = patched
+                .patched(Patch {
+                    agent_profiles: Some(BTreeMap::from([("claude-code".to_owned(), None)])),
+                    ..Patch::default()
+                })
+                .unwrap();
+            assert_eq!(cleared, record, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_choice_for_an_agent_hide_does_not_know_or_an_empty_profile_is_refused() {
+        let record = ProjectSettings::new("device", "/root");
+        let patch = |agent: &str, profile: &str| Patch {
+            agent_profiles: Some(BTreeMap::from([(
+                agent.to_owned(),
+                Some(profile.to_owned()),
+            )])),
+            ..Patch::default()
+        };
+        assert_eq!(
+            record.patched(patch("claude", "p")),
+            Err("project_settings_invalid_agent"),
+            "an alias is not the agent's id"
+        );
+        assert_eq!(
+            record.patched(patch("claude-code", "")),
+            Err("project_settings_invalid_profile")
+        );
+        assert!(record.patched(patch("codex", "p-team")).is_ok());
+    }
 }

@@ -146,6 +146,7 @@ impl Runtime {
             ));
         };
         let launch = self.launch_choice_of(&agent);
+        let profile = self.launch_profile_of(&agent);
         let record = DormantRecord {
             phase: DormantPhase::SavingClose,
             revision: 1,
@@ -174,6 +175,7 @@ impl Runtime {
             registration: self.delivery_registration_of(pane_id),
             launch,
             owner: Some(owner),
+            profile,
         };
         if let Err(reason) = self.snapshot.ui_state.agent_sleep.admit_dormant(record) {
             return Err(SleepRefusal::new(
@@ -1106,6 +1108,22 @@ impl Runtime {
             id: id.clone(),
             record: current.clone(),
         };
+        // The woken pane's record names the profile before its agent shows:
+        // the woken agent's session is read in that profile's account, and
+        // Pi's and Grok's readers prove the session that confirms this wake
+        // only there (PRD agent-profiles B19). It is kept in memory: the
+        // saved state stays the start's intent until its outcome, and the
+        // confirmation writes and saves the same record.
+        if let Some(pane) = work.record.wake_pane_id.as_deref() {
+            self.put_pane_launch(
+                pane,
+                &work.record.kind,
+                &agent_sleep_engine::dormant_wake_name(&work),
+                &work.record.launch,
+                work.record.profile.as_ref(),
+                Some(&work.record.native_session_id),
+            );
+        }
         if let Err(reason) = agent_sleep_engine::spawn_dormant_start(context, work, args) {
             self.fail_dormant(id, &reason);
         }
@@ -1221,6 +1239,7 @@ impl Runtime {
                     &record.kind,
                     &name,
                     &record.launch,
+                    record.profile.as_ref(),
                     Some(&record.native_session_id),
                 );
             }

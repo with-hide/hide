@@ -63,8 +63,8 @@ An attention that reached the operator (PRD mission-node-simple D-05, B14) is la
 It is laid on the Conductor's row while the Conductor holds the mission, else on the row of the node's worker while its registration stands, and only on a row that rests with no demand of its own (`plans.rs::mission_attention_asks`, laid by `lay_reviews_on`); while no row shown carries it, a working one included, the mission is its own Needs You item (`on_row: false`, read from the laid rows) and the notice goes out; it is lifted from the row when the attention goes, whoever or whatever settled it.
 The row then stands in Needs You and its line reads `<node> · <why>` (`mission.attention.reason.*`; `mission.attention` names it in notifications), with the node's title as the plain sentence for a surface that does not know the cause; the bell and the phone word it in their own language from the same subject, and a Desk card reads it as a decision.
 Several asks on one row are oldest first with `외 N건` for the rest, as for a plan review and a mission decision.
-With neither row standing, the mission itself is one Needs You item above the agent rows (its title and `<node> · <why>`, `외 N건` for the rest, with `이어받기` and that node's choices), which opens its map and is counted in the device's Needs You number with the agents, and the operator is also told once by a notice; a toast or a push alone never stands in for it (PRD mission-node-simple D-19, [delivery.md](delivery.md#missions)).
-It is a question the core lays, not one of the seven escalation causes of Delegated escalation, and adds no status, mark, colour or group.
+With neither row standing, the mission itself is one Needs You item above the agent rows (its title and `<node> · <why>`, `외 N건` for the rest, with `지휘 다시 열기` and that node's choices), which opens its map and is counted in the device's Needs You number with the agents, and the operator is also told once by a notice; a toast or a push alone never stands in for it (PRD mission-node-simple D-19, [delivery.md](delivery.md#missions)).
+It is a question the core lays, not one of the eight escalation causes of Delegated escalation, and adds no status, mark, colour or group.
 
 ### A handed plan step adds no status
 
@@ -80,6 +80,23 @@ The same rule holds for a device's rows.
 A mission decision, and a mission node's attention (above), follow the same path (`plans.rs::lay_reviews_on`), laid again whenever the plan book or the mission book moves; a decision's `detail` is its line, cut to a row's width, and an attention's is the node's title, so a phone page or service worker that does not know the cause draws the plain sentence.
 A row that has both a plan waiting for review and a mission decision carries the one asked first and counts the other behind it, as the root's other asks are counted (`외 N건`, needs-you-cleanup D-13).
 Input an agent has not confirmed follows the same path, laid on the pane rather than a session, since a child that never took its brief may have no session yet: `{cause: "input_unconfirmed", input: "brief" | "letter", spent, held}`, worded `브리프 확인 안 됨` or `편지 확인 안 됨`, `브리프 못 받음` or `편지 못 받음` only when a composer read saw the text still there (`held`), and `· 재시도 다 씀` once its typings are spent (`agents.input.*`); the core lays it only once no parent can clear the screen ([delivery.md: Input an agent did not take](delivery.md#input-an-agent-did-not-take)), and a delegated child's ask rises to its root as the seventh escalation cause.
+
+### A person's turn an agent declares
+
+An agent at a step only a person can take, a sign-in, an unlock, an app or system permission, says so with `hide agent ask-human auth|permission <where>` (PRD ask-human D-02, D-03); it adds no status, mark colour or group, and Hide AI's own reading of a blocked turn stays for an agent that does not say it.
+The declaration is the core's, one per registration in the delivery ledger (`Ledger::human_turns`, `coordination/human_turn.rs`), so it outlives a sleep and a restart, and nothing Hide AI reads takes it down (D-07, D-16); the place is kept as the agent wrote it on one line, a URL's query and fragment included, since they can name what the operator needs, such as a device code or a request number (D-04).
+The place lives only while the declaration stands: it leaves the ledger with the declaration, and the Done letter and the diagnostic log never carry it, so a one-time code it holds is on the screen, a notification and the phone only until the step is done (D-04, B4).
+It goes only when the operator presses Done, when the operator sends that agent a message of their own from its pane or the phone's conversation, when the agent runs `--clear`, or when its registration ends (D-08); a message typed and not sent leaves it.
+The core lays it on the declaring row in a field of its own, `declared_human_turn` `{id, kind, place, device, since_unix_ms}` (`runtime/human_turn.rs`), on a working row and on one with its own question or block too; the row's own question, `ask_subject` and demand stay as they are, so a question the operator answers meanwhile does not come back when the turn goes, and every reading of the row looks at the field first: the row's ask leads with it (`state.ask.subject` `{cause: "human_turn", id, kind, place, device}`) and counts the rest behind it (`외 N건`, D-21), and the row's `human_turn` names the declaration a row leads with, its own or a raised one, for the key and Done.
+A ledger the core could not read leaves the turns laid as they were and settles nothing, which the diagnostic log says (`ask_human.ledger_unreadable`).
+A delegated child's declaration is the eighth escalation cause, `human_turn`, checked before every other: its lineage root stands in Needs You with the child's ask leading its asks, whatever the parents between are doing, and those parents take only the descendant signal (`human:<id>`), which turns them unread (D-06, D-17).
+Several declarations under one root show the one declared first, with the rest behind it; Done on the root settles only that one, and each also stands on its own row in the tree (D-20).
+The mark is the warning badge with a key in place of the `!` (`StatusMark` `human`), on the declaring row and the root only, named `사람 차례`; its line is `<kind word> · <place>`, `인증` or `허용` (`agents.human.*`), the place plain text the operator can select and never a link (D-09, D-15), with a copy icon beside it wherever Done stands that puts the whole place on the clipboard ([UI_BEHAVIOR.md](UI_BEHAVIOR.md)), and the device's chip when it runs on a connected device.
+The pane head of the declaring agent, of its root and of every parent between them says it with Done, as an own ask leads a pane's band and a raised one the root's (`agent_state/header.rs`; a parent between reads the turns raised below it from `human_below`, which its row never draws).
+Done is one event (`human_turn_done`, the declaration's id) from the two lists, the pane head, the Overview, the tree and the phone, disabled with the connection's reason while the declaring agent's device is not connected; it sends the agent one report letter, which wakes it when it sleeps and waits for no answer, then takes the declaration down, so a press from two surfaces sends one letter ([delivery.md: A person's turn](delivery.md#a-persons-turn)).
+A new declaration is one notice on the desktop and the phone under the existing switches, worded `사람 차례 · <kind word> · <place> · <device>`, and a replacing one is a new notice; the notification ledger keeps the declarations it announced (`Seen` in `turn.rs::push`), so a declaration raised under a root already in Needs You is announced once too, and a restart announces nothing again (D-11).
+A mission worker's declaration rises to its Conductor's row like any delegated child's, and on the map it is only its node's waiting reason, a key and `<kind word> · <place>`, never a mission attention or a 내 차례 item of the mission (D-18).
+Regression owners: `hide-core/src/runtime/tests/human_turn.rs`, the escalation tests in `agent_state/escalation.rs`, `each_persons_turn_is_announced_once_with_what_and_where` in `hided/src/mobile/push.rs`, and `web/e2e/ask-human.spec.ts`.
 
 ## agent_status provenance and background waits
 
@@ -148,15 +165,17 @@ The agents' sequences start again with the daemon, so the engine keeps every tok
 
 A record saved on another engine is carried over instead of compared.
 Each record holds its verdict (`PaneReadRecord::unread`), saved whenever it flips, and until the pane settles on the new engine the row keeps that verdict.
-The first time the pane settles on the connection, a read record moves to the new engine unless the pane shows something the operator had not read: another known agent session, a demand it did not have, or a change between working and stopped.
+The first time the pane settles on the connection, a read record takes the new engine's mark and sequence and keeps everything else the operator read, and from then on it is judged like any record read on that engine: the row is unread while it shows something the record does not cover (another known agent session, a demand it did not have, a change between working and stopped), and read again if that goes away at the same sequence.
+Nothing is decided from that first settled state alone, because it can still be on its way.
+On 2026-11-09 a started daemon laid label summaries before its first usage read told it Hide AI was paused, so three read panes whose labels ended on a question showed that question for a moment, and a verdict taken once from that moment kept them unread until the operator read them again, on every restart.
 A completion the restored engine reports again is the one the record held, so a restored agent that reports `done` again stays read.
 An unread record stays unread through the restore and is decided again only when the operator reads the pane.
 Running the same pass twice changes nothing, and a second restart starts from the records the first one left.
-A record saved while its pane was still being restored (the operator looked during those steps) is carried the same way once the pane settles.
+A record saved while its pane was still being restored (the operator looked during those steps) holds no state to compare, so it takes what the pane settles on as read.
 Records written before this rule name no engine, so Hide cannot tell which one they were read on; each is judged by sequence as before the first time its pane settles and then names that engine.
 Reading such a record as read on a guess would lose news, so an upgrade whose first connection reaches a restored pane with such a record can show a read row unread once.
 
-Regression owners: `a_read_pane_stays_read_through_a_restored_servers_steps`, `a_restored_pane_reporting_done_again_stays_read`, `a_pane_unread_before_a_restart_stays_unread`, `a_restored_pane_showing_something_new_is_unread`, `a_hide_restart_on_the_same_server_shows_work_done_while_away`, `a_childs_signal_through_a_restore_lights_its_parent_only_when_new` and `a_record_saved_before_servers_were_named_is_judged_by_sequence_once` in `sidebar.rs`, `a_device_pane_read_before_its_server_restarts_stays_read` for a device, `a_server_mark_is_written_once_and_rides_with_lineage_keys` for the writer, and `web/e2e/read-across-restart.spec.ts` against a real restart of hided.
+Regression owners: `a_read_pane_stays_read_through_a_restored_servers_steps`, `a_restored_pane_is_read_by_what_it_rests_on_not_its_first_settled_state`, `a_restored_pane_reporting_done_again_stays_read`, `a_pane_unread_before_a_restart_stays_unread`, `a_restored_pane_showing_something_new_is_unread`, `a_hide_restart_on_the_same_server_shows_work_done_while_away`, `a_childs_signal_through_a_restore_lights_its_parent_only_when_new` and `a_record_saved_before_servers_were_named_is_judged_by_sequence_once` in `sidebar.rs`, `a_device_pane_read_before_its_server_restarts_stays_read` for a device, `a_server_mark_is_written_once_and_rides_with_lineage_keys` for the writer, and `web/e2e/read-across-restart.spec.ts` against a real restart of hided.
 
 ## Completion is separate from stopped
 
@@ -169,6 +188,8 @@ The engine's done/idle distinction supplies completion evidence only; Hide's own
 
 A completion is news only when it appears.
 A record that holds a completion the row no longer shows still covers the row: a completion goes away only when the agent works again, which its own change already says, or when a restarted engine no longer reports it.
+A demand is the same: one the row no longer shows is a question answered, whose work moves the sequence, or a label summary withheld while Hide AI is paused or summaries are off, and neither is anything to look at; a demand that appears, or turns into another, is news.
+A session the row cannot name yet is no other session: another session is news only when the record and the row both name one.
 Any other change to the fingerprint (the agent working again, a state change between two looks, another session in the pane) still turns the row unread.
 Regression owners: `a_read_demand_stays_read_when_the_engine_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which finishes a blocked and an unfinished turn after the operator moved on.
 
@@ -246,7 +267,7 @@ A turn the label read as finished (`done`) is not hidden by the background tasks
 The Done notification goes out as for any finished turn, and opening the row reads it; a task that wakes the agent starts a new turn, which decides the mark again.
 A `waiting` or `unfinished` verdict, or none (Hide AI off included), keeps the row in progress on its background tasks, and children, a reply being made or running checks keep it in progress whatever the verdict (B28).
 A merely ready or finished descendant is quiet, and one whose activity the engine reports as unknown does not make its root wait, because a waiting state the projection cannot vouch for is not drawn.
-A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the seven escalation causes raises it (Delegated escalation).
+A descendant holding a question, approval or error waits on its parent, not the other way round, so it does not make the root wait: it turns the root unread through the descendant signals above, and moves the root to Needs You only once one of the eight escalation causes raises it (Delegated escalation).
 A delegated row that waits on its own (`background` or `reply`) is Working, like a delegated row that is running, and its ancestors' counts take it as working; its root waits on it only while it waits on a background task, because a reply is made by the agent that answers, not by the row that asked; an ordinary delegated row that waits for nothing keeps Seen.
 
 A reply wait ends when nothing is making the answer, even while the letter is still open in the ledger.
@@ -421,7 +442,7 @@ Four say whose move is next, and their shapes alone tell them apart; `unknown` s
 
 The ring does not turn (D-02): its dashes, not motion, tell waiting from work, on every surface, the ones with no second line (tabs, pane headers, the ⌃Tab switcher, ⌘K, the child tree popover) included (D-25, B36).
 When the agent starts working again the dashes close, and when a turn ends with a wait left they open.
-A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer, so it draws `waiting` in the working colour while its line keeps the request's warning colour, dimmed, and never the resting ring a parent's children button would show ahead of a working sibling; one of the seven escalation causes still makes it `turn`.
+A delegated row draws only `going`, `waiting`, `quiet` or `unknown` (B24): its question is its parent's to answer, so it draws `waiting` in the working colour while its line keeps the request's warning colour, dimmed, and never the resting ring a parent's children button would show ahead of a working sibling; one of the eight escalation causes still makes it `turn`.
 Colour never carries the distinction alone: the mark's name and the word that leads its line are its hover text and part of the row's accessible name (`markWords` in `web/src/agentRow.ts`), as in `내 차례 · 질문` or `읽을 것 · 일 남음`.
 
 How a stop ended is the label's verdict (`axes.rs::stop_verdict`): finished, or unfinished (work left); a label `waiting` that nothing proves is running is work left too, since nothing will wake the agent (status-marks D-17).
@@ -466,7 +487,7 @@ A subtree close is undone by one Reopen closed: the parent and its descendants c
 Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `hide-core/src/runtime/tests/tree_close.rs`.
 
 Needs You and Done belong to operator-owned roots.
-A delegated row stays Working or Seen; under the seven conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
+A delegated row stays Working or Seen; under the eight conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
 The raised row keeps its own demand, mark, status word and group; what changes is that it is drawn bright and its root carries the ask.
 Done is therefore scoped to the lineage root: a delegated child that finishes leaves a dimmed Seen row, and the completion the operator acts on is the root's.
 
@@ -924,7 +945,7 @@ A Hide AI row for a home is on the phone's list, and in these transitions, only 
 Here “on” means Agent summaries is enabled and the current session has a proven label.
 Before a proven label exists, an unavailable provider or failed analysis adds no generated title or sentence; an existing proven label can remain while an analysis is unavailable.
 “Off” means Agent summaries is disabled, including Hide AI being off; native session facts, engine lifecycle, lineage, read state and notification settings still apply.
-The table describes operator-owned roots; delegated rows and the seven escalation causes keep their ownership rules above.
+The table describes operator-owned roots; delegated rows and the eight escalation causes keep their ownership rules above.
 Sentences keep their original language in every mode.
 
 | Surface or condition | Hide AI on | Hide AI off |

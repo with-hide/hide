@@ -8,7 +8,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useStartPanel } from "./startDraft";
-import { checkoutKey, homeKey } from "./startTargets";
+import { checkoutKey } from "./startTargets";
 import { useUiStore } from "./ui";
 
 const canvas = vi.hoisted(() => {
@@ -27,7 +27,8 @@ it("shows a signed-out warning only when the chosen target runs on the machine w
   const project = { id: "remote-project", label: "new-project", path: "/remote/new-project", device_id: remote, remote_target_id: remote, registered: true, temporary: false, is_git: false, checkouts: [{ id: "remote-checkout", workspace_id: "remote-project", label: "main", path: "/remote/new-project", exists: true, is_primary: true }] };
   const snapshot = {
     navigator: {
-      focused_device_id: remote, workspaces: [],
+      focused_device_id: remote,
+      workspaces: [{ id: "local-project", label: "local", path: "/local/p", device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: "local-checkout", workspace_id: "local-project", label: "local", path: "/local/p", exists: true, is_primary: true }] }],
       devices: [
         { id: "core-machine", kind: "local", label: "Core machine", state: "local" },
         { id: remote, kind: "remote", label: "Fixture named session", state: "ready", kit: { busy: false, components: [], agents: [{ id: "claude-code", availability: "available", enabled: true, chosen: true }] } },
@@ -53,7 +54,7 @@ it("shows a signed-out warning only when the chosen target runs on the machine w
     expect(container.querySelector("[data-start-target]")?.getAttribute("data-start-target")).toBe(checkoutKey(remote, project.path));
     expect(container.querySelector("[data-agent-kind]")?.getAttribute("data-agent-kind")).toBe("claude");
     expect(warning()).toBeNull();
-    await act(async () => useStartPanel.getState().setTarget(homeKey("core-machine")));
+    await act(async () => useStartPanel.getState().setTarget(checkoutKey("core-machine", "/local/p")));
     expect(warning()?.textContent).toContain("Not signed in");
     await act(async () => useStartPanel.getState().setTarget(checkoutKey(remote, project.path)));
     expect(warning()).toBeNull();
@@ -130,6 +131,123 @@ it("asks which project and which branch, offers a new branch, and holds a start 
     expect(q("[data-start-submit]")).toHaveProperty("disabled", true);
     await press("[data-start-reconnect]");
     expect(events.at(-1)).toMatchObject({ kind: "retry_connect", payload: { target_id: remote } });
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
+});
+
+it("offers Add a project in place of Start when the device has no project, and opens it on that device (PRD retire-hide-home B1)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const snapshot = {
+    navigator: { focused_device_id: "core", devices: [{ id: "core", kind: "local", label: "This Mac", state: "local" }], workspaces: [] },
+    ui_state: { agent_start: { kind: "claude", models: {} } },
+    status: {},
+  } as unknown as SnapshotRest;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const q = (selector: string) => document.querySelector<HTMLElement>(selector);
+  try {
+    await act(async () => {
+      useShellStore.setState({ rest: snapshot, connection: "live" });
+      useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null, addProjectDevice: null });
+      useStartPanel.getState().open(false);
+      root.render(<TooltipProvider><StartPanelHost actions={createActions(() => true)} /></TooltipProvider>);
+    });
+    expect(q("[data-start-submit]")).toBeNull();
+    expect(q("[data-start-add-project]")?.textContent).toBe("Add project");
+    expect(q("[data-start-target]")?.getAttribute("data-start-target")).toBe("");
+    await act(async () => q("[data-start-add-project]")!.click());
+    expect(useUiStore.getState().overlay).toBe("add_project");
+    expect(useUiStore.getState().addProjectDevice).toBe("core");
+    expect(useStartPanel.getState().isOpen).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
+});
+
+it("shows the profile the core would pick, the project's first, and sends a profile only when the operator picks one (agent-profiles B1, B14)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const events: { kind: string; payload: Record<string, unknown> }[] = [];
+  const listed = (id: string, name: string) => ({ id, kind: "claude-code", name, account: `/home/me/accounts/${name}`, program: null, env_keys: [], version: 1, install: "own", folder: null, hook: null, skill: null });
+  const snapshot = (profiles: unknown, projectProfile: string | null) => ({
+    navigator: {
+      focused_device_id: "core-machine",
+      workspaces: [{ id: "blog", label: "blog", path: "/local/blog", device_id: "core-machine", registered: true, temporary: false, is_git: false, checkouts: [{ id: "blog-main", workspace_id: "blog", label: "main", path: "/local/blog", exists: true, is_primary: true }] }],
+      devices: [{ id: "core-machine", kind: "local", label: "Core machine", state: "local", kit: { busy: false, components: [], agents: [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: true }], profiles } }],
+    },
+    ui_state: {
+      agent_start: { kind: "claude", models: {} },
+      project_settings: projectProfile ? { blog: { version: 1, device_id: "core-machine", root: "/local/blog", agent_profiles: { "claude-code": projectProfile } } } : {},
+    },
+    status: {},
+  }) as unknown as SnapshotRest;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const q = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+  const started = () => events.filter((event) => event.kind === "agent_start_in_checkout").map((event) => event.payload);
+  const render = async (rest: SnapshotRest) => {
+    await act(async () => {
+      useShellStore.setState({ rest, connection: "live" });
+      useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null });
+      useStartPanel.setState(panel, true);
+      useStartPanel.getState().open(false, { projectId: "blog", kind: "claude" });
+      root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as never); return true; })} /></TooltipProvider>);
+    });
+  };
+  try {
+    // No profile on the machine: no menu, and the start names none.
+    await render(snapshot({ state: "listed", version: 1, profiles: [], defaults: {} }, null));
+    expect(q("[data-profile-pick]")).toBeNull();
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).not.toHaveProperty("profile");
+    await act(async () => root.render(<></>));
+
+    const profiles = { state: "listed", version: 2, profiles: [listed("p-work", "work"), listed("p-side", "side")], defaults: { "claude-code": "p-side" } };
+    await render(snapshot(profiles, "p-work"));
+    // The project's choice is shown chosen and sent as no choice at all.
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).not.toHaveProperty("profile");
+    await act(async () => root.render(<></>));
+
+    // A project that names the built-in profile opens on it, though the agent's default is side.
+    await render(snapshot(profiles, "default"));
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("default");
+    await act(async () => root.render(<></>));
+
+    await render(snapshot(profiles, null));
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-side");
+    const trigger = q("[data-profile-pick]")!;
+    trigger.focus();
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect([...document.querySelectorAll("[data-profile-pick-option]")].map((option) => option.getAttribute("data-profile-pick-option"))).toEqual(["default", "p-work", "p-side"]);
+    const option = q('[data-profile-pick-option="p-work"]')!;
+    option.focus();
+    await act(async () => { option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(q("[data-profile-pick]")?.dataset.profilePick).toBe("p-work");
+    await act(async () => q("[data-start-submit]")!.click());
+    expect(started().at(-1)).toMatchObject({ checkout_path: "/local/blog", provider: "claude", profile: "p-work" });
   } finally {
     await act(async () => root.unmount());
     container.remove();

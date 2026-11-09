@@ -97,6 +97,11 @@ struct StoredUiState {
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<serde_json::Value>,
+    /// The tab `detail` belongs to, and the slots of the other tabs by tab id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail_tabs: Option<serde_json::Value>,
     /// Kept as JSON and read record by record
     /// (`OverviewGraphChoices::read_stored`), so a record this build cannot
     /// read is left out and the rest of the store still loads.
@@ -125,7 +130,7 @@ struct StoredUiState {
     #[serde(default)]
     focused_checkout_id: Option<String>,
     #[serde(default)]
-    workspace_registrations: Vec<WorkspaceRegistration>,
+    workspace_registrations: Vec<StoredRegistration>,
     /// Read one by one, so a registration this build cannot place (an SSH
     /// alias and a node that dials in together, or neither, as only a hand
     /// edit writes) is dropped with a diagnostic instead of making the whole
@@ -269,6 +274,49 @@ struct StoredUiState {
     /// renamed again. More entries than the limit (a hand edit) are cut to it.
     #[serde(default)]
     operator_tab_names: BTreeMap<String, String>,
+    /// Absent unless the retirement of an old Home (`~/hide`) is pending.
+    #[serde(default)]
+    home_retire: Vec<crate::model::HomeRetirement>,
+}
+
+/// A registration as stored. `home` is only ever read: the release before
+/// the retirement of Home (PRD retire-hide-home) flagged a device's Home
+/// registration with it, and `decode` records one pending retirement for it
+/// and leaves the registration exactly as stored (B8, B13); the next save
+/// drops the flag.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StoredRegistration {
+    #[serde(flatten)]
+    registration: WorkspaceRegistration,
+    #[serde(default, skip_serializing)]
+    home: bool,
+}
+
+/// The registrations as an ordinary list, and one pending retirement per
+/// registration the older store flagged as its device's Home. The registration
+/// stays as it was (name and pin) until its helper answers what `~/hide`
+/// holds, so nothing is decided before the folder has been looked at; it is
+/// an ordinary pinned project meanwhile (D-04, D-08).
+fn read_registrations(
+    stored: Vec<StoredRegistration>,
+) -> (
+    Vec<WorkspaceRegistration>,
+    Vec<crate::model::HomeRetirement>,
+) {
+    let mut retirements = Vec::new();
+    let registrations = stored
+        .into_iter()
+        .map(|stored| {
+            if stored.home {
+                retirements.push(crate::model::HomeRetirement {
+                    device_id: stored.registration.device_id.clone(),
+                    registration_id: stored.registration.id.clone(),
+                });
+            }
+            stored.registration
+        })
+        .collect();
+    (registrations, retirements)
 }
 
 /// Settings › Issues as stored. `default_agent` is only ever read: it named
@@ -562,6 +610,26 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 DetailSlot::default()
             }),
     };
+    // One slot this build cannot read drops alone; the others still load.
+    let detail_tabs = match stored.detail_tabs {
+        None => BTreeMap::new(),
+        Some(serde_json::Value::Object(slots)) => slots
+            .into_iter()
+            .filter_map(|(tab, value)| {
+                let slot = serde_json::from_value::<DetailSlot>(value)
+                    .ok()
+                    .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT);
+                if slot.is_none() {
+                    unrecognized.push(UnrecognizedField::Detail);
+                }
+                slot.map(|slot| (tab, slot))
+            })
+            .collect(),
+        Some(_) => {
+            unrecognized.push(UnrecognizedField::Detail);
+            BTreeMap::new()
+        }
+    };
     let overview_graph = match stored.overview_graph {
         None => OverviewGraphChoices::default(),
         Some(value) => match OverviewGraphChoices::read_stored(value) {
@@ -619,6 +687,13 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 crate::missions::ConductorSettings::default()
             }),
     };
+    let (workspace_registrations, flagged) = read_registrations(stored.workspace_registrations);
+    let mut home_retire = stored.home_retire;
+    for retirement in flagged {
+        if !home_retire.contains(&retirement) {
+            home_retire.push(retirement);
+        }
+    }
     let disposition = if unrecognized.is_empty() {
         LoadDisposition::Loaded
     } else {
@@ -657,6 +732,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             practice,
             practice_invite_closed: stored.practice_invite_closed,
             detail,
+            detail_home: stored.detail_home,
+            detail_tabs,
             overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
@@ -666,7 +743,8 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             browser_shortcut_bindings: stored.browser_shortcut_bindings,
             focused_device_id: stored.focused_device_id,
             focused_checkout_id: stored.focused_checkout_id,
-            workspace_registrations: stored.workspace_registrations,
+            workspace_registrations,
+            home_retire,
             device_registrations: stored.device_registrations,
             machine_label: stored.machine_label,
             accent_hex: stored.accent_hex,
@@ -843,6 +921,9 @@ pub fn save(
         practice_invite_closed: state.practice_invite_closed,
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
+        detail_home: state.detail_home.clone(),
+        detail_tabs: (!state.detail_tabs.is_empty())
+            .then(|| serde_json::to_value(&state.detail_tabs).expect("the 보기 slots serialize")),
         overview_graph: Some(
             serde_json::to_value(&state.overview_graph)
                 .expect("the Overview map's choices serialize"),
@@ -855,7 +936,16 @@ pub fn save(
         browser_shortcut_bindings: state.browser_shortcut_bindings.clone(),
         focused_device_id: state.focused_device_id.clone(),
         focused_checkout_id: state.focused_checkout_id.clone(),
-        workspace_registrations: state.workspace_registrations.clone(),
+        workspace_registrations: state
+            .workspace_registrations
+            .iter()
+            .cloned()
+            .map(|registration| StoredRegistration {
+                registration,
+                home: false,
+            })
+            .collect(),
+        home_retire: state.home_retire.clone(),
         device_registrations: state.device_registrations.clone(),
         machine_label: state.machine_label.clone(),
         accent_hex: state.accent_hex.clone(),
@@ -1234,6 +1324,7 @@ mod tests {
                 server: Some("server-7".to_owned()),
                 unread: true,
                 checks_ended: None,
+                human_turn: None,
             },
         );
         state.pane_completions.insert(
@@ -1557,6 +1648,51 @@ mod tests {
         let _ = fs::remove_dir(root);
     }
 
+    /// PRD retire-hide-home D-04, D-08: a store the release before wrote, with
+    /// a registration flagged `home`, loads that registration as it was stored
+    /// (an ordinary pinned project) and one pending retirement for its device;
+    /// the next save carries neither the flag nor a second entry, and the
+    /// pending entry survives a relaunch until the helper answers.
+    #[test]
+    fn an_older_stores_home_flag_becomes_a_pending_retirement_once() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let older = r#"{"schema_version":1,"expanded_paths":[],"workspace_registrations":[
+            {"id":"workspace:home","label":"Home","path":"/Users/me/hide","device_id":"test-node","pinned":true,"home":true},
+            {"id":"workspace:alpha","label":"Alpha","path":"/repo/alpha","device_id":"test-node"}]}"#;
+        fs::write(&path, older).unwrap();
+
+        let (state, sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        let registered: Vec<_> = state
+            .workspace_registrations
+            .iter()
+            .map(|registration| (registration.label.as_str(), registration.pinned))
+            .collect();
+        assert_eq!(registered, [("Home", true), ("Alpha", false)]);
+        assert_eq!(
+            state.home_retire,
+            [crate::model::HomeRetirement {
+                device_id: "test-node".to_owned(),
+                registration_id: "workspace:home".to_owned(),
+            }]
+        );
+
+        save(&path, &state, &sizes).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(
+            written["workspace_registrations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|registration| registration.get("home").is_none()),
+            "{written}"
+        );
+        let (again, _, _) = load(&path);
+        assert_eq!(again.home_retire, state.home_retire);
+        assert_eq!(again.workspace_registrations, state.workspace_registrations);
+    }
+
     /// B5. A pinned registration comes back pinned, and a store written before
     /// registrations carried the flag loads every project unpinned with no
     /// warning.
@@ -1573,7 +1709,6 @@ mod tests {
                 path: "/repo/alpha".to_owned(),
                 device_id: "local".to_owned(),
                 pinned: true,
-                home: false,
             }],
             ..UiStateSnapshot::default()
         };
@@ -1676,9 +1811,17 @@ mod tests {
             workspace_id: "workspace:alpha".to_owned(),
             number: 7,
         });
+        state.detail_home = Some("w1:t1".to_owned());
+        let mut other = DetailSlot::default();
+        other.open(crate::model::DetailItem::Cost {
+            workspace_id: "workspace:alpha".to_owned(),
+        });
+        state.detail_tabs.insert("w1:t2".to_owned(), other);
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the lens");
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.detail_home, state.detail_home);
+        assert_eq!(restored.detail_tabs, state.detail_tabs);
         assert_eq!(restored.sidebar_lens, SidebarLens::Tasks);
         assert_eq!(restored.task_view, TaskView::Project);
         assert_eq!(restored.sidebar_project, state.sidebar_project);
@@ -1692,6 +1835,10 @@ mod tests {
         assert_eq!(older_state.task_view, TaskView::Status);
         assert_eq!(older_state.sidebar_project, None);
         assert_eq!(older_state.detail, DetailSlot::default());
+        assert_eq!(
+            (older_state.detail_home, older_state.detail_tabs.len()),
+            (None, 0)
+        );
 
         let unknown = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
             "sidebar_lens":"sessions","task_view":"status","detail":{"items":[{"kind":"tab"}],"shown":true}}"#;
@@ -1705,6 +1852,36 @@ mod tests {
         );
         assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(unknown_state.detail, DetailSlot::default());
+
+        // A mission's card in a slot, the front one's or an Agent tab's,
+        // loads as it was saved, between the other items (operator decision
+        // 2026-11-09, replacing PRD mission-screen B20).
+        let with_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"pull_request","workspace_id":"w","number":7},{"kind":"mission","mission":"mission-3"}],"shown":true},
+            "detail_tabs":{"w1:t2":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}}"#;
+        let (mission_state, _sizes, mission_disposition) = decode(with_mission);
+        assert_eq!(mission_disposition, LoadDisposition::Loaded);
+        assert_eq!(
+            mission_state.detail,
+            DetailSlot {
+                items: vec![
+                    crate::model::DetailItem::PullRequest {
+                        workspace_id: "w".into(),
+                        number: 7
+                    },
+                    crate::model::DetailItem::Mission {
+                        mission: "mission-3".into()
+                    },
+                ],
+                shown: true,
+            }
+        );
+        assert_eq!(
+            mission_state.detail_tabs["w1:t2"].items,
+            vec![crate::model::DetailItem::Mission {
+                mission: "mission-4".into()
+            }]
+        );
     }
 
     /// Practice-mode progress survives a relaunch; a store written before it

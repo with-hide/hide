@@ -3,6 +3,7 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+mod agent_exec;
 mod arguments;
 mod browser_control;
 mod closed_stdout;
@@ -24,6 +25,9 @@ mod opener_lifecycle;
 mod remote_delivery;
 mod seat;
 mod shell_exec;
+#[allow(dead_code)] // `hide agent exec` needs only the table form.
+#[path = "../../../hide-agent-hooks/tests/it/stand_in_daemon.rs"]
+mod stand_in_daemon;
 #[allow(dead_code)] // This fixture needs readiness only, not stand-in placement.
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;

@@ -1,6 +1,10 @@
 //! Which agent runtimes Hide instruments, and the vocabulary it writes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use hide_agent_adapter::AccountPath;
+
+use crate::account::AccountAt;
 
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +58,7 @@ macro_rules! intent_table {
 pub const PURPOSE_CONTEXT: &str = concat!(
     intent_table!(),
     "\n\n",
-    "Read and drive the panes of your machine through Hide: `hide pane read <pane>` and `hide agent read <agent>` print a pane's last 120 lines, unwrapped (`--lines <n>`, 2000 at most), `hide pane send <pane> <text>` types text, presses keys with `--key <name>` (esc, enter, up, down, tab, ctrl-c, ...) and Enter only with `--enter`, `hide agent show <id>` says what an agent is doing and waits on, and `hide pane open --beside -- <command>` runs a command in a new pane right of yours and prints its id, leaving your focus where it is unless `--focus`; `hide ps` lists the panes and their ids. Text typed into another agent's pane is no letter: hand an agent something with `hide request send`, which keeps it with its reply and retry, and add `--force` to put it into the agent's input now even while it works, which is refused while someone is typing there. When you create a worktree, set its one-line purpose in 40 characters or fewer with `hide workspace purpose \"…\"`, and remove a worktree Hide shows with `hide workspace remove <path>`, never a plain `git worktree remove`, which leaves its panes open. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`."
+    "Read and drive the panes of your machine through Hide: `hide pane read <pane>` and `hide agent read <agent>` print a pane's last 120 lines, unwrapped (`--lines <n>`, 2000 at most), `hide pane send <pane> <text>` types text, presses keys with `--key <name>` (esc, enter, up, down, tab, ctrl-c, ...) and Enter only with `--enter`, `hide agent show <id>` says what an agent is doing and waits on, and `hide pane open --beside -- <command>` runs a command in a new pane right of yours and prints its id, leaving your focus where it is unless `--focus`; `hide ps` lists the panes and their ids. Text typed into another agent's pane is no letter: hand an agent something with `hide request send`, which keeps it with its reply and retry, and add `--force` to put it into the agent's input now even while it works, which is refused while someone is typing there. When you create a worktree, set its one-line purpose in 40 characters or fewer with `hide workspace purpose \"…\"`, and remove a worktree Hide shows with `hide workspace remove <path>`, never a plain `git worktree remove`, which leaves its panes open. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`. When the next step is one only a person can take (a sign-in, an unlock, an app or OS permission), run `hide agent ask-human auth|permission <where>` and stop: the operator is told and you get a letter once they have done it; give a command that waits for a person's approval a timeout so it cannot hang."
 );
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
@@ -347,45 +351,42 @@ impl AgentRuntime {
         }
     }
 
-    /// The directory whose presence means this runtime is set up on this Mac:
-    /// the agent's folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), whatever `CODEX_HOME` the
-    /// launching shell carries.
+    /// The directory whose presence means this runtime is set up in the
+    /// account: its own folder (`AccountPath::State`). For a home, that is
+    /// the default account's for a node that honours no variable, whatever
+    /// `CODEX_HOME` the launching shell carries.
     ///
     /// Hide installs nothing for a runtime the operator does not use: writing
     /// `~/.codex/hooks.json` on a machine with no Codex would create a file
     /// for a tool that is not there.
-    pub fn home_directory(self, home: &Path) -> PathBuf {
-        self.dialect().adapter().install_home(home)
+    pub fn home_directory<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        at.into()
+            .place(self.dialect().adapter(), AccountPath::State)
     }
 
     /// The file whose `hooks` object Hide appends to.
-    pub fn config_path(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => self.home_directory(home).join("settings.json"),
-            Self::Codex => self.home_directory(home).join("hooks.json"),
-        }
+    pub fn config_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        at.into()
+            .place(self.dialect().adapter(), AccountPath::Hooks)
     }
 
     /// The file that keeps this runtime's folder trust, found from the same
     /// folder as [`Self::config_path`], so the trust Hide records and its
     /// hooks are always read from one place (`crate::folder_trust`).
     ///
-    /// Claude Code's is its global config, `~/.claude.json`, or the older
-    /// `.config.json` in its folder while that file has content, which Claude
-    /// Code then reads instead (its `getGlobalClaudeFile`); Codex's is the
-    /// `config.toml` in its folder, which only Codex writes.
-    pub fn trust_path(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => {
-                let legacy = self.home_directory(home).join(".config.json");
-                if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
-                    return legacy;
-                }
-                home.join(".claude.json")
+    /// Claude Code's is its global config (`AccountPath::FolderTrust`), or
+    /// the older `.config.json` in its folder while that file has content,
+    /// which Claude Code then reads instead (its `getGlobalClaudeFile`);
+    /// Codex's is the `config.toml` in its folder, which only Codex writes.
+    pub fn trust_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        let at = at.into();
+        if self == Self::ClaudeCode {
+            let legacy = self.home_directory(at).join(".config.json");
+            if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
+                return legacy;
             }
-            Self::Codex => self.home_directory(home).join("config.toml"),
         }
+        at.place(self.dialect().adapter(), AccountPath::FolderTrust)
     }
 }
 
@@ -470,6 +471,7 @@ impl HookEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn the_marker_is_found_with_its_version_and_only_for_hides_own_entries() {
@@ -551,6 +553,10 @@ mod tests {
             assert!(PURPOSE_CONTEXT.contains("`hide agent list`"));
             assert!(PURPOSE_CONTEXT.contains("From the machine that runs Hide"));
             assert!(PURPOSE_CONTEXT.contains("`machine_not_permitted`"));
+            // A step only a person takes is declared, and a wait on a
+            // person's approval is bounded (PRD ask-human B27).
+            assert!(PURPOSE_CONTEXT.contains("`hide agent ask-human auth|permission <where>`"));
+            assert!(PURPOSE_CONTEXT.contains("a timeout"));
             // The intent table comes first, in English, and names the exact
             // command for each request (PRD agent-beside-and-session-guide B18).
             assert!(PURPOSE_CONTEXT.starts_with("Inside Hide, turn what the operator asks for"));

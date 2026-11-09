@@ -211,6 +211,39 @@ pub fn exec_login_shell(shell: &Path) -> io::Result<std::convert::Infallible> {
     }
 }
 
+/// Runs `command` as this process's own program, what a pane's start line
+/// does through `hide agent exec` to start an agent with its profile's
+/// variables (docs/ARCHITECTURE.md, Starting an agent with a profile). The
+/// caller invokes it at its entry point, before any thread starts.
+///
+/// On Unix this process becomes the program (`CommandExt::exec`, which looks
+/// a bare name up on the `PATH` the command will run with), so its pid,
+/// process group, signals and exit code are the program's own, as when the
+/// shell started it; success never returns. Windows replaces no process: the
+/// program runs as this process's one child, in a job that ends with this
+/// process, so ending it, or the console closing, ends the program's whole
+/// tree; this process takes no Ctrl-C or Ctrl-Break of its own, which reach
+/// the program in its console group as before, waits for the program, and
+/// answers its exit code for the caller to exit with.
+///
+/// `spawned` runs on Windows alone, with the program's pid, once the program
+/// is in the job and resumed, the point past which nothing of its start can
+/// fail; while it runs the program's process is held, so the pid is still
+/// the program's. Unix never runs it: what follows a successful
+/// replacement is the program, never this caller.
+pub fn hand_over(mut command: Command, spawned: impl FnOnce(u32)) -> io::Result<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let _ = spawned;
+        Err(command.exec())
+    }
+    #[cfg(windows)]
+    {
+        sys::hand_over(&mut command, spawned)
+    }
+}
+
 /// Runtime-injected launch metadata, never an operator setting: optional for
 /// standalone commands, required by a guarded Unix launch. The value names
 /// one inherited stream-socket descriptor >= 3; malformed values fail before
@@ -1433,14 +1466,17 @@ pub fn console_foreground(shell: u32) -> io::Result<u32> {
     }
     let mut foreground = oldest.map_or(shell, |(_, child)| child);
     // npm's .cmd launcher and an explicit PowerShell -File wrapper stay
-    // alive while their program runs. Follow only an unambiguous chain
-    // of shells, never a runtime's helpers or an agent-specific name.
+    // alive while their program runs, and so does Hide's own start of an
+    // agent with a profile (`hide agent exec`, [`hand_over`]), which on
+    // Windows waits for its program as its one child. Follow only an
+    // unambiguous chain of those, never a runtime's helpers or an
+    // agent-specific name.
     for depth in 0..MAX_DEPTH {
         if foreground == shell {
             break;
         }
         let name = name_of(foreground)?;
-        if !["cmd.exe", "powershell.exe", "pwsh.exe"]
+        if !["cmd.exe", "powershell.exe", "pwsh.exe", "hide.exe"]
             .iter()
             .any(|wrapper| wrapper.eq_ignore_ascii_case(&name))
         {
@@ -5229,6 +5265,66 @@ mod sys {
         jobs: HashMap<usize, Arc<Mutex<Followed>>>,
         next: usize,
         down: Option<String>,
+    }
+
+    /// Ctrl-C and Ctrl-Break are the program's: this process handles them as
+    /// done, so they never end it before its child. A handler routine is not
+    /// inherited, so the child keeps the console's default. Every other event
+    /// (the console closing) takes the default, which ends this process and
+    /// with it the job.
+    unsafe extern "system" fn child_takes_interrupts(event: u32) -> windows_sys::core::BOOL {
+        use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
+        windows_sys::core::BOOL::from(event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
+    }
+
+    /// [`super::hand_over`] on Windows: the program, started suspended so it
+    /// cannot start a process of its own before it is in the job, in a
+    /// kill-on-close job only this process holds, in this process's console
+    /// group, waited for.
+    pub(super) fn hand_over(command: &mut Command, spawned: impl FnOnce(u32)) -> io::Result<i32> {
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+        // SAFETY: an all-zero limit structure is a valid value.
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: attributes and name may be null.
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = Owned(job);
+        // SAFETY: `limits` is valid for the size passed.
+        let set = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the handler is a function that lives as long as the program.
+        if unsafe { SetConsoleCtrlHandler(Some(child_takes_interrupts), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        command.creation_flags(CREATE_SUSPENDED);
+        let mut child = command.spawn()?;
+        // SAFETY: both handles are open; the child's is owned by `child`.
+        let tied = if unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            resume(child.id())
+        };
+        if let Err(error) = tied {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        spawned(child.id());
+        let status = child.wait()?;
+        // Windows always has a code; the job closes with this process.
+        Ok(status.code().unwrap_or(1))
     }
 
     pub(super) fn spawn(

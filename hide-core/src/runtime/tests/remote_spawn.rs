@@ -84,6 +84,7 @@ impl NodeLink for Node {
                 agent,
                 path,
                 trusted: true,
+                ..
             } => {
                 self.trusted.lock().unwrap().push((agent, path));
                 Value::Null
@@ -102,6 +103,14 @@ impl NodeLink for Node {
                 return Err(LinkError::Refused(hide_node_link::HostError::new(
                     hide_node_link::ErrorCode::NotFound,
                     "no such ref",
+                )));
+            }
+            // The device's profiles, read after its kit pass: a node that
+            // keeps none.
+            Call::ProfileList { .. } => {
+                return Err(LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::Unsupported,
+                    "This node keeps no agent profiles",
                 )));
             }
             // The catalog's reads of the device's folders, which a session
@@ -139,8 +148,8 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 /// does not show holds its name (`held`) until the test says the engine's
 /// deadline passed; a read of the name then answers it is gone. The pane
 /// shows its shell's first-prompt mark once `unmarked` reads of it have
-/// passed, `refused` makes the engine refuse the next start before typing
-/// anything, `list_fails` is how many agent lists after the start the
+/// passed, `refused` makes the engine refuse the next start with its code
+/// and message, `list_fails` is how many agent lists after the start the
 /// engine fails to answer, and while `full` the device's node holds the
 /// most pane holders it keeps, so no pane starts there. `screen` is what the
 /// started agent shows when asked whether it takes input, and a prompt typed
@@ -152,7 +161,7 @@ fn device_engine(
     shows: Arc<AtomicBool>,
     held: Arc<AtomicBool>,
     unmarked: Arc<AtomicUsize>,
-    refused: Arc<AtomicBool>,
+    refused: Refusal,
     list_fails: Arc<AtomicUsize>,
     full: Arc<AtomicBool>,
     screen: Arc<AtomicUsize>,
@@ -189,8 +198,9 @@ fn device_engine(
             text: "Last login: today\n".to_owned(),
             truncated: false,
         }),
-        "start_agent" if refused.swap(false, Ordering::SeqCst) => {
-            self::refused("internal_error", "the start was refused")
+        "start_agent" if refused.lock().unwrap().is_some() => {
+            let (code, message) = refused.lock().unwrap().take().unwrap();
+            self::refused(code, message)
         }
         "start_agent" => {
             started.store(true, Ordering::SeqCst);
@@ -267,8 +277,8 @@ struct Spawner {
     held: Arc<AtomicBool>,
     /// How many more reads of the pane show no first-prompt mark.
     unmarked: Arc<AtomicUsize>,
-    /// Whether the engine refuses the next start.
-    refused: Arc<AtomicBool>,
+    /// The code and message the engine refuses the next start with, if any.
+    refused: Refusal,
     /// How many agent lists after the start the engine fails to answer.
     list_fails: Arc<AtomicUsize>,
     /// Whether the device's node holds the most pane holders it keeps.
@@ -314,7 +324,7 @@ fn spawner() -> Spawner {
     let shows = Arc::new(AtomicBool::new(true));
     let held = Arc::new(AtomicBool::new(false));
     let unmarked = Arc::new(AtomicUsize::new(0));
-    let refused = Arc::new(AtomicBool::new(false));
+    let refused = Refusal::default();
     let list_fails = Arc::new(AtomicUsize::new(0));
     let full = Arc::new(AtomicBool::new(false));
     let screen = Arc::new(AtomicUsize::new(SCREEN_STARTING));
@@ -509,6 +519,7 @@ impl Spawner {
                 task: None,
                 brief: None,
                 beside: false,
+                profile: None,
             },
         )
     }
@@ -536,6 +547,7 @@ impl Spawner {
                 task: None,
                 brief: Some(brief.into()),
                 beside: false,
+                profile: None,
             },
         )
     }
@@ -619,6 +631,7 @@ fn desk_ask_on(spawner: &Spawner, intent: &str, machine: &str) -> Result<Value, 
             task: None,
             brief: None,
             beside: false,
+            profile: None,
         },
     };
     let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
@@ -1138,7 +1151,7 @@ fn the_same_intent_types_its_start_once_more_only_after_the_engine_lets_the_name
 fn a_retry_of_an_integrated_spawn_still_waits_for_the_first_prompt() {
     let spawner = spawner();
     spawner.node.integrated.store(true, Ordering::SeqCst);
-    spawner.refused.store(true, Ordering::SeqCst);
+    *spawner.refused.lock().unwrap() = Some(("internal_error", "the start was refused"));
     let ask = || spawner.spawn(Some("here"), Some(DEVICE), "integrated");
     ask().expect_err("Herdr refused the first start");
     assert_eq!(
@@ -1208,6 +1221,51 @@ fn a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_start
     assert_eq!(spawner.count("close_pane"), 1);
 }
 
+/// A profile's program that did not start after its line was typed (the
+/// system refused it past every check, such as a binary for another
+/// processor) leaves nothing of the spawn: its refusal names the profile
+/// and the program, and the tab it opened closes, as one whose shell never
+/// started does. One whose result is not known keeps its pane, where the
+/// program may run.
+#[test]
+fn a_spawn_whose_profiles_program_did_not_start_closes_the_tab_it_opened() {
+    let spawner = spawner();
+    let sentence = "Codex · gw could not start /opt/gw: Bad CPU type in executable (os error 86)";
+    *spawner.refused.lock().unwrap() = Some((crate::launch::PROFILE_REFUSED, sentence));
+    let refused = spawner
+        .spawn(Some("here"), Some(DEVICE), "kernel-refused")
+        .expect_err("its program did not start");
+    assert_eq!(
+        split_refusal(&refused),
+        (crate::launch::PROFILE_REFUSED, Some(sentence)),
+        "its own code, with the executor's sentence"
+    );
+    assert_eq!(spawner.count("start_agent"), 1);
+    assert_eq!(spawner.count("close_pane"), 1, "the tab it opened closed");
+    let record = &spawner.ledger().spawns[0];
+    assert_eq!(record.pane, None, "the spawn names no pane");
+    assert!(!record.completed);
+
+    *spawner.refused.lock().unwrap() = Some((
+        crate::launch::PROFILE_UNCONFIRMED,
+        "whether its program runs is not known",
+    ));
+    spawner
+        .spawn(Some("here"), Some(DEVICE), "unconfirmed")
+        .expect_err("its result is not known");
+    assert_eq!(spawner.count("close_pane"), 1, "its pane stays");
+    let record = spawner
+        .ledger()
+        .spawns
+        .into_iter()
+        .find(|spawn| spawn.intent == "unconfirmed")
+        .unwrap();
+    assert!(record.pane.is_some(), "the spawn keeps its pane");
+}
+
+/// The code and message a test makes the engine refuse its next start with.
+type Refusal = Arc<Mutex<Option<(&'static str, &'static str)>>>;
+
 /// A spawn's answer time, shortened for one test.
 struct AnswerWait;
 
@@ -1254,6 +1312,7 @@ fn a_spawn_whose_agent_never_takes_input_answers_within_its_answer_time() {
             task: None,
             brief: Some("fix it".into()),
             beside: false,
+            profile: None,
         },
     );
     assert!(
@@ -1733,6 +1792,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
                 task: None,
                 brief: None,
                 beside: false,
+                profile: None,
             },
         )
         .expect_err("refused");

@@ -66,9 +66,32 @@ export type PendingViewsClose = {
  * `main` is one device's all-projects Overview, the screen its Home row opens
  * (PRD home-device-rail D-13): `deviceId` names the device, and without one it
  * is the device in front. `desk` is Desk's room (PRD Desk 1차 B1), which
- * the sidebar's `◆ Desk` row opens.
+ * the sidebar's `◆ Desk` row opens. `missions` is one device's mission
+ * screen (PRD mission-screen D-01), which the sidebar's `미션` row and every
+ * mission entry open; where it stands is `MissionPlace`.
  */
-export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" } | { kind: "desk" };
+export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions" };
+
+/**
+ * The mission screen's page state (PRD mission-screen D-10): the device it
+ * shows, the mission its detail shows, the project chip, the pane it was
+ * opened from and the table's scroll. Page navigation, never saved; the core
+ * hears only which mission the detail shows (`mission_shown`, D-16).
+ */
+export type MissionPlace = {
+  /** The device whose missions it lists; null follows the rail's front device. A mission of another device names its own (B13). */
+  deviceId: string | null;
+  /** The mission the detail shows beside the list (B10); null shows the table (B2). */
+  selected: string | null;
+  /** The project chip (B3): a catalog project id, or null for every project. */
+  projectId: string | null;
+  /** 끝남 opened whole by `모두 ›` (B4). */
+  closedAll: boolean;
+  /** The table's scroll, so ✕ comes back to where it was (B11). */
+  scroll: number;
+};
+
+export const MISSION_ENTRY: MissionPlace = { deviceId: null, selected: null, projectId: null, closedAll: false, scroll: 0 };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };
@@ -123,8 +146,6 @@ export function toggledFold(folds: readonly string[], fold: string): string[] {
 
 /** The Hide AI tool's two tabs (PRD hide-ai-suggestions D-01). */
 export type HideAiTab = "suggestions" | "memory";
-/** The Mission tool's two pages: the missions, or the defaults a new mission starts with (PRD mission-tool B9). */
-export type MissionToolPage = "list" | "settings";
 
 export type Overlay = "none" | "shortcuts" | "find" | "add_project" | "file_palette" | "diff_palette" | "search" | "settings" | "project_settings";
 
@@ -265,17 +286,9 @@ type UiStore = {
    */
   taskTable: { filter: import("./projectStatus").TaskFilter; task: string | null };
   showTaskTable: (filter: import("./projectStatus").TaskFilter, task: string | null) => void;
-  /**
-   * The Mission tool's page, its start guide unfolded above the list and its
-   * 끝남 group opened whole (PRD mission-tool B7-B9). Page-local and never
-   * sent: the defaults it edits are the core's Settings › Mission values.
-   */
-  missionToolPage: MissionToolPage;
-  missionGuideOpen: boolean;
-  missionClosedAll: boolean;
-  setMissionToolPage: (page: MissionToolPage) => void;
-  setMissionGuideOpen: (open: boolean) => void;
-  setMissionClosedAll: (open: boolean) => void;
+  /** Where the mission screen stands (PRD mission-screen D-10). */
+  missions: MissionPlace;
+  setMissions: (patch: Partial<MissionPlace>) => void;
   /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
@@ -324,6 +337,8 @@ type UiStore = {
   notice: Notice | null;
   /** The management dialog a sidebar menu opened, or null. */
   workspaceDialog: WorkspaceDialog | null;
+  /** The device Add a project opens on, set by the surface that opened it (the start panel's empty device); null follows the focused device. */
+  addProjectDevice: string | null;
   /** The pane whose plan chip is pinned open by its press or ⇧⌘U (PRD hide-plan B7). */
   planPane: string | null;
   /**
@@ -402,6 +417,7 @@ type UiStore = {
   setCycle: (cycle: Cycle | null) => void;
   setNotice: (notice: Notice | null) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
+  setAddProjectDevice: (device: string | null) => void;
   setPlanPane: (paneId: string | null) => void;
   setWatchedTask: (id: number | null) => void;
   setFocusWhenListed: (paneId: string | null) => void;
@@ -459,9 +475,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   laneExpanded: false,
   hideAiTab: "suggestions",
   openSuggestion: null,
-  missionToolPage: "list",
-  missionGuideOpen: false,
-  missionClosedAll: false,
+  missions: MISSION_ENTRY,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
   pageWiden: null,
@@ -485,6 +499,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   cycle: null,
   notice: null,
   workspaceDialog: null,
+  addProjectDevice: null,
   planPane: null,
   watchedTask: null,
   focusWhenListed: null,
@@ -531,9 +546,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     for (const key of gone) delete next[key];
     set({ browserDevices: next });
   },
-  setMissionToolPage: (missionToolPage) => set({ missionToolPage }),
-  setMissionGuideOpen: (missionGuideOpen) => set({ missionGuideOpen }),
-  setMissionClosedAll: (missionClosedAll) => set({ missionClosedAll }),
+  setMissions: (patch) => set({ missions: { ...get().missions, ...patch } }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   taskTable: { filter: "all", task: null },
   showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),
@@ -569,6 +582,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setCycle: (cycle) => set({ cycle }),
   setNotice: (notice) => set({ notice }),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),
+  setAddProjectDevice: (addProjectDevice) => set({ addProjectDevice }),
   setPlanPane: (planPane) => set({ planPane }),
   setWatchedTask: (watchedTask) => set({ watchedTask }),
   setFocusWhenListed: (focusWhenListed) => set({ focusWhenListed }),

@@ -878,6 +878,9 @@ impl Runtime {
         card.mark_read = row.state.mark_tone.read;
         card.read = !row.unread;
         let ask = match (&row.ask_subject, row.status_code) {
+            // A step only a person takes holds the job as a block does,
+            // ahead of the agent's own ask (PRD ask-human D-21).
+            _ if row.declared_human_turn.is_some() => DeskAskKind::Blocked,
             (Some(crate::model::AskSubject::PlanReview { .. }), _) => DeskAskKind::PlanReview,
             (
                 Some(
@@ -889,6 +892,7 @@ impl Runtime {
             // Something on the agent's screen took Hide's input: a stop the
             // operator clears, as a block is.
             (Some(crate::model::AskSubject::InputUnconfirmed { .. }), _) => DeskAskKind::Blocked,
+            (Some(crate::model::AskSubject::HumanTurn { .. }), _) => DeskAskKind::Blocked,
             (None, AgentStatusCode::Approval) => DeskAskKind::Approval,
             (None, AgentStatusCode::Error) => DeskAskKind::Blocked,
             (None, _) => DeskAskKind::Question,
@@ -1247,7 +1251,6 @@ impl Runtime {
         let with_rows: HashSet<&str> = self.agent_rows().map(|row| row.pane_id.as_str()).collect();
         let projects = self
             .catalog_workspaces()
-            .filter(|workspace| !workspace.is_home)
             // A project is named by a path, as `@project(<path> <name>)`
             // promises Desk's agent, which hands it to `--repo`: its primary
             // checkout's, or the project's own for a folder with none.
@@ -1873,6 +1876,7 @@ mod tests {
             brief: None,
             task: None,
             beside: false,
+            profile: None,
         }
     }
 

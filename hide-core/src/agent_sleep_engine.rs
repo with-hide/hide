@@ -388,6 +388,9 @@ pub(crate) struct WakeRequest {
     /// an agent that does not report it itself on resume.
     pub(crate) session_id: Option<String>,
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
+    /// The profile the agent ran with, which it wakes with again; `None` for
+    /// the built-in default.
+    pub(crate) profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// Why a wake failed, as the codes the screen words (`web/src/startReason.ts`);
@@ -415,6 +418,37 @@ pub(crate) fn start_agent(
     node: &dyn NodeLink,
     request: &WakeRequest,
 ) -> WakeOutcome {
+    match wake_launch(node, request) {
+        Ok(launch) => start_launched(engine, node, request, launch),
+        Err(failed) => failed,
+    }
+}
+
+/// The start a wake of `request` makes, with the profile the agent ran with
+/// as its machine answers for it now: a profile gone from its machine, or
+/// one it refuses now, wakes nothing (D-27, B20), and the built-in default
+/// asks nothing of the machine.
+pub(crate) fn wake_launch(
+    node: &dyn NodeLink,
+    request: &WakeRequest,
+) -> Result<crate::launch::Launch, WakeOutcome> {
+    crate::launch::resolve(
+        Some(node),
+        &crate::launch::Request::recorded(&request.kind, request.profile.as_ref()),
+    )
+    .map_err(|refusal| WakeOutcome::Failed {
+        reason: refusal.code.to_owned(),
+        detail: refusal.detail,
+    })
+}
+
+/// [`start_agent`] with the start [`wake_launch`] answered.
+pub(crate) fn start_launched(
+    engine: &dyn Engine,
+    node: &dyn NodeLink,
+    request: &WakeRequest,
+    launch: crate::launch::Launch,
+) -> WakeOutcome {
     if let Some(cwd) = request.cwd.as_deref()
         && !crate::node_access::is_directory(node, cwd)
     {
@@ -426,7 +460,7 @@ pub(crate) fn start_agent(
     let start = match engine.prepare_start(AgentLaunch {
         pane_id: request.pane_id.clone(),
         name: request.name.clone(),
-        kind: request.kind.clone(),
+        launch,
         args: request.args.clone(),
         codex_daemon: request.codex_daemon,
         wakes: true,
@@ -477,7 +511,6 @@ pub(crate) fn start_agent(
         &correlation,
         shell,
         &start,
-        crate::agent_start::START_ANSWER_WAIT,
         &|| Ok(()),
     ) {
         Ok(_) => {
@@ -703,6 +736,7 @@ mod tests {
                         cwd: None,
                         session_id: None,
                         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+                        profile: None,
                     }
                 ),
                 WakeOutcome::Started,
@@ -1176,6 +1210,7 @@ mod tests {
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
+                profile: None,
                 pane_id: "w1:p1".into(),
                 kind: "codex".into(),
                 name: "one".into(),
@@ -1210,6 +1245,7 @@ mod tests {
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: Default::default(),
+                profile: None,
                 pane_id: "w1:p1".into(),
                 kind: "claude".into(),
                 name: "one".into(),
@@ -1269,6 +1305,7 @@ mod tests {
                 &Starts(form),
                 &WakeRequest {
                     codex_daemon: Default::default(),
+                    profile: None,
                     pane_id: "w1:p1".into(),
                     kind: "claude".into(),
                     name: "one".into(),
@@ -1309,6 +1346,7 @@ mod tests {
     fn resume_in(cwd: &str) -> WakeRequest {
         WakeRequest {
             codex_daemon: Default::default(),
+            profile: None,
             pane_id: "w1:p1".into(),
             kind: "claude".into(),
             name: "one".into(),
@@ -1453,6 +1491,7 @@ mod tests {
                 &node,
                 &WakeRequest {
                     codex_daemon: Default::default(),
+                    profile: None,
                     pane_id: "w1:p1".into(),
                     kind: kind.into(),
                     name: "one".into(),
@@ -1477,6 +1516,7 @@ mod tests {
             &hide_node::Local::of_process(),
             &WakeRequest {
                 codex_daemon: Default::default(),
+                profile: None,
                 pane_id: "w1:p1".into(),
                 kind: "codex".into(),
                 name: "wake-w1-p1".into(),

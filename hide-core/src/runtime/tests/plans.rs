@@ -537,6 +537,7 @@ fn spawn_step(step: &str, parent: Option<&str>) -> crate::delivery::Command {
             plan_node: Some(step.into()),
             plan: None,
             beside: false,
+            profile: None,
         },
     }
 }

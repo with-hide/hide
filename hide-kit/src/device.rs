@@ -33,5 +33,6 @@ pub fn device_target(root: &Path, home: &Path, cli_dir: &Path, stop: Arc<AtomicB
         retirement_projects: Vec::new(),
         legacy: crate::legacy::device(home, root),
         stop,
+        profiles: None,
     }
 }

@@ -5,7 +5,7 @@
 // parts in the projects-sidebar and session-record scenes. Nothing leaves it.
 import { HouseIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, type ReactNode } from "react";
-import { AgentMark } from "../AgentMark";
+import { AgentMark, ProfileBadge } from "../AgentMark";
 import { LetterTag, PaneLetterButton, RowLetterMark } from "../components/letter-mark";
 import { MentionChip } from "../components/mention-chip";
 import { MissionChip } from "../components/mission-chip";
@@ -13,6 +13,7 @@ import { PlanChecklist } from "../components/plan-checklist";
 import { PrMark } from "../components/pr-mark";
 import { MilestoneMark, SessionRow, SessionRowBody } from "../components/session-row";
 import { LookButton, StatusMark } from "../components/status-mark";
+import { HumanTurnDone, HumanTurnLine } from "../components/human-turn";
 import { RowButton } from "../components/ui/row-button";
 import { UpdateReadyCardBody } from "../components/update-ready";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -36,6 +37,10 @@ function missions(): Mission[] {
 }
 
 const conductor = (state: (typeof MISSION_STATES)[number]) => ({ session: { device_id: "local", session_id: `conductor-${state}` } });
+/** A person's turn on this machine (PRD ask-human). */
+const HUMAN_TURN = { id: "gallery.1", kind: "auth", place: "https://github.com/login/device?user_code=TEST-1234" } as const;
+/** The gallery's Copy takes the place without touching the clipboard, so a press shows the check. */
+const galleryCopy = async () => true;
 const time = (text: string) => <span className="font-mono text-caption text-muted-foreground">{text}</span>;
 const marks = (mark: Parameters<typeof StatusMark>[0]["mark"], kind = "claude") => <><StatusMark mark={mark} /><AgentMark kind={kind} /></>;
 
@@ -92,8 +97,20 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
             </RowButton>
           </State>
         </Part>
+        <Part name="Profile badge · AgentMark profile, ProfileBadge">
+          <State name="Default and profile tabs"><span className="flex items-center gap-md text-caption"><span className="flex items-center gap-xs"><StatusMark mark="going" /><AgentMark kind="claude" /><span>Claude</span></span><span className="flex items-center gap-xs"><StatusMark mark="going" /><AgentMark kind="claude" profile="work" /><span>Claude</span></span><span className="flex items-center gap-xs"><StatusMark mark="done" /><AgentMark kind="codex" profile="personal" /><span>Fix login redirect</span></span></span></State>
+          <State name="Logos hidden"><ol><SessionRow mark={<><StatusMark mark="going" /><ProfileBadge profile="work" standalone /></>} title="Fix login redirect" right={time("2m")} /></ol></State>
+          <State name="Hide AI keeps its owl"><span className="flex items-center gap-xs text-caption"><AgentMark kind="claude" hideAi="card" profile="work" /><span>Hide AI · Claude · work</span></span></State>
+          <State name="Korean name"><span className="flex items-center gap-xs text-caption"><AgentMark kind="claude" profile="회사" /><span>블로그 초안 개요</span></span></State>
+        </Part>
         <Part name="To look at · LookButton">
           <State name="Pane header"><span className="flex min-w-0 items-center gap-sm text-caption"><LookButton label="볼 것 · boundary-final.html" onLook={open} /><AgentMark kind="claude" /><span className="truncate">미션 상태 단순화 경계 목업</span></span></State>
+        </Part>
+        <Part name="A person's turn · StatusMark human, HumanTurnLine, HumanTurnCopy, HumanTurnDone">
+          <State name="Marks: key, read key, plain turn"><span className="flex items-center gap-sm"><StatusMark mark="turn" human label="사람 차례 · 인증 · github.com/login" /><StatusMark mark="turn" human read /><StatusMark mark="turn" /></span></State>
+          <State name="Needs You row"><ol><SessionRow mark={<><StatusMark mark="turn" human /><AgentMark kind="claude" /></>} title="배포 스크립트 정리" right={time("4m")} /></ol><div className="flex flex-col gap-xxs pl-(--size-agent-mark)"><HumanTurnLine turn={HUMAN_TURN} copy={galleryCopy} /><HumanTurnDone turn={HUMAN_TURN} actions={{ finishHumanTurn: open }} /></div></State>
+          <State name="Long place, permission"><div className="flex flex-col gap-xxs"><HumanTurnLine turn={{ ...HUMAN_TURN, id: "long", kind: "permission", place: "System Settings > Privacy & Security > Screen & System Audio Recording > Terminal" }} copy={galleryCopy} /><HumanTurnDone turn={{ ...HUMAN_TURN, id: "long" }} actions={{ finishHumanTurn: open }} /></div></State>
+          <State name="Device not connected"><HumanTurnDone turn={{ ...HUMAN_TURN, id: "away", device_id: "mini" }} actions={{ finishHumanTurn: open }} /></State>
         </Part>
         <Part name="Ready update · UpdateReadyCardBody">
           <State name="Card beside the ↑ button"><div className="w-(--size-usage-popover) rounded-lg border border-border bg-popover p-md text-popover-foreground"><UpdateReadyCardBody version="9.9.9" onRestart={open} onLater={open} onReleaseNotes={open} /></div></State>

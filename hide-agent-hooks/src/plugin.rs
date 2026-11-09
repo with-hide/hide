@@ -29,6 +29,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use crate::account::AccountAt;
 use crate::route::HookTarget;
 use hide_agent_adapter::PluginDialect;
 use sha2::{Digest, Sha256};
@@ -52,11 +53,11 @@ pub struct PluginFile {
     pub source_name: &'static str,
     /// Raised when the file's text changes.
     pub version: u32,
-    /// The agent whose own folder holds the file: its install-scope folder
-    /// (`hide_agent_adapter::HomeScope::Install`), which Hide never creates.
+    /// The agent whose own folder holds the file: its default account's
+    /// (`AccountPath::State`), which Hide never creates, and the folder in
+    /// it the agent loads scripts from (`AccountPath::Plugins`), which Hide
+    /// may create.
     pub config: hide_agent_adapter::AgentId,
-    /// The folder inside it the agent loads scripts from, which Hide may create.
-    pub folder: &'static str,
     /// Hide's own folder inside that one, for a plugin the agent loads as a
     /// folder: made with its first file and taken out with its last.
     pub own_folder: Option<&'static str>,
@@ -147,20 +148,25 @@ impl Plugin {
         self.entry().noun
     }
 
-    pub fn config_directory(&self, home: &Path) -> PathBuf {
-        self.entry().config_directory(home)
+    pub fn config_directory<'h>(&self, at: impl Into<AccountAt<'h>>) -> PathBuf {
+        self.entry().config_directory(at)
     }
 
-    pub fn path(&self, home: &Path, install: Option<&str>) -> PathBuf {
-        self.entry().path(home, install)
+    pub fn path<'h>(&self, at: impl Into<AccountAt<'h>>, install: Option<&str>) -> PathBuf {
+        self.entry().path(at, install)
     }
 
     /// Judges the plugin by its worst file.
-    pub fn observe<'a>(&self, home: &Path, helper: impl Into<HookTarget<'a>>) -> PluginObserved {
+    pub fn observe<'a, 'h>(
+        &self,
+        at: impl Into<AccountAt<'h>>,
+        helper: impl Into<HookTarget<'a>>,
+    ) -> PluginObserved {
+        let at = at.into();
         let helper = helper.into();
         self.files
             .iter()
-            .map(|file| file.observe(home, helper))
+            .map(|file| file.observe(at, helper))
             .max_by_key(PluginObserved::weight)
             .expect("a plugin has a file")
     }
@@ -168,27 +174,28 @@ impl Plugin {
     /// Writes this build's files once none of them refuses: a file Hide did
     /// not write anywhere in the plugin leaves every file as it was. True
     /// when a file changed.
-    pub fn install<'a>(
+    pub fn install<'a, 'h>(
         &self,
-        home: &Path,
+        at: impl Into<AccountAt<'h>>,
         helper: impl Into<HookTarget<'a>>,
     ) -> Result<bool, String> {
+        let at = at.into();
         let helper = helper.into();
         for file in self.files {
-            file.refusal(home, &file.observe(home, helper), helper.install())?;
+            file.refusal(at, &file.observe(at, helper), helper.install())?;
         }
         let mut changed = false;
         for file in self.files {
-            changed |= file.install(home, helper)?;
+            changed |= file.install(at, helper)?;
         }
         // An earlier build of this installation wrote the app's names; its
         // files run this helper, and would answer beside the new ones.
         if helper
             .install()
             .is_some_and(|install| crate::route::mark(install).is_some())
-            && self.files.iter().all(|file| file.earlier_is(home, &helper))
+            && self.files.iter().all(|file| file.earlier_is(at, &helper))
         {
-            changed |= self.remove_files(home, None)?;
+            changed |= self.remove_files(at, None)?;
         }
         Ok(changed)
     }
@@ -198,39 +205,43 @@ impl Plugin {
     /// it stays and no half is left without the other; a file Hide did not
     /// write stays too, and so does the folder that holds it. True when a
     /// file went.
-    pub fn remove(&self, home: &Path, install: Option<&str>) -> Result<bool, String> {
+    pub fn remove<'h>(
+        &self,
+        at: impl Into<AccountAt<'h>>,
+        install: Option<&str>,
+    ) -> Result<bool, String> {
+        let at = at.into();
         // Hide's trust entries go whether or not the operator edited the
-        // file: they are Hide's, and nothing else takes them out.
+        // file: they are Hide's, and nothing else takes them out. A
+        // profile's account has its trust taken out by the kit, which
+        // judges that account's file first (`hide_kit` targets).
         let forgotten = match self.trust {
-            Some(agent) => {
-                crate::folder_trust::forget_all(agent, home, crate::folder_trust::Tools::none())
-                    .map_err(|failure| failure.message())?
-            }
-            None => 0,
+            Some(agent) if at.is_default() => crate::folder_trust::forget_all(
+                agent,
+                at.home(),
+                crate::folder_trust::Tools::none(),
+            )
+            .map_err(|failure| failure.message())?,
+            Some(_) | None => 0,
         };
-        Ok(self.remove_files(home, install)? || forgotten > 0)
+        Ok(self.remove_files(at, install)? || forgotten > 0)
     }
 
     /// Takes the installation `install`'s unedited files out, unless one of
     /// them is edited, and its own folder once empty. True when a file went.
-    fn remove_files(&self, home: &Path, install: Option<&str>) -> Result<bool, String> {
+    fn remove_files(&self, at: AccountAt<'_>, install: Option<&str>) -> Result<bool, String> {
         for file in self.files {
-            if file.owner(home, install)? == Owner::Edited {
+            if file.owner(at, install)? == Owner::Edited {
                 return Ok(false);
             }
         }
         let mut removed = false;
         for file in self.files {
-            removed |= file.remove(home, install)?;
+            removed |= file.remove(at, install)?;
         }
         for file in self.files {
             if let Some(own) = file.own_folder {
-                remove_if_empty(
-                    &file
-                        .config_directory(home)
-                        .join(file.folder)
-                        .join(named(own, install)),
-                )?;
+                remove_if_empty(&file.scripts_directory(at).join(named(own, install)))?;
             }
         }
         Ok(removed)
@@ -278,16 +289,25 @@ fn remove_if_empty(folder: &Path) -> Result<(), String> {
 
 impl PluginFile {
     /// The agent's own folder, the one Herdr's integration for it used too.
-    pub fn config_directory(&self, home: &Path) -> PathBuf {
-        self.config.adapter().install_home(home)
+    pub fn config_directory<'h>(&self, at: impl Into<AccountAt<'h>>) -> PathBuf {
+        at.into().place(
+            self.config.adapter(),
+            hide_agent_adapter::AccountPath::State,
+        )
+    }
+
+    /// The folder in it the agent loads scripts from.
+    pub fn scripts_directory<'h>(&self, at: impl Into<AccountAt<'h>>) -> PathBuf {
+        at.into().place(
+            self.config.adapter(),
+            hide_agent_adapter::AccountPath::Plugins,
+        )
     }
 
     /// Where the installation `install` keeps this file: Hide's own folder
     /// carries its mark when the plugin has one, and the file does otherwise.
-    pub fn path(&self, home: &Path, install: Option<&str>) -> PathBuf {
-        self.config_directory(home)
-            .join(self.folder)
-            .join(self.name(install))
+    pub fn path<'h>(&self, at: impl Into<AccountAt<'h>>, install: Option<&str>) -> PathBuf {
+        self.scripts_directory(at).join(self.name(install))
     }
 
     /// The file's name inside the agent's folder, as a sentence names it.
@@ -303,8 +323,8 @@ impl PluginFile {
     /// that helper when it names one (OpenCode 2's terminal half takes it
     /// from the server half). A missing one is too, so a plugin of several
     /// files is judged by those that are there.
-    fn earlier_is(&self, home: &Path, helper: &HookTarget<'_>) -> bool {
-        let Ok(text) = std::fs::read_to_string(self.path(home, None)) else {
+    fn earlier_is(&self, at: AccountAt<'_>, helper: &HookTarget<'_>) -> bool {
+        let Ok(text) = std::fs::read_to_string(self.path(at, None)) else {
             return true;
         };
         let (first, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
@@ -367,12 +387,12 @@ impl PluginFile {
     }
 
     /// Judges the file against the one `helper` would be named in.
-    fn observe<'a>(&self, home: &Path, helper: impl Into<HookTarget<'a>>) -> PluginObserved {
+    fn observe<'a>(&self, at: AccountAt<'_>, helper: impl Into<HookTarget<'a>>) -> PluginObserved {
         let helper = helper.into();
-        if !self.config_directory(home).is_dir() {
+        if !self.config_directory(at).is_dir() {
             return PluginObserved::ConfigAbsent;
         }
-        let path = self.path(home, helper.install());
+        let path = self.path(at, helper.install());
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == ErrorKind::NotFound => return PluginObserved::Missing,
@@ -413,20 +433,20 @@ impl PluginFile {
     /// Why the file may not be written over what is there, if it may not.
     fn refusal(
         &self,
-        home: &Path,
+        at: AccountAt<'_>,
         observed: &PluginObserved,
         install: Option<&str>,
     ) -> Result<(), String> {
         match observed {
             PluginObserved::ConfigAbsent => Err(format!(
                 "{} does not exist; the {} is put in once {} has made it",
-                self.config_directory(home).display(),
+                self.config_directory(at).display(),
                 self.noun,
                 self.agent
             )),
             PluginObserved::Foreign(_) => Err(format!(
                 "{} is a file Hide did not write; Hide left it alone",
-                self.path(home, install).display()
+                self.path(at, install).display()
             )),
             PluginObserved::Unreadable(reason) => Err(reason.clone()),
             PluginObserved::Current
@@ -439,15 +459,19 @@ impl PluginFile {
     /// Writes this build's file. A file Hide did not write is never replaced,
     /// and the agent's own folder is never created. Writing the same bytes
     /// twice writes nothing; true when the file changed.
-    fn install<'a>(&self, home: &Path, helper: impl Into<HookTarget<'a>>) -> Result<bool, String> {
+    fn install<'a>(
+        &self,
+        at: AccountAt<'_>,
+        helper: impl Into<HookTarget<'a>>,
+    ) -> Result<bool, String> {
         let helper = helper.into();
-        let path = self.path(home, helper.install());
-        let observed = self.observe(home, helper);
-        self.refusal(home, &observed, helper.install())?;
+        let path = self.path(at, helper.install());
+        let observed = self.observe(at, helper);
+        self.refusal(at, &observed, helper.install())?;
         if observed == PluginObserved::Current {
             return Ok(false);
         }
-        let folder = self.config_directory(home).join(self.folder);
+        let folder = self.scripts_directory(at);
         for folder in std::iter::once(folder.clone()).chain(
             self.own_folder
                 .map(|own| folder.join(named(own, helper.install()))),
@@ -469,8 +493,8 @@ impl PluginFile {
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
     }
 
-    fn owner(&self, home: &Path, install: Option<&str>) -> Result<Owner, String> {
-        let path = self.path(home, install);
+    fn owner(&self, at: AccountAt<'_>, install: Option<&str>) -> Result<Owner, String> {
+        let path = self.path(at, install);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Owner::Absent),
@@ -487,11 +511,11 @@ impl PluginFile {
     /// Takes Hide's unedited file out; an edited one carries the operator's
     /// changes and stays, as does a file Hide did not write. True when a file
     /// went.
-    fn remove(&self, home: &Path, install: Option<&str>) -> Result<bool, String> {
-        if self.owner(home, install)? != Owner::Hide {
+    fn remove(&self, at: AccountAt<'_>, install: Option<&str>) -> Result<bool, String> {
+        if self.owner(at, install)? != Owner::Hide {
             return Ok(false);
         }
-        let path = self.path(home, install);
+        let path = self.path(at, install);
         std::fs::remove_file(&path)
             .map(|()| true)
             .map_err(|error| format!("{} could not be removed: {error}", path.display()))

@@ -380,6 +380,7 @@ impl Spawner {
                 task: None,
                 brief: None,
                 beside: ask.beside,
+                profile: None,
             },
         )
     }

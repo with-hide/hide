@@ -85,6 +85,7 @@ pub fn local_target(kit_dir: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTa
         retirement_projects: Vec::new(),
         legacy: crate::legacy::local(home),
         stop,
+        profiles: None,
     }
 }
 

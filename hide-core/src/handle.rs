@@ -829,6 +829,34 @@ impl Core {
         Ok(())
     }
 
+    /// What `hide agent exec` in `caller`'s pane on `device` reported of
+    /// the profile's start the engine typed there
+    /// (`HookCommand::AgentExec`, PRD agent-profiles B22): handed to the
+    /// pane's engine, which keeps it with that start's attempt. The engine
+    /// is told off the runtime lock, as every engine call is; a refusal is
+    /// what a `Ready` reads as "do not start".
+    pub fn agent_exec(
+        &self,
+        device: &str,
+        caller: &str,
+        report: crate::engine::AgentExecReport,
+    ) -> Result<(), &'static str> {
+        if !check_owner_thread(self, "agent.exec") {
+            return Err("agent_exec_unavailable");
+        }
+        let (machine, pane) = crate::address::split_pane(device, caller);
+        let engine = lock_recover(&self.runtime)
+            .delivery_engine(machine)
+            .ok_or("agent_exec_engine_unavailable")?;
+        engine.agent_exec(pane, report).map_err(|error| {
+            crate::diagnostic!(serde_json::json!({
+                "component": "launch", "kind": "agent_exec.refused",
+                "pane": caller, "device": device, "message": error.to_string(),
+            }));
+            "agent_exec_refused"
+        })
+    }
+
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or
     /// of the caller's own `device` (PRD software-factory-conductor D-35).
     pub fn agent_catalog(
@@ -841,6 +869,21 @@ impl Core {
             return Err("catalog_unavailable".into());
         }
         lock_recover(&self.runtime).agent_catalog(device, machine, timed_out)
+    }
+
+    /// `hide agent profile` for a caller on `device`: the change planned
+    /// under the lock, which the daemon then runs off this thread
+    /// (`agent_profiles::Prepared::run`). A refusal is a delivery refusal
+    /// string (`coordination::split_refusal`).
+    pub fn prepare_agent_profile(
+        &self,
+        device: &str,
+        command: crate::agent_profiles::ProfileCommand,
+    ) -> Result<crate::agent_profiles::Prepared, String> {
+        if !check_owner_thread(self, "agent_profile.prepare") {
+            return Err(crate::agent_profiles::UNANSWERED.into());
+        }
+        lock_recover(&self.runtime).prepare_agent_profile_command(device, command)
     }
 
     /// A read of the operator's agent definition folder in `home`, made off

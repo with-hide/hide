@@ -3,6 +3,7 @@
 
 mod end;
 pub(crate) mod executor;
+pub mod human_turn;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
@@ -87,11 +88,17 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "native_identity_unavailable"
             | "brief_not_submitted"
             | "agent_not_started"
-            | "pane_busy"),
+            | "pane_busy"
+            | crate::launch::PROFILE_GONE
+            | crate::launch::PROFILES_UNSUPPORTED
+            | crate::launch::PROFILE_REFUSED
+            | crate::launch::PROFILE_UNANSWERED
+            | crate::launch::PROFILE_UNCONFIRMED),
             detail,
         )) => (code, Some(detail)),
         Some((code, detail))
             if crate::worktree_command::DETAILED.contains(&code)
+                || crate::agent_profiles::DETAILED.contains(&code)
                 || crate::links::session_command::DETAILED.contains(&code) =>
         {
             (code, Some(detail))
@@ -113,6 +120,9 @@ pub const INCOMPLETE_SPAWN: [&str; 4] = [
 pub(crate) const AGENT_LIMIT: usize = 2048;
 pub(crate) const SPAWN_LIMIT: usize = 4096;
 
+// One per request, made and consumed by its caller and never kept in bulk
+// (a reservation keeps a `SpawnRecord`), so a spawn's size is not worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -140,6 +150,15 @@ pub enum Command {
     Show {
         id: String,
     },
+    /// The caller declares that its next step is one only a person can
+    /// take (`hide agent ask-human <kind> <place>`, PRD ask-human): `kind`
+    /// is `auth` or `permission`, `place` where the person acts.
+    AskHuman {
+        kind: String,
+        place: String,
+    },
+    /// The caller takes its declaration down (`hide agent ask-human --clear`).
+    AskHumanClear,
     /// Ends the registration and, unless `keep_pane`, closes the pane its
     /// agent ran in, which ends the pane's holder, its shell, the agent and
     /// everything under it; the agent's conversation is kept in the session
@@ -170,6 +189,11 @@ pub enum Command {
             skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
         )]
         launch: hide_agent_adapter::LaunchChoice,
+        /// The profile the child runs with, by its name on the child's
+        /// machine (`hide agent spawn --profile`, PRD agent-profiles B16);
+        /// none picks it (`launch::pick`). Part of the intent like `launch`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
         /// What Hide asked the child to do, for the screen to name it. Only
         /// Hide's own identity may give one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,6 +711,15 @@ pub struct SpawnRecord {
     /// 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub reserved_at_unix_ms: u64,
+    /// The profile the spawn named (`Command::Spawn::profile`), part of the
+    /// intent; none on a spawn that named none and every earlier record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The profile the engine took the child's start with, which the child's
+    /// pane record keeps for every restart Hide makes of it (D-27); none for
+    /// the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// What became of a spawn's brief, read from the facts its record keeps,
@@ -880,6 +913,16 @@ fn input_authority(caller: &Actor) -> bool {
 }
 
 pub(crate) enum Mutation {
+    /// The caller's own declaration (`human_turn::declare`): a kind and a
+    /// place, or none to clear it.
+    AskHuman {
+        turn: Option<(human_turn::HumanKind, String)>,
+    },
+    /// The operator settled declaration `id` (`human_turn::settle`).
+    SettleHuman {
+        id: String,
+        by: human_turn::Settled,
+    },
     Register {
         record: AgentRecord,
         check: bool,
@@ -959,9 +1002,11 @@ pub(crate) enum Mutation {
         id: String,
         pane: String,
     },
-    /// The engine took a start of the spawn's agent in its pane.
+    /// The engine took a start of the spawn's agent in its pane, with the
+    /// profile `profile` (none for the built-in default).
     Typed {
         id: String,
+        profile: Option<crate::launch::LaunchProfile>,
     },
     BindChild {
         id: String,
@@ -1250,34 +1295,45 @@ pub(crate) fn here<'a>(
 
 /// The live registrations whose agent Hide put to sleep, by id, as the
 /// runtime reads them from its sleep records under its lock
-/// (`Runtime::sleeping_registrations`).
+/// (`Runtime::sleeping_registrations`), and the profile each live agent runs
+/// with, as its row names it (`Runtime::registration_profiles`).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Sleeping(pub(crate) std::collections::BTreeSet<String>);
+pub(crate) struct RegistrationFacts {
+    pub(crate) asleep: std::collections::BTreeSet<String>,
+    pub(crate) profiles: std::collections::BTreeMap<String, String>,
+}
 
-impl Sleeping {
+impl RegistrationFacts {
     /// For an answer about a registration its own running agent just made,
-    /// or one just ended: neither is asleep.
-    pub(crate) const NONE: Self = Self(std::collections::BTreeSet::new());
+    /// or one just ended: neither is asleep, and its row is not read.
+    pub(crate) const NONE: Self = Self {
+        asleep: std::collections::BTreeSet::new(),
+        profiles: std::collections::BTreeMap::new(),
+    };
 }
 
 /// Where a registration's agent is in its life: ended with its record,
 /// asleep while Hide holds it asleep, running otherwise. The one decision
 /// `hide agent list`, `hide agent show` and `hide ps` answer from.
-pub(crate) fn life(record: &AgentRecord, sleeping: &Sleeping) -> Runtime {
+pub(crate) fn life(record: &AgentRecord, sleeping: &RegistrationFacts) -> Runtime {
     if record.ended {
         Runtime::Ended
-    } else if sleeping.0.contains(&record.id) {
+    } else if sleeping.asleep.contains(&record.id) {
         Runtime::Asleep
     } else {
         Runtime::Running
     }
 }
 
-pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &Sleeping) -> Value {
+pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &RegistrationFacts) -> Value {
     json!(agent_view(record, ledger, sleeping))
 }
 
-pub(crate) fn agent_view(record: &AgentRecord, ledger: &Ledger, sleeping: &Sleeping) -> AgentView {
+pub(crate) fn agent_view(
+    record: &AgentRecord,
+    ledger: &Ledger,
+    sleeping: &RegistrationFacts,
+) -> AgentView {
     let runtime = life(record, sleeping);
     AgentView {
         names: ledger
@@ -1295,6 +1351,7 @@ pub(crate) fn agent_view(record: &AgentRecord, ledger: &Ledger, sleeping: &Sleep
         parent: record.parent.clone(),
         origin: record.origin.clone().or_else(|| record.parent.clone()),
         project: record.project.clone(),
+        profile: sleeping.profiles.get(&record.id).cloned(),
         runtime,
         // Only a running agent has a connection; a sleeping one has none
         // until it wakes (status-model.md, Not connected).
@@ -1456,6 +1513,8 @@ pub(crate) fn apply(
     now: u64,
 ) -> Result<Value, String> {
     match mutation {
+        Mutation::AskHuman { turn } => human_turn::declare(ledger, caller, turn.as_ref(), now),
+        Mutation::SettleHuman { id, by } => human_turn::settle(ledger, caller, id, *by),
         Mutation::Register { record, check } => {
             validate_registration_name(caller, record)?;
             let callers_own = |id: &String| {
@@ -1520,7 +1579,7 @@ pub(crate) fn apply(
                     .find(|record| &record.id == id)
                     .ok_or("agent_unavailable")?,
                 ledger,
-                &Sleeping::NONE,
+                &RegistrationFacts::NONE,
             ))
         }
         Mutation::Reserve { parent, command } => {
@@ -1534,6 +1593,7 @@ pub(crate) fn apply(
                 path,
                 args,
                 launch,
+                profile,
                 task,
                 brief,
                 beside,
@@ -1629,6 +1689,7 @@ pub(crate) fn apply(
                     || record.mode != mode
                     || record.args != *args
                     || record.launch != *launch
+                    || record.profile != *profile
                     || record.brief != *brief
                     || record.beside != *beside
                     || !task_agrees
@@ -1685,6 +1746,8 @@ pub(crate) fn apply(
                 launch_words: Vec::new(),
                 beside: *beside,
                 reserved_at_unix_ms: now,
+                profile: profile.clone(),
+                started_profile: None,
             };
             ledger.spawns.push(record.clone());
             Ok(json!(record))
@@ -1974,7 +2037,7 @@ pub(crate) fn apply(
                 .ok_or("spawn_unavailable")?;
             Ok(json!(record))
         }
-        Mutation::Typed { id } => {
+        Mutation::Typed { id, profile } => {
             let parent = ledger
                 .spawns
                 .iter()
@@ -1994,6 +2057,7 @@ pub(crate) fn apply(
                 return Err("spawn_incomplete".into());
             }
             record.typed = record.typed.saturating_add(1);
+            record.started_profile.clone_from(profile);
             Ok(json!(record))
         }
         Mutation::BindChild { id, record } => {
@@ -2324,7 +2388,7 @@ fn insert_record(ledger: &mut Ledger, record: &AgentRecord, check: bool) -> Resu
             return Err("registration_conflict".into());
         }
         // The caller is that registration's own running agent.
-        return Ok(view(existing, ledger, &Sleeping::NONE));
+        return Ok(view(existing, ledger, &RegistrationFacts::NONE));
     }
     if ledger.agents.iter().any(|existing| {
         !existing.ended
@@ -2348,7 +2412,7 @@ fn insert_record(ledger: &mut Ledger, record: &AgentRecord, check: bool) -> Resu
     let mut record = record.clone();
     record.id = allocate(ledger, "agent")?;
     ledger.agents.push(record.clone());
-    Ok(view(&record, ledger, &Sleeping::NONE))
+    Ok(view(&record, ledger, &RegistrationFacts::NONE))
 }
 
 /// Ends a registration, the watches on it and the answer waits of the letters
@@ -2359,6 +2423,7 @@ fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
     };
     let live = !std::mem::replace(&mut record.ended, true);
     let target = record.actor.clone();
+    human_turn::end(ledger, id);
     ledger
         .watches
         .retain(|watch| !watch.target.same_identity(&target));
@@ -2748,6 +2813,7 @@ mod tests {
             task: None,
             brief: None,
             beside: false,
+            profile: None,
         }
     }
     fn register_as(
@@ -2790,7 +2856,7 @@ mod tests {
         assert_eq!(ledger, before);
         let id = register(&mut ledger, fork(), &source.actor);
         let fork = ledger.agents.iter().find(|record| record.id == id).unwrap();
-        let shown = view(fork, &ledger, &Sleeping::NONE);
+        let shown = view(fork, &ledger, &RegistrationFacts::NONE);
         assert!(shown["parent"].is_null());
         assert_eq!(shown["origin"], source_id);
         // Without the fork's provenance, the source is not the new pane.
@@ -3676,7 +3742,10 @@ mod tests {
         apply(
             &mut ledger,
             &parent,
-            &Mutation::Typed { id: spawn.clone() },
+            &Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
             2,
         )
         .unwrap();
@@ -4079,7 +4148,16 @@ mod tests {
         assert_eq!(pane(&ledger), None, "the pane that never ran is no one's");
 
         apply(&mut ledger, &actor, &place("w1:p3"), 6).unwrap();
-        apply(&mut ledger, &actor, &Mutation::Typed { id: id.clone() }, 7).unwrap();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Typed {
+                id: id.clone(),
+                profile: None,
+            },
+            7,
+        )
+        .unwrap();
         assert_eq!(
             apply(&mut ledger, &actor, &place("w1:p4"), 8).unwrap_err(),
             "intent_conflict"
@@ -4149,7 +4227,10 @@ mod tests {
             apply(
                 &mut ledger,
                 &actor,
-                &Mutation::Typed { id: spawn.clone() },
+                &Mutation::Typed {
+                    id: spawn.clone(),
+                    profile: None,
+                },
                 2,
             )
             .unwrap();
@@ -4285,7 +4366,10 @@ mod tests {
                 shell: None,
                 child: None,
             },
-            Mutation::Typed { id: spawn.clone() },
+            Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
         ] {
             apply(&mut ledger, &actor, &mutation, 2).unwrap();
         }
@@ -4454,7 +4538,10 @@ mod tests {
         apply(
             &mut ledger,
             &actor,
-            &Mutation::Typed { id: spawn.clone() },
+            &Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
             3,
         )
         .unwrap();
@@ -4740,7 +4827,10 @@ mod tests {
                 let ended = ledger.agents.iter().find(|r| r.id == child_id).unwrap();
                 assert!(ended.ended);
                 assert_eq!(ended.parent, expected_parent);
-                assert_eq!(view(ended, &ledger, &Sleeping::NONE)["origin"], origin);
+                assert_eq!(
+                    view(ended, &ledger, &RegistrationFacts::NONE)["origin"],
+                    origin
+                );
                 assert!(ledger.watches.is_empty());
                 assert!(!ledger.agents.iter().find(|r| r.id == origin).unwrap().ended);
                 let mut restored: Ledger =
@@ -4768,7 +4858,10 @@ mod tests {
                 let child = ledger.agents.iter().find(|r| r.id == child_id).unwrap();
                 assert!(!child.ended);
                 assert_eq!(child.parent, expected_parent);
-                assert_eq!(view(child, &ledger, &Sleeping::NONE)["origin"], origin);
+                assert_eq!(
+                    view(child, &ledger, &RegistrationFacts::NONE)["origin"],
+                    origin
+                );
                 assert_eq!(ledger.watches.len(), 1);
             }
         }
@@ -4813,12 +4906,12 @@ mod tests {
                     .find(|record| record.id == child)
                     .unwrap(),
                 &ledger,
-                &Sleeping::NONE,
+                &RegistrationFacts::NONE,
             );
             assert!(child_view["parent"].is_null());
             assert_eq!(child_view["origin"], origin);
             assert!(child_view["watch"].is_null());
-            assert!(view(&ledger.agents[0], &ledger, &Sleeping::NONE)["origin"].is_null());
+            assert!(view(&ledger.agents[0], &ledger, &RegistrationFacts::NONE)["origin"].is_null());
             let before = ledger.clone();
             assert_eq!(
                 apply(
@@ -4869,7 +4962,10 @@ mod tests {
                 .find(|record| record.id == child)
                 .unwrap();
             assert!(!live.ended);
-            assert_eq!(view(live, &restored, &Sleeping::NONE)["origin"], origin);
+            assert_eq!(
+                view(live, &restored, &RegistrationFacts::NONE)["origin"],
+                origin
+            );
             apply(
                 &mut restored,
                 &child_actor,
@@ -4978,7 +5074,7 @@ mod tests {
         assert_eq!(restored, ledger);
         assert_eq!(restored.spawns[0].mode, SpawnMode::Delegation);
         assert_eq!(
-            view(&restored.agents[1], &restored, &Sleeping::NONE)["origin"],
+            view(&restored.agents[1], &restored, &RegistrationFacts::NONE)["origin"],
             parent
         );
         let before = restored.clone();

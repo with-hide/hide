@@ -6,6 +6,7 @@ use crate::model::{
 
 fn session(id: &str, provider: &str, request: &str, updated_at_unix_ms: u64) -> SessionRowSnapshot {
     SessionRowSnapshot {
+        account: Default::default(),
         id: id.to_owned(),
         provider: provider.to_owned(),
         provider_label: if provider == "codex" {
@@ -567,6 +568,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
             codex_daemon_unreadable: None,
             codex_capability_unread: None,
             codex_daemon_off: None,
+            profiles: Vec::new(),
             refused: None,
         },
     );

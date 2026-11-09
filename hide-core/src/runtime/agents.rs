@@ -1710,7 +1710,7 @@ impl Runtime {
             Some(&live_pane_ids),
         );
         self.apply_pane_launches(
-            &session.agents,
+            &mut session.agents,
             ReadRecordScope::Remote(target_id),
             Some(&live_pane_ids),
         );
@@ -1720,6 +1720,7 @@ impl Runtime {
             Some(&live_pane_ids),
         );
         self.lay_unseen_views(&mut session.agents);
+        self.lay_human_turns(&mut session.agents);
         crate::agent_state::apply_lineage(
             &mut session.agents,
             &session.workspaces,
@@ -2940,6 +2941,7 @@ impl Runtime {
             self.ingest_archive_saved(&state.session_archive, result.is_ok());
             self.acknowledge_project_settings_save(&state, result.is_ok());
             self.acknowledge_device_naming(&state, naming_round, result.is_ok());
+            self.acknowledge_home_rename(&state, result.is_ok());
             return result;
         };
         self.state_save_pending = true;
@@ -2996,6 +2998,7 @@ impl Runtime {
                             guard.acknowledge_project_settings_save(&state, result.is_ok());
                         let naming_changed =
                             guard.acknowledge_device_naming(&state, naming_round, result.is_ok());
+                        guard.acknowledge_home_rename(&state, result.is_ok());
                         if let Err(message) = &result {
                             if settings_changed {
                                 guard.push_diagnostic(
@@ -3042,9 +3045,8 @@ impl Runtime {
     }
 
     pub(super) fn persist_ui_state(&mut self) {
-        // Every registration change is persisted here, which is when a Home's
-        // links follow it (PRD home-device-rail D-06).
-        self.request_home_link_syncs();
+        // A pending retirement of an old Home is asked as soon as it can be.
+        self.request_home_retirements();
         // ...and when a machine's protections follow it (PRD agent-guardrails B11).
         self.refresh_guardrail_policies();
         if let Err(message) = self.write_ui_state() {
@@ -3349,6 +3351,7 @@ impl Runtime {
                         &pending.kind,
                         &pending.name,
                         &pending.launch,
+                        pending.profile.as_ref(),
                         None,
                     );
                 }
@@ -4011,6 +4014,7 @@ impl Runtime {
         self.lay_checks(&mut agents);
         self.lay_hide_ai(&mut agents);
         self.lay_unseen_views(&mut agents);
+        self.lay_human_turns(&mut agents);
         crate::agent_state::apply_lineage(
             &mut agents,
             &workspaces,
@@ -4290,6 +4294,7 @@ pub(super) struct PendingFork {
     pub(super) kind: String,
     pub(super) name: String,
     pub(super) launch: hide_agent_adapter::LaunchChoice,
+    pub(super) profile: Option<crate::launch::LaunchProfile>,
 }
 
 /// What one machine's rows say for a first run.
