@@ -185,6 +185,7 @@ libghostty-vt is Zig and C, 22 MB of source, and is never copied into this repos
 
 `scripts/prepare-vt-inputs.py` is the one preparation step, on every system and in every lane.
 It downloads each input, refuses one whose sha256 differs from its pin, checks that every one of Herdr's patches applies in reverse to the extracted tree (so the tree is the dist plus exactly those patches), has Zig fetch the packages, which Zig checks against its own content hash, and moves the finished folder into place in one rename.
+The `translate_c` package is fetched over git (`git+https://codeberg.org/...#<commit>`), not as codeberg's generated archive: on 2026-11-09 codeberg's archive endpoint stopped answering while its git service kept working, which failed every CI build that prepared the inputs, and Zig's content hash of the git checkout is the same as the archive's.
 A refusal names the input, the digest it found and the one pinned, and leaves nothing behind.
 The folder is `<cache>/vt/<pin digest>-<system>`, where `<cache>` is `HIDE_BUILD_CACHE`, else `~/.cache/hide-build`, else `%LOCALAPPDATA%\hide-build` on Windows; on macOS it holds about 470 MB, 415 MB of it the Zig compiler.
 It is a download cache like the Rust toolchain, shared by every checkout and never written by a build, and the three most recently prepared entries are kept.
