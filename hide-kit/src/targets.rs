@@ -834,7 +834,7 @@ fn take_out(
     {
         removed |= remove_skill_in(&spot.location)?;
     }
-    removed |= forget_trust(target, own);
+    removed |= forget_trust(target, own)?;
     Ok(removed)
 }
 
@@ -860,31 +860,31 @@ fn trust_spot(own: &Own) -> Option<(hide_agent_hooks::folder_trust::Agent, Spot)
 }
 
 /// Takes the folder trust Hide recorded in a going profile account out of
-/// it, once [`judged`] lets Hide write there; what stays is logged and
-/// leaves with the agent's switch. True when an entry went.
-fn forget_trust(target: &KitTarget, own: &Own) -> bool {
+/// it, once [`judged`] lets Hide write there, by the rule [`take_out`] holds
+/// every piece to: a trust file that could not be read, and a removal that
+/// failed (Codex's own program missing included), are errors, so the
+/// account's target and its `Removing` state stay for the next pass; a place
+/// Hide may not write stays for good, and the log says why. True when an
+/// entry went.
+fn forget_trust(target: &KitTarget, own: &Own) -> Result<bool, String> {
     let Some((agent, spot)) = trust_spot(own) else {
-        return false;
+        return Ok(false);
     };
-    if let Err(reason) = judged(own, &spot, Touch::Write) {
-        log("profile_target.trust_left", Some(&own.key), &reason.text);
-        return false;
+    match judged(own, &spot, Touch::Write) {
+        Ok(_) => {}
+        Err(reason) if reason.why.cause == PartCause::Unreadable => return Err(reason.text),
+        Err(reason) => {
+            log("profile_target.trust_left", Some(&own.key), &reason.text);
+            return Ok(false);
+        }
     }
     let tools = hide_agent_hooks::folder_trust::Tools {
         codex: target.codex.as_ref(),
         stop: &target.stop,
     };
-    match hide_agent_hooks::folder_trust::forget_account(agent, &target.home, &own.account, tools) {
-        Ok(forgotten) => forgotten > 0,
-        Err(failure) => {
-            log(
-                "profile_target.trust_left",
-                Some(&own.key),
-                &failure.message(),
-            );
-            false
-        }
-    }
+    hide_agent_hooks::folder_trust::forget_account(agent, &target.home, &own.account, tools)
+        .map(|forgotten| forgotten > 0)
+        .map_err(|failure| failure.message())
 }
 
 /// Whether the node may write `profile`'s folder trust in the account the
