@@ -231,8 +231,13 @@ def launcher(path, argv, *, environment=(), unset=(), keep=(), within=None):
     lines = ["@echo off", *(f'set "hide_kept_{name}=%{name}%"' for name in keep),
              *(f"set {cmd_quote(name + '=')}" for name in unset),
              *(f"set {cmd_quote(f'{key}={value}')}" for key, value in environment.items()),
-             *(f'if defined hide_kept_{name} if /i "%hide_kept_{name}:~0,{len(prefix)}%"=={cmd_quote(prefix)} '
-               f'set "{name}=%hide_kept_{name}%"' for name in keep),
+             # cmd expands a line as it reads it, and a substring of a
+             # variable that is not set leaves its `%`s behind and breaks the
+             # line; the jump leaves the line unread then.
+             *(line for name in keep for line in (
+                 f"if not defined hide_kept_{name} goto hide_kept_{name}_done",
+                 f'if /i "%hide_kept_{name}:~0,{len(prefix)}%"=={cmd_quote(prefix)} set "{name}=%hide_kept_{name}%"',
+                 f":hide_kept_{name}_done")),
              # The last line: its exit status is the file's, and a program
              # that is itself a .cmd (an npm install's) takes over the run.
              " ".join(cmd_quote(value) for value in argv) + " %*"]
