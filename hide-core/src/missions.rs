@@ -681,6 +681,56 @@ pub struct Question {
     #[serde(default)]
     pub node: Option<String>,
     pub asked_at_unix_ms: u64,
+    /// The Views the Conductor linked to this question: the ones `--show`
+    /// named and the ones it opened in the turn that asked it, oldest
+    /// first, at most [`VIEW_LINK_LIMIT`]. The map lists them with the node's
+    /// own (`MissionNode::views`) under the question.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
+    /// The operator asked the Conductor for something to look at before
+    /// answering (`볼 자료 요청`): asked once per question.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub material_asked: bool,
+}
+
+/// The most Views one question or one node links; past it the oldest goes.
+pub const VIEW_LINK_LIMIT: usize = 16;
+
+/// A View a decision shows the operator to look at, by the checkout that
+/// holds it: a link is a fact recorded when the View was opened or named,
+/// never a guess from its name or its time.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ViewLink {
+    pub device_id: String,
+    pub checkout_path: String,
+    pub display_id: String,
+    /// The node's attempt the View was opened in (`MissionNode::attempts`);
+    /// a question's own link keeps 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attempt: u8,
+}
+
+impl ViewLink {
+    fn same_view(&self, other: &Self) -> bool {
+        self.device_id == other.device_id
+            && self.checkout_path == other.checkout_path
+            && self.display_id == other.display_id
+    }
+}
+
+/// Adds `link` to `links` as the newest, once: the same View again moves
+/// to the end, and the oldest goes past [`VIEW_LINK_LIMIT`]. Whether the
+/// list changed.
+pub fn push_view_link(links: &mut Vec<ViewLink>, link: ViewLink) -> bool {
+    if links.last() == Some(&link) {
+        return false;
+    }
+    links.retain(|known| !known.same_view(&link));
+    links.push(link);
+    if links.len() > VIEW_LINK_LIMIT {
+        links.remove(0);
+    }
+    true
 }
 
 /// The operator's answer to the question with `key`, from the banner (B26):
@@ -755,6 +805,11 @@ pub struct MissionNode {
     pub branch: Option<String>,
     #[serde(default)]
     pub attempts: u8,
+    /// The Views the node's worker and the agents under it opened, each with
+    /// the attempt it was opened in; a decision that stops the node lists
+    /// the current attempt's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
     /// What the node does now, its conclusion or its verification result.
     #[serde(default)]
     pub line: Option<String>,
@@ -1622,6 +1677,10 @@ pub enum MissionCommand {
         recommend: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node: Option<String>,
+        /// Views of the Conductor's checkout to show with the question, by
+        /// id; the CLI opens a path as a View first and sends its id.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        show: Vec<String>,
     },
     /// Sets or clears why new nodes wait on usage (B13).
     Delay {
@@ -1765,6 +1824,7 @@ impl MissionCommand {
                 why,
                 options,
                 node,
+                show,
                 ..
             } => {
                 // The choices' count and length are refused with their own
@@ -1777,6 +1837,8 @@ impl MissionCommand {
                     && valid_line(why, LINE_LIMIT)
                     && options.len() <= NODE_LIMIT
                     && node.as_deref().is_none_or(valid_key)
+                    && show.len() <= VIEW_LINK_LIMIT
+                    && show.iter().all(|id| valid_key(id))
             }
             Self::Delay { mission, line } => {
                 id_ok(mission)
@@ -2135,6 +2197,7 @@ pub(crate) fn apply_plan(
                 base_pr: None,
                 branch: None,
                 attempts: 0,
+                views: Vec::new(),
                 line: None,
                 change: None,
                 review: None,

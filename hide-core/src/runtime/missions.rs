@@ -1719,6 +1719,7 @@ impl Runtime {
                 options,
                 recommend,
                 node,
+                show: _,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 let changed =

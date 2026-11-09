@@ -472,6 +472,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 options,
                 recommend,
                 node: values.get("--node").map(|node| key(node)).transpose()?,
+                show: Vec::new(),
             }
         }
         "delay" => {
@@ -883,6 +884,7 @@ mod tests {
                 options: vec!["main".into(), "#1503".into()],
                 recommend: Some(2),
                 node: Some("ui".into()),
+                show: Vec::new(),
             })
         );
         assert!(parse(words(&["decide", "--line", "Q", "--recommend", "0"]).iter()).is_err());

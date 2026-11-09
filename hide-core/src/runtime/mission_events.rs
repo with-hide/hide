@@ -359,6 +359,8 @@ impl Runtime {
                     recommend,
                     node,
                     asked_at_unix_ms: now,
+                    views: Vec::new(),
+                    material_asked: false,
                 })
             }
             None => None,
