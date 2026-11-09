@@ -447,15 +447,16 @@ mod tests {
     #[test]
     fn a_checkpointed_read_discards_output_if_a_writer_changes_its_source() {
         let (home, path) = checkpointed();
-        let result = crate::opencode::with_unchecked_read(home.path(), |db| {
-            let value: i64 = db
-                .query_row("SELECT value FROM sample", [], |row| row.get(0))
-                .unwrap();
-            let writer = Connection::open(&path).unwrap();
-            writer.execute("UPDATE sample SET value=2", []).unwrap();
-            drop(writer);
-            value
-        });
+        let result =
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |db| {
+                let value: i64 = db
+                    .query_row("SELECT value FROM sample", [], |row| row.get(0))
+                    .unwrap();
+                let writer = Connection::open(&path).unwrap();
+                writer.execute("UPDATE sample SET value=2", []).unwrap();
+                drop(writer);
+                value
+            });
         assert_eq!(result, Err(ReadRefusal::InMotion("opencode_db_changed")));
     }
 
@@ -473,7 +474,10 @@ mod tests {
         }
         let (home, path) = checkpointed();
         let mode = |bits| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(bits));
-        let result = crate::opencode::with_unchecked_read(home.path(), |_| mode(0o000).unwrap());
+        let result =
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |_| {
+                mode(0o000).unwrap()
+            });
         mode(0o600).unwrap();
         assert_eq!(
             result,
@@ -488,16 +492,17 @@ mod tests {
         let shm = path.with_file_name("opencode.db-shm");
         std::fs::write(&wal, []).unwrap();
         std::fs::write(&shm, [0; 32768]).unwrap();
-        let result = crate::opencode::with_unchecked_read(home.path(), |db| {
-            db.query_row("SELECT value FROM sample", [], |row| row.get::<_, i64>(0))
-        });
+        let result =
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |db| {
+                db.query_row("SELECT value FROM sample", [], |row| row.get::<_, i64>(0))
+            });
         assert_eq!(result.unwrap().unwrap(), 1);
         assert_eq!(std::fs::read(&wal).unwrap(), Vec::<u8>::new());
         assert_eq!(std::fs::read(&shm).unwrap(), vec![0; 32768]);
         let journal = path.with_file_name("opencode.db-journal");
         std::fs::write(&journal, b"unfinished native transaction").unwrap();
         assert!(
-            crate::opencode::with_unchecked_read(home.path(), |_| panic!(
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |_| panic!(
                 "journal must be refused before reading"
             ))
             .is_err()
@@ -515,30 +520,35 @@ mod tests {
         let read_value = |db: &Connection| {
             db.query_row("SELECT value FROM sample", [], |row| row.get::<_, i64>(0))
         };
-        let result = crate::opencode::with_unchecked_read(home.path(), |db| {
-            std::thread::scope(|scope| {
-                let competing = scope.spawn(|| {
-                    crate::opencode::with_unchecked_read(home.path(), |_| {
-                        panic!("a competing connection must not open")
-                    })
-                });
-                assert_eq!(
-                    competing.join().unwrap(),
-                    Err(ReadRefusal::InMotion("opencode_db_busy"))
-                );
-                assert_eq!(
-                    crate::opencode::with_unchecked_read(other.path(), read_value)
+        let result =
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |db| {
+                std::thread::scope(|scope| {
+                    let competing = scope.spawn(|| {
+                        crate::opencode::with_unchecked_read(
+                            &crate::Accounts::new(home.path()),
+                            |_| panic!("a competing connection must not open"),
+                        )
+                    });
+                    assert_eq!(
+                        competing.join().unwrap(),
+                        Err(ReadRefusal::InMotion("opencode_db_busy"))
+                    );
+                    assert_eq!(
+                        crate::opencode::with_unchecked_read(
+                            &crate::Accounts::new(other.path()),
+                            read_value
+                        )
                         .unwrap()
                         .unwrap(),
-                    1
-                );
+                        1
+                    );
+                });
+                assert_eq!(read_value(db).unwrap(), 1);
+                db.execute_batch("SELECT absent_column FROM sample")
             });
-            assert_eq!(read_value(db).unwrap(), 1);
-            db.execute_batch("SELECT absent_column FROM sample")
-        });
         assert!(result.unwrap().is_err());
         assert_eq!(
-            crate::opencode::with_unchecked_read(home.path(), read_value)
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), read_value)
                 .unwrap()
                 .unwrap(),
             1
@@ -548,18 +558,23 @@ mod tests {
     #[test]
     fn replacing_the_database_keeps_its_guard_until_the_previous_read_ends() {
         let (home, path) = checkpointed();
-        let result = crate::opencode::with_unchecked_read(home.path(), |_| {
-            let previous = path.with_file_name("previous.db");
-            std::fs::rename(&path, &previous).unwrap();
-            std::fs::copy(&previous, &path).unwrap();
-            assert_eq!(
-                crate::opencode::with_unchecked_read(home.path(), |_| panic!(
-                    "replacement bypassed gate"
-                )),
-                Err(ReadRefusal::InMotion("opencode_db_busy"))
-            );
-        });
+        let result =
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |_| {
+                let previous = path.with_file_name("previous.db");
+                std::fs::rename(&path, &previous).unwrap();
+                std::fs::copy(&previous, &path).unwrap();
+                assert_eq!(
+                    crate::opencode::with_unchecked_read(
+                        &crate::Accounts::new(home.path()),
+                        |_| panic!("replacement bypassed gate")
+                    ),
+                    Err(ReadRefusal::InMotion("opencode_db_busy"))
+                );
+            });
         assert_eq!(result, Err(ReadRefusal::InMotion("opencode_db_changed")));
-        assert!(crate::opencode::with_unchecked_read(home.path(), |_| ()).is_ok());
+        assert!(
+            crate::opencode::with_unchecked_read(&crate::Accounts::new(home.path()), |_| ())
+                .is_ok()
+        );
     }
 }

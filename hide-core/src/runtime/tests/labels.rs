@@ -744,8 +744,9 @@ fn a_plan_read_from_the_session_file_puts_the_row_in_needs_you() {
     )
     .unwrap();
     let transcript = read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &LabelTranscriptRequest {
+            account: Default::default(),
             agent: hide_session::Agent::Codex,
             reference_kind: "id".to_owned(),
             reference_value: SESSION.to_owned(),
@@ -1354,8 +1355,9 @@ fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
     )
     .unwrap();
     let transcript = read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &LabelTranscriptRequest {
+            account: Default::default(),
             agent: hide_session::Agent::Claude,
             reference_kind: "id".to_owned(),
             reference_value: SESSION.to_owned(),
@@ -1467,8 +1469,9 @@ fn a_hook_turn_whose_prompt_the_session_file_shows_unanswered_ends_at_rest() {
         )
         .unwrap();
         read(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             &LabelTranscriptRequest {
+                account: Default::default(),
                 agent: hide_session::Agent::Claude,
                 reference_kind: "id".to_owned(),
                 reference_value: SESSION.to_owned(),
@@ -1585,8 +1588,9 @@ fn an_approval_ends_when_the_session_file_reads_the_refused_calls_result() {
         )
         .unwrap();
         read(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             &LabelTranscriptRequest {
+                account: Default::default(),
                 agent: hide_session::Agent::Claude,
                 reference_kind: "id".to_owned(),
                 reference_value: SESSION.to_owned(),

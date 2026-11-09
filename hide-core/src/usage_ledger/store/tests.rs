@@ -1332,7 +1332,10 @@ fn cross_build_device(db: &Connection) -> String {
 fn read_native_files(store: &mut Store, device: &str, home: &Path, now: u64) {
     let zone = jiff::tz::TimeZone::system();
     let agent = Agent::Claude;
-    for candidate in hide_session::usage::list(home, agent, 0).unwrap().files {
+    for candidate in hide_session::usage::list(&hide_session::Accounts::new(home), agent, 0)
+        .unwrap()
+        .files
+    {
         let saved = store.checkpoint(device, agent, &candidate.path).unwrap();
         if saved
             .as_ref()
@@ -1343,7 +1346,13 @@ fn read_native_files(store: &mut Store, device: &str, home: &Path, now: u64) {
         let path = hide_platform::path::from_wire(&candidate.path).unwrap();
         let mut checkpoint = saved.map(|(_, checkpoint)| checkpoint);
         loop {
-            let step = hide_session::usage::read(home, agent, &path, checkpoint).unwrap();
+            let step = hide_session::usage::read(
+                &hide_session::Accounts::new(home),
+                agent,
+                &path,
+                checkpoint,
+            )
+            .unwrap();
             store
                 .ingest(device, agent, &candidate, &step, now, &zone)
                 .unwrap();

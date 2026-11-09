@@ -1479,7 +1479,12 @@ fn launch_with_prompt_checked(
     // is none for a device, whose own engine answers for its PATH, and a
     // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(refusal) = crate::agent_start::trust_worktree(pane_node, &kind, path)
+        && let Err(refusal) = crate::agent_start::trust_worktree(
+            pane_node,
+            &kind,
+            path,
+            profile.as_ref().map(|(id, _)| id),
+        )
     {
         return TaskAgentOutcome::Failed(AgentFailure::with_detail(refusal.code, refusal.detail));
     }
@@ -1515,12 +1520,13 @@ fn launch_with_prompt_checked(
         args,
         prompt.as_deref(),
         codex_daemon,
-        &|| {
+        &|account| {
             current()?;
             if let Some(scope) = resume_scope.as_ref() {
                 crate::live::confirm_session_launch(
                     agent_node.ok_or("session_route_reader_unavailable")?,
                     &kind,
+                    account,
                     &scope.id,
                     Some(&scope.cwd),
                     resume_reference.as_ref(),
@@ -1603,11 +1609,8 @@ fn launch_agent(
     mut args: Vec<String>,
     prompt: Option<&str>,
     codex_daemon: crate::codex_launch::CodexDaemon,
-    check: &dyn Fn() -> Result<(), String>,
+    check: &dyn Fn(&hide_agent_adapter::AccountKey) -> Result<(), String>,
 ) -> Launch {
-    if let Err(reason) = check() {
-        return Launch::Failed(AgentFailure::reason(reason));
-    }
     let kind = agent.kind();
     // The profile is asked of the node that runs the pane, before anything
     // is typed there: one gone or refused starts nothing (D-27, B20, B22).
@@ -1618,6 +1621,12 @@ fn launch_agent(
         }
     };
     let profile = launch.record();
+    // A resumed conversation is proven in the account its profile names.
+    let account = crate::launch::LaunchProfile::account_of(profile.as_ref());
+    let check = &|| check(&account);
+    if let Err(reason) = check() {
+        return Launch::Failed(AgentFailure::reason(reason));
+    }
     // The engine would type the command into the pane's shell and wait for
     // an agent that can never appear; say so before asking it. A device's
     // PATH is not this machine's, so there its engine answers for it. Asked
@@ -1866,6 +1875,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         if let Some(node) = node.as_deref() {
             folder_present(node, request)?;
         }
+        settle_task_session_profile(target, request)?;
         if let Some(scope) = request.resume_scope.as_ref() {
             target.check_current(request.id)?;
             let runtime = target
@@ -1877,9 +1887,11 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
                 .as_deref()
                 .ok_or_else(|| "session_resume_agent_required".to_owned())?;
             let node = task_session_node(&runtime, request.id, kind)?;
+            let account = task_resume_account(&runtime, request.id, kind, node.as_ref())?;
             crate::live::confirm_session_launch(
                 node.as_ref(),
                 kind,
+                &account,
                 &scope.id,
                 Some(&scope.cwd),
                 request.resume_reference.as_ref(),
@@ -2081,6 +2093,72 @@ fn task_session_node(
         return Err("session_resume_intent_changed".into());
     }
     task_node(&mut runtime, id)
+}
+
+/// Gives task `id`, a resume that names no account
+/// (`TaskAgentLaunch::profile_from_session`), the profile of the account
+/// the machine that holds its session says holds it
+/// ([`crate::launch::session_account`], [`Runtime::settle_session_profile`]),
+/// before its tab is made; the machine's answer is waited for with the
+/// runtime lock released, and the task is checked current after it.
+fn settle_task_session_profile(
+    target: &TabTarget,
+    request: &CheckoutTabRequest,
+) -> Result<(), ControlFailure> {
+    let runtime = target
+        .runtime
+        .upgrade()
+        .ok_or_else(|| "runtime stopped".to_owned())?;
+    let Some(reference) = runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .task_profile_from_session(request.id)
+    else {
+        return Ok(());
+    };
+    let kind = request
+        .agent_kind
+        .as_deref()
+        .ok_or_else(|| "session_resume_agent_required".to_owned())?;
+    let node = task_session_node(&runtime, request.id, kind)?;
+    let account = crate::launch::session_account(node.as_ref(), kind, &reference)
+        .map_err(|refusal| ControlFailure::Definite(refusal.code.to_owned()))?;
+    target.check_current(request.id)?;
+    if !Arc::ptr_eq(&node, &task_session_node(&runtime, request.id, kind)?) {
+        return Err(ControlFailure::Definite(
+            "session_resume_reader_changed".into(),
+        ));
+    }
+    runtime
+        .lock()
+        .map_err(|_| TASK_GONE.to_owned())?
+        .settle_session_profile(request.id, kind, &account)
+        .map_err(|code| ControlFailure::Definite(code.to_owned()))?;
+    Ok(())
+}
+
+/// The account task `id`'s resumed conversation lies in: its profile's,
+/// as the machine that holds the session answers for it now (a profile
+/// that is gone or refused starts nothing, D-27), the default account for
+/// the built-in default (PRD agent-profiles B19).
+fn task_resume_account(
+    runtime: &Arc<Mutex<Runtime>>,
+    id: u64,
+    kind: &str,
+    node: &dyn crate::node_access::NodeLink,
+) -> Result<hide_agent_adapter::AccountKey, String> {
+    let profile = runtime
+        .lock()
+        .map_err(|_| TASK_GONE)?
+        .task_agent_profile(id);
+    if profile.is_none() {
+        return Ok(Default::default());
+    }
+    let launch = crate::launch::resolve(Some(node), &crate::launch::Request::new(kind, profile))
+        .map_err(|refusal| refusal.code.to_owned())?;
+    Ok(crate::launch::LaunchProfile::account_of(
+        launch.record().as_ref(),
+    ))
 }
 
 /// The node of the machine that runs task `id`'s pane.

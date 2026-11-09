@@ -1710,7 +1710,7 @@ impl Runtime {
             Some(&live_pane_ids),
         );
         self.apply_pane_launches(
-            &session.agents,
+            &mut session.agents,
             ReadRecordScope::Remote(target_id),
             Some(&live_pane_ids),
         );

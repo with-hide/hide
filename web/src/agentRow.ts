@@ -279,8 +279,18 @@ export function branchChip(agent: Pick<AgentRow, "state">): string | null {
  * row's visible text is hidden from assistive technology, so everything it
  * shows has to be here.
  */
+/**
+ * The agent's product name, and the profile it runs with when that is not its
+ * built-in default (`Claude Code · work`): what the hover and the accessible
+ * name say for a logo that wears the profile badge (PRD agent-profiles B17).
+ */
+export function agentWithProfile(t: TFunction<"translation">, agent: Pick<AgentRow, "agent_kind" | "profile">): string {
+  const product = agentProductName(agent.agent_kind);
+  return agent.profile ? t("agentProfiles.agentWithProfile", { agent: product, profile: agent.profile }) : product;
+}
+
 export function rowAccessibleName(t: TFunction<"translation">, agent: AgentRow, device: string | null): string {
-  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentProductName(agent.agent_kind), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
+  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentWithProfile(t, agent), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
 }
 
 export function recordPending(agent: Pick<AgentRow, "record_connection">): boolean {

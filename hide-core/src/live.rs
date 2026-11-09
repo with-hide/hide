@@ -701,6 +701,7 @@ pub(crate) fn start_error_message(error: crate::agent_start::StartError) -> Stri
 pub(crate) fn confirm_session_launch(
     node: &dyn crate::node_access::NodeLink,
     kind: &str,
+    account: &hide_agent_adapter::AccountKey,
     id: &str,
     cwd: Option<&str>,
     source_reference: Option<&crate::sidebar::SessionAgentSessionPayload>,
@@ -725,6 +726,7 @@ pub(crate) fn confirm_session_launch(
     }
     let request = hide_session::session_activity::SessionActivityRequest {
         agent,
+        account: account.clone(),
         reference_kind: source_reference.kind.clone(),
         reference_value: source_reference.value.clone(),
         cwd: Some(cwd.ok_or("session_route_cwd_unconfirmed")?.into()),

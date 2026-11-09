@@ -441,7 +441,7 @@ fn a_pi_or_omp_child_spawned_by_its_file_is_in_its_parents_record() {
                 .unwrap();
             let read = |store: &mut crate::links::store::LinkStore| {
                 let answer = hide_session::links::read(
-                    home.path(),
+                    &hide_session::Accounts::new(home.path()),
                     &[hide_session::links::ReadRequest {
                         agent: hide_session::Agent::from_kind(kind).unwrap(),
                         path: path.clone(),
@@ -1639,6 +1639,18 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
             .collect()
         )
     );
+    // A Codex resume that names no file asks its machine by the id, which
+    // keeps the default account while that is the only one there (B19).
+    assert_eq!(
+        runtime
+            .task_agent_launch
+            .as_ref()
+            .and_then(|launch| launch.profile_from_session.clone()),
+        Some(crate::sidebar::SessionAgentSessionPayload {
+            kind: "id".into(),
+            value: "019a-session".into(),
+        })
+    );
 
     // Pi asks no permission question; omp's full access is `--auto-approve`.
     for (provider, flag, access) in [
@@ -1682,6 +1694,21 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
         )),
         "OpenCode's proof reads the id the resume names"
     );
+    // A session line names no account: the session's machine says which
+    // holds it before the start takes that account's profile (B19).
+    assert_eq!(
+        runtime
+            .task_agent_launch
+            .as_ref()
+            .map(|launch| (launch.profile.clone(), launch.profile_from_session.clone())),
+        Some((
+            None,
+            Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "id".into(),
+                value: "ses_native1".into(),
+            })
+        ))
+    );
 
     // Starts do not grant resume support before each complete reader
     // slice lands; an id that is not one token never reaches a command line.
@@ -1714,6 +1741,119 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
         );
         assert!(runtime.snapshot.task_operation.is_none());
     }
+}
+
+/// 이어받기 resumes its gone Conductor's session by its id alone, with the
+/// profile the mission's record kept of the session's start: a record of a
+/// profile resumes with it, one before profiles with the built-in default and
+/// no lookup, records that disagree start nothing, and a resume that names
+/// its file asks the file's machine rather than taking the record (PRD
+/// agent-profiles D-27, B19).
+#[test]
+fn a_conductors_resume_runs_with_the_profile_its_mission_recorded() {
+    let mut runtime = runtime();
+    runtime.ingest_session(Ok(context_payload()));
+    let path = runtime.snapshot.navigator.workspaces[0].checkouts[0]
+        .path
+        .clone();
+    let node = runtime.node.as_str().to_owned();
+    let work = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-work".into()),
+        name: "work".into(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+    };
+    let conducted =
+        |id: &str, agent: &str, session: &str, profile: Option<&crate::launch::LaunchProfile>| {
+            let mut mission = crate::missions::tests::mission();
+            mission.id = id.into();
+            mission.device_id = node.clone();
+            mission.conductor.session = Some(crate::links::ledger::SessionIdentity {
+                device_id: node.clone(),
+                agent: agent.into(),
+                session_id: session.into(),
+            });
+            mission.conductor.profile = profile.cloned();
+            mission
+        };
+    runtime.missions.book.missions = vec![
+        conducted("mission-1", "claude", "claude-conductor", Some(&work)),
+        conducted("mission-2", "codex", "codex-conductor", None),
+        conducted("mission-3", "claude", "disputed", Some(&work)),
+        conducted("mission-4", "claude", "disputed", None),
+        crate::missions::Mission {
+            conductor: crate::missions::Conductor {
+                profile_unknown: true,
+                ..conducted("mission-5", "claude", "by-hand", None).conductor
+            },
+            ..conducted("mission-5", "claude", "by-hand", None)
+        },
+    ];
+    let start = |runtime: &mut Runtime, provider: &str, session: &str, file: Option<&str>| {
+        runtime.snapshot.task_operation = None;
+        runtime.task_agent_launch = None;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&resume_event(provider, session)).unwrap();
+        value["payload"]["checkout_path"] = path.clone().into();
+        if let Some(file) = file {
+            value["payload"]["resume_session_path"] = file.into();
+        }
+        assert!(runtime.dispatch_json(&serde_json::to_vec(&value).unwrap()));
+        runtime
+            .task_agent_launch
+            .as_ref()
+            .map(|launch| (launch.profile.clone(), launch.profile_from_session.clone()))
+    };
+
+    assert_eq!(
+        start(&mut runtime, "claude", "claude-conductor", None),
+        Some((Some((work.id.clone(), work.name.clone())), None))
+    );
+    // A Codex Conductor recorded with the built-in default resumes as it
+    // always has, however old its session's folder.
+    assert_eq!(
+        start(&mut runtime, "codex", "codex-conductor", None),
+        Some((None, None))
+    );
+    assert_eq!(
+        runtime.task_agent_launch.as_ref().unwrap().args[..2],
+        ["resume".to_owned(), "codex-conductor".to_owned()]
+    );
+    let file = "/accounts/other/projects/-repo/claude-conductor.jsonl";
+    assert_eq!(
+        start(&mut runtime, "claude", "claude-conductor", Some(file)),
+        Some((
+            None,
+            Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "path".into(),
+                value: file.into(),
+            })
+        )),
+        "a resume that names its file is the file's"
+    );
+    // A Conductor started by hand keeps no profile its mission knows: its
+    // session's machine says which account holds it, as for any resume by
+    // id alone, never the built-in default assumed.
+    assert_eq!(
+        start(&mut runtime, "claude", "by-hand", None),
+        Some((
+            None,
+            Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "id".into(),
+                value: "by-hand".into(),
+            })
+        ))
+    );
+    assert_eq!(start(&mut runtime, "claude", "disputed", None), None);
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("agent_start.invalid_resume")
+    );
+    assert!(runtime.snapshot.task_operation.is_none());
 }
 
 /// A parent the engine never named is called by its registration id in its

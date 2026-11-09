@@ -1,12 +1,11 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { memo, useRef, type KeyboardEvent } from "react";
 import { AgentRowMark } from "../AgentRowMark";
-import { agentProductName } from "../agentAdapters";
 import { agentClosing, treeCloseProgress } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, treeLine } from "../agentRow";
-import { recordWords } from "../agentRow";
+import { agentWithProfile, recordWords } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
 import { homeTurnLine, originLine } from "../hideAiOrigin";
@@ -168,7 +167,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
   // Only a root in the project tree draws a resolved row (it carries `tree`); the raised lists leave it out and a child keeps its own look.
   const resting = tree && depth === 0 && agent.resolved;
-  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
   const staleness = ask ? undefined : pullsStaleness(pulls);
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -209,7 +208,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           ref={main}
           type="button"
           disabled={unreachable}
-          aria-label={[offline ? [agent.identity_label, remote?.label, agentProductName(agent.agent_kind), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
+          aria-label={[offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
           aria-current={selected ? "true" : undefined}
           aria-expanded={tree && tree.open !== null && !tree.popover ? tree.open : undefined}
           data-agent-open={agent.pane_id}
@@ -228,7 +227,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         mark={<>
           <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
           {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). */}
-          <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree ? "sidebar" : null} />
+          <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree ? "sidebar" : null} profile={agent.profile} />
         </>}
         head={<>
           {/* The row button's name already reads all of this out. */}

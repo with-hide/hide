@@ -6,6 +6,7 @@ use crate::model::{
 
 fn session(id: &str, provider: &str, request: &str, updated_at_unix_ms: u64) -> SessionRowSnapshot {
     SessionRowSnapshot {
+        account: Default::default(),
         id: id.to_owned(),
         provider: provider.to_owned(),
         provider_label: if provider == "codex" {

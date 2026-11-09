@@ -1795,7 +1795,7 @@ mod tests {
 
     fn read_to_the_end(store: &mut LinkStore, home: &Path, path: &str) -> links::ReadAnswer {
         let answer = links::read(
-            home,
+            &hide_session::Accounts::new(home),
             &[links::ReadRequest {
                 agent: hide_session::Agent::Claude,
                 path: path.to_owned(),
@@ -1951,11 +1951,17 @@ mod tests {
                     since_unix_ms,
                     until_unix_ms,
                 } => serde_json::to_value(
-                    links::candidates(&self.home, since_unix_ms, until_unix_ms).unwrap(),
+                    links::candidates(
+                        &hide_session::Accounts::new(&self.home),
+                        since_unix_ms,
+                        until_unix_ms,
+                    )
+                    .unwrap(),
                 ),
-                Call::LinkRead { requests } => {
-                    serde_json::to_value(links::read(&self.home, &requests))
-                }
+                Call::LinkRead { requests } => serde_json::to_value(links::read(
+                    &hide_session::Accounts::new(&self.home),
+                    &requests,
+                )),
                 other => panic!("unexpected call {other:?}"),
             };
             Ok(LinkAnswer::Parsed(value.unwrap()))
@@ -2023,7 +2029,8 @@ mod tests {
             client: client.clone(),
             observations,
         };
-        let candidates = links::candidates(home.path(), 0, None).unwrap();
+        let candidates =
+            links::candidates(&hide_session::Accounts::new(home.path()), 0, None).unwrap();
         assert_eq!(candidates.len(), 1);
         let mut queue = DeviceQueue {
             queue: candidates.into(),
@@ -2044,7 +2051,7 @@ mod tests {
             store.apply_project(facts, CREATED + 2_000).unwrap();
         }
         let answers = links::read(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             &[ReadRequest {
                 agent: hide_session::Agent::Claude,
                 path: home

@@ -1,6 +1,7 @@
 //! Proven transcript ownership for labels. Other session discovery callers
 //! retain their existing cwd fallback policy.
 
+use crate::account::Accounts;
 use crate::source::FileIdentity;
 use crate::source::facts::{self, Wanted};
 use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES};
@@ -95,6 +96,19 @@ pub fn valid_native_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// A session id a resume no reader proves (Claude Code's, Codex's) passes
+/// to the agent's command line: a letter or digit first, then letters,
+/// digits, `-` and `_`, 128 bytes at most.
+pub fn valid_plain_id(id: &str) -> bool {
+    id.bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 /// Read at most one incremental-read budget of metadata from a regular file.
 /// A native id must agree with the file; a path must contain a provider id.
 /// Errors contain stable reason codes, never a transcript or personal path.
@@ -110,15 +124,15 @@ pub fn confirm_label_session(
 /// Grok additionally require their exact checkout and refuse every linked
 /// entry under home.
 pub fn confirm_session_file(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: &Path,
     reported_id: Option<&str>,
     cwd: Option<&str>,
 ) -> Result<ConfirmedLabelSession> {
-    crate::inside_session_root(home, &[agent], path)
+    crate::inside_session_root(accounts, &[agent], path)
         .map_err(|refusal| anyhow!(refusal.reason()))?;
-    confirm_metadata(agent, path, reported_id, cwd, Some(home))
+    confirm_metadata(agent, path, reported_id, cwd, Some(accounts))
 }
 
 fn confirm_metadata(
@@ -126,11 +140,13 @@ fn confirm_metadata(
     path: &Path,
     reported_id: Option<&str>,
     cwd: Option<&str>,
-    home: Option<&Path>,
+    accounts: Option<&Accounts>,
 ) -> Result<ConfirmedLabelSession> {
     if agent == Agent::Cursor {
         return crate::cursor::proof(
-            home.ok_or_else(|| anyhow!("label_session_outside_roots"))?,
+            accounts
+                .ok_or_else(|| anyhow!("label_session_outside_roots"))?
+                .home(),
             path,
             reported_id,
             cwd.ok_or_else(|| anyhow!("label_session_cwd_unconfirmed"))?,
@@ -174,12 +190,16 @@ fn confirm_metadata(
         if native != expected {
             return Err(anyhow!("label_session_cwd_mismatch"));
         }
-        let home = home.ok_or_else(|| anyhow!("label_session_outside_roots"))?;
+        let accounts = accounts.ok_or_else(|| anyhow!("label_session_outside_roots"))?;
         // agy finds a conversation by its id alone, in no folder of its cwd.
         let native_directory = if agent == Agent::Antigravity {
-            crate::antigravity::directory(home, &header.id)
+            crate::antigravity::directory(accounts.home(), &header.id)
         } else {
-            crate::native_file::default_directory(home, agent, &native)?
+            // The folder the agent itself names for the checkout, in the
+            // account the file lies in.
+            let root = crate::native_file::root_holding(accounts, agent, path)
+                .ok_or_else(|| anyhow!("label_session_outside_roots"))?;
+            crate::native_file::directory_in(&root, accounts.home(), agent, &native)?
         };
         let actual_directory = crate::native_file::directory_of(agent, path)
             .and_then(|parent| hide_platform::fs::identity::canonical(parent).ok());
@@ -240,7 +260,7 @@ fn confirm_metadata(
 /// A replacement cannot grant itself the requested owner's authority.
 /// No proof is persisted.
 pub fn read_session_file<T>(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: &Path,
     expected: Option<&SessionReadScope>,
@@ -250,14 +270,26 @@ pub fn read_session_file<T>(
         return read();
     }
     let expected = expected.ok_or_else(|| "label_session_scope_required".to_owned())?;
-    crate::inside_session_root(home, &[agent], path)
+    crate::inside_session_root(accounts, &[agent], path)
         .map_err(|refusal| refusal.reason().to_owned())?;
-    let before = confirm_session_file(home, agent, path, Some(&expected.id), Some(&expected.cwd))
-        .map_err(|e| e.to_string())?;
+    let before = confirm_session_file(
+        accounts,
+        agent,
+        path,
+        Some(&expected.id),
+        Some(&expected.cwd),
+    )
+    .map_err(|e| e.to_string())?;
     let stamp = crate::stamp::stamp_at(path);
     let result = read()?;
-    let after = confirm_session_file(home, agent, path, Some(&expected.id), Some(&expected.cwd))
-        .map_err(|e| e.to_string())?;
+    let after = confirm_session_file(
+        accounts,
+        agent,
+        path,
+        Some(&expected.id),
+        Some(&expected.cwd),
+    )
+    .map_err(|e| e.to_string())?;
     if !same_read(path, &before, &after, stamp.as_deref()) {
         return Err("label_session_read_changed".to_owned());
     }

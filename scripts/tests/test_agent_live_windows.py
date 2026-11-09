@@ -309,6 +309,21 @@ class ShellForms(unittest.TestCase):
         self.assertEqual(ran.returncode, 7, ran.stderr)
         self.assertEqual(ran.stdout.decode().strip(), "a b None " + str(["one", "two words"]))
 
+    def test_a_launcher_keeps_an_account_a_start_named_under_its_folder(self):
+        private_directory(self.folder / "bin")
+        within = self.folder / "home"
+        program = launcher(self.folder / "bin/agent", [sys.executable, "-c",
+                                                       "import os; print(os.environ.get('ACCOUNT'))"],
+                           environment={"ACCOUNT": str(within / "default")}, keep=["ACCOUNT"], within=within)
+        for given, expected in ((str(within / "profile"), str(within / "profile")),
+                                (str(self.folder / "elsewhere"), str(within / "default")), (None, str(within / "default"))):
+            with self.subTest(given=given):
+                env = {key: value for key, value in os.environ.items() if key != "ACCOUNT"}
+                ran = subprocess.run([str(program)], capture_output=True, timeout=60,
+                                     env={**env, **({"ACCOUNT": given} if given else {})})
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual(ran.stdout.decode().strip(), expected)
+
     def test_a_launcher_refuses_what_cmd_would_reinterpret(self):
         private_directory(self.folder / "bin")
         for environment, argv in (({"ROUTE": "100%"}, [sys.executable]), ({}, [sys.executable, 'say "hi"'])):

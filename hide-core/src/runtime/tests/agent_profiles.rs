@@ -417,21 +417,21 @@ fn a_typed_start_holds_its_profile_until_its_agent_shows_and_frees_it_once_the_a
     start.hold().unwrap().typed("w1:p1");
     drop(start);
     // Typed, with no record and no row yet: it may run, so it holds.
-    runtime.apply_pane_launches(&[], scope, Some(&live));
+    runtime.apply_pane_launches(&mut [], scope, Some(&live));
     assert_eq!(in_use(&mut runtime), (1, 0));
     // Its record is written before its row shows: still held, never a gap.
     running(&mut runtime, "w1:p1", "p-work", "fix-bell");
     let rows = std::mem::take(&mut runtime.snapshot.navigator.agents);
-    runtime.apply_pane_launches(&[], scope, Some(&live));
+    runtime.apply_pane_launches(&mut [], scope, Some(&live));
     assert_eq!(in_use(&mut runtime), (1, 0));
     // Its row shows, described by the record: the row carries the use.
     runtime.snapshot.navigator.agents = rows.clone();
-    runtime.apply_pane_launches(&rows, scope, Some(&live));
+    runtime.apply_pane_launches(&mut rows.clone(), scope, Some(&live));
     assert_eq!(in_use(&mut runtime), (0, 1));
     // The agent ends and its pane keeps the shell: the record stays, and
     // the profile is free to remove without closing the pane.
     runtime.snapshot.navigator.agents.clear();
-    runtime.apply_pane_launches(&[], scope, Some(&live));
+    runtime.apply_pane_launches(&mut [], scope, Some(&live));
     assert!(
         runtime
             .snapshot
@@ -452,17 +452,17 @@ fn an_unconfirmed_start_holds_its_profile_until_its_pane_is_seen_gone() {
     // A pass that does not hold the whole topology proves nothing gone.
     let none = std::collections::HashSet::new();
     runtime.apply_pane_launches(
-        &[],
+        &mut [],
         crate::agent_state::ReadRecordScope::Retain,
         Some(&none),
     );
-    runtime.apply_pane_launches(&[], local, None);
+    runtime.apply_pane_launches(&mut [], local, None);
     assert_eq!(in_use(&mut runtime), (1, 0));
     let live: std::collections::HashSet<String> = ["w1:p2".to_owned()].into();
-    runtime.apply_pane_launches(&[], local, Some(&live));
+    runtime.apply_pane_launches(&mut [], local, Some(&live));
     assert_eq!(in_use(&mut runtime), (1, 0));
     // The machine's topology no longer has the pane: the start is over.
-    runtime.apply_pane_launches(&[], local, Some(&none));
+    runtime.apply_pane_launches(&mut [], local, Some(&none));
     assert_eq!(in_use(&mut runtime), (0, 0));
 }
 

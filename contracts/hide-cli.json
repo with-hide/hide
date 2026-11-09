@@ -212,6 +212,13 @@
                         "null"
                     ]
                 },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "project": {
                     "type": [
                         "string",
@@ -250,6 +257,7 @@
                 "parent",
                 "origin",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
@@ -553,6 +561,13 @@
                         "null"
                     ]
                 },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "project": {
                     "type": [
                         "string",
@@ -592,6 +607,7 @@
                 "parent",
                 "origin",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
@@ -681,6 +697,13 @@
                                 "null"
                             ]
                         },
+                        "profile": {
+                            "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "project": {
                             "type": [
                                 "string",
@@ -719,6 +742,7 @@
                         "parent",
                         "origin",
                         "project",
+                        "profile",
                         "runtime",
                         "connection",
                         "registered",
@@ -1395,6 +1419,13 @@
                         "null"
                     ]
                 },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "project": {
                     "type": [
                         "string",
@@ -1437,6 +1468,7 @@
                 "parent",
                 "origin",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
@@ -6493,7 +6525,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:5cbd30bac5cdc02aab702bcd860d9ec45ea327e1b7fdafdbd2a278a10ecacf28",
+    "digest": "sha256:cc697d232f460d8e7595ebad8ca69c1914cc02b5c35d8b22839a8399e2d7154f",
     "envelopes": {
         "agent": {
             "answer": "value",

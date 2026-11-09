@@ -84,6 +84,7 @@ impl NodeLink for Node {
                 agent,
                 path,
                 trusted: true,
+                ..
             } => {
                 self.trusted.lock().unwrap().push((agent, path));
                 Value::Null

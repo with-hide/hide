@@ -970,6 +970,21 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             ..Default::default()
         });
         confirmed.agents.push(agent);
+        // The woken pane's record is there before its agent shows, so the
+        // agent's session is read in its profile's account (B19).
+        let recorded = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .ui_state
+                .pane_launches
+                .get("w-order:t3:p")
+                .map(|record| (record.name.clone(), record.choice.clone()))
+        };
+        assert_eq!(
+            recorded(&runtime),
+            Some((wake_name.clone(), launch.clone())),
+            "{kind}"
+        );
         runtime.ingest_session(Ok(confirmed));
         assert!(runtime.snapshot.navigator.sleeping_sessions.is_empty());
         // The woken pane keeps the choice for the agent's next restart, the

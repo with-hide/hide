@@ -341,6 +341,17 @@ impl Runtime {
                 .map(str::to_owned);
             unreadable_moved |=
                 previous.and_then(|old| old.unreadable.as_deref()) != unreadable.as_deref();
+            // Every read of the agent's session is made in the account its
+            // profile names (PRD agent-profiles B19).
+            let account = self.pane_account(
+                &pane_id,
+                kind,
+                agent.name.as_deref(),
+                agent
+                    .agent_session
+                    .as_ref()
+                    .map(|reference| reference.value.as_str()),
+            );
             let session = session_kind
                 .filter(|kind| kind.has_session_file())
                 .zip(agent.agent_session.as_ref())
@@ -351,6 +362,7 @@ impl Runtime {
                 .map(|(agent_kind, reference)| {
                     hide_session::session_activity::SessionActivityRequest {
                         agent: agent_kind,
+                        account: account.clone(),
                         reference_kind: reference.kind.clone(),
                         reference_value: reference.value.clone(),
                         cwd: agent.cwd.clone().filter(|cwd| cwd.len() <= 4096),
@@ -404,7 +416,7 @@ impl Runtime {
                 hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 hide_typed_at_unix_ms: previous.map_or(0, |old| old.hide_typed_at_unix_ms),
                 session,
-                thread: super::session_thread::ThreadReference::of(agent),
+                thread: super::session_thread::ThreadReference::of(agent, account),
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
                     .map(str::to_owned),

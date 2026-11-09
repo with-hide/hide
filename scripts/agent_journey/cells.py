@@ -9,6 +9,7 @@ gave the screens (`journey_composer`).
 """
 
 import hashlib
+import os.path
 
 PASS, FAIL, NOT_MEASURED, NA, EXCLUDED, PENDING = "pass", "fail", "not measured", "N/A", "excluded", "pending"
 # A failed turn the agent never answered at all, after its prompt: the one
@@ -37,11 +38,21 @@ def assistant_after(events, after=0):
 
 # The contract's cell names in table order (contracts/agent-journey.json).
 CELLS = ("start", "start_untrusted", "launch_brief", "reply", "integration", "guidance_memory", "letter",
-         "letter_busy", "letter_menu", "composer", "sleep_wake", "resume", "fork", "title", "usage")
+         "letter_busy", "letter_menu", "composer", "sleep_wake", "resume", "fork", "title", "usage", "profile")
 # A cell that cannot be measured until another one passed: a fork, a title
 # and usage need a conversation with an answer in it.
 PREREQUISITE = {"reply": "start", "integration": "start", "guidance_memory": "start", "letter": "start",
-                "letter_busy": "letter", "letter_menu": "letter", "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply"}
+                "letter_busy": "letter", "letter_menu": "letter", "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply",
+                "profile": "start"}
+# The cells a profile's journey runs again in the profile's account (the
+# `profile` cell): its start and first reply, a letter, and Sleep, Wake and
+# the turn after it, each as the default account's runs.
+PROFILE_CELLS = ("start", "reply", "letter", "sleep_wake", "resume")
+# A real login is the operator's own account's, and a profile's account would
+# need one of its own: a signed-in run leaves the profile cell to the fake
+# model, whose files the run writes in the profile's account.
+REAL_LOGIN_PROFILE = ("a profile's account would need a login of its own; the run never signs in, "
+                      "and the fake model lane measures it")
 
 # Agents the operator took out of the journey (PRD D-45): every cell reads
 # excluded with the reason, never fail or not measured, and counts nowhere.
@@ -535,3 +546,36 @@ def resume_verdict(before, after, reply):
     if not before or before != after:
         return FAIL, f"native session changed across Wake ({before} -> {after})"
     return (PASS, "same session " + before + "; " + reply[1]) if reply[0] == PASS else reply
+
+
+def profile_verdict(measured, paths, folder):
+    """The profile cell: every cell of PROFILE_CELLS the adapter declares
+    passed in the profile's journey (`measured`, its table row), and each
+    session file Hide's reader read for it lies in the profile's account
+    `folder`. OpenCode's sessions are rows of the account's database, which
+    the reader reads in that account alone, and have no path to compare."""
+    for name in PROFILE_CELLS:
+        current = measured[name]
+        if current["status"] in (PASS, NA):
+            continue
+        status = FAIL if current["status"] == FAIL else NOT_MEASURED
+        return status, f"the profile's {name}: {current['status']}: {current['reason']}"
+    files = [path for path in paths if not path.startswith(OPENCODE_SESSION)]
+    if not paths:
+        return FAIL, "Hide's reader read no session of the profile"
+    outside = [path for path in files if not inside(path, folder)]
+    if outside:
+        return FAIL, f"Hide read the profile's session {outside[0]} outside its account {folder}"
+    return PASS, f"started, answered a letter and woke in {folder}"
+
+
+# How Hide's reader names an OpenCode session (hide_session::links::OPENCODE_PREFIX).
+OPENCODE_SESSION = "opencode/"
+
+
+def inside(path, folder):
+    """Whether `path` lies in `folder`, every link resolved, as the system
+    compares names (without case on Windows and macOS's default volume, so
+    by the resolved names)."""
+    path, folder = os.path.realpath(path), os.path.realpath(folder)
+    return os.path.commonpath([os.path.normcase(path), os.path.normcase(folder)]) == os.path.normcase(folder)

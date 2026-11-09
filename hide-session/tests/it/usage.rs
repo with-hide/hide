@@ -54,7 +54,12 @@ fn antigravity_usage() {
         "{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-01T12:00:00Z\",\"content\":\"PRIVATE_BODY_SENTINEL\"}\n",
         "{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-01T12:00:01Z\",\"input_tokens\":2525,\"cache_read_tokens\":15528,\"output_tokens\":100,\"content\":\"PRIVATE_BODY_SENTINEL\"}\n",
     )).unwrap();
-    let listed = usage::list(home.path(), Agent::Antigravity, 0).unwrap();
+    let listed = usage::list(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Antigravity,
+        0,
+    )
+    .unwrap();
     assert_eq!(listed.files.len(), 1);
     let (events, checkpoint) = usage_drain(home.path(), Agent::Antigravity, &file, None);
     assert_eq!(events.len(), 1);
@@ -71,10 +76,15 @@ fn antigravity_usage() {
     assert_eq!(event.recorded_cost_micro_usd, None);
     assert!(!format!("{event:?}").contains("PRIVATE_BODY_SENTINEL"));
     assert!(
-        usage::read(home.path(), Agent::Antigravity, &file, Some(checkpoint))
-            .unwrap()
-            .events
-            .is_empty()
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Antigravity,
+            &file,
+            Some(checkpoint)
+        )
+        .unwrap()
+        .events
+        .is_empty()
     );
 }
 
@@ -146,7 +156,13 @@ fn a_busy_agy_index_refuses_the_read_and_the_next_read_places_the_checkout() {
     holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
 
     assert_eq!(
-        usage::read(home.path(), Agent::Antigravity, &file, None).unwrap_err(),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Antigravity,
+            &file,
+            None
+        )
+        .unwrap_err(),
         usage::Refusal::Database
     );
 
@@ -160,7 +176,8 @@ fn a_busy_agy_index_refuses_the_read_and_the_next_read_places_the_checkout() {
 
 fn pi_or_omp_usage(agent: Agent) {
     let home = tempfile::tempdir().unwrap();
-    let root = hide_session::session_root(home.path(), agent).unwrap();
+    let root =
+        hide_session::session_root(&hide_session::Accounts::new(home.path()), agent).unwrap();
     fs::create_dir_all(&root).unwrap();
     let file = root.join("session.jsonl");
     fs::write(&file, concat!(
@@ -188,10 +205,15 @@ fn pi_or_omp_usage(agent: Agent) {
         event.key
     );
     assert!(
-        usage::read(home.path(), agent, &file, Some(checkpoint))
-            .unwrap()
-            .events
-            .is_empty()
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            agent,
+            &file,
+            Some(checkpoint)
+        )
+        .unwrap()
+        .events
+        .is_empty()
     );
 }
 
@@ -201,7 +223,12 @@ fn usage_opencode_refuses_oversized_identifiers_before_materializing_them() {
     let (path, db) = opencode_fixture(home.path());
     opencode_message(&db, &"x".repeat(129), true, 100);
     assert!(matches!(
-        usage::read(home.path(), Agent::OpenCode, &path, None),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            None
+        ),
         Err(usage::Refusal::Database)
     ));
     db.execute("DELETE FROM message", []).unwrap();
@@ -210,7 +237,12 @@ fn usage_opencode_refuses_oversized_identifiers_before_materializing_them() {
     db.execute("UPDATE message SET session_id=?1", ["s".repeat(129)])
         .unwrap();
     assert!(matches!(
-        usage::read(home.path(), Agent::OpenCode, &path, None),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            None
+        ),
         Err(usage::Refusal::Database)
     ));
     db.execute(
@@ -220,7 +252,12 @@ fn usage_opencode_refuses_oversized_identifiers_before_materializing_them() {
     .unwrap();
     opencode_part(&db, &"p".repeat(129), "valid", Some(0.1));
     assert!(matches!(
-        usage::read(home.path(), Agent::OpenCode, &path, None),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            None
+        ),
         Err(usage::Refusal::Database)
     ));
 }
@@ -337,7 +374,12 @@ fn usage_opencode_wal_reader_role() {
     let path = home.join(".local/share/opencode/opencode.db");
     if !path.with_extension("db-shm").exists() {
         assert!(matches!(
-            usage::read(&home, Agent::OpenCode, &path, None),
+            usage::read(
+                &hide_session::Accounts::new(&home),
+                Agent::OpenCode,
+                &path,
+                None
+            ),
             Err(usage::Refusal::Database)
         ));
         return;
@@ -355,11 +397,23 @@ fn usage_rewritten_file_rescans_and_large_batches_resume_without_loss() {
     fs::create_dir_all(&root).unwrap();
     let path = root.join("rewrite.jsonl");
     fs::write(&path, CLAUDE).unwrap();
-    let first = usage::read(home.path(), Agent::Claude, &path, None).unwrap();
+    let first = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        None,
+    )
+    .unwrap();
     // Rewrite the same inode and length, then grow it. A size-only resume
     // would miss the changed first event entirely.
     fs::write(&path, CLAUDE.replace("request-a", "request-b") + CLAUDE).unwrap();
-    let rewritten = usage::read(home.path(), Agent::Claude, &path, Some(first.checkpoint)).unwrap();
+    let rewritten = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        Some(first.checkpoint),
+    )
+    .unwrap();
     assert!(rewritten.rescanned);
     let mut rewritten_events = rewritten.events;
     if rewritten.has_more {
@@ -385,7 +439,13 @@ fn usage_rewritten_file_rescans_and_large_batches_resume_without_loss() {
     let mut count = 0;
     let mut steps = 0;
     loop {
-        let step = usage::read(home.path(), Agent::Claude, &path, saved).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Claude,
+            &path,
+            saved,
+        )
+        .unwrap();
         assert!(step.events.len() <= 8192);
         assert!(step.read_bytes <= 1024 * 1024);
         count += step.events.len();
@@ -408,7 +468,13 @@ fn usage_read_resumes_torn_records_without_persisting_their_body() {
     let path = root.join("session.jsonl");
     let split = CLAUDE.len() - 20;
     fs::write(&path, &CLAUDE[..split]).unwrap();
-    let first = usage::read(home.path(), Agent::Claude, &path, None).unwrap();
+    let first = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        None,
+    )
+    .unwrap();
     assert!(first.events.is_empty());
     assert!(!first.has_more);
     assert_eq!(first.checkpoint.offset, 0);
@@ -421,7 +487,7 @@ fn usage_read_resumes_torn_records_without_persisting_their_body() {
         .write_all(&CLAUDE.as_bytes()[split..])
         .unwrap();
     let second = usage::read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         Agent::Claude,
         &path,
         Some(serde_json::from_str(&checkpoint).unwrap()),
@@ -444,7 +510,13 @@ fn usage_read_resumes_torn_records_without_persisting_their_body() {
             .unwrap()
             .contains("PRIVATE_BODY_SENTINEL")
     );
-    let third = usage::read(home.path(), Agent::Claude, &path, Some(second.checkpoint)).unwrap();
+    let third = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        Some(second.checkpoint),
+    )
+    .unwrap();
     assert!(third.events.is_empty());
 }
 
@@ -461,8 +533,20 @@ fn usage_native_identity_survives_file_copy_and_streaming_updates() {
         CLAUDE.replace("\"output_tokens\":5", "\"output_tokens\":8"),
     )
     .unwrap();
-    let a = usage::read(home.path(), Agent::Claude, &a, None).unwrap();
-    let b = usage::read(home.path(), Agent::Claude, &b, None).unwrap();
+    let a = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &a,
+        None,
+    )
+    .unwrap();
+    let b = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &b,
+        None,
+    )
+    .unwrap();
     assert_eq!(a.events[0].key, b.events[0].key);
     assert_eq!(b.events[0].tokens.output, 8);
 }
@@ -477,13 +561,25 @@ fn usage_oversized_record_advances_in_bounded_steps_and_reports_its_loss() {
     bytes.push(b'\n');
     bytes.extend_from_slice(CLAUDE.as_bytes());
     fs::write(&path, bytes).unwrap();
-    let first = usage::read(home.path(), Agent::Claude, &path, None).unwrap();
+    let first = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        None,
+    )
+    .unwrap();
     assert!(first.read_bytes <= 1024 * 1024);
     assert_eq!(first.skipped.get("record_capacity"), Some(&1));
     assert_eq!(first.skipped.len(), 1);
     assert!(first.events.is_empty());
     assert!(first.has_more);
-    let second = usage::read(home.path(), Agent::Claude, &path, Some(first.checkpoint)).unwrap();
+    let second = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        Some(first.checkpoint),
+    )
+    .unwrap();
     assert!(second.read_bytes <= 1024 * 1024);
     assert!(second.events.is_empty());
     assert!(second.skipped.is_empty());
@@ -506,7 +602,13 @@ fn usage_oversized_record_advances_in_bounded_steps_and_reports_its_loss() {
         (10, 5, 100, 20, 4)
     );
     assert_eq!(serde_json::to_value(&checkpoint).unwrap()["finished"], true);
-    let eof = usage::read(home.path(), Agent::Claude, &path, Some(checkpoint)).unwrap();
+    let eof = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Claude,
+        &path,
+        Some(checkpoint),
+    )
+    .unwrap();
     assert!(eof.events.is_empty());
     assert!(eof.skipped.is_empty());
     assert!(!eof.has_more);
@@ -522,7 +624,7 @@ fn usage_discovery_includes_subagents_and_archived_sessions_and_refuses_escape()
     fs::create_dir_all(child.parent().unwrap()).unwrap();
     fs::write(&child, CLAUDE).unwrap();
     assert_eq!(
-        usage::list(home.path(), Agent::Claude, 0)
+        usage::list(&hide_session::Accounts::new(home.path()), Agent::Claude, 0)
             .unwrap()
             .files
             .len(),
@@ -532,14 +634,20 @@ fn usage_discovery_includes_subagents_and_archived_sessions_and_refuses_escape()
     fs::create_dir_all(archive.parent().unwrap()).unwrap();
     fs::write(&archive, "").unwrap();
     assert_eq!(
-        usage::list(home.path(), Agent::Codex, 0)
+        usage::list(&hide_session::Accounts::new(home.path()), Agent::Codex, 0)
             .unwrap()
             .files
             .len(),
         1
     );
     assert_eq!(
-        usage::read(home.path(), Agent::Claude, &archive, None).unwrap_err(),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Claude,
+            &archive,
+            None
+        )
+        .unwrap_err(),
         usage::Refusal::OutsideRoot
     );
 }
@@ -582,7 +690,13 @@ fn usage_grok_parent_includes_children_and_partial_cost_is_unknown() {
             dir.join("updates.jsonl"),
         )
         .unwrap();
-        let step = usage::read(home.path(), Agent::Grok, &dir.join("updates.jsonl"), None).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Grok,
+            &dir.join("updates.jsonl"),
+            None,
+        )
+        .unwrap();
         events.extend(step.events);
     }
     // The parent's own PromptUsage is the oracle, not parent + child usage.
@@ -605,8 +719,13 @@ fn usage_grok_parent_includes_children_and_partial_cost_is_unknown() {
         let mut record: serde_json::Value = serde_json::from_str(&original).unwrap();
         record["params"]["update"]["usage"][flag] = true.into();
         fs::write(dir.join("updates.jsonl"), format!("{record}\n")).unwrap();
-        let partial =
-            usage::read(home.path(), Agent::Grok, &dir.join("updates.jsonl"), None).unwrap();
+        let partial = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Grok,
+            &dir.join("updates.jsonl"),
+            None,
+        )
+        .unwrap();
         assert_eq!(partial.events[0].tokens, event.tokens);
         assert!(partial.events[0].incomplete);
         assert_eq!(partial.events[0].recorded_cost_micro_usd, None);
@@ -659,7 +778,13 @@ fn usage_codex_legacy_fork_is_reported_and_synthetic_totals_never_count() {
     let mut saved = None;
     let mut missing_boundary = 0;
     for page in 0..100 {
-        let step = usage::read(home.path(), Agent::Codex, &path, saved).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Codex,
+            &path,
+            saved,
+        )
+        .unwrap();
         assert!(step.read_bytes <= 1024 * 1024);
         assert!(step.events.is_empty());
         assert!(
@@ -746,7 +871,7 @@ fn usage_drain(
     let mut saved = checkpoint;
     let mut events = Vec::new();
     for _ in 0..100 {
-        let step = usage::read(home, agent, path, saved).unwrap();
+        let step = usage::read(&hide_session::Accounts::new(home), agent, path, saved).unwrap();
         assert!(step.read_bytes <= 1024 * 1024);
         assert!(step.skipped.is_empty(), "{:?}", step.skipped);
         assert!(
@@ -833,7 +958,13 @@ fn usage_opencode_rows_past_the_read_limit_are_skipped_as_capacity_and_the_rest_
     let mut events = Vec::new();
     let mut skipped = std::collections::BTreeMap::<String, u64>::new();
     for _ in 0..100 {
-        let step = usage::read(home.path(), Agent::OpenCode, &path, saved).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            saved,
+        )
+        .unwrap();
         assert!(step.read_bytes <= 1024 * 1024);
         events.extend(step.events);
         for (reason, count) in step.skipped {
@@ -862,7 +993,13 @@ fn usage_opencode_vacuum_rescans_without_changing_native_event_identity() {
     opencode_part(&db, "part-a", "msg-a", Some(0.1));
     let (first, checkpoint) = usage_drain(home.path(), Agent::OpenCode, &path, None);
     db.execute_batch("VACUUM").unwrap();
-    let next = usage::read(home.path(), Agent::OpenCode, &path, Some(checkpoint)).unwrap();
+    let next = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::OpenCode,
+        &path,
+        Some(checkpoint),
+    )
+    .unwrap();
     assert!(next.rescanned);
     let mut events = next.events;
     if next.has_more {
@@ -990,7 +1127,13 @@ fn usage_opencode_2_step_without_usage_or_past_the_read_limit_is_skipped_and_the
     let mut events = Vec::new();
     let mut skipped = std::collections::BTreeMap::<String, u64>::new();
     for _ in 0..100 {
-        let step = usage::read(home.path(), Agent::OpenCode, &path, saved).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            saved,
+        )
+        .unwrap();
         assert!(step.read_bytes <= 1024 * 1024);
         events.extend(step.events);
         for (reason, count) in step.skipped {
@@ -1060,7 +1203,13 @@ fn usage_opencode_2_rows_past_the_read_total_are_read_by_the_next_read() {
     let mut all = Vec::new();
     for read in 1.. {
         assert!(read <= 8, "the reads did not finish");
-        let step = usage::read(home.path(), Agent::OpenCode, &path, saved).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            saved,
+        )
+        .unwrap();
         assert!(step.skipped.is_empty(), "{:?}", step.skipped);
         assert!(
             step.events.len() <= 2,
@@ -1110,7 +1259,13 @@ fn usage_opencode_2_vacuum_rescans_without_changing_native_event_identity() {
     opencode_2_step(&db, "msg-a", true, 100, 0.1);
     let (first, checkpoint) = usage_drain(home.path(), Agent::OpenCode, &path, None);
     db.execute_batch("VACUUM").unwrap();
-    let next = usage::read(home.path(), Agent::OpenCode, &path, Some(checkpoint)).unwrap();
+    let next = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::OpenCode,
+        &path,
+        Some(checkpoint),
+    )
+    .unwrap();
     assert!(next.rescanned);
     let mut events = next.events;
     if next.has_more {
@@ -1230,7 +1385,12 @@ fn usage_opencode_2_database_with_only_part_of_the_1x_history_is_refused_as_its_
     db.execute_batch("CREATE TABLE message (id text PRIMARY KEY, data text);")
         .unwrap();
     assert!(matches!(
-        usage::read(home.path(), Agent::OpenCode, &path, None),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            None
+        ),
         Err(usage::Refusal::Schema)
     ));
 }
@@ -1308,16 +1468,25 @@ fn usage_opencode_data_home_role() {
     let home = std::path::PathBuf::from(home);
     if expect == "refused" {
         let refused = usage::Refusal::Environment;
-        assert_eq!(usage::list(&home, Agent::OpenCode, 0).unwrap_err(), refused);
+        assert_eq!(
+            usage::list(&hide_session::Accounts::new(&home), Agent::OpenCode, 0).unwrap_err(),
+            refused
+        );
         let database = home.join(".local/share/opencode/opencode.db");
         assert_eq!(
-            usage::read(&home, Agent::OpenCode, &database, None).unwrap_err(),
+            usage::read(
+                &hide_session::Accounts::new(&home),
+                Agent::OpenCode,
+                &database,
+                None
+            )
+            .unwrap_err(),
             refused
         );
         assert_eq!(refused.to_string(), "usage_read_Environment");
         return;
     }
-    let listed = usage::list(&home, Agent::OpenCode, 0).unwrap();
+    let listed = usage::list(&hide_session::Accounts::new(&home), Agent::OpenCode, 0).unwrap();
     assert_eq!(listed.files.len(), 1);
     let path = std::path::PathBuf::from(&listed.files[0].path);
     let (events, _) = usage_drain(&home, Agent::OpenCode, &path, None);
@@ -1338,7 +1507,12 @@ fn usage_opencode_database_of_neither_schema_is_refused_with_its_own_reason() {
         .execute_batch("CREATE TABLE sample (value);")
         .unwrap();
     assert!(matches!(
-        usage::read(home.path(), Agent::OpenCode, &path, None),
+        usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::OpenCode,
+            &path,
+            None
+        ),
         Err(usage::Refusal::Schema)
     ));
 }
@@ -1368,7 +1542,13 @@ fn a_grok_summary_leaves_every_step_room_for_a_whole_record_or_is_refused() {
     };
 
     summary(largest);
-    let step = usage::read(home.path(), Agent::Grok, &updates, None).unwrap();
+    let step = usage::read(
+        &hide_session::Accounts::new(home.path()),
+        Agent::Grok,
+        &updates,
+        None,
+    )
+    .unwrap();
     assert_eq!(step.checkpoint.offset, record.len() as u64);
     assert!(!step.has_more);
     assert!(step.read_bytes <= MIB, "{} bytes read", step.read_bytes);
@@ -1378,7 +1558,13 @@ fn a_grok_summary_leaves_every_step_room_for_a_whole_record_or_is_refused() {
     for bytes in [largest + 1, 900 * 1024, MIB - 1024, MIB] {
         summary(bytes);
         assert_eq!(
-            usage::read(home.path(), Agent::Grok, &updates, None).unwrap_err(),
+            usage::read(
+                &hide_session::Accounts::new(home.path()),
+                Agent::Grok,
+                &updates,
+                None
+            )
+            .unwrap_err(),
             usage::Refusal::Capacity,
             "a {bytes}-byte summary"
         );

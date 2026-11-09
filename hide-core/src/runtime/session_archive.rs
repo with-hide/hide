@@ -1591,7 +1591,7 @@ impl Runtime {
             },
             false,
             member.cwd.clone(),
-            member.profile.as_ref(),
+            super::projects::StartProfile::Recorded(member.profile.as_ref()),
         );
         if let Some(operation) = self
             .snapshot

@@ -1882,6 +1882,13 @@ impl Mobile {
         &self.config.home
     }
 
+    /// The accounts this machine's node reads sessions in, its profiles'
+    /// included (`hide_host::profiles::session_accounts`): the phone reads
+    /// a conversation in one of them and nowhere else.
+    pub fn session_accounts(&self) -> std::sync::Arc<hide_session::Accounts> {
+        hide_host::profiles::session_accounts(Some(&self.config.state_dir), &self.config.home)
+    }
+
     /// Tells the core the operator submitted a reply to `pane_id` from the
     /// phone, so the message it writes reads as theirs (PRD
     /// overview-request-view D-19). A refusal only loses that attribution.

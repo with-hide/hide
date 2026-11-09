@@ -165,15 +165,17 @@ The agents' sequences start again with the daemon, so the engine keeps every tok
 
 A record saved on another engine is carried over instead of compared.
 Each record holds its verdict (`PaneReadRecord::unread`), saved whenever it flips, and until the pane settles on the new engine the row keeps that verdict.
-The first time the pane settles on the connection, a read record moves to the new engine unless the pane shows something the operator had not read: another known agent session, a demand it did not have, or a change between working and stopped.
+The first time the pane settles on the connection, a read record takes the new engine's mark and sequence and keeps everything else the operator read, and from then on it is judged like any record read on that engine: the row is unread while it shows something the record does not cover (another known agent session, a demand it did not have, a change between working and stopped), and read again if that goes away at the same sequence.
+Nothing is decided from that first settled state alone, because it can still be on its way.
+On 2026-11-09 a started daemon laid label summaries before its first usage read told it Hide AI was paused, so three read panes whose labels ended on a question showed that question for a moment, and a verdict taken once from that moment kept them unread until the operator read them again, on every restart.
 A completion the restored engine reports again is the one the record held, so a restored agent that reports `done` again stays read.
 An unread record stays unread through the restore and is decided again only when the operator reads the pane.
 Running the same pass twice changes nothing, and a second restart starts from the records the first one left.
-A record saved while its pane was still being restored (the operator looked during those steps) is carried the same way once the pane settles.
+A record saved while its pane was still being restored (the operator looked during those steps) holds no state to compare, so it takes what the pane settles on as read.
 Records written before this rule name no engine, so Hide cannot tell which one they were read on; each is judged by sequence as before the first time its pane settles and then names that engine.
 Reading such a record as read on a guess would lose news, so an upgrade whose first connection reaches a restored pane with such a record can show a read row unread once.
 
-Regression owners: `a_read_pane_stays_read_through_a_restored_servers_steps`, `a_restored_pane_reporting_done_again_stays_read`, `a_pane_unread_before_a_restart_stays_unread`, `a_restored_pane_showing_something_new_is_unread`, `a_hide_restart_on_the_same_server_shows_work_done_while_away`, `a_childs_signal_through_a_restore_lights_its_parent_only_when_new` and `a_record_saved_before_servers_were_named_is_judged_by_sequence_once` in `sidebar.rs`, `a_device_pane_read_before_its_server_restarts_stays_read` for a device, `a_server_mark_is_written_once_and_rides_with_lineage_keys` for the writer, and `web/e2e/read-across-restart.spec.ts` against a real restart of hided.
+Regression owners: `a_read_pane_stays_read_through_a_restored_servers_steps`, `a_restored_pane_is_read_by_what_it_rests_on_not_its_first_settled_state`, `a_restored_pane_reporting_done_again_stays_read`, `a_pane_unread_before_a_restart_stays_unread`, `a_restored_pane_showing_something_new_is_unread`, `a_hide_restart_on_the_same_server_shows_work_done_while_away`, `a_childs_signal_through_a_restore_lights_its_parent_only_when_new` and `a_record_saved_before_servers_were_named_is_judged_by_sequence_once` in `sidebar.rs`, `a_device_pane_read_before_its_server_restarts_stays_read` for a device, `a_server_mark_is_written_once_and_rides_with_lineage_keys` for the writer, and `web/e2e/read-across-restart.spec.ts` against a real restart of hided.
 
 ## Completion is separate from stopped
 
@@ -186,6 +188,8 @@ The engine's done/idle distinction supplies completion evidence only; Hide's own
 
 A completion is news only when it appears.
 A record that holds a completion the row no longer shows still covers the row: a completion goes away only when the agent works again, which its own change already says, or when a restarted engine no longer reports it.
+A demand is the same: one the row no longer shows is a question answered, whose work moves the sequence, or a label summary withheld while Hide AI is paused or summaries are off, and neither is anything to look at; a demand that appears, or turns into another, is news.
+A session the row cannot name yet is no other session: another session is news only when the record and the row both name one.
 Any other change to the fingerprint (the agent working again, a state change between two looks, another session in the pane) still turns the row unread.
 Regression owners: `a_read_demand_stays_read_when_the_engine_marks_its_tab_seen_after_focus_left` and `a_read_demand_turns_unread_again_only_for_news` in `sidebar.rs`, and `web/e2e/blocked-state.spec.ts`, which finishes a blocked and an unfinished turn after the operator moved on.
 

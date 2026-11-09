@@ -113,12 +113,20 @@ pub struct LaunchTarget {
 
 /// An account's identity: the value set into the agent's account variable,
 /// as set, or none for the default. Two profiles with one key are one account.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountKey {
+    #[default]
     Default,
     Folder(String),
     Name(String),
+}
+
+impl AccountKey {
+    /// The agent's default account, which a wire field leaves out.
+    pub fn is_default(&self) -> bool {
+        *self == Self::Default
+    }
 }
 
 /// One feature's place in an account.

@@ -65,7 +65,9 @@ pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
-pub use targets::{KitProfiles, ProfilePlace, ProfileReport, ProfileSource, prepare_account};
+pub use targets::{
+    KitProfiles, ProfilePlace, ProfileReport, ProfileSource, prepare_account, trust_writable,
+};
 
 /// What a retirement took off one machine.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

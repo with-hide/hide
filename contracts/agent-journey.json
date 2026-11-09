@@ -33,20 +33,24 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": true
     },
     "letter": "bell",
     "busy_letter": [
       "bell"
     ],
     "stop_observer": null,
+    "account_vars": [
+      "CLAUDE_CONFIG_DIR"
+    ],
     "input": [
       "launch_prompt",
       "typed"
     ],
     "wake": "pane",
     "title": "automatic",
-    "request_budget": 27,
+    "request_budget": 36,
     "fake_home": {
       "status": "proven",
       "key_env": "ANTHROPIC_API_KEY",
@@ -99,20 +103,24 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": true
     },
     "letter": "bell",
     "busy_letter": [
       "bell"
     ],
     "stop_observer": null,
+    "account_vars": [
+      "CODEX_HOME"
+    ],
     "input": [
       "launch_prompt",
       "typed"
     ],
     "wake": "pane",
     "title": "automatic",
-    "request_budget": 30,
+    "request_budget": 39,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -164,7 +172,8 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": true
     },
     "letter": "bell",
     "busy_letter": [
@@ -176,13 +185,16 @@
       "hooks",
       "journey-stop-observer.json"
     ],
+    "account_vars": [
+      "GROK_HOME"
+    ],
     "input": [
       "launch_prompt",
       "typed"
     ],
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 32,
+    "request_budget": 44,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -229,17 +241,23 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": true
     },
     "letter": "next_prompt",
     "busy_letter": [],
     "stop_observer": null,
+    "account_vars": [
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_STATE_HOME"
+    ],
     "input": [
       "typed"
     ],
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 18,
+    "request_budget": 27,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -291,11 +309,15 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": true
     },
     "letter": "next_prompt",
     "busy_letter": [],
     "stop_observer": null,
+    "account_vars": [
+      "PI_CODING_AGENT_DIR"
+    ],
     "input": [
       "typed"
     ],
@@ -303,7 +325,7 @@
     "title": {
       "named": "/name"
     },
-    "request_budget": 18,
+    "request_budget": 27,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -355,18 +377,22 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": true
     },
     "letter": "next_prompt",
     "busy_letter": [],
     "stop_observer": null,
+    "account_vars": [
+      "OMP_PROFILE"
+    ],
     "input": [
       "launch_prompt",
       "typed"
     ],
     "wake": "sleeping_session",
     "title": "automatic",
-    "request_budget": 21,
+    "request_budget": 30,
     "fake_home": {
       "status": "proven",
       "key_env": "JOURNEY_FAKE_KEY",
@@ -419,11 +445,13 @@
       "resume": true,
       "fork": true,
       "title": true,
-      "usage": true
+      "usage": true,
+      "profile": false
     },
     "letter": "next_prompt",
     "busy_letter": [],
     "stop_observer": null,
+    "account_vars": [],
     "input": [
       "launch_prompt",
       "typed"

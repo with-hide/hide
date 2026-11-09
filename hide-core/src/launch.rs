@@ -56,6 +56,14 @@ pub struct LaunchProfile {
     pub account: AccountKey,
 }
 
+impl LaunchProfile {
+    /// The account an agent run with `profile` reads its sessions in: the
+    /// default account for the built-in default (`None`).
+    pub(crate) fn account_of(profile: Option<&Self>) -> AccountKey {
+        profile.map_or_else(AccountKey::default, |profile| profile.account.clone())
+    }
+}
+
 /// `name`, a profile of the `kind` agent, as the operator reads it named
 /// after its agent (`Claude · work`): `hide agent list`, `show` and the start
 /// line say it so; a row carries the name alone, for the mark beside its logo.
@@ -498,6 +506,98 @@ pub(crate) fn exec_start(
         );
     }
     ExecProfile::Ready(ready)
+}
+
+/// Two accounts' stores on the session's machine hold the session a resume
+/// names, so no one account can resume it.
+pub(crate) const SESSION_ACCOUNT_AMBIGUOUS: &str = "session_account_ambiguous";
+/// The session's machine did not say which of its accounts holds the
+/// session a resume names.
+pub(crate) const SESSION_ACCOUNT_UNANSWERED: &str = "session_account_unanswered";
+/// A resume names its session by id alone while the session's machine keeps
+/// another account for the agent besides the default.
+pub(crate) const SESSION_ACCOUNT_UNPROVEN: &str = "session_account_unproven";
+
+/// The account `node`, the machine that holds the `kind` session
+/// `reference` names, registered and holds it in
+/// (`Call::SessionAccount`, PRD agent-profiles B19), with the runtime lock
+/// released: what a resume of a session line or record, which names no
+/// account, runs in. A node the core admits on the older protocol keeps no
+/// profile, so its sessions are the default account's; any other node that
+/// does not answer starts nothing, never the default account in its place.
+pub(crate) fn session_account(
+    node: &dyn NodeLink,
+    kind: &str,
+    reference: &crate::sidebar::SessionAgentSessionPayload,
+) -> Result<AccountKey, Refusal> {
+    let refused = |code, detail: String| Refusal { code, detail };
+    let agent = hide_session::Agent::from_kind(kind).ok_or_else(|| {
+        refused(
+            SESSION_ACCOUNT_UNANSWERED,
+            format!("{} keeps no session Hide reads", label(kind)),
+        )
+    })?;
+    let answer = crate::node_access::call_as::<AccountKey>(
+        node,
+        hide_node_link::protocol::Call::SessionAccount {
+            request: hide_session::session_account::SessionAccountRequest {
+                agent,
+                reference_kind: reference.kind.clone(),
+                reference_value: reference.value.clone(),
+            },
+        },
+        LAUNCH_TIMEOUT,
+    );
+    match answer {
+        Ok(account) => Ok(account),
+        Err(LinkError::Refused(error))
+            if matches!(
+                error.code,
+                ErrorCode::InvalidRequest | ErrorCode::Unsupported
+            ) && node.predates_current_protocol() =>
+        {
+            Ok(AccountKey::Default)
+        }
+        Err(error) => {
+            let reason = match &error {
+                LinkError::Refused(refusal) => Some(refusal.message.as_str()),
+                _ => None,
+            };
+            crate::diagnostic!(serde_json::json!({
+                "component": "launch",
+                "kind": "session_account.unanswered",
+                "agent": kind,
+                "reason": error.to_string(),
+            }));
+            Err(
+                if reason == Some(hide_session::session_account::AMBIGUOUS) {
+                    refused(
+                        SESSION_ACCOUNT_AMBIGUOUS,
+                        format!(
+                            "{} was not resumed: two of its accounts on this machine hold the session",
+                            label(kind)
+                        ),
+                    )
+                } else if reason == Some(hide_session::session_account::UNPROVEN) {
+                    refused(
+                        SESSION_ACCOUNT_UNPROVEN,
+                        format!(
+                            "{} was not resumed: it keeps more than one account on this machine, and the session names no file",
+                            label(kind)
+                        ),
+                    )
+                } else {
+                    refused(
+                        SESSION_ACCOUNT_UNANSWERED,
+                        format!(
+                            "{} was not resumed: its machine did not say which account holds the session",
+                            label(kind)
+                        ),
+                    )
+                },
+            )
+        }
+    }
 }
 
 /// What a new start's parent says of the profile the start runs with
