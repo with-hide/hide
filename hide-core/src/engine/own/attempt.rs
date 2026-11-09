@@ -64,6 +64,9 @@ pub(super) const ABANDONED: &str = "abandoned";
 #[derive(Clone, Debug)]
 pub(super) struct Attempt {
     pub(super) id: String,
+    /// The profile, and its version, the start was checked with: what its
+    /// executor's ask is answered from ([`Self::asked`]).
+    checked: crate::launch::ExecAttempt,
     /// The claim of the start it belongs to: a failure withdraws the
     /// provisional agent of this claim alone.
     pub(super) claim: Arc<()>,
@@ -90,9 +93,10 @@ pub(super) enum Look {
 }
 
 impl Attempt {
-    pub(super) fn new(id: String, claim: Arc<()>) -> Self {
+    pub(super) fn new(checked: crate::launch::ExecAttempt, claim: Arc<()>) -> Self {
         Self {
-            id,
+            id: checked.id.clone(),
+            checked,
             claim,
             executor: None,
             child: None,
@@ -119,6 +123,20 @@ impl Attempt {
                 child: self.child,
             },
         }
+    }
+
+    /// What its executor asks before it checks its program
+    /// (`AgentExecEvent::Profile`): the profile the start was checked with,
+    /// only while it runs and before its `Ready`, so a line that runs after
+    /// its start ended, or past its `Ready`, is handed nothing.
+    pub(super) fn asked(&self, id: &str) -> Result<crate::launch::ExecAttempt, &'static str> {
+        if id != self.id || self.outcome.is_some() {
+            return Err(ATTEMPT_UNKNOWN);
+        }
+        if self.executor.is_some() {
+            return Err(ATTEMPT_MISMATCH);
+        }
+        Ok(self.checked.clone())
     }
 
     /// Takes `report`, refused unless it names this attempt while it runs
@@ -254,7 +272,7 @@ impl Drop for Finish<'_, '_> {
 mod tests {
     use super::*;
 
-    const ID: &str = "1794175536904-d976a9485d217ccbe6a55d4704337678";
+    const ID: &str = "d976a9485d217ccb";
     const EXECUTOR: ExecProcess = ExecProcess {
         pid: 77,
         started: 5,
@@ -268,8 +286,35 @@ mod tests {
         }
     }
 
+    fn checked() -> crate::launch::ExecAttempt {
+        crate::launch::ExecAttempt {
+            id: ID.to_owned(),
+            kind: "claude".to_owned(),
+            profile: hide_agent_adapter::ProfileId("p-0123456789abcdef".to_owned()),
+            name: "work".to_owned(),
+            version: 3,
+        }
+    }
+
     fn attempt() -> Attempt {
-        Attempt::new(ID.to_owned(), Arc::new(()))
+        Attempt::new(checked(), Arc::new(()))
+    }
+
+    /// Its executor is handed the profile the start was checked with only
+    /// while it runs and before its `Ready`: a line that runs after its
+    /// start ended, or a second executor past the `Ready`, is handed none.
+    #[test]
+    fn an_executor_is_handed_the_checked_profile_only_while_its_attempt_runs_before_its_ready() {
+        let mut attempt = attempt();
+        assert_eq!(attempt.asked(ID), Ok(checked()));
+        assert_eq!(attempt.asked("0123456789abcdef"), Err(ATTEMPT_UNKNOWN));
+        attempt
+            .report(&report(AgentExecEvent::Ready, EXECUTOR))
+            .unwrap();
+        assert_eq!(attempt.asked(ID), Err(ATTEMPT_MISMATCH));
+        let mut ended = self::attempt();
+        ended.settle(Outcome::Unconfirmed { why: DEADLINE });
+        assert_eq!(ended.asked(ID), Err(ATTEMPT_UNKNOWN));
     }
 
     #[test]
@@ -380,8 +425,8 @@ mod tests {
             "exec",
             "--attempt",
             ID,
-            "--profile",
-            "p",
+            "--",
+            "claude",
         ];
         assert_eq!(
             seen(ID, EXECUTOR, None, read(5, &executor)),

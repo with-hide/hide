@@ -2,7 +2,7 @@ import type { Catalog, Catalogs } from "../schema";
 
 // Desk (PRD session-docs-and-assistant, Desk 1차): the chat, its bar and
 // composer, the job and approval cards, the @ menu, the Threads list, a
-// thread, the outputs, the Desk lane and Settings › Desk. The Korean is the
+// thread, the outputs, the Desk lane and Settings › Labs › Desk. The Korean is the
 // PRD's own words.
 export const deskEnglish = {
   "desk.name": "Desk",
@@ -90,7 +90,6 @@ export const deskEnglish = {
   "desk.jobFailure.not_started": "The session didn't start",
   "desk.jobFailure.invalid_request": "Desk asked for a start Hide doesn't take",
   "desk.jobFailure.other": "Couldn't start the session",
-  "settings.tabs.desk": "Desk",
   "desk.switch.carried": "{{from}} → {{to}} · the conversation above was handed over",
   "desk.switch.trimmed": "{{from}} → {{to}} · handed over without its earliest part",
   "desk.switch.none": "{{from}} → {{to}} · the conversation was not handed over",
@@ -337,7 +336,6 @@ const ko: Catalog<typeof deskEnglish> = {
   "desk.jobFailure.not_started": "세션이 시작되지 않았어요",
   "desk.jobFailure.invalid_request": "Hide가 받지 않는 띄우기를 Desk가 요청했어요",
   "desk.jobFailure.other": "세션을 띄우지 못했어요",
-  "settings.tabs.desk": "Desk",
   "desk.switch.carried": "{{from}} → {{to}} 바꿈 · 위 대화를 넘겨 줬어요",
   "desk.switch.trimmed": "{{from}} → {{to}} 바꿈 · 앞부분을 빼고 넘겨 줬어요",
   "desk.switch.none": "{{from}} → {{to}} 바꿈 · 대화는 넘기지 않았어요",
@@ -584,7 +582,6 @@ const zh: Catalog<typeof deskEnglish> = {
   "desk.jobFailure.not_started": "会话没有启动",
   "desk.jobFailure.invalid_request": "Desk 请求了 Hide 不接受的启动方式",
   "desk.jobFailure.other": "无法启动会话",
-  "settings.tabs.desk": "Desk",
   "desk.switch.carried": "{{from}} → {{to}} · 已移交上面的对话",
   "desk.switch.trimmed": "{{from}} → {{to}} · 已移交对话（去掉了最早部分）",
   "desk.switch.none": "{{from}} → {{to}} · 未移交对话",
@@ -831,7 +828,6 @@ const ja: Catalog<typeof deskEnglish> = {
   "desk.jobFailure.not_started": "セッションが始まりませんでした",
   "desk.jobFailure.invalid_request": "Hide が受け付けない起動を Desk が求めました",
   "desk.jobFailure.other": "セッションを起動できませんでした",
-  "settings.tabs.desk": "Desk",
   "desk.switch.carried": "{{from}} → {{to}} に切り替え · 上の会話を引き継ぎました",
   "desk.switch.trimmed": "{{from}} → {{to}} に切り替え · 最初の部分を除いて引き継ぎました",
   "desk.switch.none": "{{from}} → {{to}} に切り替え · 会話は引き継いでいません",

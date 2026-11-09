@@ -2815,7 +2815,7 @@ export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp
 export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
 export type DeskApprovalState = "waiting" | "allowed" | "allowed_conversation" | "rejected" | "closed";
-/** A Settings › Desk › 권한 row (D-82): `desk_permission_row`. */
+/** A Settings › Labs › Desk › 권한 row (D-82): `desk_permission_row`. */
 export type DeskPermissionRow = "hide" | "read" | "shell" | "edit";
 /** `desk_permission_answer`: 바로 or 묻기. */
 export type DeskPermissionAnswer = "run" | "ask";
@@ -2843,7 +2843,7 @@ export type DeskAgent = {
   signed_in: boolean | null;
   /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
-  /** The rows of Settings › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
+  /** The rows of Settings › Labs › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
   always_runs: DeskPermissionRow[];
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];
@@ -2943,7 +2943,7 @@ export type DeskSection = {
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
-  /** `enabled` is Settings › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
+  /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
   /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
   lane: { pinned: boolean; kept: DeskKeptTab[] };

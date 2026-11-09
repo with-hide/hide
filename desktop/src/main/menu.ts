@@ -91,7 +91,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
   Help: ["shortcuts"],
 };
 
-/** Commands the menu carries only while Settings › Desk has Desk on (D-76). */
+/** Commands the menu carries only while Settings › Labs › Desk has Desk on (D-76). */
 export const DESK_ONLY: readonly CommandId[] = ["desk_terminal"];
 
 export const KEYBOARD_ONLY: readonly CommandId[] = [

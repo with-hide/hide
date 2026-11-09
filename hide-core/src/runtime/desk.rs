@@ -7,7 +7,7 @@
 //!
 //! A permission request Hide cannot read, or answer with a one-time
 //! allowance, does not run (D-60). Every other one is answered here from
-//! Settings › Desk › 권한, what the operator allowed for the rest of the
+//! Settings › Labs › Desk › 권한, what the operator allowed for the rest of the
 //! conversation and the core's facts (`hide_desk::permission::decide`,
 //! D-82): it runs, or a card waits for `한 번 허용`, `이 대화에서 계속 허용`
 //! or `거절…` (D-83). An allowance lives here until the Desk process ends,
@@ -224,7 +224,7 @@ pub(super) struct SettingsPayload {
     default_agent: Option<Option<AdapterId>>,
     location: Option<DeskLocation>,
     cap: Option<u8>,
-    /// Settings › Desk › 권한, whole (D-82).
+    /// Settings › Labs › Desk › 권한, whole (D-82).
     permissions: Option<permission::Table>,
 }
 

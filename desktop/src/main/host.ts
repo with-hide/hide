@@ -296,7 +296,7 @@ export class DesktopHost {
   }
 
   /**
-   * Whether Settings › Desk has Desk on, which the shell reports as each
+   * Whether Settings › Labs › Desk has Desk on, which the shell reports as each
    * snapshot moves it (D-76). Only this window's page on the daemon origin is
    * heard, and only a boolean.
    */

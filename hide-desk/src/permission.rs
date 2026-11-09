@@ -3,7 +3,7 @@
 //!
 //! The agent always runs in its ask mode, so what it runs reaches Hide as
 //! `session/request_permission` ([`read_request`]). Hide sorts the action
-//! into a row of Settings › Desk › 권한 and names what it plainly does that
+//! into a row of Settings › Labs › Desk › 권한 and names what it plainly does that
 //! cannot be undone ([`classify`]); the core answers it from the operator's
 //! [`Table`], what the operator allowed for the rest of the conversation and
 //! its own facts about sessions and projects ([`decide`]). A row set to 바로
@@ -98,7 +98,7 @@ pub fn readable(request: &Request) -> Option<&Action> {
     request.action.as_ref()
 }
 
-/// A row of Settings › Desk › 권한 (D-82).
+/// A row of Settings › Labs › Desk › 권한 (D-82).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Row {
@@ -123,7 +123,7 @@ pub enum Answer {
     Ask,
 }
 
-/// Settings › Desk › 권한: one answer per row, every row 바로 until the
+/// Settings › Labs › Desk › 권한: one answer per row, every row 바로 until the
 /// operator changes it. The same table holds for every agent.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

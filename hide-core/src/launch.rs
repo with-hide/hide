@@ -15,8 +15,11 @@
 //! checks them now, so an edit counts from the next start (D-11), a removed
 //! profile is refused by name (D-27, B20), and a program that is not there
 //! refuses the start before anything is typed (B22). Its start line runs
-//! `hide agent exec` with the `hide` beside that node, so the variables reach
-//! the agent's process alone and never the pane's shell (D-26, B21).
+//! `hide agent exec` with the `hide` beside that node and names only the
+//! start's attempt and the agent's own words: the executor asks for the
+//! profile's variables and program just before it runs ([`exec_start`]), at
+//! the version this start was checked with, so they reach the agent's
+//! process alone, never the pane's shell or its history (D-26, B21).
 
 use std::time::Duration;
 
@@ -33,6 +36,14 @@ pub(crate) mod holds;
 /// How long a start waits for its machine to answer its profile: a read of
 /// one small file and a look for one program.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long an executor's ask for its profile waits on the machine
+/// ([`exec_start`]): inside the executor's own wait for its answer
+/// (`hided::workspace_cli::AGENT_EXEC_WITHIN`, ten seconds).
+const EXEC_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most an executor's start may carry
+/// ([`hide_agent_hooks::hook_request::ExecStart`]): its answer has to fit
+/// one hook answer, with room for the answer's own words.
+const EXEC_START_LIMIT: usize = hide_agent_hooks::hook_request::HOOK_RESPONSE_LIMIT - 4096;
 
 /// The profile an agent's record keeps of its start (D-27): its id, its name
 /// then, which a refusal names once the profile is gone, and the account it
@@ -182,44 +193,38 @@ impl Launch {
     /// `argv`, the agent's own start, as the pane's shell runs it: itself
     /// for the built-in default, with no attempt; else the `hide` beside the
     /// pane's node, `agent exec`, a new attempt
-    /// (`hide_agent_hooks::hook_request::AGENT_EXEC_ATTEMPT`) first, the
-    /// profile's variables and program, and `argv` after `--`
-    /// (`hided::agent_exec`).
+    /// (`hide_agent_hooks::hook_request::AGENT_EXEC_ATTEMPT`) first, and
+    /// `argv` after `--` (`hided::agent_exec`). The profile's variables and
+    /// program are not on it: the attempt keeps which profile, at which
+    /// version, this start was checked with, and the executor asks for them
+    /// ([`exec_start`]).
     pub(crate) fn line(&self, argv: Vec<String>) -> Result<StartLine, String> {
-        let Some((_, start)) = &self.profile else {
+        let Some((profile, start)) = &self.profile else {
             return Ok(StartLine {
                 words: argv,
                 attempt: None,
             });
         };
-        let attempt = hide_agent_hooks::hook_request::fresh_request_id()
+        let id = hide_agent_hooks::hook_request::fresh_attempt()
             .map_err(|why| format!("the start's attempt could not be named: {why}"))?;
         let mut line = vec![
             start.exec.clone(),
             "agent".to_owned(),
             "exec".to_owned(),
             hide_agent_hooks::hook_request::AGENT_EXEC_ATTEMPT.to_owned(),
-            attempt.clone(),
-            "--profile".to_owned(),
-            shown(&self.kind, &start.name),
+            id.clone(),
+            "--".to_owned(),
         ];
-        for (name, value) in &start.env {
-            line.push("--env".to_owned());
-            line.push(format!("{name}={value}"));
-        }
-        if let Some(program) = &start.program {
-            line.push("--program".to_owned());
-            line.push(program.file.clone());
-            for word in &program.leading {
-                line.push("--leading".to_owned());
-                line.push(word.clone());
-            }
-        }
-        line.push("--".to_owned());
         line.extend(argv);
         Ok(StartLine {
             words: line,
-            attempt: Some(attempt),
+            attempt: Some(ExecAttempt {
+                id,
+                kind: self.kind.clone(),
+                profile: profile.clone(),
+                name: start.name.clone(),
+                version: start.version,
+            }),
         })
     }
 
@@ -252,7 +257,20 @@ impl Launch {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StartLine {
     pub(crate) words: Vec<String>,
-    pub(crate) attempt: Option<String>,
+    pub(crate) attempt: Option<ExecAttempt>,
+}
+
+/// The attempt a profile's start runs under, and what its executor's ask
+/// is answered from ([`exec_start`]): the profile of the agent `kind`, by
+/// the name a refusal gives it, at the version its machine answered when
+/// the start was checked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ExecAttempt {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    pub(crate) profile: ProfileId,
+    pub(crate) name: String,
+    pub(crate) version: u64,
 }
 
 /// Why a start with a profile was refused before anything was typed: a
@@ -394,6 +412,100 @@ pub(crate) fn resolve(node: Option<&dyn NodeLink>, request: &Request) -> Result<
         profile: Some((id, start)),
         hold: request.hold.clone(),
     })
+}
+
+/// How the start `attempt` runs, asked by its executor just before it runs
+/// (`hide agent exec`, `AgentExecEvent::Profile`), with the runtime lock
+/// and the owner thread released: the profile as `node`, its machine, has it
+/// now, only at the version the start was checked with (D-26). A profile
+/// that is gone, being removed, changed since, or that its machine does not
+/// answer for now is refused with why, which the executor reports as its
+/// check's refusal and runs nothing on. The machine is asked as a start
+/// asks it ([`resolve`]); the hold the start took when it was planned stays
+/// until the runtime sees what came of it, so a removal through this core
+/// is refused all along, and this ask refuses one made elsewhere.
+pub(crate) fn exec_start(
+    node: Option<&dyn NodeLink>,
+    attempt: &ExecAttempt,
+) -> hide_agent_hooks::hook_request::ExecProfile {
+    use hide_agent_hooks::hook_request::{ExecProfile, ExecStart};
+    let (agent, kind, name) = (label(&attempt.kind), &attempt.kind, &attempt.name);
+    let refused = |reason: &str, failure: String| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "launch",
+            "kind": "exec_start.refused",
+            "attempt": attempt.id,
+            "agent": attempt.kind,
+            "profile": attempt.profile.0,
+            "reason": reason,
+        }));
+        ExecProfile::Refused { failure }
+    };
+    let Some(node) = node else {
+        return refused(
+            "node_unavailable",
+            format!(
+                "{agent} with the profile {name} was not started: its machine cannot be reached to read the profile"
+            ),
+        );
+    };
+    let answer = crate::node_access::call_as::<ProfileLaunch>(
+        node,
+        hide_node_link::protocol::Call::ProfileLaunch {
+            kind: attempt.kind.clone(),
+            profile: attempt.profile.clone(),
+        },
+        EXEC_TIMEOUT,
+    );
+    let start = match answer {
+        Ok(ProfileLaunch::Ready(start)) if start.version == attempt.version => start,
+        Ok(ProfileLaunch::Ready(_)) => {
+            return refused(
+                "profile_changed",
+                format!(
+                    "{agent} was not started: its profile {name} changed while it was starting; start it again"
+                ),
+            );
+        }
+        Ok(ProfileLaunch::Gone) => {
+            return refused(
+                PROFILE_GONE,
+                format!(
+                    "{agent}'s profile {name} is gone, so it was not started; start a new agent with another profile (hide agent spawn --kind {kind} --profile <name>)"
+                ),
+            );
+        }
+        Ok(ProfileLaunch::Refused { text }) => {
+            return refused(PROFILE_REFUSED, format!("{agent} was not started: {text}"));
+        }
+        Err(error) => {
+            return refused(
+                &error.to_string(),
+                format!(
+                    "{agent} with the profile {name} was not started: its machine did not answer for the profile"
+                ),
+            );
+        }
+    };
+    let (program, leading) = start.program.map_or((None, Vec::new()), |program| {
+        (Some(program.file), program.leading)
+    });
+    let ready = ExecStart {
+        label: shown(&attempt.kind, &start.name),
+        env: start.env,
+        program,
+        leading,
+    };
+    let size = serde_json::to_vec(&ready).map_or(usize::MAX, |bytes| bytes.len());
+    if size > EXEC_START_LIMIT {
+        return refused(
+            "start_too_large",
+            format!(
+                "{agent} was not started: its profile {name} carries more variables than a start takes ({EXEC_START_LIMIT} bytes)"
+            ),
+        );
+    }
+    ExecProfile::Ready(ready)
 }
 
 /// Two accounts' stores on the session's machine hold the session a resume

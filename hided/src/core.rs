@@ -114,6 +114,12 @@ enum Command {
         report: hide_core::engine::AgentExecReport,
         reply: Sender<Result<(), &'static str>>,
     },
+    ExecStart {
+        device_id: String,
+        pane_id: String,
+        attempt: String,
+        reply: Sender<Result<hide_core::ExecAsk, &'static str>>,
+    },
     /// A read of the operator's agent definition folder, made off the owner
     /// thread with the development switch on.
     AgentDefinitions {
@@ -598,6 +604,28 @@ impl CoreHandle {
             })
             .map_err(|_| "agent_exec_unavailable")?;
         result.recv().map_err(|_| "agent_exec_unavailable")?
+    }
+
+    /// What `hide agent exec` in a pane asks for its profile before it
+    /// checks its program: planned on the owner thread, then asked of the
+    /// pane's machine on the caller's thread, so no node call waits there.
+    pub fn exec_start(
+        &self,
+        device: &str,
+        pane: &str,
+        attempt: &str,
+    ) -> Result<hide_node_link::panes::ExecProfile, &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::ExecStart {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                attempt: attempt.to_owned(),
+                reply,
+            })
+            .map_err(|_| "agent_exec_unavailable")?;
+        let ask = result.recv().map_err(|_| "agent_exec_unavailable")??;
+        Ok(ask.ask())
     }
 
     /// `hide agent catalog`, read on the owner thread. While the core says a
@@ -1557,6 +1585,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.agent_exec(&device_id, &pane_id, report));
+            }
+            Command::ExecStart {
+                device_id,
+                pane_id,
+                attempt,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_exec_start(&device_id, &pane_id, &attempt));
             }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
             Command::AgentProfile {

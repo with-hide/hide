@@ -14,7 +14,7 @@ const deskItem = (app: ElectronApplication) =>
 
 async function switchDesk(page: Page, on: boolean) {
   await page.locator("[data-open-settings]").click();
-  await page.locator('[data-settings-tab="desk"]').click();
+  await page.locator('[data-settings-tab="labs"]').click();
   const use = page.locator("[data-desk-use]");
   if ((await use.getAttribute("data-desk-use")) !== String(on)) await use.click();
   await expect(use).toHaveAttribute("data-desk-use", String(on));

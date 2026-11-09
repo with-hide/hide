@@ -44,7 +44,7 @@
 //!   and only a Grok home of Desk's own changes that, which would leave
 //!   Grok's sign-in apart from the operator's (D-81).
 //!
-//! Hide answers each request from Settings › Desk › 권한
+//! Hide answers each request from Settings › Labs › Desk › 권한
 //! ([`crate::permission`]); what an agent runs without asking whatever a
 //! row says is declared by [`AdapterId::always_runs`] and shown on that row.
 
@@ -178,7 +178,7 @@ impl AdapterId {
         }
     }
 
-    /// The rows of Settings › Desk › 권한 this agent runs without asking,
+    /// The rows of Settings › Labs › Desk › 권한 this agent runs without asking,
     /// whatever the row says (D-82): what it runs there never reaches Hide,
     /// so the row shows it. Codex reads inside its read-only sandbox, which
     /// asks only to leave it; OpenCode's configuration, omp's mode and

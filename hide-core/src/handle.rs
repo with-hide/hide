@@ -186,6 +186,23 @@ impl Drop for Core {
     }
 }
 
+/// An executor's ask for its profile, ready to run on any thread
+/// ([`Core::prepare_exec_start`]): the profile and version its start was
+/// checked with, and the link to the pane's machine, found under the lock.
+pub struct ExecAsk {
+    node: Option<std::sync::Arc<dyn crate::node_access::NodeLink>>,
+    checked: crate::launch::ExecAttempt,
+}
+
+impl ExecAsk {
+    /// Asks the pane's machine for the profile now (`launch::exec_start`).
+    /// Blocks on that machine for at most a few seconds; never call it on
+    /// the owner thread.
+    pub fn ask(self) -> hide_agent_hooks::hook_request::ExecProfile {
+        crate::launch::exec_start(self.node.as_deref(), &self.checked)
+    }
+}
+
 /// A checkout's change-list read, ready to run on any thread: it holds the
 /// checkout's root and the channel to its host, found under the lock.
 pub struct PreparedChanges {
@@ -855,6 +872,45 @@ impl Core {
             }));
             "agent_exec_refused"
         })
+    }
+
+    /// What `hide agent exec` in a pane asks before it checks its program
+    /// (`AgentExecEvent::Profile`), planned on the owner thread: the
+    /// attempt's checked profile, read from the pane's engine, and the link
+    /// to that pane's machine, which the caller asks off this thread
+    /// ([`ExecAsk::ask`]). Refused, as a report is, unless that attempt runs
+    /// in the pane with no `Ready` yet.
+    pub fn prepare_exec_start(
+        &self,
+        device: &str,
+        caller: &str,
+        attempt: &str,
+    ) -> Result<ExecAsk, &'static str> {
+        if !check_owner_thread(self, "agent.exec_start") {
+            return Err("agent_exec_unavailable");
+        }
+        let (machine, pane) = crate::address::split_pane(device, caller);
+        let runtime = lock_recover(&self.runtime);
+        let engine = runtime
+            .delivery_engine(machine)
+            .ok_or("agent_exec_engine_unavailable")?;
+        let node = runtime.linked_node(machine).ok().map(|(_, link)| link);
+        drop(runtime);
+        let checked = engine.exec_attempt(pane, attempt).map_err(|error| {
+            crate::diagnostic!(serde_json::json!({
+                "component": "launch", "kind": "exec_start.not_taken",
+                "pane": caller, "device": device, "message": error.to_string(),
+            }));
+            match error {
+                crate::engine::EngineError::Refused { code, .. }
+                    if code == crate::engine::ATTEMPT_UNKNOWN =>
+                {
+                    crate::engine::ATTEMPT_UNKNOWN
+                }
+                _ => "agent_exec_refused",
+            }
+        })?;
+        Ok(ExecAsk { node, checked })
     }
 
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or

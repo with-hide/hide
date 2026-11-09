@@ -82,8 +82,8 @@ pub struct PaneIdentity {
 // A hook's proof-and-answer exchange is spoken by the hook itself, so its
 // types are the hook crate's (`hide_agent_hooks::hook_request`).
 pub use hide_agent_hooks::hook_request::{
-    AGENT_EXEC_FAILURE_LIMIT, AgentExecEvent, ExecProcess, HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT,
-    HookCommand, HookRequest, PullPoint,
+    AGENT_EXEC_FAILURE_LIMIT, AgentExecEvent, ExecProcess, ExecProfile, ExecStart,
+    HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest, PullPoint,
 };
 
 /// What a node tells the core without being asked: one JSON line with an
