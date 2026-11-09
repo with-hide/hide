@@ -384,6 +384,9 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
         launch.args[..2],
         ["--resume".to_owned(), session_of("w1:p1")]
     );
+    // A record kept before profiles ran with the built-in default, and
+    // resumes with it without asking which account holds the session (D-27).
+    assert_eq!((launch.profile, launch.profile_from_session), (None, None));
     // A second press while it starts starts nothing (B21).
     send(
         &mut runtime,

@@ -123,6 +123,8 @@ export type AgentRow = {
   id: string;
   pane_id: string;
   identity_label: string;
+  /** The name of the profile the agent runs with (`b`), absent on its agent's built-in default; the title stays the default's (PRD agent-profiles B17). */
+  profile?: string;
   /** Conversation display provenance, independent of lifecycle and hook health. */
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;
@@ -769,7 +771,7 @@ export type PaneRow = {
   fork?: PaneFork;
 };
 
-export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code"> & { state: Pick<AgentState, "mark_tone"> };
+export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code" | "profile"> & { state: Pick<AgentState, "mark_tone"> };
 
 export type Tab = {
   /** `named_by_operator`: the manual name is one the operator gave through Rename, which keeps the tab when its agents leave. */

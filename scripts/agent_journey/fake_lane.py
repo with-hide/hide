@@ -52,50 +52,71 @@ def claude(home, url, root, local, key=KEY):
     is the global config Claude reads there and the file Hide records its
     folder trust in (hide-agent-hooks runtime.rs, `trust_path`); in CI mode
     it is `~/.claude.json` of the disposable HOME, as a new machine's."""
-    config = home / ".claude/.config.json" if local else home / ".claude.json"
-    private_directory(config.parent)
-    write_private(config, json.dumps(claude_config(root, key)).encode())
+    if local:
+        claude_files(home / ".claude", root, key)
+    else:
+        private_directory(home)
+        write_private(home / ".claude.json", json.dumps(claude_config(root, key)).encode())
     env = {"ANTHROPIC_BASE_URL": url, "ANTHROPIC_API_KEY": key}
     if local:
         env["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
     return env
 
 
+def claude_files(folder, root, key=KEY):
+    """Claude's global config in the account `folder` (CLAUDE_CONFIG_DIR)."""
+    private_directory(folder)
+    write_private(folder / ".config.json", json.dumps(claude_config(root, key)).encode())
+
+
 def codex(home, url, root, local, key=KEY):
     """Codex 0.163 reads no base URL from its environment: a provider of its
     own in CODEX_HOME's config.toml, whose key it reads from `env_key`."""
     del root, local
-    config = home / ".codex/config.toml"
-    private_directory(config.parent)
-    write_private(config, (f'model = "{MODEL}"\nmodel_provider = "{PROVIDER}"\n'
+    codex_files(home / ".codex", url)
+    return {"JOURNEY_FAKE_KEY": key}
+
+
+def codex_files(folder, url):
+    """The fake provider in the account `folder` (CODEX_HOME)."""
+    private_directory(folder)
+    write_private(folder / "config.toml", (f'model = "{MODEL}"\nmodel_provider = "{PROVIDER}"\n'
                            f'[model_providers.{PROVIDER}]\nname = "{PROVIDER}"\nbase_url = "{url}/v1"\n'
                            f'wire_api = "responses"\nenv_key = "JOURNEY_FAKE_KEY"\n').encode())
-    return {"JOURNEY_FAKE_KEY": key}
 
 
 def grok(home, url, root, local, key=KEY):
     """Grok 1.0.52's custom model in GROK_HOME's config.toml
     (~/.grok/docs/user-guide/11-custom-models.md), its default."""
     del root, local
-    config = home / ".grok/config.toml"
-    private_directory(config.parent)
-    write_private(config, (f'[models]\ndefault = "{PROVIDER}"\n[model.{PROVIDER}]\nmodel = "{MODEL}"\n'
+    grok_files(home / ".grok", url)
+    return {"JOURNEY_FAKE_KEY": key}
+
+
+def grok_files(folder, url):
+    """The fake model in the account `folder` (GROK_HOME)."""
+    private_directory(folder)
+    write_private(folder / "config.toml", (f'[models]\ndefault = "{PROVIDER}"\n[model.{PROVIDER}]\nmodel = "{MODEL}"\n'
                            f'base_url = "{url}/v1"\nenv_key = "JOURNEY_FAKE_KEY"\napi_backend = "chat_completions"\n'
                            f'name = "Journey"\ncontext_window = 128000\n').encode())
-    return {"JOURNEY_FAKE_KEY": key}
 
 
 def pi(home, url, root, local, key=KEY):
     """Pi 1.0.4's custom provider (`models.json`) and default model
     (`settings.json`) in its agent folder."""
     del root, local
-    folder = home / ".pi/agent"
+    pi_files(home / ".pi/agent", url)
+    return {"JOURNEY_FAKE_KEY": key}
+
+
+def pi_files(folder, url):
+    """The fake provider and default model in the account `folder`
+    (PI_CODING_AGENT_DIR)."""
     private_directory(folder)
     write_private(folder / "models.json", json.dumps({"providers": {PROVIDER: {
         "baseUrl": f"{url}/v1", "api": "openai-completions", "apiKey": "${JOURNEY_FAKE_KEY}",
         "models": [{"id": MODEL, "name": "Journey"}]}}}).encode())
     write_private(folder / "settings.json", json.dumps({"defaultProvider": PROVIDER, "defaultModel": MODEL}).encode())
-    return {"JOURNEY_FAKE_KEY": key}
 
 
 def omp(home, url, root, local, key=KEY):
@@ -103,13 +124,17 @@ def omp(home, url, root, local, key=KEY):
     (`config.yml`) in its agent folder; its key is read from the variable
     `apiKey` names."""
     del root, local
-    folder = home / ".omp/agent"
+    omp_files(home / ".omp/agent", url)
+    return {"JOURNEY_FAKE_KEY": key}
+
+
+def omp_files(folder, url):
+    """The fake provider and default model role in omp's agent `folder`."""
     private_directory(folder)
     write_private(folder / "models.yml", (f"providers:\n  {PROVIDER}:\n    baseUrl: {url}/v1\n"
                                           f"    apiKey: JOURNEY_FAKE_KEY\n    api: openai-completions\n"
                                           f"    models:\n      - id: {MODEL}\n        name: Journey\n").encode())
     write_private(folder / "config.yml", (ci.OMP_SET_UP + f"modelRoles:\n  default: {PROVIDER}/{MODEL}\n").encode())
-    return {"JOURNEY_FAKE_KEY": key}
 
 
 def agy(home, url, root, local, key=KEY):
@@ -131,7 +156,12 @@ def opencode(home, url, root, local, key=KEY):
     prompt still rides the start, and a run's text must never reach a hosted
     model."""
     del root, local
-    folder = home / opencode_service.CONFIG
+    opencode_files(home / opencode_service.CONFIG, url)
+    return {"JOURNEY_FAKE_KEY": key}
+
+
+def opencode_files(folder, url):
+    """The fake provider in OpenCode's configuration `folder`."""
     private_directory(folder)
     write_private(folder / "opencode.json", json.dumps({
         "model": f"{PROVIDER}/{MODEL}",
@@ -140,7 +170,43 @@ def opencode(home, url, root, local, key=KEY):
         "providers": {PROVIDER: {"name": "Journey", "env": ["JOURNEY_FAKE_KEY"],
                                  "package": "@opencode/ai/providers/openai-compatible",
                                  "settings": {"baseURL": f"{url}/v1"}, "models": {MODEL: {"name": "Journey"}}}}}).encode())
-    return {"JOURNEY_FAKE_KEY": key}
+
+
+# The account a profile of each agent runs in for the `profile` cell, under
+# the run's HOME: a folder its account variable names, or omp's profile name
+# with the agent folder omp keeps for it (hide-agent-adapter/agents/*.toml,
+# `[account]`), and the files that point the agent at the fake model there.
+PROFILE_NAME = "journey"
+PROFILE_ACCOUNTS = {
+    "claude": (".journey-profile/claude", lambda folder, url, root, key: claude_files(folder, root, key)),
+    "codex": (".journey-profile/codex", lambda folder, url, root, key: codex_files(folder, url)),
+    "grok": (".journey-profile/grok", lambda folder, url, root, key: grok_files(folder, url)),
+    "pi": (".journey-profile/pi", lambda folder, url, root, key: pi_files(folder, url)),
+}
+
+
+def profile_account(kind, home, url, root, key=KEY):
+    """Writes the files that point `kind` at the fake model at `url` in the
+    account its journey profile runs in, and answers that account: the
+    profile file's `account`, the reader's spelling of it, and the folder its
+    sessions lie under."""
+    if kind == "opencode":
+        # Its XDG folders under the account; its background server takes a
+        # port of its own there (opencode_service), which the run ends as it
+        # ends the default account's.
+        folder = home / ".journey-profile/opencode"
+        config = folder / "config/opencode"
+        opencode_files(config, url)
+        opencode_service.configure(config)
+        return {"account": {"folder": str(folder)}, "reader": "folder:" + str(folder), "folder": str(folder)}
+    if kind == "omp":
+        folder = home / ".omp/profiles" / PROFILE_NAME / "agent"
+        omp_files(folder, url)
+        return {"account": {"name": PROFILE_NAME}, "reader": "name:" + PROFILE_NAME, "folder": str(folder)}
+    relative, write = PROFILE_ACCOUNTS[kind]
+    folder = home / relative
+    write(folder, url, root, key)
+    return {"account": {"folder": str(folder)}, "reader": "folder:" + str(folder), "folder": str(folder)}
 
 
 PROVIDERS = {"claude": claude, "codex": codex, "grok": grok, "pi": pi, "omp": omp, "agy": agy, "opencode": opencode}

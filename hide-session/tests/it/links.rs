@@ -214,7 +214,7 @@ fn home_with_claude() -> (tempfile::TempDir, PathBuf) {
 #[test]
 fn a_read_resumes_from_its_checkpoint_and_reads_only_what_was_appended() {
     let (home, file) = home_with_claude();
-    let listed = links::candidates(home.path(), 0, None).unwrap();
+    let listed = links::candidates(&hide_session::Accounts::new(home.path()), 0, None).unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].agent, Agent::Claude);
 
@@ -223,7 +223,7 @@ fn a_read_resumes_from_its_checkpoint_and_reads_only_what_was_appended() {
         path: listed[0].path.clone(),
         checkpoint: None,
     };
-    let first = links::read(home.path(), &[request]).remove(0);
+    let first = links::read(&hide_session::Accounts::new(home.path()), &[request]).remove(0);
     assert_eq!(first.error, None);
     assert_eq!(first.facts.last_request.unwrap().1, "첫 요청");
 
@@ -231,7 +231,7 @@ fn a_read_resumes_from_its_checkpoint_and_reads_only_what_was_appended() {
     contents.push_str(&(claude("s1", "cli", "a", "둘째 요청", "2026-10-03T01:01:00Z") + "\n"));
     fs::write(&file, contents).unwrap();
     let second = links::read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &[ReadRequest {
             agent: Agent::Claude,
             path: listed[0].path.clone(),
@@ -255,7 +255,7 @@ fn a_read_refuses_a_file_outside_the_agent_roots() {
     let outside = home.path().join("elsewhere.jsonl");
     fs::write(&outside, "{}\n").unwrap();
     let answer = links::read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &[ReadRequest {
             agent: Agent::Claude,
             path: outside.to_string_lossy().into_owned(),
@@ -272,7 +272,7 @@ fn a_listing_leaves_out_files_older_than_its_start() {
     let (home, _) = home_with_claude();
     let future = u64::MAX / 2;
     assert!(
-        links::candidates(home.path(), future, None)
+        links::candidates(&hide_session::Accounts::new(home.path()), future, None)
             .unwrap()
             .is_empty()
     );
@@ -281,17 +281,23 @@ fn a_listing_leaves_out_files_older_than_its_start() {
 #[test]
 fn a_later_page_takes_only_files_at_or_before_its_end() {
     let (home, _) = home_with_claude();
-    let modified = links::candidates(home.path(), 0, None).unwrap()[0].modified_unix_ms;
+    let modified = links::candidates(&hide_session::Accounts::new(home.path()), 0, None).unwrap()
+        [0]
+    .modified_unix_ms;
     assert_eq!(
-        links::candidates(home.path(), 0, Some(modified))
+        links::candidates(&hide_session::Accounts::new(home.path()), 0, Some(modified))
             .unwrap()
             .len(),
         1
     );
     assert!(
-        links::candidates(home.path(), 0, Some(modified - 1))
-            .unwrap()
-            .is_empty()
+        links::candidates(
+            &hide_session::Accounts::new(home.path()),
+            0,
+            Some(modified - 1)
+        )
+        .unwrap()
+        .is_empty()
     );
 }
 
@@ -308,12 +314,13 @@ fn a_refused_file_is_unreadable_and_only_a_missing_one_is_gone() {
         checkpoint: None,
     };
     fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
-    let refused = links::read(home.path(), &[request(&file)]).remove(0);
+    let refused =
+        links::read(&hide_session::Accounts::new(home.path()), &[request(&file)]).remove(0);
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(refused.error.as_deref(), Some("session_unreadable"));
 
     fs::remove_file(&file).unwrap();
-    let gone = links::read(home.path(), &[request(&file)]).remove(0);
+    let gone = links::read(&hide_session::Accounts::new(home.path()), &[request(&file)]).remove(0);
     assert_eq!(gone.error.as_deref(), Some("session_file_missing"));
 }
 
@@ -330,7 +337,7 @@ fn an_opencode_root_and_its_child_session_are_separate_link_lines() {
         .execute_batch(&fs::read_to_string(fixture("opencode-1.18.30/opencode.sql")).unwrap())
         .unwrap();
     let answers = links::read(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &[
             ReadRequest {
                 agent: Agent::OpenCode,
@@ -496,7 +503,7 @@ fn an_opencode_call_that_names_a_pull_request_is_named_in_both_schemas() {
                 .execute_batch(&sql)
                 .unwrap();
             let answer = links::read(
-                home.path(),
+                &hide_session::Accounts::new(home.path()),
                 &[ReadRequest {
                     agent: Agent::OpenCode,
                     path: "opencode/ses_0a1b2c3d4e5f60718293a4b5c6".into(),
@@ -560,7 +567,7 @@ fn a_pull_request_its_creating_call_printed_is_made_in_every_format_that_pairs_c
             .execute_batch(&sql)
             .unwrap();
         let answer = links::read(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             &[ReadRequest {
                 agent: Agent::OpenCode,
                 path: "opencode/ses_0a1b2c3d4e5f60718293a4b5c6".into(),
@@ -658,7 +665,7 @@ fn a_creating_calls_output_read_in_a_later_poll_is_still_its_making() {
     };
     let read = |checkpoint| {
         links::read(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             &[ReadRequest {
                 agent: Agent::Claude,
                 path: file.to_string_lossy().into_owned(),

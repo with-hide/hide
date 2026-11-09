@@ -7,8 +7,8 @@
 //! is counted from its parts, as before the upgrade, so a ledger keeps its
 //! keys, and only a message `session_message` alone holds is counted the 2.x
 //! way.
+use crate::account::Accounts;
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::time::Instant;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -193,9 +193,9 @@ fn active(
     }))
 }
 
-pub(super) fn read(home: &Path, saved: Option<Checkpoint>) -> Result<Step, Refusal> {
-    crate::opencode::with_read_legacy(home, |db, schema, legacy| {
-        read_connection(home, db, schema, legacy, saved)
+pub(super) fn read(accounts: &Accounts, saved: Option<Checkpoint>) -> Result<Step, Refusal> {
+    crate::opencode::with_read_legacy(accounts, |db, schema, legacy| {
+        read_connection(accounts, db, schema, legacy, saved)
     })
     .map_err(|refusal| {
         if refusal.reason() == crate::opencode::SCHEMA_UNKNOWN {
@@ -209,7 +209,7 @@ pub(super) fn read(home: &Path, saved: Option<Checkpoint>) -> Result<Step, Refus
 }
 
 fn read_connection(
-    home: &Path,
+    accounts: &Accounts,
     db: &Connection,
     schema: Schema,
     legacy: Legacy,
@@ -233,7 +233,7 @@ fn read_connection(
             READ_BYTES
         }) as i32,
     );
-    let database = crate::opencode::database_path(home).map_err(|_| Refusal::Environment)?;
+    let database = crate::opencode::database_path(accounts).map_err(|_| Refusal::Environment)?;
     let id = hide_platform::fs::identity::file_id(&database).map_err(|_| Refusal::Unreadable)?;
     // VACUUM changes schema_version even when it retains the same file id.
     let version: u64 = db

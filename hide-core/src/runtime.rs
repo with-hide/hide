@@ -1136,6 +1136,12 @@ pub(crate) struct TaskAgentLaunch {
     /// `None` for the built-in default.
     pub(crate) profile: Option<(hide_agent_adapter::ProfileId, String)>,
     pub(crate) resume_reference: Option<crate::sidebar::SessionAgentSessionPayload>,
+    /// The session a resume that names no account (a session line or
+    /// record) names by its file or id: the worker asks the session's
+    /// machine which account holds it and gives `profile` that account's
+    /// profile before anything starts (PRD agent-profiles B19,
+    /// `Runtime::settle_session_profile`).
+    pub(crate) profile_from_session: Option<crate::sidebar::SessionAgentSessionPayload>,
 }
 
 /// One repository of a node's GitHub read: the generation it was last asked

@@ -109,6 +109,13 @@ describe("the row's accessible name", () => {
     const child = row("child", { identity_label: "웹 디자인 시스템 리셋 구현", delegated: true, lineage_worktree_badge: "web-design-system-reset", detail: "토큰 이관 중" });
     expect(rowAccessibleName(t, child, "mini")).toBe("웹 디자인 시스템 리셋 구현, mini, web-design-system-reset, Claude Code, In progress, 토큰 이관 중");
   });
+
+  // PRD agent-profiles B17: the badge on a profile agent's logo is read out as its agent and profile, the title as the default's.
+  it("names a profile agent's profile after its agent, and a default agent by its agent alone", async () => {
+    const { t } = await createInterfaceI18n("en");
+    expect(rowAccessibleName(t, row("b", { identity_label: "Claude", profile: "work", detail: null }), null)).toBe("Claude, Claude Code · work, In progress");
+    expect(rowAccessibleName(t, row("a", { identity_label: "Claude", detail: null }), null)).toBe("Claude, Claude Code, In progress");
+  });
 });
 
 // PRD fork-operator-root B8, B9, B22: what a fork's mark and row name say.

@@ -653,22 +653,30 @@ static SESSION_FILE_AGENTS: std::sync::LazyLock<Vec<hide_session::Agent>> =
             .collect()
     });
 
+/// The accounts this node reads sessions in: each agent's default account
+/// under its home and each profile's (`crate::profiles::session_accounts`).
+/// A session is read in no other place (PRD agent-profiles D-36).
+fn accounts(env: &Env, missing: &str) -> HostResult<std::sync::Arc<hide_session::Accounts>> {
+    let home = env.home(missing)?;
+    Ok(crate::profiles::session_accounts(
+        env.state.as_deref(),
+        &home,
+    ))
+}
+
 /// A session file the core names, refused unless it lies in one of `agents`'
-/// session folders in this machine's home, answered with every link resolved.
+/// session folders in an account this machine registered, answered with
+/// every link resolved.
 fn session_file(env: &Env, agents: &[hide_session::Agent], path: &str) -> HostResult<PathBuf> {
     let path = absolute(path)?;
-    let home = env.home("sessions_home_unavailable")?;
-    hide_session::inside_session_root(Path::new(&home), agents, &path).map_err(|refusal| {
-        match refusal {
-            hide_session::RootRefusal::Unsupported | hide_session::RootRefusal::Outside => {
-                HostError::new(ErrorCode::OutsideRoot, "session_outside_roots")
-            }
-            hide_session::RootRefusal::Missing => {
-                HostError::new(ErrorCode::Io, "session_file_missing")
-            }
-            hide_session::RootRefusal::Unreadable => {
-                HostError::new(ErrorCode::Io, "session_unreadable")
-            }
+    let accounts = accounts(env, "sessions_home_unavailable")?;
+    hide_session::inside_session_root(&accounts, agents, &path).map_err(|refusal| match refusal {
+        hide_session::RootRefusal::Unsupported | hide_session::RootRefusal::Outside => {
+            HostError::new(ErrorCode::OutsideRoot, "session_outside_roots")
+        }
+        hide_session::RootRefusal::Missing => HostError::new(ErrorCode::Io, "session_file_missing"),
+        hide_session::RootRefusal::Unreadable => {
+            HostError::new(ErrorCode::Io, "session_unreadable")
         }
     })
 }
@@ -680,9 +688,8 @@ fn session_read<T: serde::Serialize>(
     read: impl FnOnce(&Path) -> Result<T, String>,
 ) -> HostResult<serde_json::Value> {
     let path = session_file(env, &SESSION_FILE_AGENTS, path)?;
-    let home = env.home("sessions_home_unavailable")?;
-    let home = Path::new(&home);
-    let agent = session_file_agent(home, &path)?;
+    let accounts = accounts(env, "sessions_home_unavailable")?;
+    let agent = session_file_agent(&accounts, &path)?;
     if !agent.is_jsonl() {
         return Err(HostError::new(
             ErrorCode::Unsupported,
@@ -690,7 +697,7 @@ fn session_read<T: serde::Serialize>(
         ));
     }
     to_value(
-        hide_session::read_session_file(home, agent, &path, scope, || read(&path))
+        hide_session::read_session_file(&accounts, agent, &path, scope, || read(&path))
             .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
     )
 }
@@ -708,11 +715,14 @@ fn antigravity_fork_cwd(cwd: &str) -> HostResult<PathBuf> {
         .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "session_route_cwd_unconfirmed"))
 }
 
-fn session_file_agent(home: &Path, path: &Path) -> HostResult<hide_session::Agent> {
+fn session_file_agent(
+    accounts: &hide_session::Accounts,
+    path: &Path,
+) -> HostResult<hide_session::Agent> {
     SESSION_FILE_AGENTS
         .iter()
         .copied()
-        .find(|agent| hide_session::inside_session_root(home, &[*agent], path).is_ok())
+        .find(|agent| hide_session::inside_session_root(accounts, &[*agent], path).is_ok())
         .ok_or_else(|| HostError::new(ErrorCode::OutsideRoot, "session_outside_roots"))
 }
 
@@ -743,15 +753,15 @@ fn open_root(root: &RootRef) -> HostResult<Root> {
     Root::open_pinned(&root_path(&root.path)?, root.identity)
 }
 
-/// The `label_transcript` answer for the transcripts under `home`; the
-/// message of a refusal is the stable reason code, never a path or
-/// transcript text.
+/// The `label_transcript` answer for the transcripts of `accounts`, read in
+/// the account the request names; the message of a refusal is the stable
+/// reason code, never a path or transcript text.
 pub fn label_transcript(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     request: &hide_session::label_transcript::LabelTranscriptRequest,
 ) -> HostResult<Value> {
     let transcript =
-        hide_session::label_transcript::read(home, request).map_err(session_refusal)?;
+        hide_session::label_transcript::read(accounts, request).map_err(session_refusal)?;
     to_value(transcript)
 }
 
@@ -763,6 +773,7 @@ fn session_refusal(refusal: hide_session::ReadRefusal) -> HostError {
         hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
         hide_session::ReadRefusal::Refused(reason) => match reason.as_str() {
             "session_file_missing" => ErrorCode::NotFound,
+            hide_session::account::ACCOUNT_UNREGISTERED => ErrorCode::OutsideRoot,
             "session_kind_unsupported"
             | "thread_unsupported"
             | "opencode_db_schema_unknown"
@@ -787,19 +798,21 @@ fn antigravity_fork_refusal(refusal: hide_session::ReadRefusal) -> HostError {
 /// One page of a pane's thread, read where its session is: ACP updates and
 /// cursors, never a path.
 pub fn session_thread(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     request: &hide_session::thread::ThreadRequest,
 ) -> HostResult<Value> {
-    let page = hide_session::thread::read_pane_thread(home, request).map_err(session_refusal)?;
+    let page =
+        hide_session::thread::read_pane_thread(accounts, request).map_err(session_refusal)?;
     to_value(page)
 }
 
 /// Local and remote activity share this path-free, metadata-only answer.
 pub fn session_activity(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     request: &hide_session::session_activity::SessionActivityRequest,
 ) -> HostResult<Value> {
-    let activity = hide_session::session_activity::read(home, request).map_err(session_refusal)?;
+    let activity =
+        hide_session::session_activity::read(accounts, request).map_err(session_refusal)?;
     to_value(activity)
 }
 
@@ -1200,8 +1213,9 @@ pub fn handle_with_progress(
                 _ => std::env::var_os(name),
             };
             let deadline = std::time::Instant::now() + crate::importable::IMPORTABLE_SEARCH_BUDGET;
+            let accounts = crate::profiles::session_accounts(env.state.as_deref(), &home);
             to_value(crate::importable::find(
-                &home, &variables, now, &exclude, deadline,
+                &home, &accounts, &variables, now, &exclude, deadline,
             ))
         }
         Call::NewFolderTarget { parent, name, kind } => {
@@ -1416,9 +1430,9 @@ pub fn handle_with_progress(
             cwd,
             profile,
         } => {
-            let home = env.home("opencode_fork_home_unavailable")?;
+            let accounts = accounts(env, "opencode_fork_home_unavailable")?;
             to_value(crate::opencode_fork::fork(
-                Path::new(&home),
+                &accounts,
                 &source,
                 &absolute(&cwd)?,
                 profile.as_ref(),
@@ -1426,12 +1440,14 @@ pub fn handle_with_progress(
             )?)
         }
         Call::AgentTrust {
-            agent,
+            agent: kind,
             path,
             trusted,
+            profile,
         } => {
+            use hide_agent_hooks::account::AccountAt;
             use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-            let agent = hide_agent_adapter::adapter(&agent)
+            let agent = hide_agent_adapter::adapter(&kind)
                 .and_then(|adapter| adapter.start)
                 .and_then(Agent::of)
                 .ok_or_else(|| {
@@ -1439,6 +1455,14 @@ pub fn handle_with_progress(
                 })?;
             let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
+            let account = match &profile {
+                Some(id) => crate::profiles::trust_account(env, &kind, id)?,
+                None => None,
+            };
+            let at = match &account {
+                Some(account) => AccountAt::Account { home, account },
+                None => AccountAt::Home(home),
+            };
             let folder = antigravity_folder(&path).ok_or_else(|| {
                 HostError::new(ErrorCode::InvalidPath, "agent_trust_path_invalid")
             })?;
@@ -1451,7 +1475,7 @@ pub fn handle_with_progress(
                 stop: &env.stop,
             };
             if trusted {
-                folder_trust::trust_worktree(agent, home, folder, tools)
+                folder_trust::trust_worktree(agent, at, folder, tools)
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }
@@ -1636,40 +1660,45 @@ pub fn handle_with_progress(
             Ok(Value::Null)
         }
         Call::LabelTranscript { request } => {
-            let home = env.home("label_session_home_unavailable")?;
-            label_transcript(Path::new(&home), &request)
+            let accounts = accounts(env, "label_session_home_unavailable")?;
+            label_transcript(&accounts, &request)
         }
         Call::SessionWorkTurn { request } => {
-            let home = env.home("session_work_home_unavailable")?;
+            let accounts = accounts(env, "session_work_home_unavailable")?;
             to_value(
-                hide_session::label_transcript::read_work_turn(Path::new(&home), &request)
+                hide_session::label_transcript::read_work_turn(&accounts, &request)
                     .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
             )
         }
         Call::SessionActivity { request } => {
-            let home = env.home("session_activity_home_unavailable")?;
-            session_activity(Path::new(&home), &request)
+            let accounts = accounts(env, "session_activity_home_unavailable")?;
+            session_activity(&accounts, &request)
+        }
+        Call::SessionAccount { request } => {
+            let accounts = accounts(env, "session_account_home_unavailable")?;
+            let account = hide_session::session_account::read(&accounts, &request)
+                .map_err(session_refusal)?;
+            to_value(account)
         }
         Call::SessionThread { request } => {
-            let home = env.home("session_thread_home_unavailable")?;
-            session_thread(Path::new(&home), &request)
+            let accounts = accounts(env, "session_thread_home_unavailable")?;
+            session_thread(&accounts, &request)
         }
         Call::LinkFiles {
             since_unix_ms,
             until_unix_ms,
         } => {
-            let home = env.home("links_home_unavailable")?;
-            let listed =
-                hide_session::links::candidates(Path::new(&home), since_unix_ms, until_unix_ms)
-                    .map_err(|code| HostError::new(ErrorCode::Io, code))?;
+            let accounts = accounts(env, "links_home_unavailable")?;
+            let listed = hide_session::links::candidates(&accounts, since_unix_ms, until_unix_ms)
+                .map_err(|code| HostError::new(ErrorCode::Io, code))?;
             to_value(listed)
         }
         Call::UsageFiles {
             agent,
             since_unix_ms,
         } => {
-            let home = env.home("usage_home_unavailable")?;
-            let candidates = hide_session::usage::list(Path::new(&home), agent, since_unix_ms)
+            let accounts = accounts(env, "usage_home_unavailable")?;
+            let candidates = hide_session::usage::list(&accounts, agent, since_unix_ms)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason.to_string()))?;
             to_value(candidates)
         }
@@ -1678,19 +1707,18 @@ pub fn handle_with_progress(
             path,
             checkpoint,
         } => {
-            let home = env.home("usage_home_unavailable")?;
+            let accounts = accounts(env, "usage_home_unavailable")?;
             let path = hide_platform::path::from_wire(&path)
                 .map_err(|_| HostError::new(ErrorCode::InvalidPath, "usage_path_invalid"))?;
-            let step = hide_session::usage::read(Path::new(&home), agent, &path, checkpoint)
+            let step = hide_session::usage::read(&accounts, agent, &path, checkpoint)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason.to_string()))?;
             to_value(step)
         }
         Call::ProjectSessions { project } => {
-            let home = env.home("sessions_home_unavailable")?;
-            let read =
-                hide_session::SessionCatalog::new(Path::new(&home), project.device_id.clone())
-                    .project_sessions(&project)
-                    .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
+            let accounts = accounts(env, "sessions_home_unavailable")?;
+            let read = hide_session::SessionCatalog::new(&accounts, project.device_id.clone())
+                .project_sessions(&project)
+                .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
             // A store that listed nothing rides the answer as a row of its
             // own, so the core logs why its sessions are absent.
             let mut rows = Vec::with_capacity(read.sessions.len() + read.refusals.len());
@@ -1741,31 +1769,25 @@ pub fn handle_with_progress(
             // OpenCode keeps no session file: its database is read by the id
             // the scope names, proven inside the read, and `path` names nothing.
             if agent == hide_session::Agent::OpenCode {
-                let home = env.home("sessions_home_unavailable")?;
-                let page =
-                    hide_session::opencode::read_conversation(Path::new(&home), &scope, checkpoint)
-                        .map_err(session_refusal)?;
+                let accounts = accounts(env, "sessions_home_unavailable")?;
+                let page = hide_session::opencode::read_conversation(&accounts, &scope, checkpoint)
+                    .map_err(session_refusal)?;
                 return to_value(page);
             }
             let path = session_file(env, &[agent], &path)?;
-            let home = env.home("sessions_home_unavailable")?;
-            let page = hide_session::read_session_file(
-                Path::new(&home),
-                agent,
-                &path,
-                Some(&scope),
-                || {
+            let accounts = accounts(env, "sessions_home_unavailable")?;
+            let page =
+                hide_session::read_session_file(&accounts, agent, &path, Some(&scope), || {
                     hide_session::read_conversation(
-                        Path::new(&home),
+                        accounts.home(),
                         agent,
                         &path,
                         &scope,
                         checkpoint,
                     )
                     .map_err(|_| "session_conversation_read_failed".to_owned())
-                },
-            )
-            .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+                })
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
             to_value(page)
         }
         Call::LinkRead { requests } => {
@@ -1775,8 +1797,8 @@ pub fn handle_with_progress(
                     "links_read_limit",
                 ));
             }
-            let home = env.home("links_home_unavailable")?;
-            let mut answers = hide_session::links::read(Path::new(&home), &requests);
+            let accounts = accounts(env, "links_home_unavailable")?;
+            let mut answers = hide_session::links::read(&accounts, &requests);
             // Agent records carry this node's native cwd. Catalog paths use
             // wire spelling; only the owning node may convert between them.
             for answer in &mut answers {
@@ -1978,6 +2000,7 @@ mod tests {
             ))
             .unwrap();
         let request = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: hide_session::Agent::OpenCode,
             reference_kind: "id".to_owned(),
             reference_value: "ses_0a1b2c3d4e5f60718293a4b5c6".to_owned(),
@@ -1987,13 +2010,18 @@ mod tests {
         };
         let writer = rusqlite::Connection::open(&database).unwrap();
         writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
-        let error = session_activity(home.path(), &request).unwrap_err();
+        let error =
+            session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap_err();
         assert_eq!(
             (error.code, error.message.as_str()),
             (ErrorCode::Busy, "opencode_db_busy")
         );
         drop(writer);
-        assert!(session_activity(home.path(), &request).unwrap()["bytes"].as_u64() > Some(0));
+        assert!(
+            session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap()["bytes"]
+                .as_u64()
+                > Some(0)
+        );
     }
 
     /// A node hands over, once, what its pane's hooks could not confirm,
@@ -2069,6 +2097,7 @@ mod tests {
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"native-a\"}}\nsecret conversation\n";
         std::fs::write(&path, contents).unwrap();
         let mut request = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: hide_session::Agent::Codex,
             reference_kind: "path".to_owned(),
             reference_value: path.to_string_lossy().into_owned(),
@@ -2076,7 +2105,7 @@ mod tests {
             exact_route: false,
             expected_id: None,
         };
-        let answer = session_activity(home.path(), &request).unwrap();
+        let answer = session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap();
         assert_eq!(answer.as_object().unwrap().len(), 2);
         assert_eq!(answer["bytes"], contents.len() as u64);
         assert!(answer["modified_at_unix_ms"].as_u64().unwrap() > 0);
@@ -2092,7 +2121,8 @@ mod tests {
             call
         );
         request.reference_kind = "opaque".to_owned();
-        let error = session_activity(home.path(), &request).unwrap_err();
+        let error =
+            session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap_err();
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert_eq!(error.message, "session_kind_unsupported");
     }

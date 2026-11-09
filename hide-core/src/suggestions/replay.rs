@@ -51,7 +51,7 @@ fn session_facts(
     counts: &mut SessionCounts,
 ) -> Vec<Observation> {
     let identity = hide_project::resolve(root, "local").expect("a replay Project resolves");
-    let catalog = hide_session::SessionCatalog::new(home, "local");
+    let catalog = hide_session::SessionCatalog::new(&hide_session::Accounts::new(home), "local");
     let sessions = catalog
         .project_sessions(&identity)
         .expect("the Project's sessions are listed");
@@ -65,6 +65,7 @@ fn session_facts(
         };
         let checkout = session.checkout_path.to_string_lossy().into_owned();
         let mut request = LabelTranscriptRequest {
+            account: Default::default(),
             agent: session.agent,
             reference_kind: "path".into(),
             reference_value: locator.to_owned(),
@@ -94,13 +95,14 @@ fn session_facts(
         let mut waited = None;
         let mut refused = None;
         for _ in 0..READS_PER_SESSION {
-            let transcript = match label_transcript::read(home, &request) {
-                Ok(transcript) => transcript,
-                Err(reason) => {
-                    refused = Some(reason.to_string());
-                    break;
-                }
-            };
+            let transcript =
+                match label_transcript::read(&hide_session::Accounts::new(home), &request) {
+                    Ok(transcript) => transcript,
+                    Err(reason) => {
+                        refused = Some(reason.to_string());
+                        break;
+                    }
+                };
             failed.extend(transcript.failed_tools);
             if waited.is_none()
                 && transcript

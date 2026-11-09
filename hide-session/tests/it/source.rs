@@ -113,9 +113,10 @@ impl Session {
             next: request.clone(),
         };
         loop {
-            let answer = read(self.home.path(), &request).unwrap_or_else(|refusal| {
-                panic!("{:?} read refused: {refusal:?}", self.agent);
-            });
+            let answer = read(&hide_session::Accounts::new(self.home.path()), &request)
+                .unwrap_or_else(|refusal| {
+                    panic!("{:?} read refused: {refusal:?}", self.agent);
+                });
             reads.events.extend(
                 answer
                     .events
@@ -144,7 +145,11 @@ impl Session {
     }
 
     fn refusal(&self) -> ReadRefusal {
-        read(self.home.path(), &self.request).unwrap_err()
+        read(
+            &hide_session::Accounts::new(self.home.path()),
+            &self.request,
+        )
+        .unwrap_err()
     }
 
     /// Rewrites the file so its records are `change`d; each record keeps its
@@ -505,7 +510,11 @@ fn a_naming_record_over_its_cap_is_refused_for_its_size() {
     let grok = adapters::grok::Native::new();
     grok.summary(|summary| summary["generated_title"] = json!(over));
     assert_eq!(
-        read(grok.home.path(), &grok.request).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(grok.home.path()),
+            &grok.request
+        )
+        .unwrap_err(),
         refused,
         "Grok's summary.json"
     );
@@ -519,7 +528,11 @@ fn a_naming_record_over_its_cap_is_refused_for_its_size() {
     )
     .unwrap();
     assert_eq!(
-        read(grok.home.path(), &grok.request).unwrap_err(),
+        read(
+            &hide_session::Accounts::new(grok.home.path()),
+            &grok.request
+        )
+        .unwrap_err(),
         ReadRefusal::Refused("label_session_metadata_line_capacity".into()),
     );
 }
@@ -598,13 +611,25 @@ fn usage_holds_an_unfinished_record_and_counts_a_broken_one() {
             .join("-work-app/session-a.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, &bytes).unwrap();
-        let step = usage::read(home.path(), Agent::Claude, &path, None).unwrap();
+        let step = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Claude,
+            &path,
+            None,
+        )
+        .unwrap();
         assert_eq!(step.events.len(), 1);
         assert_eq!(step.checkpoint.offset, unfinished as u64);
         assert_eq!(step.skipped.values().sum::<u64>(), 1, "{:?}", step.skipped);
         assert_eq!(unfinished, first.len() + broken.len());
         fs::write(&path, format!("{first}{broken}{second}")).unwrap();
-        let next = usage::read(home.path(), Agent::Claude, &path, Some(step.checkpoint)).unwrap();
+        let next = usage::read(
+            &hide_session::Accounts::new(home.path()),
+            Agent::Claude,
+            &path,
+            Some(step.checkpoint),
+        )
+        .unwrap();
         assert_eq!(next.events.len(), 1, "the finished record is read once");
         assert_eq!(
             next.checkpoint.offset,

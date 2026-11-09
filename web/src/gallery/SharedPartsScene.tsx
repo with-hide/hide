@@ -5,7 +5,7 @@
 // parts in the projects-sidebar and session-record scenes. Nothing leaves it.
 import { HouseIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, type ReactNode } from "react";
-import { AgentMark } from "../AgentMark";
+import { AgentMark, ProfileBadge } from "../AgentMark";
 import { LetterTag, PaneLetterButton, RowLetterMark } from "../components/letter-mark";
 import { MentionChip } from "../components/mention-chip";
 import { MissionChip } from "../components/mission-chip";
@@ -96,6 +96,12 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
               </SessionRowBody>
             </RowButton>
           </State>
+        </Part>
+        <Part name="Profile badge · AgentMark profile, ProfileBadge">
+          <State name="Default and profile tabs"><span className="flex items-center gap-md text-caption"><span className="flex items-center gap-xs"><StatusMark mark="going" /><AgentMark kind="claude" /><span>Claude</span></span><span className="flex items-center gap-xs"><StatusMark mark="going" /><AgentMark kind="claude" profile="work" /><span>Claude</span></span><span className="flex items-center gap-xs"><StatusMark mark="done" /><AgentMark kind="codex" profile="personal" /><span>Fix login redirect</span></span></span></State>
+          <State name="Logos hidden"><ol><SessionRow mark={<><StatusMark mark="going" /><ProfileBadge profile="work" standalone /></>} title="Fix login redirect" right={time("2m")} /></ol></State>
+          <State name="Hide AI keeps its owl"><span className="flex items-center gap-xs text-caption"><AgentMark kind="claude" hideAi="card" profile="work" /><span>Hide AI · Claude · work</span></span></State>
+          <State name="Korean name"><span className="flex items-center gap-xs text-caption"><AgentMark kind="claude" profile="회사" /><span>블로그 초안 개요</span></span></State>
         </Part>
         <Part name="To look at · LookButton">
           <State name="Pane header"><span className="flex min-w-0 items-center gap-sm text-caption"><LookButton label="볼 것 · boundary-final.html" onLook={open} /><AgentMark kind="claude" /><span className="truncate">미션 상태 단순화 경계 목업</span></span></State>

@@ -485,3 +485,15 @@ it("draws a middle child's whole pull request list on its child row, its grandch
   expect(counts('[data-task-row="a"]')).toBe("mergeable:1 merged:1");
   expect(mark('[data-task-child="c"]')?.textContent).toBe("#42");
 });
+
+// PRD agent-profiles B17: a child whose logo wears a profile badge says its agent and profile in its hover and its name; a default child says its agent alone.
+it("names a profile child's agent and profile in its hover and accessible name, and a default child's agent alone", async () => {
+  const agents = [row("parent", { lineage_child_pane_ids: ["work", "plain"] }), row("work", { lineage_parent_pane_id: "parent", delegated: true, profile: "work" }), row("plain", { lineage_parent_pane_id: "parent", delegated: true })];
+  const { container } = await render(snapshot(agents, [card("parent", "working", "hide-main", ["parent", "work", "plain"])], "status", ["parent"]), agents);
+  const named = (id: string) => container.querySelector<HTMLElement>(`[data-task-child="${id}"] [data-task-focus="row"]`)!;
+  expect(named("work").getAttribute("aria-label")).toContain("Claude Code · work");
+  expect(named("work").title).toContain("Claude Code · work");
+  expect(named("plain").getAttribute("aria-label")).toContain("Claude Code");
+  expect(named("plain").getAttribute("aria-label")).not.toContain(" · work");
+  expect(named("plain").title).not.toContain(" · ");
+});

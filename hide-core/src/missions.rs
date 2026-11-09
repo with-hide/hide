@@ -1070,6 +1070,18 @@ pub struct Conductor {
     pub session: Option<crate::links::ledger::SessionIdentity>,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// The profile the session's start ran with, as its pane's launch record
+    /// kept it, which 이어받기's resume of the session runs with again
+    /// (PRD agent-profiles D-27); `None` for the built-in default, as for
+    /// every mission recorded before profiles, unless `profile_unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
+    /// No launch record describes the session's start (a Conductor started
+    /// by hand), so the account it runs in is not known: 이어받기 asks the
+    /// session's machine, as a resume that names the session by id alone
+    /// does, never assuming the built-in default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_unknown: bool,
 }
 
 fn is_zero(value: &u8) -> bool {
@@ -3036,6 +3048,8 @@ pub(crate) mod tests {
                 actor: actor("w1:p1"),
                 session: None,
                 agent_id: None,
+                profile: None,
+                profile_unknown: false,
             },
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
@@ -3776,5 +3790,41 @@ pub(crate) mod tests {
             purpose: "screens".into(),
         };
         assert!(settings.validate().is_ok());
+    }
+
+    /// A Conductor recorded before profiles names none and reads as the
+    /// built-in default's; one that names a profile keeps it (PRD
+    /// agent-profiles D-27). An older build reads both, the field unknown to
+    /// it left out.
+    #[test]
+    fn a_conductor_recorded_before_profiles_reads_as_the_built_in_default() {
+        let old = serde_json::json!({"actor": serde_json::to_value(actor("w1:p1")).unwrap()});
+        let conductor: Conductor = serde_json::from_value(old).unwrap();
+        assert_eq!(conductor.profile, None);
+        assert!(
+            serde_json::to_value(&conductor)
+                .unwrap()
+                .get("profile")
+                .is_none()
+        );
+
+        let work = Conductor {
+            profile: Some(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p-work".into()),
+                name: "work".into(),
+                account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+            }),
+            ..conductor.clone()
+        };
+        let saved = serde_json::to_value(&work).unwrap();
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), work);
+        assert!(!conductor.profile_unknown, "a mission kept before profiles");
+        let unknown = Conductor {
+            profile_unknown: true,
+            ..conductor
+        };
+        let saved = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(saved["profile_unknown"], true);
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), unknown);
     }
 }

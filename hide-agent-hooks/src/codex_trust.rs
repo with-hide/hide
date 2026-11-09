@@ -948,10 +948,10 @@ fn project_key_path(key: &str, field: Option<&str>) -> String {
     }
 }
 
-fn config_failure(home: &Path, failure: TrustFailure) -> crate::install::InstallFailure {
+fn config_failure(at: AccountAt<'_>, failure: TrustFailure) -> crate::install::InstallFailure {
     crate::install::InstallFailure::NotWritable {
         path: crate::folder_trust::Agent::Codex
-            .settings_path(home)
+            .settings_path(at)
             .display()
             .to_string(),
         detail: format!("Codex {}: {}", failure.kind.summary(), failure.detail),
@@ -962,19 +962,19 @@ fn config_failure(home: &Path, failure: TrustFailure) -> crate::install::Install
 /// record one.
 fn project_session<'a>(
     codex: &Program,
-    home: &Path,
+    at: AccountAt<'_>,
     stop: &'a AtomicBool,
 ) -> Result<Session<'a>, crate::install::InstallFailure> {
-    match Session::start(codex, AccountAt::Home(home), stop, Limits::DEFAULT) {
+    match Session::start(codex, at, stop, Limits::DEFAULT) {
         Ok(Started::Ready(session)) => Ok(session),
         Ok(Started::Unsupported) => Err(config_failure(
-            home,
+            at,
             TrustFailure::new(
                 TrustFailureKind::Ended,
                 "this Codex has no app-server to record a folder's trust through",
             ),
         )),
-        Err(failure) => Err(config_failure(home, failure)),
+        Err(failure) => Err(config_failure(at, failure)),
     }
 }
 
@@ -988,7 +988,7 @@ fn project_session<'a>(
 /// longer exists.
 pub(crate) fn add_project_trust(
     codex: &Program,
-    home: &Path,
+    at: AccountAt<'_>,
     stop: &AtomicBool,
     key: &str,
     repository: Option<&str>,
@@ -997,15 +997,15 @@ pub(crate) fn add_project_trust(
 ) -> Result<crate::folder_trust::Added, crate::install::InstallFailure> {
     let refused = |detail: String| crate::install::InstallFailure::Refused {
         path: crate::folder_trust::Agent::Codex
-            .settings_path(home)
+            .settings_path(at)
             .display()
             .to_string(),
         detail,
     };
-    let mut session = project_session(codex, home, stop)?;
+    let mut session = project_session(codex, at, stop)?;
     let projects = session
         .projects()
-        .map_err(|failure| config_failure(home, failure))?;
+        .map_err(|failure| config_failure(at, failure))?;
     match projects.trust_level(key) {
         Some("trusted") => return Ok(crate::folder_trust::Added::Present),
         Some("untrusted") => {
@@ -1031,19 +1031,19 @@ pub(crate) fn add_project_trust(
     }));
     session
         .write_projects(projects.version.as_deref(), edits)
-        .map_err(|failure| config_failure(home, failure))?;
+        .map_err(|failure| config_failure(at, failure))?;
     match session.projects() {
         Ok(after) if after.trust_level(key) == Some("trusted") => {
             Ok(crate::folder_trust::Added::New)
         }
         Ok(_) => Err(config_failure(
-            home,
+            at,
             TrustFailure::new(
                 TrustFailureKind::Unconfirmed,
                 format!("codex accepted the write and does not list {key} as trusted"),
             ),
         )),
-        Err(failure) => Err(config_failure(home, failure)),
+        Err(failure) => Err(config_failure(at, failure)),
     }
 }
 
@@ -1053,14 +1053,14 @@ pub(crate) fn add_project_trust(
 /// Answers how many entries changed.
 pub(crate) fn remove_project_trust(
     codex: &Program,
-    home: &Path,
+    at: AccountAt<'_>,
     stop: &AtomicBool,
     keys: &[String],
 ) -> Result<usize, crate::install::InstallFailure> {
-    let mut session = project_session(codex, home, stop)?;
+    let mut session = project_session(codex, at, stop)?;
     let projects = session
         .projects()
-        .map_err(|failure| config_failure(home, failure))?;
+        .map_err(|failure| config_failure(at, failure))?;
     let edits = removal_edits(&projects, keys);
     if edits.is_empty() {
         return Ok(0);
@@ -1068,7 +1068,7 @@ pub(crate) fn remove_project_trust(
     let removed = edits.len();
     session
         .write_projects(projects.version.as_deref(), edits)
-        .map_err(|failure| config_failure(home, failure))?;
+        .map_err(|failure| config_failure(at, failure))?;
     Ok(removed)
 }
 

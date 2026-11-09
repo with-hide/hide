@@ -74,7 +74,7 @@ fn ingest_as(store: &mut LinkStore, home: &Path, agent: Agent, path: &str) {
     loop {
         let checkpoint = store.checkpoint(DEVICE, path).unwrap();
         let answer = links::read(
-            home,
+            &hide_session::Accounts::new(home),
             &[ReadRequest {
                 agent,
                 path: path.to_owned(),

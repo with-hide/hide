@@ -483,7 +483,8 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
         let transcript: LabelTranscript = call_as(
             device.link.as_ref(),
             Call::LabelTranscript {
-                request: LabelTranscriptRequest {
+                request: Box::new(LabelTranscriptRequest {
+                    account: Default::default(),
                     agent,
                     reference_kind: "id".to_owned(),
                     reference_value: id.to_owned(),
@@ -492,7 +493,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
                     subagents: Default::default(),
                     turns: None,
                     tools: None,
-                },
+                }),
             },
             TIMEOUT,
         )
@@ -577,7 +578,8 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
     let refused: Result<LabelTranscript, _> = call_as(
         device.link.as_ref(),
         Call::LabelTranscript {
-            request: LabelTranscriptRequest {
+            request: Box::new(LabelTranscriptRequest {
+                account: Default::default(),
                 agent: Agent::Omp,
                 reference_kind: "id".into(),
                 reference_value: "native-omp".into(),
@@ -586,7 +588,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
                 subagents: Default::default(),
                 turns: None,
                 tools: None,
-            },
+            }),
         },
         TIMEOUT,
     );

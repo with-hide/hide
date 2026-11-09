@@ -462,11 +462,12 @@ pub(crate) fn confirm_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> R
 /// The transcript of the reported conversation, or with none reported the
 /// newest one the operator started in `cwd`.
 pub(crate) fn locate(
-    home: &Path,
+    accounts: &crate::Accounts,
     identity: Option<&crate::SessionIdentity>,
     cwd: Option<&str>,
     budget: &mut DiscoveryBudget,
 ) -> crate::Result<PathBuf> {
+    let home = accounts.home();
     budget.directory()?;
     let cwd = cwd.ok_or(SessionError::CwdUnavailable)?;
     let id = match identity {
@@ -485,8 +486,14 @@ pub(crate) fn locate(
         }
     };
     let path = transcript(home, &id);
-    crate::confirm_session_file(home, crate::Agent::Antigravity, &path, Some(&id), Some(cwd))
-        .map_err(|error| SessionError::unproven(&error))?;
+    crate::confirm_session_file(
+        accounts,
+        crate::Agent::Antigravity,
+        &path,
+        Some(&id),
+        Some(cwd),
+    )
+    .map_err(|error| SessionError::unproven(&error))?;
     Ok(path)
 }
 

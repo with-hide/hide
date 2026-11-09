@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::account::{Accounts, Root};
 use crate::{
     Agent, ConversationEvent, DiscoveryBudget, EventKind, LineResult, RootRefusal, SessionError,
     SessionIdentity,
@@ -18,14 +19,43 @@ use crate::{
 /// Routing constraint of Pi's native --session <id>: its default cwd folder
 /// is searched first. Global matches prompt to fork, so they cannot wake an
 /// existing conversation without an operator decision.
-fn root_suffix(home: &Path, agent: Agent) -> PathBuf {
+///
+/// The account a read of `agent` locates in (`Accounts::root`): the place
+/// and the folder it is proven down from. Cursor's is below the home.
+fn reading_root(accounts: &Accounts, agent: Agent) -> std::result::Result<Root, RootRefusal> {
     match agent {
-        Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => {
-            crate::account::sessions_below_home(home, agent)
-        }
-        Agent::Cursor => PathBuf::from(crate::cursor::SESSIONS),
+        Agent::Cursor => Ok(Root {
+            anchor: accounts.home().to_path_buf(),
+            place: accounts.home().join(crate::cursor::SESSIONS),
+        }),
+        Agent::Grok | Agent::Pi | Agent::Omp | Agent::Antigravity => accounts
+            .root(agent)
+            .ok()
+            .flatten()
+            .cloned()
+            .ok_or(RootRefusal::Outside),
         _ => unreachable!("native-file policy requires a native-file format"),
     }
+}
+
+/// Every account `agent` keeps sessions in (`Accounts::roots`), the default
+/// first; Cursor's one below the home.
+fn account_roots(accounts: &Accounts, agent: Agent) -> Vec<Root> {
+    match agent {
+        Agent::Cursor => reading_root(accounts, agent).into_iter().collect(),
+        _ => accounts
+            .roots(agent)
+            .map(|(_, root)| root.clone())
+            .collect(),
+    }
+}
+
+/// The account of `agent` whose place holds `path`, as spelled or with the
+/// account's folder resolved.
+pub(crate) fn root_holding(accounts: &Accounts, agent: Agent, path: &Path) -> Option<Root> {
+    account_roots(accounts, agent)
+        .into_iter()
+        .find(|root| below(root, path).is_ok())
 }
 
 fn encode_path(path: &Path) -> String {
@@ -103,7 +133,14 @@ fn omp_directory(home: &Path, cwd: &Path) -> Result<OmpDirectory> {
 /// The folder the agent's default resolver reads a checkout's sessions
 /// from: the session file's folder for Pi and omp, the group holding each
 /// session's folder for Grok.
-pub(crate) fn default_directory(home: &Path, agent: Agent, cwd: &Path) -> Result<PathBuf> {
+pub(crate) fn default_directory(accounts: &Accounts, agent: Agent, cwd: &Path) -> Result<PathBuf> {
+    let root = reading_root(accounts, agent).map_err(|_| anyhow!("session_route_unconfirmed"))?;
+    directory_in(&root, accounts.home(), agent, cwd)
+}
+
+/// [`default_directory`] in the account `root`; omp names a checkout's
+/// folder by the node's `home`.
+pub(crate) fn directory_in(root: &Root, home: &Path, agent: Agent, cwd: &Path) -> Result<PathBuf> {
     let name = match agent {
         Agent::Omp => omp_directory(home, cwd)?.name,
         Agent::Grok => crate::grok::group_name(cwd)?,
@@ -112,19 +149,19 @@ pub(crate) fn default_directory(home: &Path, agent: Agent, cwd: &Path) -> Result
         }
         _ => absolute_directory_name(cwd),
     };
-    Ok(home.join(root_suffix(home, agent)).join(name))
+    Ok(root.place.join(name))
 }
 
 /// OMP startup migrates these fixed aliases before resolving a selector.
 /// Refuse the pending native work; Hide neither migrates nor edits histories.
-fn confirm_omp_migrations(home: &Path, cwd: &Path, directory: &Path) -> Result<()> {
+fn confirm_omp_migrations(root: &Root, home: &Path, cwd: &Path, directory: &Path) -> Result<()> {
     if !cwd.is_absolute() || cwd.components().any(|part| part == Component::ParentDir) {
         return Err(anyhow!("session_route_unconfirmed"));
     }
     let canonical_cwd = hide_platform::fs::identity::canonical(cwd)
         .map_err(|_| anyhow!("session_route_unconfirmed"))?;
     let policy = omp_directory(home, &canonical_cwd)?;
-    let root = home.join(root_suffix(home, Agent::Omp));
+    let root = &root.place;
     for spelling in [home, policy.canonical_home.as_path()] {
         let legacy = absolute_directory_name(spelling);
         let prefix = format!("{}-", legacy.strip_suffix("--").unwrap());
@@ -210,43 +247,63 @@ fn confirm_omp_migrations(home: &Path, cwd: &Path, directory: &Path) -> Result<(
     Ok(())
 }
 
-/// The home itself may have a platform alias. No component below it may be
-/// a link, including .pi and the sessions root. Inspect native entry identity
-/// rather than relying on canonicalization to hide internal links.
+/// The account's folder itself may have a platform alias. No component below
+/// it may be a link, including .pi and the sessions root. Inspect native
+/// entry identity rather than relying on canonicalization to hide internal
+/// links. A path is read only in an account the node registered
+/// (`Accounts::roots`).
 pub(crate) fn inside_root(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: &Path,
 ) -> std::result::Result<PathBuf, RootRefusal> {
-    let canonical_home =
-        hide_platform::fs::identity::canonical(home).map_err(|_| RootRefusal::Unreadable)?;
+    let mut refusal = RootRefusal::Outside;
+    for root in account_roots(accounts, agent) {
+        match below(&root, path) {
+            Ok(()) if agent == Agent::Cursor => {
+                return crate::cursor::checked_path(accounts.home(), path)
+                    .map_err(|_| RootRefusal::Outside);
+            }
+            Ok(()) if agent == Agent::Antigravity => {
+                return crate::antigravity::checked_path(accounts.home(), path);
+            }
+            Ok(()) => return checked_path_under(&root.anchor, root.suffix(), path),
+            Err(RootRefusal::Outside) => {}
+            Err(other) => refusal = other,
+        }
+    }
+    Err(refusal)
+}
+
+/// Whether `path` names an entry strictly below `root`'s place, spelled
+/// from its anchor as given or as resolved.
+fn below(root: &Root, path: &Path) -> std::result::Result<(), RootRefusal> {
+    let canonical_anchor = hide_platform::fs::identity::canonical(&root.anchor)
+        .map_err(|_| RootRefusal::Unreadable)?;
     let relative = path
-        .strip_prefix(home)
-        .or_else(|_| path.strip_prefix(&canonical_home))
+        .strip_prefix(&root.anchor)
+        .or_else(|_| path.strip_prefix(&canonical_anchor))
         .map_err(|_| RootRefusal::Outside)?;
-    let suffix = root_suffix(home, agent);
-    if !relative.starts_with(&suffix) || relative == suffix {
+    let suffix = root.suffix();
+    if !relative.starts_with(suffix) || relative == suffix {
         return Err(RootRefusal::Outside);
     }
-    if agent == Agent::Cursor {
-        crate::cursor::checked_path(home, path).map_err(|_| RootRefusal::Outside)
-    } else if agent == Agent::Antigravity {
-        crate::antigravity::checked_path(home, path)
-    } else {
-        checked_path(home, agent, path)
-    }
+    Ok(())
 }
 
-pub(crate) fn root(home: &Path, agent: Agent) -> std::result::Result<PathBuf, RootRefusal> {
-    checked_path(home, agent, &home.join(root_suffix(home, agent)))
+/// The folder `agent`'s sessions are read from (`reading_root`), proven.
+pub(crate) fn root(accounts: &Accounts, agent: Agent) -> std::result::Result<PathBuf, RootRefusal> {
+    let root = reading_root(accounts, agent)?;
+    checked_path_under(&root.anchor, root.suffix(), &root.place)
 }
 
-fn checked_path(
-    home: &Path,
-    agent: Agent,
-    path: &Path,
-) -> std::result::Result<PathBuf, RootRefusal> {
-    checked_path_under(home, &root_suffix(home, agent), path)
+/// Every folder `agent`'s sessions are kept in that the node registered and
+/// that can be proven, the default first: what a listing walks.
+pub(crate) fn roots(accounts: &Accounts, agent: Agent) -> Vec<PathBuf> {
+    account_roots(accounts, agent)
+        .iter()
+        .filter_map(|root| checked_path_under(&root.anchor, root.suffix(), &root.place).ok())
+        .collect()
 }
 
 pub(crate) fn checked_path_under(
@@ -308,29 +365,31 @@ pub(crate) fn directory_of(agent: Agent, path: &Path) -> Option<&Path> {
 /// matches. Refuse uncertainty instead of depending on directory enumeration.
 /// This directory scan is action-only, never a snapshot or per-file catalog read.
 pub(crate) fn confirm_route(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: &Path,
     id: &str,
     cwd: &Path,
 ) -> Result<()> {
     if agent == Agent::Cursor {
-        return crate::cursor::confirm_route(home, path, id, cwd)
+        return crate::cursor::confirm_route(accounts.home(), path, id, cwd)
             .map_err(|error| anyhow!(error.to_string()));
     }
     if agent == Agent::Antigravity {
-        return crate::antigravity::confirm_route(home, path, id, cwd);
+        return crate::antigravity::confirm_route(accounts.home(), path, id, cwd);
     }
     let expected =
-        inside_root(home, agent, path).map_err(|_| anyhow!("session_route_unconfirmed"))?;
+        inside_root(accounts, agent, path).map_err(|_| anyhow!("session_route_unconfirmed"))?;
+    let root =
+        root_holding(accounts, agent, path).ok_or_else(|| anyhow!("session_route_unconfirmed"))?;
     if agent == Agent::Grok {
-        return confirm_grok_route(home, &expected, id, cwd);
+        return confirm_grok_route(accounts, &root, &expected, id, cwd);
     }
     let directory = path
         .parent()
         .ok_or_else(|| anyhow!("session_route_unconfirmed"))?;
     if agent == Agent::Omp {
-        confirm_omp_migrations(home, cwd, directory)?;
+        confirm_omp_migrations(&root, accounts.home(), cwd, directory)?;
     }
     let mut budget = DiscoveryBudget::default();
     let mut remaining = crate::SESSION_INCREMENT_READ_LIMIT_BYTES;
@@ -362,7 +421,7 @@ pub(crate) fn confirm_route(
         {
             continue;
         }
-        let checked = inside_root(home, agent, &candidate)
+        let checked = inside_root(accounts, agent, &candidate)
             .map_err(|_| anyhow!("session_route_unconfirmed"))?;
         let file =
             crate::source::open(&candidate).map_err(|_| anyhow!("session_route_unconfirmed"))?;
@@ -415,15 +474,21 @@ pub(crate) fn confirm_route(
 /// `grok --resume <id>` takes the session folder named `<id>` in the
 /// launch cwd's own group before searching any other group, so that folder
 /// holding this session's summary is the one it resumes.
-fn confirm_grok_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> Result<()> {
+fn confirm_grok_route(
+    accounts: &Accounts,
+    root: &Root,
+    path: &Path,
+    id: &str,
+    cwd: &Path,
+) -> Result<()> {
     if !cwd.is_absolute() || cwd.components().any(|part| part == Component::ParentDir) {
         return Err(anyhow!("session_route_unconfirmed"));
     }
     let cwd = hide_platform::fs::identity::canonical(cwd)
         .map_err(|_| anyhow!("session_route_unconfirmed"))?;
-    let group = default_directory(home, Agent::Grok, &cwd)?;
-    let group =
-        inside_root(home, Agent::Grok, &group).map_err(|_| anyhow!("session_route_unconfirmed"))?;
+    let group = directory_in(root, accounts.home(), Agent::Grok, &cwd)?;
+    let group = inside_root(accounts, Agent::Grok, &group)
+        .map_err(|_| anyhow!("session_route_unconfirmed"))?;
     if directory_of(Agent::Grok, path) != Some(group.as_path()) {
         return Err(anyhow!("session_route_unconfirmed"));
     }
@@ -441,21 +506,21 @@ fn confirm_grok_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> Result<
 }
 
 pub(crate) fn locate(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     identity: Option<&SessionIdentity>,
     cwd: Option<&str>,
     budget: &mut DiscoveryBudget,
 ) -> crate::Result<PathBuf> {
     if agent == Agent::Cursor {
-        return crate::cursor::locate(home, identity, cwd, budget);
+        return crate::cursor::locate(accounts.home(), identity, cwd, budget);
     }
     if agent == Agent::Antigravity {
-        return crate::antigravity::locate(home, identity, cwd, budget);
+        return crate::antigravity::locate(accounts, identity, cwd, budget);
     }
     let cwd = cwd.ok_or(SessionError::CwdUnavailable)?;
     if let Some(SessionIdentity::Path(path)) = identity {
-        crate::confirm_session_file(home, agent, path, None, Some(cwd))
+        crate::confirm_session_file(accounts, agent, path, None, Some(cwd))
             .map_err(|error| SessionError::Checkpoint(error.to_string()))?;
         return Ok(path.clone());
     }
@@ -466,15 +531,15 @@ pub(crate) fn locate(
         Some(_) => return Err(SessionError::SessionFileMissing),
         None => None,
     };
-    if self::root(home, agent).is_err() {
+    if self::root(accounts, agent).is_err() {
         return Err(SessionError::SessionFileMissing);
     }
     let mut candidates = Vec::new();
     let expected_cwd = hide_platform::fs::identity::canonical(Path::new(cwd))
         .map_err(|_| SessionError::CwdUnavailable)?;
-    let directory = default_directory(home, agent, &expected_cwd)
+    let directory = default_directory(accounts, agent, &expected_cwd)
         .map_err(|error| SessionError::Checkpoint(error.to_string()))?;
-    if inside_root(home, agent, &directory).is_err() {
+    if inside_root(accounts, agent, &directory).is_err() {
         return Err(SessionError::SessionFileMissing);
     }
     let mut remaining = crate::SESSION_INCREMENT_READ_LIMIT_BYTES;
@@ -491,7 +556,7 @@ pub(crate) fn locate(
     // session that is missing.
     let mut oversized = None;
     for path in paths {
-        if inside_root(home, agent, &path).is_err() {
+        if inside_root(accounts, agent, &path).is_err() {
             continue;
         }
         let header = match crate::source::facts::header_budgeted(agent, &path, &mut remaining) {
@@ -527,7 +592,7 @@ pub(crate) fn locate(
         .next()
         .map(|(_, path)| path)
         .ok_or_else(|| oversized.unwrap_or(SessionError::SessionFileMissing))?;
-    crate::confirm_session_file(home, agent, &path, reported_id, Some(cwd))
+    crate::confirm_session_file(accounts, agent, &path, reported_id, Some(cwd))
         .map_err(|error| SessionError::Checkpoint(error.to_string()))?;
     Ok(path)
 }

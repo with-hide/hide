@@ -21,6 +21,8 @@
 //! so a reader that follows a working session reads the same records again
 //! only from where its last whole page ended.
 
+use crate::account::Accounts;
+use hide_agent_adapter::AccountKey;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
@@ -129,6 +131,10 @@ pub struct ThreadRequest {
     pub reference_value: String,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The account the pane's agent runs in, which the thread is read in;
+    /// the node refuses one it did not register.
+    #[serde(default, skip_serializing_if = "AccountKey::is_default")]
+    pub account: AccountKey,
     pub read: ThreadRead,
 }
 
@@ -197,7 +203,7 @@ pub const fn reads(format: SessionFormat) -> bool {
 /// empty page: a format declared unreadable, a missing or replaced file, a
 /// stale cursor, or a page whose every conversation record failed to parse.
 pub fn read_thread(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: Option<&Path>,
     scope: &SessionReadScope,
@@ -207,7 +213,7 @@ pub fn read_thread(
         Some(cursor) => ThreadRead::Before(cursor.clone()),
         None => ThreadRead::Newest,
     };
-    read_page(home, agent, path, scope, &read)
+    read_page(accounts, agent, path, scope, &read)
 }
 
 /// The page of `agent`'s session that begins at `from`, read forward: the
@@ -217,20 +223,30 @@ pub fn read_thread(
 /// written is left for the next read. Refused as [`read_thread`] refuses,
 /// and a page that holds no record yet is answered empty.
 pub fn read_thread_from(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: Option<&Path>,
     scope: &SessionReadScope,
     from: &ThreadCursor,
 ) -> Result<ThreadPage, ReadRefusal> {
-    read_page(home, agent, path, scope, &ThreadRead::From(from.clone()))
+    read_page(
+        accounts,
+        agent,
+        path,
+        scope,
+        &ThreadRead::From(from.clone()),
+    )
 }
 
 /// The page `request` asks for of the session an agent pane runs, located
 /// and proven its native owner's as the label read proves it (an `id`
 /// reference must be a plain id, a reported path must lie in the agent's
 /// session folder and belong to the session it names).
-pub fn read_pane_thread(home: &Path, request: &ThreadRequest) -> Result<ThreadPage, ReadRefusal> {
+pub fn read_pane_thread(
+    accounts: &Accounts,
+    request: &ThreadRequest,
+) -> Result<ThreadPage, ReadRefusal> {
+    let accounts = &accounts.reading(request.agent, &request.account)?;
     if request.reference_kind == "id"
         && !crate::label_transcript::is_session_id(&request.reference_value)
     {
@@ -247,10 +263,10 @@ pub fn read_pane_thread(home: &Path, request: &ThreadRequest) -> Result<ThreadPa
             id: request.reference_value.clone(),
             cwd: request.cwd.clone().ok_or("session_route_unconfirmed")?,
         };
-        return read_page(home, request.agent, None, &scope, &request.read);
+        return read_page(accounts, request.agent, None, &scope, &request.read);
     }
     let (path, confirmed) = crate::label_transcript::locate_confirmed(
-        home,
+        accounts,
         request.agent,
         &request.reference_kind,
         &request.reference_value,
@@ -264,11 +280,11 @@ pub fn read_pane_thread(home: &Path, request: &ThreadRequest) -> Result<ThreadPa
         },
         cwd: request.cwd.clone().unwrap_or_default(),
     };
-    read_page(home, request.agent, Some(&path), &scope, &request.read)
+    read_page(accounts, request.agent, Some(&path), &scope, &request.read)
 }
 
 fn read_page(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: Option<&Path>,
     scope: &SessionReadScope,
@@ -276,12 +292,12 @@ fn read_page(
 ) -> Result<ThreadPage, ReadRefusal> {
     match reader(agent.format()) {
         Reader::Unsupported => Err(ReadRefusal::from("thread_unsupported")),
-        Reader::OpenCode => opencode::read(home, scope, read),
+        Reader::OpenCode => opencode::read(accounts, scope, read),
         Reader::Lines(lines) => {
             let path = path.ok_or(ReadRefusal::from("thread_path_required"))?;
-            crate::inside_session_root(home, &[agent], path)
+            crate::inside_session_root(accounts, &[agent], path)
                 .map_err(|_| ReadRefusal::from("thread_outside_session_root"))?;
-            crate::read_session_file(home, agent, path, Some(scope), || match read {
+            crate::read_session_file(accounts, agent, path, Some(scope), || match read {
                 ThreadRead::Newest => read_lines(path, lines, None),
                 ThreadRead::Before(cursor) => read_lines(path, lines, Some(cursor)),
                 ThreadRead::From(cursor) => read_lines_from(path, lines, cursor),

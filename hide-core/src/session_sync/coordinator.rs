@@ -1033,16 +1033,31 @@ fn unix_now_ms() -> u64 {
 /// Hands the worker the operator's agent-summary switch and the core's
 /// output language, under one brief lock, on every tick and publish: a
 /// turned switch reaches the screen and the running request within one
-/// tick, and a changed language the next request. Returns whether the shown
-/// labels changed.
+/// tick, and a changed language the next request. The launch records that
+/// name the accounts of the target's agents ride the same lock, copied
+/// only when one moved since the worker last took them. Returns whether
+/// the shown labels changed.
 fn take_label_switch(context: &SessionSyncContext, worker: &mut LabelWorker) -> bool {
+    let device = match &context.target {
+        SessionSyncTarget::Local { .. } => None,
+        SessionSyncTarget::Remote { target_id, .. } => Some(target_id.as_str()),
+    };
+    let edit = worker.account_launches_edit();
     let taken = context.runtime.upgrade().and_then(|runtime| {
-        runtime
-            .lock()
-            .ok()
-            .map(|guard| (guard.labels_asked(), guard.output_language()))
+        runtime.lock().ok().map(|guard| {
+            (
+                guard.labels_asked(),
+                guard.output_language(),
+                guard.account_launches(device, edit),
+            )
+        })
     });
-    taken.is_some_and(|(on, language)| worker.follow_core(on, language, Instant::now()))
+    taken.is_some_and(|(on, language, launches)| {
+        if let Some(launches) = launches {
+            worker.follow_account_launches(launches);
+        }
+        worker.follow_core(on, language, Instant::now())
+    })
 }
 
 /// Hands this machine's worker the panes whose sessions typed input waits
@@ -1081,6 +1096,20 @@ fn observe_labels(worker: &mut LabelWorker, state: &ProjectionState) {
                 .map(|session| (session.kind.clone(), session.value.clone())),
             cwd: agent.cwd.clone(),
             state_change_seq: agent.state_change_seq,
+            account: agent
+                .agent
+                .as_deref()
+                .map_or_else(Default::default, |kind| {
+                    worker.account_of(
+                        &agent.pane_id,
+                        kind,
+                        agent.name.as_deref(),
+                        agent
+                            .agent_session
+                            .as_ref()
+                            .map(|session| session.value.as_str()),
+                    )
+                }),
         })
         .collect();
     let live: HashSet<String> = state

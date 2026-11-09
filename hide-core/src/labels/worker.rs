@@ -185,6 +185,9 @@ pub(crate) struct ObservedAgent {
     pub(crate) reference: Option<(String, String)>,
     pub(crate) cwd: Option<String>,
     pub(crate) state_change_seq: u64,
+    /// The account the agent reads its sessions in: its profile's, from
+    /// the pane's launch record (PRD agent-profiles B19).
+    pub(crate) account: hide_agent_adapter::AccountKey,
 }
 
 pub(crate) struct WorkerConfig {
@@ -401,6 +404,8 @@ struct PaneState {
     metadata_observed: Option<SessionMetadata>,
     metadata_loaded: bool,
     cwd: Option<String>,
+    /// The account every read of the pane's session names.
+    account: hide_agent_adapter::AccountKey,
     generation: u64,
     /// The conversation since the anchor, bounded; empty until the first
     /// read of this process.
@@ -464,6 +469,10 @@ pub(crate) struct LabelWorker {
     input: Arc<OperatorInput>,
     records: BTreeMap<String, PaneRecord>,
     panes: BTreeMap<String, PaneState>,
+    /// The launch records of this machine's panes whose agent runs in an
+    /// account other than the default, with the edit they were taken at
+    /// (`Runtime::account_launches`).
+    account_launches: Option<(u64, BTreeMap<String, crate::model::PaneLaunch>)>,
     generator: GeneratorLock,
     reader: Reader,
     results: Receiver<WorkerResult>,
@@ -531,6 +540,7 @@ impl LabelWorker {
             store,
             analyzer,
             panes: BTreeMap::new(),
+            account_launches: None,
             reader,
             results,
             sender,
@@ -721,6 +731,7 @@ impl LabelWorker {
                             metadata_observed: None,
                             metadata_loaded: false,
                             cwd: observed.cwd.clone(),
+                            account: observed.account.clone(),
                             generation: self.next_generation,
                             events: VecDeque::new(),
                             events_loaded: false,
@@ -746,7 +757,10 @@ impl LabelWorker {
                     );
                 }
                 Some(pane) => {
-                    if pane.reported_reference != reference_token || pane.agent != agent {
+                    if pane.reported_reference != reference_token
+                        || pane.agent != agent
+                        || pane.account != observed.account
+                    {
                         // Another session, or none: everything in flight
                         // for the old one is dropped when it lands.
                         self.next_generation += 1;
@@ -795,6 +809,7 @@ impl LabelWorker {
                     pane.status = status;
                     pane.reported_reference = reference_token;
                     pane.cwd = observed.cwd.clone();
+                    pane.account = observed.account.clone();
                 }
             }
         }
@@ -1101,6 +1116,42 @@ impl LabelWorker {
             )
     }
 
+    /// The edit of the launch records [`Self::account_of`] reads, which the
+    /// core hands again only once they moved.
+    pub(crate) fn account_launches_edit(&self) -> Option<u64> {
+        self.account_launches.as_ref().map(|(edit, _)| *edit)
+    }
+
+    /// Takes the launch records `Runtime::account_launches` answered.
+    pub(crate) fn follow_account_launches(
+        &mut self,
+        launches: (u64, BTreeMap<String, crate::model::PaneLaunch>),
+    ) {
+        self.account_launches = Some(launches);
+    }
+
+    /// The account the `kind` agent started under `name` whose
+    /// conversation is `session` reads its sessions in, in this machine's
+    /// pane `pane_id`: its launch record's profile's, when the record
+    /// describes it, else the default (`Runtime::pane_account`).
+    pub(crate) fn account_of(
+        &self,
+        pane_id: &str,
+        kind: &str,
+        name: Option<&str>,
+        session: Option<&str>,
+    ) -> hide_agent_adapter::AccountKey {
+        self.account_launches
+            .as_ref()
+            .and_then(|(_, launches)| launches.get(pane_id))
+            .filter(|launch| {
+                crate::runtime::agent_choice::launch_describes(launch, kind, name, session)
+            })
+            .and_then(|launch| launch.profile.as_ref())
+            .map(|profile| profile.account.clone())
+            .unwrap_or_default()
+    }
+
     /// Takes what the core says labels follow: the operator's agent-summary
     /// switch (see [`Self::set_summaries`]) and the output language of the
     /// requests made from now on; a label already shown keeps the language
@@ -1367,6 +1418,7 @@ impl LabelWorker {
             state_change_seq: record.map(|record| record.state_change_seq),
             request: LabelTranscriptRequest {
                 agent: pane.agent,
+                account: pane.account.clone(),
                 reference_kind: kind,
                 reference_value: value,
                 cwd: pane.cwd.clone(),
