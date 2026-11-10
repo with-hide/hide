@@ -184,16 +184,17 @@ def rust_plan(modules, lister):
     """What the Rust job runs, from the tests the built binary lists for each package.
 
     `lister(package, filterset)` answers how many tests nextest would run. A
-    package whose selected modules list none (a helper file lists no test of
-    its own) runs its whole `it` binary instead, so N is always what runs and
-    never an estimate.
+    package with a selected module that lists none (a helper file lists no
+    test of its own, and what it reaches is unknown) runs its whole `it`
+    binary instead, whatever else was selected beside it, so N is always what
+    runs and never an estimate.
     """
     plan = []
     for package, expression in nextest_filters(modules):
-        tests = lister(package, expression)
-        if tests == 0 and expression:
-            expression, tests = "", lister(package, "")
-        plan.append({"package": package, "filter": expression, "tests": tests})
+        names = sorted(module["module"] for module in modules if module["package"] == package)
+        if expression and any(lister(package, nextest_filters([{"package": package, "module": name}])[0][1]) == 0 for name in names):
+            expression = ""
+        plan.append({"package": package, "filter": expression, "tests": lister(package, expression)})
     return plan
 
 

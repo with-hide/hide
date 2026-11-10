@@ -60,7 +60,8 @@ jobs:
   count:
     name: choose the repeat
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The web install and listing (5 minutes each) or the Rust build and listing (25), whichever the pull request needs, with setup.
+    timeout-minutes: 45
     outputs:
       web: ${{ steps.resolve.outputs.web }}
       rust: ${{ steps.resolve.outputs.rust }}

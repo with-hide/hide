@@ -110,6 +110,12 @@ class Detection(unittest.TestCase):
         plan = repeat.rust_plan([{"package": "hide-platform", "module": "stand_ins"}], lister)
         self.assertEqual(plan, [{"package": "hide-platform", "filter": "", "tests": 293}])
         self.assertEqual(asked, [("hide-platform", "test(/^(stand_ins)::/)"), ("hide-platform", "")])
+        # A helper beside a module that lists tests still runs the whole binary.
+        plan = repeat.rust_plan(
+            [{"package": "hide-platform", "module": "resident"}, {"package": "hide-platform", "module": "stand_ins"}],
+            lambda package, expression: 293 if not expression else (0 if "stand_ins)" in expression and "resident" not in expression else 9),
+        )
+        self.assertEqual(plan, [{"package": "hide-platform", "filter": "", "tests": 293}])
         # A module that lists tests keeps its filter, and a helper adds nothing to 20 web tests: N = 20 + 5.
         plan = repeat.rust_plan([{"package": "hide-relay-protocol", "module": "admission"}], lambda package, expression: 5)
         self.assertEqual(plan, [{"package": "hide-relay-protocol", "filter": "test(/^(admission)::/)", "tests": 5}])

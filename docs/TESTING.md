@@ -950,7 +950,7 @@ Nothing is handed to the nightly.
 - **What counts as a changed test is a file, not a test.**
   A web `e2e/*.spec.ts` added or modified runs whole, and so does a module of a crate's `tests/it` binary added or modified (`foo.rs`, `foo/mod.rs` or `foo/bar.rs`, picked by nextest's `test(/^foo::/)`, children included).
   A changed line says nothing reliable about which test it reaches (a helper, a hook, a fixture at the top of the file, a loop that declares tests), and reading the TypeScript to tell is more machinery than the lane earns.
-  `tests/it/support`, `tests/it/main.rs`, a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
+  A change to `tests/it/support` or `tests/it/main.rs`, or a module that lists no test (a helper file such as `stand_ins.rs`, even beside modules that do list tests), selects the crate's whole `it` binary, since what a helper reaches is not knowable from the diff; a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
   `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
 - **The budget is 200 test runs for the whole pull request.**
   N is the number of tests that will run, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs) and `cargo nextest list` counts the Rust tests the module's filterset matches (an `#[ignore]` test and a helper file count none).
