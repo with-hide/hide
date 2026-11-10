@@ -151,12 +151,6 @@ jobs:
           SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          # TEMPORARY repeat run for the native fixture node; reverted before the pull request is ready.
-          if [ "$RUNNER_OS" = macOS ]; then
-            if [ "${SHARD%/*}" != 1 ]; then echo "repeat run is on shard 1"; exit 0; fi
-            bash scripts/verify-web.sh desktop e2e --retries 0 --repeat-each 10 --grep "raised-child pane bands preserve native terminal geometry|session records by goal flow|failed terminals remain legible"
-            exit 0
-          fi
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
           if [ "${SHARD#*/}" -gt 1 ]; then
