@@ -66,8 +66,20 @@ ensure_device() {
     fi
 }
 
+# A release of this branch holds release.lock with its pid (mini-release.sh); copying a project under its archive, or
+# removing its folder, would break it, so the commands that do so wait.
+refuse_while_release_runs() {
+    local holder
+    holder=$(cat "$base/release.lock/pid" 2> /dev/null || true)
+    if [[ "$holder" =~ ^[0-9]+$ ]] && kill -0 "$holder" 2> /dev/null; then
+        printf 'refusing: a release of this branch is running on this machine (pid %s); wait for it, or read `build-ios.sh uploads`\n' "$holder" >&2
+        exit 1
+    fi
+}
+
 case "$command" in
     guard)
+        refuse_while_release_runs
         others=$(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name "$slug" 2> /dev/null | sort || true)
         count=$(printf '%s' "$others" | grep -c . || true)
         if (( count >= max_other_branches )); then
@@ -121,6 +133,7 @@ case "$command" in
         printf 'simulator: %s\ncapture: %s\n' "$id" "$shots/run.png"
         ;;
     clean)
+        refuse_while_release_runs
         id=$(device_id)
         if [[ -n "$id" ]]; then
             xcrun simctl shutdown "$id" 2> /dev/null || true
