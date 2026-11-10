@@ -10389,3 +10389,46 @@ fn a_mission_delay_ends_by_itself() {
         .is_err()
     );
 }
+
+/// A node that could start and was not is raised to its Conductor twenty
+/// minutes after the minute decision first saw it, not a moment before, and
+/// a delay set meanwhile starts that clock again once it is lifted.
+#[test]
+fn a_node_not_started_is_raised_twenty_minutes_after_it_was_first_seen() {
+    use crate::missions::AttentionReason;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    let raised = |runtime: &Runtime| {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .attention
+            .as_ref()
+            .map(|attention| attention.reason)
+    };
+    let t0 = crate::runtime::unix_milliseconds();
+    runtime.stall_missions(t0);
+    // A delay holds it for a while: no clock runs, and lifting it starts one.
+    runtime.stall_missions(t0 + 10 * minute);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    runtime.stall_missions(t0 + 15 * minute);
+    command(&mut runtime, "sender", json!({"op": "delay", "line": null})).unwrap();
+    let lifted = t0 + 16 * minute;
+    runtime.stall_missions(lifted);
+    runtime.stall_missions(lifted + 20 * minute - 1);
+    assert_eq!(raised(&runtime), None);
+    assert!(runtime.stall_missions(lifted + 20 * minute));
+    assert_eq!(raised(&runtime), Some(AttentionReason::NotStarted));
+}

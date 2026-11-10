@@ -674,14 +674,17 @@ impl Runtime {
     }
 
     /// Ends each delay that ran out, gives an end to one a build before
-    /// `Mission::delay_until_unix_ms` set, and raises the nodes whose move
-    /// did not come (`mission_health::stall_acts`); run in the minute
-    /// decision, the only clock a stall needs. A mission whose device does
-    /// not answer is left as it is (B29). Whether the book changed.
+    /// `Mission::delay_until_unix_ms` set, and raises each node that stood
+    /// where a move did not come (`mission_health::stalls`) for as long as
+    /// its reason allows (`stall_after`), counted from the first judgment
+    /// that saw it stand: a hold lifted, a place freed, a decision answered
+    /// or a restart starts its clock again. Run in the minute decision, the
+    /// only clock a stall needs. A mission whose device does not answer is
+    /// left as it is (B29). Whether the book changed.
     pub(crate) fn stall_missions(&mut self, now: u64) -> bool {
-        let watched_from = *self.missions.stall_watched_from.get_or_insert(now);
         let ledger = self.delivery_state().ok();
         let closed: Vec<String> = self.closed_registration_ids().into_iter().collect();
+        let mut clock = std::collections::HashMap::new();
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &mut self.missions.book.missions[index];
@@ -716,29 +719,37 @@ impl Runtime {
                 crate::coordination::mission_workers(ledger, &mission.id, &closed, now)
                     >= usize::from(mission.cap)
             });
-            let acts = crate::mission_health::stall_acts(
+            let operator_waits: Vec<bool> = mission
+                .nodes
+                .iter()
+                .map(|node| self.gate_open(mission, node))
+                .collect();
+            let standing = crate::mission_health::stalls(
                 mission,
                 self.mission_pulls(mission),
-                crate::mission_health::StallFacts {
-                    cap_full,
-                    watched_from,
-                },
-                now,
+                cap_full,
+                &operator_waits,
             );
-            if acts.is_empty() {
+            let mut due = Vec::new();
+            for stall in standing {
+                let node = &mission.nodes[stall.node];
+                let cause = crate::missions::cause_key(stall.reason, stall.pr, None);
+                let key = (mission.id.clone(), node.key.clone(), cause);
+                let since = self.missions.stall_clock.get(&key).copied().unwrap_or(now);
+                if now.saturating_sub(since) >= crate::mission_health::stall_after(stall.reason) {
+                    due.push(stall);
+                }
+                clock.insert(key, since);
+            }
+            if due.is_empty() {
                 continue;
             }
             let id = mission.id.clone();
             let mission = &mut self.missions.book.missions[index];
             let mut events = Vec::new();
-            for act in acts {
-                if let Act::Raise {
-                    node, reason, pr, ..
-                } = act
-                {
-                    let key = mission.nodes[node].key.clone();
-                    events.extend(raise_for(mission, &key, reason, pr, None, now));
-                }
+            for stall in due {
+                let key = mission.nodes[stall.node].key.clone();
+                events.extend(raise_for(mission, &key, stall.reason, stall.pr, None, now));
             }
             if !events.is_empty() {
                 mission.updated_at_unix_ms = now;
@@ -747,6 +758,9 @@ impl Runtime {
                 changed = true;
             }
         }
+        // Only what stands now keeps its clock, so the map holds at most one
+        // entry per node standing and a move that came starts it again.
+        self.missions.stall_clock = clock;
         if changed {
             self.save_missions();
             self.flush_mission_wakes();
@@ -889,7 +903,17 @@ impl Runtime {
                     // went back to work did not end the mission's closing:
                     // the next refusal is raised again, not held back as
                     // the one already handled.
-                    if let Some((AttentionReason::CloseRefused, cause)) = cleared {
+                    // A stall Hide took off because its move came, or none is
+                    // owed now, may stand again later as a new one, with
+                    // its own clock and letter.
+                    if let Some((
+                        AttentionReason::CloseRefused
+                        | AttentionReason::NotStarted
+                        | AttentionReason::WarningStood
+                        | AttentionReason::WaitStood,
+                        cause,
+                    )) = cleared
+                    {
                         mission.nodes[node]
                             .handled
                             .retain(|handled| *handled != cause);

@@ -576,10 +576,12 @@ pub(crate) struct MissionRuntime {
     pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
     /// What the last health evaluation read (PRD mission-node-simple D-08).
     pub(super) health_made: super::mission_health::HealthMadeFrom,
-    /// When this daemon first judged stalls (`stall_missions`). Memory only:
-    /// a restart or an update starts every stall clock from its first
-    /// judgment, so nothing that rested before it is raised at once.
-    pub(super) stall_watched_from: Option<u64>,
+    /// Since when each stall standing now has stood, by mission, node and
+    /// cause, as the minute decision first saw it (`stall_missions`). Memory
+    /// only: a restart or an update starts every clock again, so nothing that
+    /// rested before it is raised at once; an entry goes once its stall
+    /// stops standing, so it holds at most one per node standing.
+    pub(super) stall_clock: std::collections::HashMap<(String, String, String), u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,

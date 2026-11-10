@@ -667,6 +667,7 @@ A published release is never changed; a bad one is replaced by a higher version,
 If the app does not open after an update, install the previous release from the Releases page by hand, as in [Install a release](#install-a-release); `~/.hide` and the desktop profile stay as they are.
 After you have used a profile in a mission's worker candidates or Hide AI's agent items, 1.2.6 or earlier cannot read those choices; 1.2.5 or earlier also drops a session's profile from its launch record when it saves.
 Read the profile rows of [What each system supports](#what-each-system-supports) before installing one of them by hand.
+While a mission holds a stalled node (`멈춤` in 내 차례), 1.2.6 or earlier cannot read the missions at all, since it does not know that reason; settle the card, or wait for its move, before installing one of them by hand. A phone app from 1.2.6 or earlier shows such a card's reason as a raw key until it updates.
 The app never installs a lower version by itself.
 An install cut off partway is finished by installing again:
 

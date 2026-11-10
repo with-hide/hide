@@ -290,8 +290,10 @@ Every node not finished is someone's move, and a move that does not come is rais
 | The worker's, after a warning above | never: you already have the warning's letter | 30 minutes after the warning, if it still stands |
 | Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push | 10 minutes later |
 
-A node is not stalled while a delay holds the mission, the mission has as many workers as its cap, a decision waits on the operator, or GitHub's answer is stale; the clocks start no earlier than when this daemon first judged them, so an update raises nothing at once.
-Each cause is raised once and goes when the move comes: the node starts, the warning goes, the pull request moves.
+No move is owed while a delay holds the mission, a decision waits on the operator, or the node's gate waits on the operator's answer; a node not started also waits while the mission has as many workers as its cap, a warning stands only once its letter reached you, and a pull request's wait is judged only on GitHub's current answer.
+A mission closed as `merge_wait` waits on the operator's merges, so none of these is raised there.
+Each clock starts when Hide first sees the node stand there, so lifting a delay, freeing a place, answering a decision or restarting Hide starts it again, and an update raises nothing at once.
+Each stall is raised once while it stands and goes when its move comes or none is owed; if it stands again later, that is a new one.
 To hold a node on purpose, depend on an `external` node or set a delay; there is no silent wait.
 
 ### Finish lines
