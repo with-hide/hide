@@ -104,7 +104,6 @@ test("a planned review stays quiet until arrival and the phone's answer passes t
     await expect(phone.locator('[data-node-gate="passed"]')).toBeVisible();
     await screenshot(page, "mission-gate-passed-desktop");
     await screenshot(phone, "mission-gate-passed-phone");
-    await mission(conductor, ["node", "screen", "--status", "done"]);
   } finally {
     await phoneContext?.close();
     daemon?.stop();
