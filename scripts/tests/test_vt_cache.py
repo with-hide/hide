@@ -26,6 +26,7 @@ USERS = {
     ('release.yml', 'test'): False,
     ('holder-restart.yml', 'restart'): False,
     ('remote-mailbox.yml', 'mailbox'): False,
+    ('repeat.yml', 'rust'): False,
     ('wsl-device.yml', 'linux-kit'): False,
     ('wsl-device.yml', 'windows'): False,
     ('package.yml', 'windows-compile'): False,

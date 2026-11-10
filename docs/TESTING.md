@@ -514,6 +514,7 @@ The table names the lanes a path reaches; on a pull request the macOS jobs among
 | The phone page: `web/mobile.html`, `web/public/m` | `checks` and `web-e2e`; hided serves it at `/m/`, and the app never loads it |
 | Web code the desktop host imports or drives through native input (the host bridge, the shortcut registry, keys and keyboard, store, snapshot and socket, terminals, focus and area cycling, `App.tsx`, `main.tsx`; `SHARED_WEB` in the script) | also `windows-e2e` and `windows-desktop` |
 | A `web/e2e` spec | `checks` and `web-e2e`; a spec tagged `@platform` also runs `windows-e2e` (the whole suite runs on Linux, so the Linux leg of `@platform` is `web-e2e`) |
+| A `web/e2e/*.spec.ts` added or modified, or a module of a crate's `tests/it` binary added or modified (not its `support` folder or `main.rs`) | also `repeat`: those tests run many times with no retry ([The repeat lane](#the-repeat-lane)) |
 | `desktop/src` outside registered unit tests, `desktop/static`, a `desktop/e2e` spec | `checks` and `desktop-e2e`, the only macOS lane (two shard jobs) a change outside the two crates and the package inputs below asks for, and `windows-desktop` (the desktop `@platform` tests on Windows) for `desktop/src`, `desktop/static` and a spec tagged `@platform`; `desktop/src/main` also runs `windows-check`, where the main process's unit suite runs on Windows |
 | A Rust crate | `rust` over the crate and every crate that depends on it (from `cargo metadata`), `windows-check`, which compiles every crate for Windows, the Linux `web-e2e` when the crate reaches `hided`, which the web suite drives, or `hide-holder`, which its own-engine job runs beside hided unlinked (the holder's crates and `vendor/portable-pty`), and `remote-mailbox` when the crate reaches `hide-core`, `hided`, `hide-agent-hooks` or `hide-host`; not the macOS `desktop-e2e`, which main's push run and the nightly run for it ([Where the macOS runners went](#where-the-macos-runners-went)) |
 | `hide-core`, `hided`, `hide-platform`, `hide-host`, `hide-kit`, `hide-agent-hooks` | also `os-contract` (its Linux and Windows legs), `windows-e2e` and `windows-desktop`; no macOS lane but `package` for the package inputs among them |
@@ -525,7 +526,7 @@ The table names the lanes a path reaches; on a pull request the macOS jobs among
 | What goes into a package (`PACKAGE_PATHS` in the script): `desktop/scripts`, `desktop/package.json`, `desktop/resources`, `verify-cargo.sh`, `verify-web.sh`, `toolchain-env.sh`, `hided/build.rs`, which embeds the web shell, `hided/src/cli.rs`, `hide-kit` and `hide-agent-hooks` | also `package`: `package.yml`'s Windows and Linux packages, the two Linux device helper builds, and the macOS archive with the packaged app's own specs |
 | The paths `POLICY_ONLY` names, which no lane reads: `agents/`, `site/`, `.gitignore` files, the root `LICENSE` and `NOTICE`, the PR template and `dependabot.yml`, the contribution intake (the issue and discussion forms and `APPROVED_CONTRIBUTORS`), `scripts/tests/`, the policy `check-*` scripts, the design, release and measurement scripts, the pre-merge check and the merge order with the helpers they share, the design contract's token generator and checks (`gen-tokens.mjs`, `check-design-contract.mjs` and the checks it runs, which `design-contract.yml` runs on every pull request), and Markdown below a folder no rule claims | `policy` alone |
 | The paths `NAMED_LANES` names, whose readers are a known set: a `web/e2e` file that is not a spec (the `desktop` suites on macOS and Windows import it, and `desktop/e2e` unit tests run in `windows-check`), a `desktop/e2e` file that is not a spec, the Playwright, eslint and vitest configurations, `web/vite.config.ts` (every lane that builds the shell or runs its unit suite), `web/scripts` and `desktop/scripts` | the lanes that read it, listed in the script and its test; known packaging helpers run `checks` and `package`, without unrelated desktop, OMP or OS contracts |
-| Any `.github/workflows/` or `.github/actions/` change, or `scripts/ci-plan.py` | every lane, including `package` and `agent-clis`; a CI definition must exercise all its decisions |
+| Any `.github/workflows/` or `.github/actions/` change, or `scripts/ci-plan.py` | every lane, including `package`, `agent-clis` and `repeat` (which runs the tests the pull request changes, none when it changes no test); a CI definition must exercise all its decisions |
 | `scripts/` the lanes call (`verify-*.sh`, `ci-flaky-report.py`, ...), any contract `READERS` does not name, any `package.json`, lockfile, the workspace `Cargo.toml`, a type change, and any path no row above names | every lane but `package`, which only the package inputs add |
 
 The macOS choices below are data in `MACOS_LANE_INPUTS`, rather than additional job conditions; on a pull request they apply only when it changes a macOS path.
@@ -775,7 +776,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 51 jobs.
+A run that plans every lane a pull request can plan starts at most 54 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -792,6 +793,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, and a Windows core dialing the runner's OpenSSH Server and an sshd in that distribution over Windows' own `ssh.exe`, planned only for the crates those links cross (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), the node command and the two tests ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
+| `repeat changed tests` | 3 | the count of the changed tests, their web specs through `web-e2e.yml` and their Rust modules under nextest; each of the last two starts only for a pull request that changes such a test, so the three are the most one start ([The repeat lane](#the-repeat-lane)) |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
@@ -911,7 +913,7 @@ A lane whose run has no key, such as a fork's, files nothing and still passes.
   Artifact downloads use the existing `gh` credentials, need gh 2.97 or newer, stop at the byte cap and a 45-second deadline, and reap the child process on every exit.
   Unsupported provenance, ambiguity, API refusal or a resource cap stops history filing with a warning and summary rather than guessing from partial evidence; a history notice cannot turn a failed lane green or block a passing lane.
   Local reporter regressions use fixture reports and mocked APIs, never live test issues or comments.
-- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0` so one failure fails the job), and a green job is the evidence.
+- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run repeat.yml` repeats a named web spec or Rust test module on Linux, macOS or Windows ([The repeat lane](#the-repeat-lane)), and `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0` so one failure fails the job), and a green job is the evidence.
 - At the deadline a flaky test is fixed or deleted.
   Whoever knows the cause opens the fix or the deletion; if nobody does, the issue goes to the operator.
   The deadline is not a timer that moves the test somewhere quieter, and a later flake on an issue past its deadline says so in its comment.
@@ -938,6 +940,41 @@ A flaky test is isolated by its issue, never by leaving a required lane:
 - There is no quarantine tag and no quarantine step: every web and desktop e2e test runs in the lanes its plan picks, and a flaky one is retried, filed and fixed or deleted like any other.
 - Rust has no quarantine either: a flaky Rust test is retried, filed and fixed or deleted, and the policy is zero `ignore`.
   An `ignore` that names an external binary, such as `remote_delivery`, is an opt-in run with its own step and says what it needs; it is not a quarantine.
+
+### The repeat lane
+
+A new test that fails one run in ten passes its own pull request nine times in ten, so retrying a failure cannot keep it out.
+The `repeat` lane (`repeat.yml`, called from `pr.yml`) runs the tests a pull request adds or changes many times with no retry, and one failed run fails the lane and so `verify`.
+Nothing is handed to the nightly.
+
+- **What counts as a changed test is a file, not a test.**
+  A web `e2e/*.spec.ts` added or modified runs whole, and so does a module of a crate's `tests/it` binary added or modified (`foo.rs`, `foo/mod.rs` or `foo/bar.rs`, picked by nextest's `test(/^foo::/)`, children included).
+  A changed line says nothing reliable about which test it reaches (a helper, a hook, a fixture at the top of the file, a loop that declares tests), and reading the TypeScript to tell is more machinery than the lane earns.
+  `tests/it/support`, `tests/it/main.rs`, a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
+  `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
+- **The budget is 200 test runs for the whole pull request.**
+  N is the number of tests inside the chosen files, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs), and the Rust tests are counted from their `#[test]` and `#[tokio::test]` attributes in the source, since the count has to exist before anything builds.
+  Each test runs `clamp(floor(200 / N), 3, 10)` times: 5 tests run 10 times (50 runs), 20 run 10 (200), 50 run 4 (200), 100 run 3 (300, the floor of 3 wins), and one spec of 12 tests runs 12 x 10 = 120 times.
+  Fewer than three repeats shows too little, so a pull request that changes more than 66 tests runs over 200.
+  The job summary says how many tests were counted and the repeat chosen.
+- **Web specs** run through `web-e2e.yml` with `specs` and `repeat` (one shard that builds in place, the same fixtures and runner setup as the suite) as `playwright test --retries=0 --repeat-each=<repeat> <spec>$...`; it files no flaky issue, because a retry is what classifies a test as flaky and this run has none.
+  **Rust modules** run under nextest on the `rust` lane's caches with `--profile ci --retries 0 --stress-count <repeat>`.
+  A module whose tests are all `#[ignore]` (the remote mailbox lane's, which has its own `repeat` input below) runs none and warns.
+- **Both run on Linux in a pull request.**
+  A fix is shown on the system that failed with a hand run, with no temporary commit:
+
+  ```sh
+  # web specs, N times, on linux (default), macos or windows
+  gh workflow run repeat.yml --ref <branch> -f runner=windows -f web='s3.spec.ts' -f repeat=10
+  # some tests of a spec, by Playwright's --grep
+  gh workflow run repeat.yml --ref <branch> -f web='s3.spec.ts' -f grep='explorer' -f repeat=20
+  # Rust modules of a crate's tests/it binary, as package:module
+  gh workflow run repeat.yml --ref <branch> -f runner=macos -f rust='hided:handshake hide-core:seat' -f repeat=10
+  ```
+
+  `repeat` is 1 to 100, a name that is no spec or module fails before anything runs, and a green run is the evidence.
+  The macOS runner is the scarce one (operator decision 2026-11-01), so ask for it only when macOS is what failed.
+  The step cap for a web repeat is 120 minutes: 200 runs of a 30-second test take 100, and a longer spec takes the budget's worth of its own time.
 
 ### Nightly failures
 

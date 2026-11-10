@@ -18,6 +18,11 @@
 # to `target/debug` and `web/dist`.
 # A single shard builds in place: a second job would only add its own setup.
 # On Linux every shard installs zsh from the cached packages of `.github/actions/apt-install`.
+#
+# `specs` turns the lane into the repeat lane's web leg (`repeat.yml`): the
+# named spec files run `repeat` times each with no retry, so one failed run
+# fails the job. It is one shard that builds in place, and it files no flaky
+# issue: a retry is what classifies a test as flaky, and this run has none.
 name: web e2e lane
 
 on:
@@ -37,6 +42,16 @@ on:
         required: true
       grep:
         description: Playwright `--grep` filter; empty runs every test.
+        type: string
+        required: false
+        default: ""
+      specs:
+        description: Space-separated spec paths to repeat; empty is the lane as the suites run it.
+        type: string
+        required: false
+        default: ""
+      repeat:
+        description: With `specs`, how many times each test runs (`--repeat-each`), with no retry.
         type: string
         required: false
         default: ""
@@ -146,7 +161,9 @@ jobs:
     # in either still stops the shards, and the lane reports the failure.
     if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) && contains(fromJSON('["success","skipped"]'), needs.build-web.result) }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 40
+    # A repetition is bounded by the repeat lane's budget of test runs, not by
+    # the suite, and a Windows runner is the slowest.
+    timeout-minutes: ${{ inputs.specs != '' && 150 || 40 }}
     defaults:
       run:
         shell: bash
@@ -248,17 +265,30 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/windows-fixture-path
       - name: End-to-end
-        timeout-minutes: 20
+        timeout-minutes: ${{ inputs.specs != '' && 120 || 20 }}
         env:
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           HIDE_E2E_TRACE: "1"
           GREP: ${{ inputs.grep }}
+          SPECS: ${{ inputs.specs }}
+          REPEAT: ${{ inputs.repeat }}
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
-          if [ "${SHARD#*/}" -gt 1 ]; then
+          if [ -n "$SPECS" ]; then
+            # The repeat lane: these spec files, `REPEAT` times each, no retry
+            # (the config retries once under CI), so one failed run fails the
+            # step. Each spec is a file filter that matches that path alone.
+            [ "${SHARD#*/}" = 1 ] || { echo "a repeat run is one shard, not $SHARD" >&2; exit 1; }
+            case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+            # shellcheck disable=SC2086 # the spec paths hold no space or glob character
+            python3 scripts/ci-repeat.py spec-patterns $SPECS > "$RUNNER_TEMP/web-e2e-specs.txt"
+            while IFS= read -r pattern; do args+=("$pattern"); done < "$RUNNER_TEMP/web-e2e-specs.txt"
+            echo "repeat: $REPEAT x $SPECS" | tee -a "$GITHUB_STEP_SUMMARY"
+            bash scripts/verify-web.sh web e2e --retries=0 --repeat-each="$REPEAT" "${args[@]}"
+          elif [ "${SHARD#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
             # Playwright's equal counts. Playwright counts a `--test-list` that
             # matches nothing as a pass, so `check` fails the step unless it
@@ -279,14 +309,16 @@ jobs:
             bash scripts/verify-web.sh web e2e-list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/web-e2e-shard-list.txt"
             python3 scripts/e2e-shard.py check --table web/e2e/shard-durations.json --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
             args+=(--test-list "$shard_file")
+            bash scripts/verify-web.sh web e2e "${args[@]}"
+          else
+            bash scripts/verify-web.sh web e2e "${args[@]}"
           fi
-          bash scripts/verify-web.sh web e2e "${args[@]}"
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.specs == '' }}
         continue-on-error: true
         timeout-minutes: 2
         uses: actions/create-github-app-token@v3
@@ -300,7 +332,7 @@ jobs:
         # seven-day deadline, or a comment on the issue that tracks it. A
         # report that fails to file is a warning, not a failed lane.
         id: flaky
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.specs == '' }}
         continue-on-error: true
         timeout-minutes: 5
         env:
@@ -312,7 +344,7 @@ jobs:
       - name: Keep this job attempt's test report
         continue-on-error: true
         timeout-minutes: 2
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.specs == '' }}
         uses: actions/upload-artifact@v7
         with:
           name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}

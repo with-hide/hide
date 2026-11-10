@@ -313,7 +313,7 @@ if name == 'playwright' and '--list' in args:
         result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
                                     RUNNER_TEMP=str(self.root),
                                     HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
-                                    GREP="", SHARD="1/2")
+                                    GREP="", SPECS="", REPEAT="", SHARD="1/2")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.tool_calls("node", "web"), [["scripts/build-phone.mjs"]])
         calls = self.tool_calls("playwright", "web")
@@ -321,6 +321,30 @@ if name == 'playwright' and '--list' in args:
         self.assertTrue(all("--list" in call for call in calls[:2]))
         self.assertNotIn("--list", calls[-1])
         self.assertTrue(all("--grep-invert" not in call for call in calls))
+
+    def test_web_repeat_runs_the_named_specs_n_times_with_no_retry(self):
+        self.enable_package_scripts()
+        shutil.copyfile(ROOT / "scripts/ci-repeat.py", self.root / "scripts/ci-repeat.py")
+        result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
+                                    RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
+                                    HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
+                                    GREP="", SPECS="web/e2e/s3.spec.ts web/e2e/s7.spec.ts", REPEAT="10", SHARD="1/1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.tool_calls("playwright", "web")
+        self.assertEqual(calls, [[
+            "test", "--retries=0", "--repeat-each=10", r"web/e2e/s3\.spec\.ts$", r"web/e2e/s7\.spec\.ts$",
+        ]])
+
+    def test_web_repeat_refuses_a_bad_repeat_and_a_second_shard(self):
+        self.enable_package_scripts()
+        shutil.copyfile(ROOT / "scripts/ci-repeat.py", self.root / "scripts/ci-repeat.py")
+        for repeat, shard in (("", "1/1"), ("0", "1/1"), ("ten", "1/1"), ("10", "1/2")):
+            with self.subTest(repeat=repeat, shard=shard):
+                result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
+                                            RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
+                                            HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
+                                            GREP="", SPECS="web/e2e/s3.spec.ts", REPEAT=repeat, SHARD=shard)
+                self.assertNotEqual(result.returncode, 0)
 
     def test_desktop_execution_always_builds_and_propagates_prerequisite_and_test_failures(self):
         self.enable_package_scripts()
