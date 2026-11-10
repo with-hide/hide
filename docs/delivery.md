@@ -242,6 +242,7 @@ Each letter has at most three durable doorbell reservations, including successfu
 The reservation is persisted before input, and the adapter repeats the native inspection (`Engine::delivery_agent`: readiness, kind, session, status, sequence) after the persistence wait.
 A refusal before the reservation spends none, so a letter the engine keeps refusing is never charged an attempt.
 A crash or changed pane after reservation may consume an attempt while leaving the letter pending.
+The post-reservation check takes its verdict under the runtime lock and releases that lock before recording a refusal through the delivery writer, so input arriving during persistence cannot block the mailbox behind its own receipt.
 Legacy records with a successful bell but no total count conservatively have no automatic attempts left; manual and prompt-hook intake remain available.
 
 The `UserPromptSubmit` hook of a bell target reads the submitted prompt from its input payload and sends the core the SHA-256 of its canonical text (`hide inbox --hook --prompt-digest <sha256>`), never the text itself.
