@@ -47,6 +47,40 @@ final class PushTests: XCTestCase {
         wait(for: [done], timeout: 5)
     }
 
+    func testAnEarlierRequestsTimerDoesNotEndALaterRequest() {
+        func pause(_ seconds: TimeInterval) {
+            let gap = expectation(description: "pause")
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { gap.fulfill() }
+            wait(for: [gap], timeout: 5)
+        }
+        let token = PushToken()
+        token.register = {}
+        token.wait = 0.3
+        var first: Result<String, PushToken.Failure>?
+        token.request { first = $0 }
+        token.didFail()
+        XCTAssertEqual(first, .failure(.unavailable))
+        // The second round starts at 0.2 s and its own timer ends at 0.5 s; the first round's timer fires at 0.3 s.
+        pause(0.2)
+        var second: Result<String, PushToken.Failure>?
+        token.request { second = $0 }
+        pause(0.2)
+        XCTAssertNil(second, "the first round's timer ended the second round")
+        pause(0.3)
+        XCTAssertEqual(second, .failure(.timedOut))
+    }
+
+    func testTheAppStopsReceivingNoticesOnlyWhenNoComputersKeyIsLeft() {
+        let token = PushToken()
+        var unregistered = 0
+        token.unregister = { unregistered += 1 }
+        token.keysChanged(remaining: 2)
+        token.keysChanged(remaining: 1)
+        XCTAssertEqual(unregistered, 0)
+        token.keysChanged(remaining: 0)
+        XCTAssertEqual(unregistered, 1)
+    }
+
     func testTheEnvironmentIsTheBuildsAndNeverADefault() {
         #if DEBUG
         XCTAssertEqual(PushEnvironment.current, "sandbox")

@@ -28,10 +28,46 @@ final class NotificationCipherTests: XCTestCase {
         XCTAssertThrowsError(try NotificationCipher.decrypt(wrongSize, privateKey: key, auth: auth)) { XCTAssertEqual($0 as? NotificationCipherError, .malformed) }
         XCTAssertThrowsError(try NotificationCipher.decrypt(body, privateKey: key, auth: Data(count: 15))) { XCTAssertEqual($0 as? NotificationCipherError, .malformed) }
     }
+
+    private func mine() -> PushKey {
+        PushKey(room: String(repeating: "k", count: 43), privateKey: P256.KeyAgreement.PrivateKey().rawRepresentation, auth: Data((0..<16).map { UInt8($0) }))
+    }
+
+    func testARecordThatOpensButDoesNotEndWithTheLastRecordsDelimiterIsRefused() throws {
+        let key = mine()
+        let plain = Data("a notice".utf8)
+        let good = try encrypt(plain, for: key)
+        XCTAssertEqual(try NotificationCipher.decrypt(Base64URL.decode(good)!, privateKey: key.privateKey, auth: key.auth), plain)
+        // 0x01 marks a record that is not the last one, no delimiter at all marks nothing, and padding before the
+        // delimiter is not zero padding after it.
+        for (name, delimiter) in [("not the last record", [UInt8(1)]), ("no delimiter", []), ("padding only", [UInt8(0), 0, 0])] {
+            let body = try encrypt(plain, for: key, delimiter: delimiter)
+            XCTAssertThrowsError(try NotificationCipher.decrypt(Base64URL.decode(body)!, privateKey: key.privateKey, auth: key.auth), name) {
+                XCTAssertEqual($0 as? NotificationCipherError, .malformed, name)
+            }
+        }
+        // Zero padding after the delimiter is part of the record and is dropped.
+        let padded = try encrypt(plain, for: key, delimiter: [2, 0, 0, 0])
+        XCTAssertEqual(try NotificationCipher.decrypt(Base64URL.decode(padded)!, privateKey: key.privateKey, auth: key.auth), plain)
+    }
+
+    func testABodyOverTheLargestTheRelayCarriesIsRefusedBeforeAnyKeyIsTried() throws {
+        let key = mine()
+        let big = try encrypt(Data(repeating: 0x61, count: 4100), for: key)
+        let body = Base64URL.decode(big)!
+        XCTAssertGreaterThan(body.count, NotificationCipher.maxBody)
+        XCTAssertThrowsError(try NotificationCipher.decrypt(body, privateKey: key.privateKey, auth: key.auth)) {
+            XCTAssertEqual($0 as? NotificationCipherError, .malformed)
+        }
+        // The largest allowed size, to show the limit is the size and not the content.
+        let edge = try encrypt(Data(repeating: 0x61, count: NotificationCipher.maxBody - NotificationCipher.headerLength - 17), for: key)
+        XCTAssertEqual(Base64URL.decode(edge)!.count, NotificationCipher.maxBody)
+        XCTAssertNoThrow(try NotificationCipher.decrypt(Base64URL.decode(edge)!, privateKey: key.privateKey, auth: key.auth))
+    }
 }
 
 /// Encrypts a notice the way hided does, for the tests that need a body made for a key they hold.
-func encrypt(_ plain: Data, for key: PushKey) throws -> String {
+func encrypt(_ plain: Data, for key: PushKey, delimiter: [UInt8] = [2]) throws -> String {
     let sender = P256.KeyAgreement.PrivateKey()
     let receiver = try P256.KeyAgreement.PublicKey(x963Representation: key.publicKey)
     let secret = try sender.sharedSecretFromKeyAgreement(with: receiver).withUnsafeBytes { Data($0) }
@@ -42,7 +78,7 @@ func encrypt(_ plain: Data, for key: PushKey) throws -> String {
     let prk = hmac(salt, ikm)
     let cek = hmac(prk, Data("Content-Encoding: aes128gcm\0".utf8) + Data([1])).prefix(16)
     let nonce = hmac(prk, Data("Content-Encoding: nonce\0".utf8) + Data([1])).prefix(12)
-    let box = try AES.GCM.seal(plain + Data([2]), using: SymmetricKey(data: cek), nonce: AES.GCM.Nonce(data: nonce))
+    let box = try AES.GCM.seal(plain + Data(delimiter), using: SymmetricKey(data: cek), nonce: AES.GCM.Nonce(data: nonce))
     var record = salt + Data([0, 0, 0x10, 0, 65]) + sender.publicKey.x963Representation
     record += box.ciphertext + box.tag
     return Base64URL.encode(record)

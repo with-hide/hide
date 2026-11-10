@@ -140,8 +140,12 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
     /// computer could not be reached.
     @objc func forget(_ call: CAPPluginCall) {
         guard let room = room(call) else { return }
-        do { try keychain.remove(room: room); call.resolve() }
-        catch { fail(call, (error as? PushKeychainError)?.code ?? "keychain_failed") }
+        do {
+            try keychain.remove(room: room)
+            // A key list that cannot be read is not "none left": nothing is unregistered on a guess.
+            if let left = try? keychain.all().count { PushToken.shared.keysChanged(remaining: left) }
+            call.resolve()
+        } catch { fail(call, (error as? PushKeychainError)?.code ?? "keychain_failed") }
     }
 
     @objc func takeOpen(_ call: CAPPluginCall) {

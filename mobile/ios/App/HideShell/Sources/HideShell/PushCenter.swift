@@ -26,8 +26,10 @@ public final class PushOpenInbox {
         guard let room = userInfo[NoticeInfo.room] as? String, PushKeychain.isRoom(room),
               let device = userInfo[NoticeInfo.deviceId] as? String, !device.isEmpty, device.count <= 256,
               let pane = userInfo[NoticeInfo.paneId] as? String, !pane.isEmpty, pane.count <= 512 else { return false }
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         target = Target(room: room, deviceId: device, paneId: pane)
+        lock.unlock()
+        // After the lock: an observer that calls `take()` from the notification must not wait on it.
         NotificationCenter.default.post(name: .hidePushOpenArrived, object: self)
         return true
     }

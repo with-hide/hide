@@ -216,12 +216,23 @@ public final class PushActions: PushActionHandling {
             completion()
             return
         }
+        // The expiration handler and the end of the send both finish; the system's completion is called once.
+        let guardLock = NSLock()
         var background = UIBackgroundTaskIdentifier.invalid
+        var finished = false
         let finish = {
-            if background != .invalid { UIApplication.shared.endBackgroundTask(background); background = .invalid }
+            guardLock.lock()
+            if finished { guardLock.unlock(); return }
+            finished = true
+            let task = background
+            background = .invalid
+            guardLock.unlock()
+            if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
             completion()
         }
-        background = UIApplication.shared.beginBackgroundTask(withName: "hide.reply") { finish() }
+        let started = UIApplication.shared.beginBackgroundTask(withName: "hide.reply") { finish() }
+        guardLock.lock()
+        if finished { guardLock.unlock(); UIApplication.shared.endBackgroundTask(started) } else { background = started; guardLock.unlock() }
         let sender = self.sender
         Task {
             await sender.reply(text: text, target: target)
