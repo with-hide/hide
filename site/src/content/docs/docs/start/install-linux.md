@@ -43,7 +43,7 @@ Nothing changes until you choose **Continue**.
 
 hide never asks for an agent's credentials.
 Each CLI keeps its own sign-in, so install the CLI and sign in to it in a terminal before you launch hide.
-In the **Choose your agents** step each agent shows a state, for example **Checking…**, **Ready**, **Not signed in**, **Not installed** or **Update needed**. **Installed** means the CLI is found, but hide does not check that agent's sign-in, so sign in to it yourself.
+In the **Choose your agents** step each agent shows a state, for example **Checking…**, **Ready**, **Not signed in**, **Not installed** or **Update needed**. **Installed** means the CLI is found but its sign-in has not been confirmed, so sign in to it yourself.
 For pull requests, sign in to `gh` the same way (`gh auth login`).
 
 ## The `hide` command
