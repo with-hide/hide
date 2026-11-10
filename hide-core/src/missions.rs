@@ -1984,7 +1984,7 @@ pub enum MissionCommand {
         #[serde(default)]
         mission: Option<String>,
         node: String,
-        patch: NodePatch,
+        patch: Box<NodePatch>,
     },
     Start {
         #[serde(default)]

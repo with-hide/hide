@@ -399,7 +399,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             MissionCommand::Node {
                 mission: mission_of(&values)?,
                 node: key(node)?,
-                patch,
+                patch: Box::new(patch),
             }
         }
         "record" => {
