@@ -122,7 +122,7 @@ def latest_misses(contract, reports):
 def pinned_already(row, versions, pins):
     """Whether the latest release the run measured is the agent's pin, so the
     latest run already measured the pinned version."""
-    return versions.get(row["herdr_kind"]) == pins.get(row["herdr_kind"])
+    return versions.get(row["agent_cli"]) == pins.get(row["agent_cli"])
 
 
 def reruns(contract, versions, pins, reports):
@@ -148,7 +148,7 @@ def verdicts(contract, versions, pins, reports, pinned):
     measurement to say whose it is."""
     result, found = {}, latest_misses(contract, reports)
     for row in active_rows(contract):
-        agent, kind = row["id"], row["herdr_kind"]
+        agent, kind = row["id"], row["agent_cli"]
         if found[agent] is None:
             result[agent] = ("unknown", [f"{system}: no report" for system in SYSTEMS if system not in reports], [])
             continue
@@ -189,7 +189,7 @@ def updated_state(state, contract, versions, results, today):
     it until it passes, and the issue against Hide stays until a run closes it."""
     agents = {}
     for row in active_rows(contract):
-        agent, kind = row["id"], row["herdr_kind"]
+        agent, kind = row["id"], row["agent_cli"]
         before = state["agents"].get(agent, {})
         status, failures, _ = results[agent]
         passed = status == "pass"

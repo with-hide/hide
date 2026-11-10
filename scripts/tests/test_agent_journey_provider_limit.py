@@ -110,7 +110,7 @@ class RefusedCell(unittest.TestCase):
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"codex": {name: {"status": cells.PENDING} for name in ("resume", "title")}}
             record = {}
-            journey = Journey(runtime, None, controller, table, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
+            journey = Journey(runtime, None, controller, table, {"id": "codex", "agent_cli": "codex", "model_flag": []},
                               Path("/repo"), record, None, branch="b", created=[], sessions=Path(folder),
                               route={}, composer_judge=None, failure_logs=None)
             journey.pane, journey.session = "w1:p1", THREAD

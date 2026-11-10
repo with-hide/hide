@@ -369,7 +369,7 @@ def same_processes(before, after):
 
 def cell(row, binaries, run):
     """One agent's cell: its record, whatever happens."""
-    kind = row["herdr_kind"]
+    kind = row["agent_cli"]
     record = {"agent": row["id"], "kind": kind, "system": system(), "result": FAIL}
     program = ci.executable(None, kind)
     if not program:

@@ -11,10 +11,10 @@ import { AGENT_ADAPTERS, agentAdapter } from "./agentAdapters";
 export type ProviderKind = NonNullable<AgentStartChoice["kind"]>;
 export const PROVIDER_KINDS: readonly ProviderKind[] = AGENT_ADAPTERS
   .filter((row) => row.can_start)
-  .map((row) => row.herdr_kind as ProviderKind);
+  .map((row) => row.agent_cli as ProviderKind);
 
 export function providerLabel(kind: ProviderKind): string {
-  const row = AGENT_ADAPTERS.find((row) => row.can_start && row.herdr_kind === kind);
+  const row = AGENT_ADAPTERS.find((row) => row.can_start && row.agent_cli === kind);
   if (!row) throw new Error(`Missing start adapter: ${kind}`);
   return row.picker_label;
 }
@@ -81,7 +81,7 @@ export type ProfileItem = { id: string; version: number };
  */
 export function catalogFor(ai: BackgroundAi | undefined, kind: ProviderKind, profile?: ProfileItem | null): ModelCatalog {
   // A start names the agent by its engine kind (`agy`); its Hide AI row is joined by the kit's adapter id (`antigravity`).
-  const agent = AGENT_ADAPTERS.find((row) => row.can_start && row.herdr_kind === kind)?.id;
+  const agent = AGENT_ADAPTERS.find((row) => row.can_start && row.agent_cli === kind)?.id;
   const provider: AiProvider | undefined = ai?.providers.find((row) => row.agent === agent);
   if (profile) return profileCatalog(provider, profile, catalogFor(ai, kind));
   if (provider && provider.models.length > 0) {

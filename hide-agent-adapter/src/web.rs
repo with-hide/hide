@@ -7,7 +7,7 @@ pub struct WebAdapter {
     pub aliases: &'static [&'static str],
     pub label: &'static str,
     pub picker_label: &'static str,
-    #[serde(rename = "herdr_kind")]
+    #[serde(rename = "agent_cli")]
     pub engine_kind: &'static str,
     pub doc_url: &'static str,
     pub install_url: &'static str,

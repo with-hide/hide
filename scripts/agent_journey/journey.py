@@ -168,7 +168,7 @@ class Journey:
         # The branch this run makes in the measured repository, and where the
         # run keeps what it created there for the cleanup (PRD D-22).
         self.branch, self.created = branch, created
-        self.id, self.kind = contract_row["id"], contract_row["herdr_kind"]
+        self.id, self.kind = contract_row["id"], contract_row["agent_cli"]
         # The profile this journey starts its agent with and the account it
         # runs in (profiles.prepare), for the `profile` cell; None for the
         # agent's default account. Its spawns, letters and evidence carry

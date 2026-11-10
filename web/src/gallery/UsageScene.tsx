@@ -43,7 +43,7 @@ export function UsageScene({ params }: { params: URLSearchParams }) {
     const now = Date.now();
     const reset = Math.floor(now / 1000);
     const agents: AgentUsage[] = AGENT_ADAPTERS.map((adapter) => ({
-      agent: adapter.herdr_kind,
+      agent: adapter.agent_cli,
       consumption: { state: "unsupported" },
       limits: !hasLimits(adapter) ? { state: "unsupported" } : state === "loading" ? { state: "loading" } : state === "unavailable" ? { state: "unavailable", cause: "signed_out", last_checked_at_ms: now } : {
         state: "reading", freshness: "fresh", observed_at_ms: now,

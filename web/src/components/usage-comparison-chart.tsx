@@ -15,7 +15,7 @@ function series(day: UsageDay, hideOnly: boolean): { agent: string; tokens: numb
 }
 
 function usageSeriesIndex(agent: string): number {
-  return agent === HIDE_AI_USAGE ? AGENT_ADAPTERS.length : Math.max(0, AGENT_ADAPTERS.findIndex((row) => row.herdr_kind === agent));
+  return agent === HIDE_AI_USAGE ? AGENT_ADAPTERS.length : Math.max(0, AGENT_ADAPTERS.findIndex((row) => row.agent_cli === agent));
 }
 
 export function UsageComparisonChart({ days, selected, hideOnly, onSelect }: { days: UsageDay[]; selected: string | null; hideOnly: boolean; onSelect: (date: string | null) => void }) {

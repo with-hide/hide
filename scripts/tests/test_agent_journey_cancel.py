@@ -36,7 +36,7 @@ class CancelDuringACellWait(unittest.TestCase):
                                   owner=SimpleNamespace(cancelled=cancelled))
         table = cells.plan(json.loads((ROOT / "contracts/agent-journey.json").read_text()), ["codex"])
         cells.settle(table, "codex", "start", cells.PASS, "fixture")
-        journey = Journey(runtime, daemon, None, table, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
+        journey = Journey(runtime, daemon, None, table, {"id": "codex", "agent_cli": "codex", "model_flag": []},
                           Path("/repo"), {}, None, branch="b", created=[], sessions=Path(folder),
                           route={}, composer_judge=None, failure_logs=SimpleNamespace(mark=lambda: 0))
         return journey, table["codex"]

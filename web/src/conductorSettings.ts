@@ -22,7 +22,7 @@ export const DEFAULT_CONDUCTOR: ConductorSettings = { concurrency: 4, default_sc
 /** The start kind a candidate names, as the start panel lists it; null for an agent Hide cannot start. */
 export function candidateAgent(agent: string): ProviderKind | null {
   const row = agentAdapter(agent);
-  return row?.can_start ? (row.herdr_kind as ProviderKind) : null;
+  return row?.can_start ? (row.agent_cli as ProviderKind) : null;
 }
 
 /** The efforts the agent takes; none for one that takes no effort, which is then sent none (B9). */

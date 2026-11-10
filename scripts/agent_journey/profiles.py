@@ -23,7 +23,7 @@ def prepare(runtime, table, rows, ready, root, urls, key):
     for agent in ready:
         if table[agent]["profile"]["status"] != cells.PENDING:
             continue
-        account = fake_lane.profile_account(rows[agent]["herdr_kind"], runtime.home, urls[agent], root, key)
+        account = fake_lane.profile_account(rows[agent]["agent_cli"], runtime.home, urls[agent], root, key)
         try:
             added = add(runtime, agent, account["account"])
         except ProcessError as error:
