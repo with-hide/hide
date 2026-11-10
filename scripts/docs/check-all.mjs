@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // The user docs' one check: what CI runs, and what to run before a docs change is pushed.
-//   0. the CLI reference reader's own test (cli-reference.test.mjs): how a help line expands to commands, and that a
-//      binary whose help lists a command with no note fails;
+//   0. the tests beside this file: the CLI reference reader's (cli-reference.test.mjs: how a help line expands to
+//      commands, and that a binary whose help lists a command with no note fails), the shortcuts page's, and the
+//      head script's (embed-script.test.mjs: the real script run against a stand-in page, so a frame's theme repair
+//      cannot throw, loop or stop repairing);
 //   1. the guides and feature pages hold each other (check-features.mjs), and writes each feature's
 //      "Used in guides" list from the guides' `features:` headers;
 //   2. the CLI reference is generated from the help of the one `hide` named below and contracts/hide-cli.json, and fails
@@ -10,7 +12,9 @@
 //      command of the registry has no row or lacks its keys on a system (shortcuts-reference.mjs);
 //   3. the live parts the pages frame are built (web `build:docs-embed`), then the site (`astro build`),
 //      which puts them at /embed/ and writes Pagefind's search index. Between the two, check-still.mjs loads
-//      every part in Chromium and fails unless it is byte-identical 120 s apart under reduced motion.
+//      every part in Chromium and fails unless it is byte-identical 120 s apart under reduced motion, and
+//      check-map-fits.mjs frames the mission map in a stand-in page running the real head script and fails when
+//      content is hidden or blank space is left under it, or the height does not settle, at 1440 and 390.
 // Usage: check-all.mjs (--hide <binary> | HIDE_BIN=<binary>) [--ci] [--checks-only]
 //   --hide / HIDE_BIN  the `hide` whose `--help` is the one authority for which commands exist (missing notes, notes for
 //                      gone commands, the generated cli.md). It must be built from THIS commit: CI builds it in the job
@@ -67,6 +71,7 @@ writeFileSync(join(content, "reference/shortcuts.md"), shortcuts);
 if (!checksOnly) {
   run("build the live parts the pages frame", "bash", ["scripts/verify-web.sh", "web", "build:docs-embed"]);
   run("every live part holds one still picture under reduced motion", "node", ["web/src/docs/check-still.mjs"]);
+  run("the mission map is shown whole in its frame at the widths the pages give it", "node", ["web/src/docs/check-map-fits.mjs"]);
   run("build the site", "bash", ["scripts/verify-web.sh", "site", "build"]);
 }
 console.log("\ncheck-all: ok");
