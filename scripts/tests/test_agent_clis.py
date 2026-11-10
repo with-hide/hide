@@ -1,23 +1,20 @@
 """The CLI pin table every CI install reads, and the one download helper every
-pinned released file comes through: a row the installer cannot install and a
-download it should not retry fail here, not on a runner."""
+pinned released file comes through: a row the installer cannot install, a
+download curl was not told to retry, and a pin a downloaded file does not match
+fail here, not on a runner. Curl's own retry, timeout and truncation behavior
+is curl's, and is not retested here."""
 
 from pathlib import Path
-import contextlib
 import hashlib
-import http.client
 import importlib.util
 import io
 import json
 import os
-import socket
-import ssl
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
-import urllib.error
 from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -31,83 +28,26 @@ spec.loader.exec_module(install)
 URL = "https://example.invalid/releases/v1.2.3/omp-linux-x64"
 
 
-class Clock:
-    """The clock a download runs on: it moves when the code sleeps and when a
-    body arrives, so a retry's waits, its budget and the time a transfer takes
-    are checked without waiting for any of them."""
+class Curl:
+    """curl as a subprocess would run it: each call is recorded, and the run
+    writes `payload` where `--output` names or exits with `code` and `error`."""
 
-    def __init__(self):
-        self.now = 100.0
-        self.slept = []
-
-    def monotonic(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.slept.append(seconds)
-        self.now += seconds
-
-    def advance(self, seconds):
-        self.now += seconds
-
-
-class Answer:
-    """One HTTP answer, as `urlopen` returns it: a body read inside a `with`.
-    The server sends `arriving` bytes every `seconds`, so the clock shows what a
-    trickle does to a deadline. `read1` returns the bytes that have arrived, as
-    a real answer does; `read` waits to fill what it was asked for, so a body
-    taken through it checks the deadline once per chunk instead of per piece.
-    The answer can also raise the error a body still ends in partway through."""
-
-    def __init__(self, payload=b"", clock=None, seconds=0.0, raises=None, arriving=None):
+    def __init__(self, payload=b"the file", code=0, error=""):
         self.payload = payload
-        self.clock = clock
-        self.seconds = seconds
-        self.raises = raises
-        self.arriving = arriving
-        self.pieces = 0
+        self.code = code
+        self.error = error
+        self.calls = []
 
-    def __enter__(self):
-        return self
+    def __call__(self, argv, **options):
+        self.calls.append(argv)
+        if self.code:
+            return subprocess.CompletedProcess(argv, self.code, "", self.error)
+        Path(argv[argv.index("--output") + 1]).write_bytes(self.payload)
+        return subprocess.CompletedProcess(argv, 0, "", "")
 
-    def __exit__(self, *_):
-        return False
-
-    def read1(self, size=-1):
-        if size is None or size < 0 or (self.arriving and self.arriving < size):
-            size = self.arriving or size
-        return self.take(size)
-
-    def read(self, size=-1):
-        if size is None or size < 0:
-            return self.take(size)
-        piece = b""
-        while len(piece) < size:
-            more = self.take(size - len(piece))
-            if not more:
-                break
-            piece += more
-        return piece
-
-    def take(self, size):
-        # The piece takes its time either way, and a body that ends partway
-        # spends that time before it reports the failure.
-        if self.clock is not None:
-            self.clock.advance(self.seconds)
-        self.pieces += 1
-        if self.raises is not None:
-            error, self.raises = self.raises, None
-            raise error
-        if size is None or size < 0:
-            piece, self.payload = self.payload, b""
-        else:
-            piece, self.payload = self.payload[:size], self.payload[size:]
-        return piece
-
-
-def status(code):
-    """The error a server's answer of `code` raises, as urlopen raises it."""
-    return urllib.error.HTTPError(URL, code, f"answer {code}", {}, io.BytesIO(b""))
+    @property
+    def command(self):
+        return self.calls[-1]
 
 
 class Table(unittest.TestCase):
@@ -172,15 +112,28 @@ class Grok(unittest.TestCase):
             self.assertFalse((root / "outside-link").is_symlink())
 
     def test_a_failed_download_stops_the_step_and_never_runs_the_installer(self):
+        # curl's own exit and error are the step's, and Bash never sees a file.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             script, ran = self.installer(root)
+            curl = Curl(code=22, error="curl: (22) The requested URL returned error: 403")
             with mock.patch.object(install, "GROK_INSTALLER", script.as_uri()), \
-                    mock.patch.object(install.urllib.request, "urlopen", side_effect=status(403)):
+                    mock.patch.object(install.shutil, "which", return_value="/usr/bin/curl"), \
+                    mock.patch.object(install.subprocess, "run", self.only(curl)):
                 with self.assertRaises(SystemExit) as stopped:
                     install.grok({"version": "1.0.52"}, root)
-            self.assertIn("403", str(stopped.exception))
+            self.assertIn("curl exited 22", str(stopped.exception))
+            self.assertIn("error: 403", str(stopped.exception))
             self.assertFalse(ran.exists(), "the step ran the installer after its download failed")
+
+    def only(self, curl):
+        """The process runner where curl is the only program that may run: a
+        Bash call means the installer ran after its download failed."""
+        def runner(argv, **options):
+            if argv[0] != "/usr/bin/curl":
+                raise AssertionError(f"the installer ran after its download failed: {argv}")
+            return curl(argv, **options)
+        return runner
 
 
 class Download(unittest.TestCase):
@@ -198,134 +151,48 @@ class Download(unittest.TestCase):
     def test_the_pinned_version_installs(self):
         self.assertEqual(self.install_pi(clis.table()["pi"]["version"]), 0)
 
-    def fetch(self, answers, budget=None, clock=None, asked=None):
-        """What `fetch(URL)` returned and the clock it ran on, against a server
-        answering `answers` in turn: bytes for a whole body, an `Answer` for a
-        body with its own timing or failure, an exception for a refused ask.
-        Every answer reads on the same clock `fetch` itself runs on, and a
-        caller that expects the download to fail passes its own clock and
-        `asked` list, since nothing is returned to read the waits from."""
-        clock = clock or Clock()
-        answered = iter(answers)
-
-        def urlopen(url, timeout=None):
-            if asked is not None:
-                asked.append(url)
-            answer = next(answered)
-            if isinstance(answer, BaseException):
-                raise answer
-            if not isinstance(answer, Answer):
-                answer = Answer(answer)
-            answer.clock = clock
-            return answer
-
-        patches = [mock.patch.object(install.time, "monotonic", clock.monotonic),
-                   mock.patch.object(install.time, "sleep", clock.sleep),
-                   mock.patch.object(install.urllib.request, "urlopen", urlopen)]
-        if budget is not None:
-            patches.append(mock.patch.object(install, "DOWNLOAD_BUDGET_SECONDS", budget))
-        with contextlib.ExitStack() as stack:
-            for patch in patches:
-                stack.enter_context(patch)
-            return install.fetch(URL), clock
-
-    def test_a_download_that_answers_after_transient_failures_returns_the_bytes(self):
-        for answer in (status(429), status(503), ConnectionResetError("connection reset"),
-                       TimeoutError("timed out"), http.client.RemoteDisconnected("no answer"),
-                       urllib.error.URLError(TimeoutError("timed out")),
-                       urllib.error.URLError(ConnectionRefusedError("connection refused"))):
-            with self.subTest(answer=answer):
-                payload, clock = self.fetch([answer, answer, b"the file"])
-                self.assertEqual(payload, b"the file")
-                self.assertEqual(clock.slept, list(install.DOWNLOAD_RETRY_DELAYS[:2]))
-
-    def test_a_permanent_refusal_is_not_asked_again(self):
-        # A 403, a 404, a certificate of another name, a scheme urlopen does not
-        # know and a name that does not resolve answer the same on every ask, so
-        # the server is asked once and the step ends with that cause.
-        for answer in (status(403), status(404),
-                       urllib.error.URLError(ssl.SSLCertVerificationError("hostname mismatch")),
-                       urllib.error.URLError(ValueError("unknown url type: htp")),
-                       urllib.error.URLError(socket.gaierror("nodename nor servname provided"))):
-            with self.subTest(answer=answer):
-                asked, clock = [], Clock()
-                with self.assertRaises(SystemExit) as stopped:
-                    self.fetch([answer, b"the file"], clock=clock, asked=asked)
-                self.assertEqual(asked, [URL], "a permanent refusal asked the server again")
-                self.assertEqual(clock.slept, [])
-                self.assertIn("could not be downloaded", str(stopped.exception))
-                self.assertIn(str(getattr(answer, "reason", answer)), str(stopped.exception))
-
-    def test_a_download_that_keeps_failing_stops_on_its_own_error(self):
-        attempts = len(install.DOWNLOAD_RETRY_DELAYS) + 1
-        for answer in (status(500), ConnectionResetError("connection reset")):
-            with self.subTest(answer=answer):
-                with self.assertRaises(SystemExit) as stopped:
-                    self.fetch([answer] * attempts)
-                self.assertIn(f"{attempts} attempts", str(stopped.exception))
-                self.assertIn(str(answer), str(stopped.exception))
-
-    def test_a_file_that_does_not_match_its_pin_is_refused_without_asking_again(self):
-        row = {"version": "1.4.8", "installer": "agy",
-               "files": {install.target(): {"url": URL, "sha512": "0" * 128}}}
-        asked = []
-        with tempfile.TemporaryDirectory() as temporary, \
-                mock.patch.object(install.urllib.request, "urlopen",
-                                  side_effect=lambda url, timeout: asked.append(url) or Answer(b"another release")):
-            with self.assertRaisesRegex(SystemExit, "does not match the sha512"):
-                install.agy(row, Path(temporary))
-        self.assertEqual(asked, [URL], "a hash mismatch asked the server for the file again")
-
-    def test_a_body_that_ends_partway_is_asked_again_unless_its_answer_is_final(self):
-        # A connection that dropped mid-body is transient; a 403 once the body
-        # started is the server's answer, and a 503 is worth asking again.
-        for error in (http.client.IncompleteRead(b"half", 10), http.client.RemoteDisconnected("gone"),
-                      status(503)):
-            with self.subTest(error=error):
-                payload, clock = self.fetch([Answer(b"half", raises=error), b"the file"])
-                self.assertEqual(payload, b"the file")
-                self.assertEqual(clock.slept, [install.DOWNLOAD_RETRY_DELAYS[0]])
-        clock = Clock()
-        with self.assertRaisesRegex(SystemExit, "could not be downloaded: .*403"):
-            self.fetch([Answer(b"half", raises=status(403)), b"the file"], clock=clock)
-        self.assertEqual(clock.slept, [], "a 403 in the body asked the server again")
-
-    def test_a_body_still_arriving_at_the_budget_fails_with_the_budget_as_the_reason(self):
-        # A server that keeps trickling bytes: each piece arrives well inside
-        # the request's own wait, and there is far more than the budget at the
-        # rate it sends them, so only the deadline stops it. The body is a
-        # single chunk's worth read a byte at a time, which is what a `read`
-        # that waits to fill its chunk would hide.
-        trickle = Answer(b"x" * 4096, arriving=1,
-                         seconds=install.DOWNLOAD_BUDGET_SECONDS / 1024)
-        with self.assertRaisesRegex(SystemExit, f"inside {install.DOWNLOAD_BUDGET_SECONDS} s"):
-            self.fetch([trickle])
-        # A transfer that finishes inside the budget does finish.
-        payload, clock = self.fetch([Answer(b"the file", seconds=1.0)])
-        self.assertEqual(payload, b"the file")
-        self.assertLess(clock.now, 100.0 + install.DOWNLOAD_BUDGET_SECONDS)
-
-    def test_a_download_stops_when_the_next_wait_would_pass_its_budget(self):
-        # The budget bounds the waits: a wait that ends at it leaves no time
-        # for the attempt after it, and a second more lets that one start.
-        fits = sum(install.DOWNLOAD_RETRY_DELAYS)
-        for budget, attempts in ((fits - 1, 3), (fits, 3), (fits + 1, 4)):
-            with self.subTest(budget=budget):
-                with self.assertRaisesRegex(SystemExit, f"{attempts} attempts"):
-                    self.fetch([status(503)] * 5, budget=budget)
-
-    def test_a_request_with_no_time_left_is_never_sent(self):
-        # The budget bounds the whole download, so a download that has none is
-        # refused without asking the server, and the budget is its reason.
-        asked = []
-        with self.assertRaisesRegex(SystemExit, "inside 0 s"):
-            self.fetch([b"the file"], budget=0, asked=asked)
-        self.assertEqual(asked, [], "a download with no budget left asked the server")
-
     def test_another_version_than_the_pin_fails_the_install(self):
         with self.assertRaises(SystemExit) as stopped:
             self.install_pi("9.9.9")
         self.assertIn("pi answered '9.9.9', agent-clis.json pins", str(stopped.exception))
+
+    def fetch(self, curl, dest):
+        with mock.patch.object(install.shutil, "which", return_value="/usr/bin/curl"), \
+                mock.patch.object(install.subprocess, "run", curl):
+            return install.fetch(URL, dest)
+
+    def test_the_download_asks_curl_to_retry_a_transient_failure_and_bound_its_time(self):
+        # The flags are curl's contract with the step: what it retries, what it
+        # never retries, and how long one attempt and the whole run may take.
+        with tempfile.TemporaryDirectory() as temporary:
+            dest = Path(temporary) / "file"
+            curl = Curl()
+            self.assertEqual(self.fetch(curl, dest), dest)
+            self.assertEqual(dest.read_bytes(), b"the file")
+            command = curl.command
+        options = {}
+        for index, word in enumerate(command):
+            if word.startswith("--") and index + 1 < len(command) and not command[index + 1].startswith("-"):
+                options[word] = command[index + 1]
+            else:
+                options.setdefault(word, True)
+        self.assertEqual(command[0], "/usr/bin/curl")
+        for flag in ("--fail", "--location", "--silent", "--show-error", "--retry-connrefused"):
+            self.assertIn(flag, options, f"curl was given no {flag}")
+        self.assertEqual(options["--retry"], "3")
+        self.assertEqual(options["--output"], str(dest))
+        self.assertEqual(command[-1], URL)
+        # Every timeout is a number, so none is a flag curl would read as one.
+        for flag in ("--connect-timeout", "--max-time", "--retry-max-time"):
+            self.assertRegex(options[flag], r"^\d+$", f"curl was given no time for {flag}")
+
+    def test_a_failed_download_ends_the_step_with_curl_s_exit_and_its_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(SystemExit) as stopped:
+                self.fetch(Curl(code=18, error="curl: (18) end of response with 9 bytes missing"),
+                           Path(temporary) / "file")
+        self.assertIn("curl exited 18", str(stopped.exception))
+        self.assertIn("9 bytes missing", str(stopped.exception))
 
     def install_kind(self, kind, help_text="", render=""):
         """main() for `kind` at its pin, its `--help` answering `help_text` and
@@ -375,11 +242,20 @@ class Download(unittest.TestCase):
         self.assertIn("lacks Approval policy is currently never", str(stopped.exception))
 
     def install_agy(self, url, payload, sha512):
-        """agy() on this runner, the row naming `url` and `sha512` and the download answering `payload`."""
+        """agy() on this runner, the row naming `url` and `sha512` and curl
+        writing `payload`, the check reading the file curl left."""
         row = {"version": "1.4.8", "installer": "agy", "files": {install.target(): {"url": url, "sha512": sha512}}}
-        with tempfile.TemporaryDirectory() as temporary, \
-                mock.patch.object(install, "fetch", return_value=payload):
-            program = install.agy(row, Path(temporary))
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        curl = Curl(payload=payload)
+
+        def fetch(url, dest):
+            curl(["/usr/bin/curl", "--output", str(dest), url])
+            return dest
+
+        with mock.patch.object(install, "fetch", fetch):
+            self.prefix = folder
+            program = install.agy(row, folder)
             return program.name, program.read_bytes()
 
     def test_agy_installs_the_program_of_the_recorded_archive_only_when_its_sha512_matches(self):
@@ -392,8 +268,10 @@ class Download(unittest.TestCase):
         url = "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.8-1/x/cli.tar.gz"
         name, content = self.install_agy(url, payload, hashlib.sha512(payload).hexdigest())
         self.assertEqual((name, content), ("agy.exe" if os.name == "nt" else "agy", b"agy program"))
+        # A file of another digest is refused and leaves no program to run.
         with self.assertRaisesRegex(SystemExit, "does not match the sha512"):
             self.install_agy(url, payload, hashlib.sha512(b"another release").hexdigest())
+        self.assertFalse((self.prefix / "agy").exists(), "a refused file still left a program")
 
     def test_agy_installs_a_recorded_program_as_it_is(self):
         url = "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.8-1/windows-x64/cli.exe"

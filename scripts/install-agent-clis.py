@@ -10,10 +10,10 @@ $RUNNER_TEMP/agent-clis), and the script prints one `<kind>=<program>` line
 per CLI; with GITHUB_PATH set it puts each program's folder on the PATH of
 the later steps, and with GITHUB_OUTPUT set it writes the same lines as the
 step's outputs. npm installs run no package's install scripts but those of
-a row that names why it needs them (`install_scripts`). A download is asked
-again while its failure is transient, inside a fixed budget, and the grok
-installer is downloaded to a file before it runs, so a failed download ends
-the step with its own error. A CLI that answers
+a row that names why it needs them (`install_scripts`). A download is curl's,
+which asks again on a transient failure inside its own bounds and fails a body
+that arrived short, and the grok installer is downloaded to a file before it
+runs, so a failed download ends the step with curl's own error. A CLI that answers
 another version than the table's fails the install, so a vendor release moves
 the pin in a pull request before a lane measures it. So does a CLI whose
 `--help` lists no full-access option its adapter declares
@@ -29,7 +29,6 @@ the access they give in the prompt input it renders (`FULL_ACCESS_PROOF`).
 
 import argparse
 import hashlib
-import http.client
 import io
 import json
 import os
@@ -37,14 +36,10 @@ from pathlib import Path
 import platform
 import re
 import shutil
-import ssl
 import subprocess
 import sys
 import tarfile
 import tempfile
-import time
-import urllib.error
-import urllib.request
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHECKOUT / "scripts"))
@@ -54,35 +49,17 @@ WINDOWS = os.name == "nt"
 # Where each pinned release comes from: the vendor's installer, or its release files.
 GROK_INSTALLER = "https://x.ai/cli/install.sh"
 OMP_RELEASES = "https://github.com/can1357/oh-my-pi/releases/download"
-# A download that failed on a rate limit, a server fault or a connection that
-# dropped is asked again up to this many times, after these waits. The budget
-# bounds the whole download, its waits included: no attempt starts once it is
-# spent, one request waits no longer than what it leaves, and the body is read
-# in pieces checked against it. The install steps run under a ten-minute limit,
-# so the budget leaves the rest of a step for the other CLIs' downloads and for
-# the checks after them.
-DOWNLOAD_RETRY_DELAYS = (2, 5, 15)
-DOWNLOAD_BUDGET_SECONDS = 180
-# How long one socket read may wait before the connection counts as stalled.
-# The omp binary is over 200 MB, so a transfer slower than about 1.2 MB/s does
-# not finish inside the budget; at that speed the step was close to its own
-# limit anyway.
-DOWNLOAD_ATTEMPT_SECONDS = 60
-# The body is read in pieces of this size, so a server that keeps trickling
-# bytes cannot outlast the budget.
-DOWNLOAD_CHUNK_BYTES = 1 << 16
-# The answers a second ask may get differently: a rate limit, a request that
-# timed out, and every server fault. A 403, a 404 and a URL that answers
-# nothing are the same on the second ask.
-RETRY_STATUSES = frozenset({408, 425, 429}) | frozenset(range(500, 600))
-# The connection failures a second ask may get past: a wait that timed out and
-# a connection that was dropped, reset, refused or ended partway through. Every
-# other failure of the operating system or of TLS says the same thing on the
-# second ask, a certificate the name does not match and a name that does not
-# resolve included.
-TRANSIENT_CONNECTIONS = (TimeoutError, ConnectionResetError, ConnectionRefusedError,
-                         ConnectionAbortedError, BrokenPipeError, ssl.SSLEOFError,
-                         http.client.IncompleteRead, http.client.RemoteDisconnected)
+# A download is curl's to make: `curl --retry` asks again on a rate limit, a
+# server fault and a connection that dropped or timed out, never on a 403 or a
+# 404, `--max-time` bounds each attempt and `--retry-max-time` the whole
+# download with its waits, and curl fails a body shorter than the length the
+# answer declares. The omp binary is over 200 MB, so an attempt is given ten
+# minutes and the run as a whole the install step's own half of its limit; the
+# other downloads in a step share what it leaves.
+CURL_RETRY_FLAGS = ("--fail", "--location", "--silent", "--show-error",
+                    "--retry", "3", "--retry-connrefused",
+                    "--connect-timeout", "20", "--max-time", "600",
+                    "--retry-max-time", "300")
 
 
 def table():
@@ -141,10 +118,8 @@ def grok(row, prefix):
     hid its download's failure behind the pipeline's last command, so a curl
     that got a 500 ended the step as a missing program later."""
     folder = prefix / "grok"
-    installer = fetch(GROK_INSTALLER)
     with tempfile.TemporaryDirectory() as temporary:
-        script = Path(temporary) / "install.sh"
-        script.write_bytes(installer)
+        script = fetch(GROK_INSTALLER, Path(temporary) / "install.sh")
         # Already on PATH means the installer never tries ~/.local/bin or
         # /usr/local/bin links. Set this inside Bash so Git Bash converts its
         # inherited Windows PATH before the Unix path is prepended.
@@ -161,17 +136,20 @@ def omp(row, prefix):
     2026-10-18, while each release carries its binaries."""
     asset = f"omp-{target()}" + (".exe" if WINDOWS else "")
     base = f"{OMP_RELEASES}/v{row['version']}"
-    sums = fetch(f"{base}/SHA256SUMS.txt").decode()
-    expected = next((line.split()[0] for line in sums.splitlines() if line.split()[1:] == [asset]), None)
-    if not expected:
-        raise SystemExit(f"omp: v{row['version']} lists no {asset} in SHA256SUMS.txt")
-    binary = fetch(f"{base}/{asset}")
-    if hashlib.sha256(binary).hexdigest() != expected:
-        raise SystemExit(f"omp: {asset} of v{row['version']} does not match its SHA256SUMS.txt")
-    folder = prefix / "omp"
-    folder.mkdir(parents=True, exist_ok=True)
-    program = folder / ("omp.exe" if WINDOWS else "omp")
-    program.write_bytes(binary)
+    with tempfile.TemporaryDirectory() as temporary:
+        sums = fetch(f"{base}/SHA256SUMS.txt", Path(temporary) / "SHA256SUMS.txt").read_text()
+        expected = next((line.split()[0] for line in sums.splitlines() if line.split()[1:] == [asset]), None)
+        if not expected:
+            raise SystemExit(f"omp: v{row['version']} lists no {asset} in SHA256SUMS.txt")
+        binary = fetch(f"{base}/{asset}", Path(temporary) / asset)
+        # The file only becomes the program once it is the one the release lists,
+        # so a mismatched release leaves nothing that could run.
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != expected:
+            raise SystemExit(f"omp: {asset} of v{row['version']} does not match its SHA256SUMS.txt")
+        folder = prefix / "omp"
+        folder.mkdir(parents=True, exist_ok=True)
+        program = folder / ("omp.exe" if WINDOWS else "omp")
+        shutil.copyfile(binary, program)
     program.chmod(0o755)
     return program
 
@@ -184,58 +162,24 @@ def target():
     return f"{system}-{arch}"
 
 
-def fetch(url):
-    """The bytes at `url`, asked again while the failure is transient: a rate
-    limit, a server fault, or a connection that dropped or timed out. The budget
-    bounds the whole download, the waits between attempts included: no attempt
-    starts without time left, one request waits no longer than that leaves, and
-    the body is taken as it arrives with the deadline checked after every piece,
-    so a server that keeps trickling bytes cannot outlast it. A refusal the next
-    ask would answer the same way (403, 404, a certificate of another name, a URL
-    nothing answers) stops at once with its own cause. The step ends with the
-    download's own error; a file that arrives and does not match its pin is the
-    caller's to refuse, since no retry can repair it."""
-    end = time.monotonic() + DOWNLOAD_BUDGET_SECONDS
-    attempts = len(DOWNLOAD_RETRY_DELAYS) + 1
-    for attempt in range(1, attempts + 1):
-        left = end - time.monotonic()
-        if left <= 0:
-            raise SystemExit(f"{url} could not be downloaded inside {DOWNLOAD_BUDGET_SECONDS} s")
-        try:
-            with urllib.request.urlopen(url, timeout=min(DOWNLOAD_ATTEMPT_SECONDS, left)) as answer:
-                body = bytearray()
-                # `read1` returns the bytes that have arrived rather than
-                # waiting to fill the chunk, so the deadline is checked between
-                # the pieces a slow server sends one at a time.
-                while piece := answer.read1(DOWNLOAD_CHUNK_BYTES):
-                    body += piece
-                    if time.monotonic() >= end:
-                        raise SystemExit(f"{url} could not be downloaded inside "
-                                         f"{DOWNLOAD_BUDGET_SECONDS} s: its body was still arriving")
-                return bytes(body)
-        except (OSError, http.client.HTTPException) as error:
-            if not transient(error):
-                raise SystemExit(f"{url} could not be downloaded: {error}")
-            if attempt == attempts:
-                raise SystemExit(f"{url} could not be downloaded in {attempts} attempts: {error}")
-            wait = DOWNLOAD_RETRY_DELAYS[attempt - 1]
-            if time.monotonic() + wait >= end:
-                raise SystemExit(f"{url} could not be downloaded in {attempt} attempt"
-                                 f"{'s' if attempt > 1 else ''} inside {DOWNLOAD_BUDGET_SECONDS} s: {error}")
-            time.sleep(wait)
-
-
-def transient(error):
-    """Whether asking the same URL again may get a different answer: a rate
-    limit, a server fault, or a connection that dropped, reset, refused or
-    timed out. A 403, a 404, a certificate that names another host, an unknown
-    URL scheme and a name that does not resolve say the same thing however often
-    they are asked, so a retry only spends the step's minutes."""
-    if isinstance(error, urllib.error.HTTPError):
-        return error.code in RETRY_STATUSES
-    if isinstance(error, urllib.error.URLError):
-        return isinstance(error.reason, TRANSIENT_CONNECTIONS)
-    return isinstance(error, TRANSIENT_CONNECTIONS)
+def fetch(url, dest):
+    """`url` downloaded to `dest` by curl, which is what knows which failures are
+    worth asking again and which are not: `CURL_RETRY_FLAGS` asks again on a
+    rate limit, a server fault and a connection that dropped or timed out, never
+    on a 403 or a 404, bounds each attempt and the whole download with its
+    waits, and fails a body shorter than the answer's declared length. A failed
+    download ends the step with curl's exit code and its last error. What the
+    file must be is the caller's to check, since no retry can repair a wrong
+    pin."""
+    curl = shutil.which("curl")
+    if not curl:
+        raise SystemExit("curl is not on PATH")
+    result = subprocess.run([curl, *CURL_RETRY_FLAGS, "--output", str(dest), url],
+                            stdout=sys.stderr, stderr=subprocess.PIPE, text=True, timeout=900)
+    if result.returncode:
+        raise SystemExit(f"{url} could not be downloaded: curl exited {result.returncode}: "
+                         f"{result.stderr.strip()}")
+    return Path(dest)
 
 
 def agy(row, prefix):
@@ -248,19 +192,20 @@ def agy(row, prefix):
     if system not in row["files"]:
         raise SystemExit(f"agy: {TABLE.name} names no file for {system}")
     url, sha512 = row["files"][system]["url"], row["files"][system]["sha512"]
-    payload = fetch(url)
-    if hashlib.sha512(payload).hexdigest() != sha512:
-        raise SystemExit(f"agy: {url} does not match the sha512 {TABLE.name} records")
-    if url.endswith(".tar.gz"):
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
-            member = archive.extractfile("antigravity")
-            payload = member.read() if member else b""
-        if not payload:
-            raise SystemExit(f"agy: {url} holds no antigravity program")
-    folder = prefix / "agy"
-    folder.mkdir(parents=True, exist_ok=True)
-    program = folder / ("agy.exe" if WINDOWS else "agy")
-    program.write_bytes(payload)
+    with tempfile.TemporaryDirectory() as temporary:
+        payload = fetch(url, Path(temporary) / Path(url).name).read_bytes()
+        if hashlib.sha512(payload).hexdigest() != sha512:
+            raise SystemExit(f"agy: {url} does not match the sha512 {TABLE.name} records")
+        folder = prefix / "agy"
+        folder.mkdir(parents=True, exist_ok=True)
+        program = folder / ("agy.exe" if WINDOWS else "agy")
+        if url.endswith(".tar.gz"):
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+                member = archive.extractfile("antigravity")
+                payload = member.read() if member else b""
+            if not payload:
+                raise SystemExit(f"agy: {url} holds no antigravity program")
+        program.write_bytes(payload)
     program.chmod(0o755)
     return program
 
