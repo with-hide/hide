@@ -120,7 +120,7 @@ jobs:
         env:
           HIDE_HOLDER_CONPTY: ${{ steps.conpty.outputs.folder }}
         run: |
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder --test it -E 'test(/^clipboard::/)' --stress-count 20 --retries 0
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder -p hide-holder-protocol
           # --no-deps: the holder's own crates only, not the workspace
           # crates its tests build (hide-kit and what it links), whose lints
           # are their own lanes'.

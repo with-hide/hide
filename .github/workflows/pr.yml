@@ -91,7 +91,7 @@ on:
     # reruns the body's checks (`policy` alone when the last green run stands).
     types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
-    branches: [main, fix/holder-clipboard-copy-once]
+    branches: [main]
   merge_group:
   # nightly.yml runs every lane once a day, with agent checks owned there.
   workflow_call:
@@ -147,7 +147,7 @@ jobs:
       # another repository never gets the variable, so a fork's code never
       # reaches the self-hosted runner; unsetting the variable turns the
       # runner off for every run.
-      self-hosted-macos: ''
+      self-hosted-macos: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HIDE_MACOS_CI_RUNNER || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -160,11 +160,7 @@ jobs:
         # The crate graph comes from `cargo metadata`, which needs no build.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          echo 'lanes=["rust","vt"]' >> "$GITHUB_OUTPUT"
-          echo 'full=false' >> "$GITHUB_OUTPUT"
-          echo 'rust-packages=["hide-holder"]' >> "$GITHUB_OUTPUT"
-          echo 'macos=true' >> "$GITHUB_OUTPUT"
+        run: python3 scripts/ci-plan.py plan --event "$GITHUB_EVENT_NAME" --draft "${{ github.event.pull_request.draft || false }}" --nightly-agent-checks "${{ inputs.nightly-agent-checks || false }}" --record ci-plan.json
       # The commits this run's lanes checked, for the pull request's next run.
       # Without it the next run plans its lanes as usual, so a failed upload
       # leaves this run's plan standing.
@@ -313,7 +309,16 @@ jobs:
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
       - name: Test the planned crates
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-holder --test it -E 'test(/^clipboard::/)' --stress-count 20 --retries 0
+        # hide-ai drives its codex backend against a python fake app server.
+        # nextest runs no doc test; the workspace has none that runs.
+        run: |
+          if [ "$FULL" = true ]; then
+            bash scripts/verify-cargo.sh nextest --profile ci --workspace
+          else
+            mapfile -t packages < <(jq -r '.[] | "-p", .' <<<"$PACKAGES")
+            (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
+            bash scripts/verify-cargo.sh nextest --profile ci "${packages[@]}"
+          fi
       - name: Shell integration and agent start in real shells
         # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
         # fish read the user's files in their order, zsh gives ZDOTDIR back,
