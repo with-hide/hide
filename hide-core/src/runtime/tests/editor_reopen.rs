@@ -287,7 +287,7 @@ fn tab_strip_lists_engine_tabs_and_then_the_file_that_was_opened() {
     ))));
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
-        vec!["herdr:w-order:t1".to_owned(), "herdr:w-order:t2".to_owned()]
+        vec!["engine:w-order:t1".to_owned(), "engine:w-order:t2".to_owned()]
     );
 
     open_file(&mut runtime, &checkout_id, &file);
@@ -295,7 +295,7 @@ fn tab_strip_lists_engine_tabs_and_then_the_file_that_was_opened() {
     assert_eq!(with_file.len(), 3);
     assert_eq!(
         &with_file[..2],
-        &["herdr:w-order:t1".to_owned(), "herdr:w-order:t2".to_owned()]
+        &["engine:w-order:t1".to_owned(), "engine:w-order:t2".to_owned()]
     );
     assert!(with_file[2].starts_with("file:"));
     assert_eq!(strip_labels(&runtime, &checkout_id)[2], "notes.md");
@@ -353,7 +353,7 @@ fn tab_strip_appends_a_reopened_file_nowhere_and_a_new_engine_tab_at_the_end() {
     let after = strip_ids(&runtime, &checkout_id);
     assert_eq!(after.len(), 4);
     assert_eq!(&after[..3], &opened[..]);
-    assert_eq!(after[3], "herdr:w-order:t3");
+    assert_eq!(after[3], "engine:w-order:t3");
 
     std::fs::remove_dir_all(&directory).ok();
 }
@@ -397,9 +397,9 @@ fn tab_strip_keeps_a_file_in_its_slot_while_the_engine_reorders_around_it() {
     runtime.checkout_tab_order.insert(
         checkout_id.clone(),
         vec![
-            "herdr:w-order:t1".to_owned(),
+            "engine:w-order:t1".to_owned(),
             file_entry.clone(),
-            "herdr:w-order:t2".to_owned(),
+            "engine:w-order:t2".to_owned(),
         ],
     );
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -411,9 +411,9 @@ fn tab_strip_keeps_a_file_in_its_slot_while_the_engine_reorders_around_it() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t1".to_owned(),
+            "engine:w-order:t1".to_owned(),
             file_entry.clone(),
-            "herdr:w-order:t2".to_owned()
+            "engine:w-order:t2".to_owned()
         ]
     );
 
@@ -428,9 +428,9 @@ fn tab_strip_keeps_a_file_in_its_slot_while_the_engine_reorders_around_it() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t2".to_owned(),
+            "engine:w-order:t2".to_owned(),
             file_entry,
-            "herdr:w-order:t1".to_owned()
+            "engine:w-order:t1".to_owned()
         ]
     );
 
@@ -456,9 +456,9 @@ fn tab_strip_reorder_moves_a_file_tab_without_asking_the_engine() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t1".to_owned(),
+            "engine:w-order:t1".to_owned(),
             file_entry.clone(),
-            "herdr:w-order:t2".to_owned()
+            "engine:w-order:t2".to_owned()
         ]
     );
     assert!(runtime.snapshot().status.last_error.is_none());
@@ -475,9 +475,9 @@ fn tab_strip_reorder_moves_a_file_tab_without_asking_the_engine() {
     assert_eq!(
         strip_ids(&runtime, &checkout_id),
         vec![
-            "herdr:w-order:t1".to_owned(),
+            "engine:w-order:t1".to_owned(),
             file_entry,
-            "herdr:w-order:t2".to_owned()
+            "engine:w-order:t2".to_owned()
         ]
     );
 
