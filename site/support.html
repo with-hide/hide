@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="What hide is, how to connect your phone, how to get help, and how to remove a paired phone.">
+    <meta name="theme-color" content="#0d191b" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f4f6" media="(prefers-color-scheme: light)">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="hide · Support">
+    <meta property="og:description" content="What hide is, how to connect your phone, how to get help, and how to remove a paired phone.">
+    <meta property="og:image" content="https://withhide.dev/assets/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="canonical" href="https://withhide.dev/support">
+    <title>hide · Support</title>
+    <link rel="icon" type="image/png" href="./assets/hide-mark.png">
+    <link rel="preload" as="font" href="./assets/fonts/BricolageGrotesque-Variable.woff2" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="./styles.css">
+    <script>document.documentElement.classList.remove("no-js");</script>
+    <script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>
+    <script defer src="/_vercel/insights/script.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="wordmark" href="./" aria-label="hide home">
+          <picture>
+            <source srcset="./assets/hide-icon.svg" media="(prefers-reduced-motion: reduce)">
+            <img src="./assets/hide-icon-blinking.svg" width="34" height="34" alt="">
+          </picture>
+          <span>hide</span>
+        </a>
+        <nav aria-label="Main navigation">
+          <a class="nav-extra" href="./#conductor">Product</a>
+          <a class="nav-extra" href="./#pricing">Pricing</a>
+          <a class="nav-extra" href="./#faq">FAQ</a>
+          <a class="nav-extra" href="./privacy">Privacy</a>
+          <a class="nav-extra" href="https://github.com/with-hide/hide">GitHub</a>
+          <a class="nav-cta" href="./#download">Get hide</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="legal-main">
+      <div class="wrap">
+        <div class="legal-head">
+          <p class="label">Support</p>
+          <h1>Support</h1>
+          <p class="lead">What hide is, how to connect your phone, where to ask for help, and how to disconnect a phone you no longer use.</p>
+          <nav class="legal-langs" aria-label="Language">
+            <a href="#en">English</a>
+            <a href="#ko" lang="ko">한국어</a>
+          </nav>
+        </div>
+
+        <section class="legal" id="en" lang="en" aria-labelledby="en-title">
+          <h2 id="en-title">English</h2>
+
+          <h3>What hide is</h3>
+          <p>hide is a desktop app for running coding agents. You give a Conductor one mission; it plans the steps, starts Claude Code, Codex, Antigravity, Grok and the other agents you have installed, on this computer or on another machine you connect, and brings you only the decisions that need you.</p>
+          <ul>
+            <li>It runs on macOS (Apple Silicon), Windows (x64) and Linux (x64).</li>
+            <li>It needs the agents you want to run, already installed and signed in to your own account. hide keeps no provider credential and charges nothing for them.</li>
+            <li>It is free and fair source (FSL 1.1). There is no account, no sign-in and no payment.</li>
+            <li>Your phone can read what an agent is doing and answer it, through hide's relay. That part is optional.</li>
+          </ul>
+          <p>Installation, the supported systems and what each one needs are in the <a href="https://github.com/with-hide/hide/blob/main/docs/INSTALL.md">installation guide</a>. Downloads are on the <a href="./#download">home page</a>.</p>
+
+          <h3>Connect your phone</h3>
+          <p>The phone and the computer are the only places your conversation can be read; hide's relay passes encrypted messages along and cannot read them. No account, payment or Tailscale setup is needed.</p>
+          <ol class="support-steps">
+            <li>On the computer, open <strong>Settings › Mobile</strong> and turn on <strong>Open hide from your phone</strong> (폰에서 Hide 열기).</li>
+            <li>Wait until the connection row says <strong>Connected · Hide relay (Tokyo)</strong> (연결됨 · Hide 중계 (도쿄)), then choose <strong>Show QR</strong> (QR 보기).</li>
+            <li>Scan the code with the phone's camera. The phone opens <code>app.withhide.dev</code>; choose <strong>Connect</strong> (연결).</li>
+            <li>To keep it as an app, use the browser's Share menu and <strong>Add to Home Screen</strong>.</li>
+          </ol>
+          <ul>
+            <li>The code works for five minutes, or until one phone uses it.</li>
+            <li>Four phones can be paired with one computer.</li>
+            <li>Keep the computer running and connected. It can sleep; while it is off, the phone says it cannot connect and retries when the computer returns. The relay does not hold messages for later.</li>
+            <li>The device name at the top of the phone screen switches between computers, and <strong>Connect another device</strong> (다른 기기 연결) adds one by scanning its code.</li>
+            <li>If you used the older direct Tailscale connection, it is still under <strong>Advanced · Connect over Tailscale</strong> (고급 · Tailscale로 직접 연결). Turning Mobile off closes the relay and every phone connection.</li>
+          </ul>
+
+          <h3>Get help</h3>
+          <ul>
+            <li>Something broken: <a href="https://github.com/with-hide/hide/issues/new?template=bug.yml">open a bug report</a> with what you did, what you expected and what happened, and the version <strong>Settings › About</strong> shows for hide.</li>
+            <li>A request or an idea: <a href="https://github.com/with-hide/hide/issues/new?template=feature_request.yml">open a feature request</a>.</li>
+            <li>A question, or something that does not fit either form: the <a href="https://github.com/with-hide/hide/discussions/categories/q-a">Q&amp;A discussions</a>.</li>
+            <li>A security problem: report it privately through <a href="https://github.com/with-hide/hide/security/advisories/new">a security advisory</a>. Do not open a public issue for it.</li>
+            <li>Anything else, including privacy questions: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a>.</li>
+          </ul>
+          <p>When you report a problem, the diagnostic log helps. It is a file on your computer, under hide's state folder in <code>~/.hide/Logs</code> (on Windows, your home folder's <code>.hide\Logs</code>). It records what hide itself did and is never uploaded. Read it before you attach it, and take out anything you would rather not share.</p>
+          <p>What each part of hide sends is on the <a href="./privacy">privacy page</a>.</p>
+
+          <h3>Remove a paired phone</h3>
+          <p>There are two directions, and you may need only one of them.</p>
+          <ul>
+            <li><strong>On the computer</strong>, <strong>Settings › Mobile</strong> lists the phones connected to it and gives each one <strong>Revoke</strong> (연결 해제). A revoked phone cannot connect again without a new code from this computer. Turning Mobile off disconnects every phone at once.</li>
+            <li><strong>On the phone</strong>, open the device list and remove the computer (기기 지우기, Remove device). The phone forgets the computer's key and its own credential, and connecting again needs a new code.</li>
+          </ul>
+          <p>A phone that has not connected for seven days is disconnected automatically. Removing the phone app removes what the phone kept about its computers.</p>
+
+          <h3>Common problems</h3>
+          <div class="faq support-faq">
+            <details id="phone-cannot-connect">
+              <summary>The phone says it cannot connect</summary>
+              <p>The computer is off, asleep, or Mobile is turned off in Settings. Wake the computer and check that the connection row says Connected. The phone retries by itself; there is no need to pair again.</p>
+            </details>
+            <details id="phone-revoked">
+              <summary>The phone says the connection was revoked</summary>
+              <p>Either that phone was revoked on the computer, or it has not connected for seven days. Show a new code in Settings › Mobile and scan it on the phone.</p>
+            </details>
+            <details id="phone-limit">
+              <summary>A new phone will not pair</summary>
+              <p>One computer takes four phones. Revoke one in Settings › Mobile, then show a new code.</p>
+            </details>
+            <details id="no-notifications">
+              <summary>The phone does not show notifications</summary>
+              <p>Notifications are off until you turn them on in the phone app, and the phone's own Settings must allow them for hide. If you added the phone before it had an app on the Home Screen, open it from the Home Screen once and turn notifications on again.</p>
+            </details>
+            <details id="statistics">
+              <summary>How do I stop the desktop app sending usage statistics?</summary>
+              <p>Turn off <strong>Share usage statistics</strong> in <strong>Settings › Privacy</strong>. Wait no longer than whatever is already on its way; nothing further is sent. The <a href="./privacy">privacy page</a> lists exactly what is sent when it is on.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="legal" id="ko" lang="ko" aria-labelledby="ko-title">
+          <h2 id="ko-title">한국어</h2>
+
+          <h3>hide는 무엇인가요</h3>
+          <p>hide는 코딩 에이전트를 돌리는 데스크톱 앱입니다. 미션 하나를 Conductor에게 맡기면 단계를 계획하고, 설치해 둔 Claude Code, Codex, Antigravity, Grok 등의 에이전트를 이 컴퓨터나 연결한 다른 기기에서 띄우며, 판단이 필요한 것만 사용자에게 가져옵니다.</p>
+          <ul>
+            <li>macOS(Apple Silicon), Windows(x64), Linux(x64)에서 실행됩니다.</li>
+            <li>쓰려는 에이전트가 미리 설치되어 사용자의 계정으로 로그인되어 있어야 합니다. hide는 공급자 자격 증명을 보관하지 않고, 그 요금을 대신 청구하지도 않습니다.</li>
+            <li>무료이며 공정 소스(FSL 1.1)입니다. 계정도, 로그인도, 결제도 없습니다.</li>
+            <li>폰으로 에이전트가 하는 일을 읽고 답할 수 있습니다. hide의 중계 서버를 거치며, 이 부분은 선택입니다.</li>
+          </ul>
+          <p>설치 방법과 지원하는 시스템, 필요한 것은 <a href="https://github.com/with-hide/hide/blob/main/docs/INSTALL.md">설치 안내</a>에 있습니다. 내려받기는 <a href="./#download">첫 페이지</a>에서 합니다.</p>
+
+          <h3>폰 연결하기</h3>
+          <p>대화를 읽을 수 있는 곳은 폰과 컴퓨터뿐입니다. hide의 중계 서버는 암호화된 메시지를 전달할 뿐 내용을 읽지 못합니다. 계정도, 결제도, Tailscale 설정도 필요하지 않습니다.</p>
+          <ol class="support-steps">
+            <li>컴퓨터에서 <strong>설정 › 모바일</strong>을 열고 <strong>폰에서 Hide 열기</strong>를 켭니다.</li>
+            <li>연결 줄이 <strong>연결됨 · Hide 중계 (도쿄)</strong>가 되면 <strong>QR 보기</strong>를 고릅니다.</li>
+            <li>폰 카메라로 코드를 스캔합니다. 폰에서 <code>app.withhide.dev</code>가 열리면 <strong>연결</strong>을 고릅니다.</li>
+            <li>앱처럼 쓰려면 브라우저의 공유 메뉴에서 <strong>홈 화면에 추가</strong>를 고릅니다.</li>
+          </ol>
+          <ul>
+            <li>코드는 5분 동안, 또는 폰 한 대가 쓸 때까지 유효합니다.</li>
+            <li>컴퓨터 한 대에 폰을 4대까지 연결할 수 있습니다.</li>
+            <li>컴퓨터를 켜 두고 연결해 두세요. 잠들어도 되지만 꺼져 있는 동안 폰은 연결할 수 없다고 표시하고 컴퓨터가 돌아오면 다시 시도합니다. 중계 서버는 메시지를 쌓아 두지 않습니다.</li>
+            <li>폰 화면 위쪽의 기기 이름으로 컴퓨터를 바꾸고, <strong>다른 기기 연결</strong>로 그 컴퓨터의 코드를 스캔해 하나 더 연결합니다.</li>
+            <li>예전 Tailscale 직접 연결은 <strong>고급 · Tailscale로 직접 연결</strong>에 그대로 있습니다. 모바일을 끄면 중계와 모든 폰 연결이 닫힙니다.</li>
+          </ul>
+
+          <h3>도움 받기</h3>
+          <ul>
+            <li>무언가 고장 났다면 <a href="https://github.com/with-hide/hide/issues/new?template=bug.yml">버그 리포트를 열고</a> 무엇을 했는지, 무엇을 기대했는지, 무엇이 일어났는지와 <strong>설정 › 정보</strong>에 나오는 hide 버전을 적어 주세요.</li>
+            <li>원하는 기능이나 아이디어는 <a href="https://github.com/with-hide/hide/issues/new?template=feature_request.yml">기능 요청으로</a> 알려 주세요.</li>
+            <li>질문이나 어느 양식에도 맞지 않는 것은 <a href="https://github.com/with-hide/hide/discussions/categories/q-a">Q&amp;A 토론</a>에 남겨 주세요.</li>
+            <li>보안 문제는 <a href="https://github.com/with-hide/hide/security/advisories/new">보안 권고</a>로 비공개로 알려 주세요. 공개 이슈로 열지 마세요.</li>
+            <li>그 밖의 일과 개인정보 관련 문의: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a>.</li>
+          </ul>
+          <p>문제를 알릴 때는 진단 로그가 도움이 됩니다. 사용자의 컴퓨터에 있는 hide 상태 폴더의 <code>~/.hide/Logs</code>(Windows에서는 사용자 폴더의 <code>.hide\Logs</code>)에 있는 파일입니다. hide가 한 일만 적히며 어디로도 올라가지 않습니다. 첨부하기 전에 읽어 보고, 나누고 싶지 않은 내용은 지우세요.</p>
+          <p>hide의 각 부분이 무엇을 보내는지는 <a href="./privacy">개인정보 처리방침</a>에 있습니다.</p>
+
+          <h3>연결한 폰 지우기</h3>
+          <p>두 방향이 있고, 한쪽만 필요할 수 있습니다.</p>
+          <ul>
+            <li><strong>컴퓨터에서</strong> <strong>설정 › 모바일</strong>에 연결된 폰이 나오고 각 폰에 <strong>연결 해제</strong>가 있습니다. 해제한 폰은 이 컴퓨터의 새 코드 없이는 다시 연결할 수 없습니다. 모바일을 끄면 모든 폰 연결이 한꺼번에 끊깁니다.</li>
+            <li><strong>폰에서</strong> 기기 목록을 열고 그 컴퓨터를 지웁니다(기기 지우기). 폰은 그 컴퓨터의 키와 자기 자격 증명을 잊고, 다시 연결하려면 새 코드가 필요합니다.</li>
+          </ul>
+          <p>7일 동안 연결하지 않은 폰은 자동으로 연결이 끊깁니다. 폰 앱을 지우면 폰이 컴퓨터들에 대해 보관하던 것도 함께 지워집니다.</p>
+
+          <h3>자주 겪는 문제</h3>
+          <div class="faq support-faq">
+            <details id="phone-cannot-connect-ko">
+              <summary>폰에 연결할 수 없다고 나와요</summary>
+              <p>컴퓨터가 꺼져 있거나 잠들었거나, 설정에서 모바일이 꺼져 있습니다. 컴퓨터를 깨우고 연결 줄이 ‘연결됨’인지 확인하세요. 폰이 스스로 다시 시도하므로 새로 연결할 필요는 없습니다.</p>
+            </details>
+            <details id="phone-revoked-ko">
+              <summary>폰에 연결이 해제됐다고 나와요</summary>
+              <p>컴퓨터에서 그 폰을 해제했거나, 7일 동안 연결하지 않았습니다. 설정 › 모바일에서 새 코드를 보여 주고 폰으로 스캔하세요.</p>
+            </details>
+            <details id="phone-limit-ko">
+              <summary>새 폰이 연결되지 않아요</summary>
+              <p>컴퓨터 한 대에 폰 4대까지 연결할 수 있습니다. 설정 › 모바일에서 하나를 해제하고 새 코드를 보여 주세요.</p>
+            </details>
+            <details id="no-notifications-ko">
+              <summary>폰에 알림이 오지 않아요</summary>
+              <p>알림은 폰 앱에서 직접 켜기 전까지 꺼져 있고, 폰의 설정에서도 hide의 알림이 허용되어 있어야 합니다. 홈 화면에 앱이 생기기 전에 연결했다면 홈 화면에서 한 번 열고 알림을 다시 켜세요.</p>
+            </details>
+            <details id="statistics-ko">
+              <summary>데스크톱 앱이 사용 통계를 보내지 않게 하려면요</summary>
+              <p><strong>설정 › 개인정보</strong>에서 <strong>사용 통계 보내기</strong>를 끄세요. 이미 떠난 요청 외에는 더 보내지 않습니다. 켜져 있을 때 무엇을 보내는지는 <a href="./privacy">개인정보 처리방침</a>에 적어 두었습니다.</p>
+            </details>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>hide · Run more agents. Hold less.</span>
+        <p class="footer-contact">Contact, Enterprise and teams: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a></p>
+        <nav aria-label="More about hide">
+          <a href="./privacy">Privacy</a>
+          <a href="./support">Support</a>
+          <a href="https://github.com/with-hide/hide">Source</a>
+          <a href="https://github.com/with-hide/hide/blob/main/docs/README.md">Docs</a>
+          <a href="https://github.com/with-hide/hide/blob/main/docs/INSTALL.md">Install</a>
+          <a href="https://discord.gg/h6zme5kybD">Discord</a>
+          <a href="https://herdr.dev/">Herdr</a>
+          <a href="https://github.com/with-hide/hide/blob/main/LICENSE">FSL license</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

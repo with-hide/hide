@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="What hide collects, where each part sends it, and how long it stays: the desktop app, this website, the relay and the phone app.">
+    <meta name="theme-color" content="#0d191b" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f4f6" media="(prefers-color-scheme: light)">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="hide · Privacy policy">
+    <meta property="og:description" content="What hide collects, where each part sends it, and how long it stays.">
+    <meta property="og:image" content="https://withhide.dev/assets/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="canonical" href="https://withhide.dev/privacy">
+    <title>hide · Privacy policy</title>
+    <link rel="icon" type="image/png" href="./assets/hide-mark.png">
+    <link rel="preload" as="font" href="./assets/fonts/BricolageGrotesque-Variable.woff2" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="./styles.css">
+    <script>document.documentElement.classList.remove("no-js");</script>
+    <script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>
+    <script defer src="/_vercel/insights/script.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="wordmark" href="./" aria-label="hide home">
+          <picture>
+            <source srcset="./assets/hide-icon.svg" media="(prefers-reduced-motion: reduce)">
+            <img src="./assets/hide-icon-blinking.svg" width="34" height="34" alt="">
+          </picture>
+          <span>hide</span>
+        </a>
+        <nav aria-label="Main navigation">
+          <a class="nav-extra" href="./#conductor">Product</a>
+          <a class="nav-extra" href="./#pricing">Pricing</a>
+          <a class="nav-extra" href="./#faq">FAQ</a>
+          <a class="nav-extra" href="./support">Support</a>
+          <a class="nav-extra" href="https://github.com/with-hide/hide">GitHub</a>
+          <a class="nav-cta" href="./#download">Get hide</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="legal-main">
+      <div class="wrap">
+        <div class="legal-head">
+          <p class="label">Privacy</p>
+          <h1>Privacy policy</h1>
+          <p class="meta">Effective 10 November 2026</p>
+          <p class="lead">This page says what each part of hide sends, where it goes and how long it stays. It describes the code that ships, not an intention.</p>
+          <nav class="legal-langs" aria-label="Language">
+            <a href="#en">English</a>
+            <a href="#ko" lang="ko">한국어</a>
+          </nav>
+        </div>
+
+        <section class="legal" id="en" lang="en" aria-labelledby="en-title">
+          <h2 id="en-title">English</h2>
+
+          <h3>The short version</h3>
+          <ul>
+            <li>No account, no sign-in and no payment are needed to use hide.</li>
+            <li>We sell no data, run no advertising, and include no tracking or advertising SDK.</li>
+            <li>Your conversations, commands, code and files stay on your computer and your phone.</li>
+            <li>The desktop app sends counts of its own use, on by default, and you can turn them off in Settings › Privacy.</li>
+            <li>The phone talks to your computer through hide's relay, and to Apple's push service only if you turn notifications on.</li>
+          </ul>
+
+          <h3>1. The desktop app</h3>
+          <h4>1.1 Usage statistics</h4>
+          <p>Settings › Privacy holds <strong>Share usage statistics</strong> (사용 통계 보내기), on by default. While it is on, the app sends the following and nothing else.</p>
+          <ul>
+            <li>The event's name, a random installation identifier, a random event identifier, and the time.</li>
+            <li>The app version and the operating system (macOS, Windows or Linux).</li>
+            <li>The facts of that event, in the table below.</li>
+          </ul>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th scope="col">Event</th><th scope="col">What it says</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Window connected</td><td>That a window drew the app's state for the first time in that page, once per page.</td></tr>
+                <tr><td>Agent started</td><td>Which agent it is (Claude Code, Codex, Grok, Pi, omp, Cursor, OpenCode or Antigravity), and whether you started it, a mission started it, or another agent spawned it.</td></tr>
+                <tr><td>Mission started</td><td>How many steps the plan has, as 1, 2 to 3, 4 to 7, or 8 and more.</td></tr>
+                <tr><td>Mission ended</td><td>Done, waiting to merge, or cancelled.</td></tr>
+                <tr><td>Practice chapter</td><td>Which of the five practice chapters, and whether it started or finished.</td></tr>
+                <tr><td>Phone paired</td><td>Whether the phone paired through the relay or through Tailscale.</td></tr>
+                <tr><td>Device connected</td><td>Ready or failed, the platform (for example macOS on Apple Silicon), and, for a failure, whether it failed while downloading or installing and a class such as a sign-in that was needed or a server that could not be reached.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The following never enters that stream: prompts, replies, conversation content, code, file names, paths, session identifiers, mission titles or plans, pull requests, the model or provider used, project names, token counts, account identity, device or phone names, and your usage totals.</p>
+          <p>The installation identifier is a random value hide creates and keeps in its own state folder. It is derived from neither your account nor your hardware, it stays the same across restarts, and it moves with that folder.</p>
+          <p>Events go to PostHog, Inc. in the United States, over TLS, at <code>us.i.posthog.com</code>. Each event is flagged as carrying no person profile and no location enrichment and with an empty IP address, and the project is also set to discard client IP data. A server necessarily learns the address a connection comes from, so PostHog still sees the IP address of the connection that carries the events.</p>
+          <p>PostHog keeps events for its project's retention window: one year on its free plan, and two years by default on its paid plans.</p>
+          <p>Turning the switch off drops the events that are waiting and stops new ones. A request already on its way may finish. Turning it back on never sends what was dropped, and nothing observed while it was off is kept.</p>
+
+          <h4>1.2 What stays on your computer</h4>
+          <p>Your settings, projects, panes, Project Memory, session records and diagnostics stay in hide's state folder on your computer, <code>~/.hide</code> (on Windows, your home folder's <code>.hide</code>). Diagnostics are written to <code>Logs/</code> there and are not uploaded. Deleting that folder deletes them.</p>
+          <p>The app checks for updates by asking GitHub's public release list for <code>with-hide/hide</code>. That request carries no hide data, and GitHub sees your IP address when it is made.</p>
+          <p>Pull requests and their checks are read through the <code>gh</code> command you signed in to. hide holds no GitHub token of its own; <code>gh</code> uses its own credentials and GitHub sees the same requests it would see from your terminal.</p>
+
+          <h4>1.3 The agents you run</h4>
+          <p>Each agent in a pane is a command-line tool you installed and signed in to: Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor or Antigravity. Those tools talk to their own providers under your own account, as they do in a terminal. hide neither proxies nor adds to those requests, and keeps no provider credential.</p>
+
+          <h3>2. This website</h3>
+          <p>withhide.dev has no account and sets no cookie of its own. It uses Vercel Web Analytics for aggregate page counts.</p>
+          <ul>
+            <li>What it records per page view: the time, the path, the referring page, filtered query parameters, a coarse location (country and city), the operating system and version, the browser and version, the device type, and the script version.</li>
+            <li>Visitors are told apart by a hash made from the incoming request rather than a cookie. That session identity is discarded after 24 hours, and Vercel reports aggregate figures only.</li>
+            <li>How long the figures are kept follows the hosting plan's reporting window, one month on the free plan and twelve months on the Pro plan.</li>
+            <li>The fonts, images and scripts the page draws are served from this site. No font service and no other company's script is loaded.</li>
+          </ul>
+          <p>The download area asks GitHub's public releases API for the latest release. That request carries no hide data, and GitHub sees your IP address when it is made. Links to GitHub, Discord and Herdr leave this site and follow those sites' own policies.</p>
+
+          <h3>3. The relay</h3>
+          <p>The relay at <code>relay.withhide.dev</code> connects your phone to your computer. It passes messages along and cannot read them: they are end-to-end encrypted between your phone and your computer, and the relay holds no key to them.</p>
+          <h4>3.1 What the relay sees</h4>
+          <ul>
+            <li>A room identifier, which is a SHA-256 hash of your computer's public signing key. It is not your account, your name or your machine's name.</li>
+            <li>When a connection starts and ends, how much data passed, and the phone protocol number the phone asked for.</li>
+            <li>The IP address a connection comes from, used to count connection attempts.</li>
+          </ul>
+          <h4>3.2 What the relay keeps</h4>
+          <p>The relay has no database and no state file. Room membership, byte counts per room over a 24-hour window, and connection attempts per address over a 60-second window are held in memory only, and everything is cleared when the service restarts.</p>
+          <p>Messages are never stored. The relay does not keep a message for later delivery; if your computer is offline, the phone shows that it cannot connect and tries again when it returns.</p>
+          <h4>3.3 Logs</h4>
+          <p>The relay writes one line per event to the machine's system journal: an event name, and sometimes the room identifier, a byte count or the name of the limit that was reached. A room identifier is a hash. No message content, file name, account or machine name is ever written.</p>
+          <p>The journal keeps those lines at most six days and caps them at 64 MiB in total. An hourly job deletes lines older than six days and trims the journal to that size, so a line is gone no later than six days after it is written.</p>
+          <p>The web server in front of the relay keeps no access log. Three kinds of alert only, a limit reached, a server failure and a fixed test line, are forwarded to Google Cloud Logging, and each carries its event name and nothing else: no room identifier, size or address. How long Google keeps them follows that logging project's own retention, which hide's deploy files do not set.</p>
+
+          <h3>4. The phone app</h3>
+          <p>The phone app has no account, no sign-in, no advertising and no analytics. It loads its own files from <code>app.withhide.dev</code>, a host with no analytics on it, and talks only to your computer through the encrypted session, plus Apple's push service if you turn notifications on.</p>
+          <h4>4.1 What the phone keeps</h4>
+          <ul>
+            <li>The computers you paired: their names, their room identifiers, their public keys, and when each was last used.</li>
+            <li>The credential your computer gave the phone, kept in the phone app's own storage.</li>
+            <li>Your language and theme choice, and a cache of the app's own files so it opens quickly.</li>
+          </ul>
+          <h4>4.2 What the computer keeps about a phone</h4>
+          <ul>
+            <li>The phone's name, which hide reads from how the phone describes itself to a website, such as iPhone, iPad, Android or Phone, and when it was paired and last seen. A second phone with the same name is numbered.</li>
+            <li>A SHA-256 hash of its credential. The credential itself is never stored.</li>
+            <li>Your notification choice, and, if you turned notifications on, what is needed to deliver them, as the next section says.</li>
+          </ul>
+          <p>Each computer allows four paired phones. A phone that is not used for seven days is disconnected automatically, and you can disconnect one at any time from Settings › Mobile on the computer.</p>
+          <h4>4.3 Push notifications</h4>
+          <p>Notifications are off until you turn them on in the app, and the app works without them. A notification says that an agent needs you or has finished, with a short line the app translates. It never carries terminal content, code or a conversation.</p>
+          <ul>
+            <li>What your phone needs to receive notifications, a subscription or a device token, is kept with the phone's record on your computer and nowhere else. hide's relay stores neither.</li>
+            <li>Your computer encrypts the notification's content with a key the phone gave it inside the encrypted session, and sends it to the push service the phone uses. On a browser that is the browser's own push service; for hide's iOS app it is Apple's push notification service, which the relay forwards to without storing the content.</li>
+            <li>That push service therefore sees the phone's token, the bundle or site identifier it belongs to, and the time and size of each notification. The content is encrypted, and the phone decrypts it to show it; when it cannot, it shows a general line instead.</li>
+            <li>No notification content goes anywhere else, and none is used for advertising.</li>
+          </ul>
+
+          <h3>5. Hide AI</h3>
+          <p>Hide AI features, such as agent labels, Project Memory, worktree names and suggestions, run on your computer through an agent command-line tool you installed and signed in to: Claude Code, Codex, Grok, Pi, omp or Antigravity. They use your own account with that provider. hide keeps no provider credential and holds no copy of one.</p>
+          <p>What a feature asks goes from your computer to the provider you chose, under your account and that provider's own terms and privacy policy, not to us. hide masks secrets, email addresses and home folder account names in the text it sends. Hide AI is on by default and asks the first agent that is installed and signed in, in a fixed order, until you choose one in Settings › Hide AI; you can turn it off there, and off, no feature asks a model anything.</p>
+          <p>The phone app sends nothing to any AI service. Conversations reach the phone only through the encrypted session with your computer.</p>
+
+          <h3>6. What we never do</h3>
+          <ul>
+            <li>We do not sell, rent or share personal information for advertising.</li>
+            <li>We include no advertising, tracking or cross-site identification SDK in any part of hide.</li>
+            <li>We cannot read your conversations, commands or code in the relay, and we do not try.</li>
+            <li>We do not ask for a password, a payment card or a provider API key anywhere in hide.</li>
+          </ul>
+
+          <h3>7. Children</h3>
+          <p>hide is a tool for software work and is not directed to children. We do not knowingly collect personal information from a child under 13, or under an older age your country sets. If you believe a child's information reached us, write to the address below and we delete it.</p>
+
+          <h3>8. Your choices and requests</h3>
+          <ul>
+            <li>Turn usage statistics off in Settings › Privacy on the computer.</li>
+            <li>Disconnect a phone in Settings › Mobile on the computer, or remove a paired computer in the phone app's device list.</li>
+            <li>Delete the desktop app's data by removing its state folder, <code>~/.hide</code>, and the phone's data by deleting the app.</li>
+            <li>To ask what records may concern you, or to have them deleted, write to the address below. The installation identifier is random and tied to no person, so we may not be able to find records that belong to you; we will say so rather than guess.</li>
+          </ul>
+
+          <h3>9. Changes to this policy</h3>
+          <p>When a part of hide starts sending something new or stops, this page changes in the same release and the effective date at the top moves with it. A change to what is collected is also named in that release's notes before it takes effect.</p>
+
+          <h3>10. Contact</h3>
+          <p>Questions about this policy, and requests under it: <a href="mailto:hello@withhide.dev?subject=Privacy">hello@withhide.dev</a>. Support and common problems are on the <a href="./support">support page</a>.</p>
+        </section>
+
+        <section class="legal" id="ko" lang="ko" aria-labelledby="ko-title">
+          <h2 id="ko-title">한국어</h2>
+
+          <h3>요약</h3>
+          <ul>
+            <li>hide를 쓰는 데 계정, 로그인, 결제가 필요하지 않습니다.</li>
+            <li>데이터를 팔지 않고, 광고를 하지 않으며, 추적이나 광고 SDK를 넣지 않았습니다.</li>
+            <li>대화, 명령, 코드, 파일은 사용자의 컴퓨터와 폰에 남습니다.</li>
+            <li>데스크톱 앱은 사용 횟수만 보내며 기본으로 켜져 있고, 설정 › 개인정보에서 끌 수 있습니다.</li>
+            <li>폰은 hide의 중계 서버를 거쳐 사용자의 컴퓨터와, 알림을 켠 경우에만 애플 푸시 서비스와 통신합니다.</li>
+          </ul>
+
+          <h3>1. 데스크톱 앱</h3>
+          <h4>1.1 사용 통계</h4>
+          <p>설정 › 개인정보에 <strong>사용 통계 보내기</strong>가 있고, 기본으로 켜져 있습니다. 켜져 있는 동안 앱은 다음만 보냅니다.</p>
+          <ul>
+            <li>이벤트 이름, 무작위로 만든 설치 식별자, 무작위 이벤트 식별자, 시각.</li>
+            <li>앱 버전과 운영체제(macOS, Windows, Linux).</li>
+            <li>아래 표에 적은 그 이벤트의 내용.</li>
+          </ul>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th scope="col">이벤트</th><th scope="col">담기는 내용</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>창 연결</td><td>그 페이지에서 창이 처음으로 앱의 상태를 그렸다는 사실. 페이지마다 한 번.</td></tr>
+                <tr><td>에이전트 시작</td><td>어떤 에이전트인지(Claude Code, Codex, Grok, Pi, omp, Cursor, OpenCode, Antigravity)와, 사용자가 시작했는지, 미션이 시작했는지, 다른 에이전트가 띄웠는지.</td></tr>
+                <tr><td>미션 시작</td><td>계획의 단계 수를 1, 2~3, 4~7, 8 이상으로 나눈 값.</td></tr>
+                <tr><td>미션 끝</td><td>완료, 병합 대기, 취소 중 하나.</td></tr>
+                <tr><td>연습 챕터</td><td>다섯 챕터 중 어느 것인지와, 시작했는지 끝냈는지.</td></tr>
+                <tr><td>폰 연결</td><td>중계 서버로 연결했는지 Tailscale로 연결했는지.</td></tr>
+                <tr><td>기기 연결</td><td>성공 또는 실패, 플랫폼(예: Apple Silicon의 macOS), 그리고 실패라면 내려받기와 설치 중 어디서 실패했는지와 로그인이 필요했다거나 서버에 닿지 못했다는 식의 실패 종류.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>다음은 그 전송에 절대 들어가지 않습니다. 프롬프트, 응답, 대화 내용, 코드, 파일 이름, 경로, 세션 식별자, 미션 제목과 계획, 풀 리퀘스트, 쓴 모델이나 공급자, 프로젝트 이름, 토큰 수, 계정 신원, 기기나 폰 이름, 사용량 합계.</p>
+          <p>설치 식별자는 hide가 만들어 자기 상태 폴더에 두는 무작위 값입니다. 계정에서도 하드웨어에서도 만들지 않으며, 다시 시작해도 그대로이고 상태 폴더를 옮기면 함께 갑니다.</p>
+          <p>이벤트는 TLS로 미국의 PostHog, Inc.에 <code>us.i.posthog.com</code> 주소로 갑니다. 각 이벤트에는 개인 프로필을 만들지 않고 위치를 보강하지 않으며 IP 주소를 비운다는 표시가 붙고, 프로젝트도 클라이언트 IP 주소를 버리도록 설정해 두었습니다. 다만 서버는 접속이 어디서 왔는지 알 수밖에 없으므로, 이벤트를 전하는 접속의 IP 주소는 PostHog에 보입니다.</p>
+          <p>PostHog는 해당 프로젝트의 보관 기간 동안 이벤트를 보관합니다. 무료 요금제는 1년, 유료 요금제는 기본 2년입니다.</p>
+          <p>스위치를 끄면 기다리던 이벤트는 버려지고 새 이벤트는 만들어지지 않습니다. 이미 떠난 요청은 끝날 수 있습니다. 다시 켜도 버려진 이벤트를 뒤늦게 보내지 않고, 꺼져 있던 동안 본 것은 아무것도 남기지 않습니다.</p>
+
+          <h4>1.2 컴퓨터에 남는 것</h4>
+          <p>설정, 프로젝트, 팬, Project Memory, 세션 기록, 진단 로그는 사용자의 컴퓨터에 있는 hide 상태 폴더 <code>~/.hide</code>(Windows에서는 사용자 폴더의 <code>.hide</code>)에 남습니다. 진단 로그는 그 안의 <code>Logs/</code>에 쓰이며 어디로도 올라가지 않습니다. 그 폴더를 지우면 함께 지워집니다.</p>
+          <p>앱은 업데이트를 확인하려고 <code>with-hide/hide</code>의 공개 릴리스 목록을 GitHub에 요청합니다. 이 요청에는 hide의 데이터가 실리지 않고, 그때 GitHub가 사용자의 IP 주소를 봅니다.</p>
+          <p>풀 리퀘스트와 검사 결과는 사용자가 로그인한 <code>gh</code> 명령으로 읽습니다. hide는 GitHub 토큰을 따로 갖지 않고, <code>gh</code>가 자기 자격 증명을 쓰며, GitHub는 터미널에서 보냈을 때와 같은 요청을 봅니다.</p>
+
+          <h4>1.3 사용자가 실행하는 에이전트</h4>
+          <p>팬의 에이전트는 사용자가 설치하고 로그인한 명령줄 도구입니다. Claude Code, Codex, Grok, OpenCode, Pi, omp, Cursor, Antigravity 가 그 대상입니다. 그 도구는 터미널에서처럼 사용자의 계정으로 각자의 공급자와 통신합니다. hide는 그 요청을 중계하지도, 덧붙이지도 않으며, 공급자 자격 증명을 보관하지 않습니다.</p>
+
+          <h3>2. 이 웹사이트</h3>
+          <p>withhide.dev에는 계정이 없고 사이트가 직접 두는 쿠키도 없습니다. 방문 수를 모으는 데 Vercel Web Analytics를 씁니다.</p>
+          <ul>
+            <li>페이지 열람마다 기록하는 것: 시각, 경로, 이전 페이지, 걸러낸 쿼리 값, 대략적인 위치(국가와 도시), 운영체제와 버전, 브라우저와 버전, 기기 종류, 스크립트 버전.</li>
+            <li>방문자는 쿠키가 아니라 들어온 요청으로 만든 해시로 구분합니다. 그 세션 식별자는 24시간 뒤 버려지고, Vercel은 합계만 보여 줍니다.</li>
+            <li>합계를 보관하는 기간은 호스팅 요금제의 보고 기간을 따릅니다. 무료 요금제는 1개월, Pro 요금제는 12개월입니다.</li>
+            <li>페이지가 쓰는 글꼴과 그림, 스크립트는 이 사이트에서 직접 내려받습니다. 글꼴 서비스나 다른 회사의 스크립트를 부르지 않습니다.</li>
+          </ul>
+          <p>내려받기 영역은 최신 릴리스를 GitHub의 공개 API에 물어봅니다. 이 요청에도 hide의 데이터가 실리지 않고, 그때 GitHub가 사용자의 IP 주소를 봅니다. GitHub, Discord, Herdr로 가는 링크는 이 사이트를 떠나며 그 사이트의 방침을 따릅니다.</p>
+
+          <h3>3. 중계 서버</h3>
+          <p><code>relay.withhide.dev</code>의 중계 서버는 사용자의 폰과 컴퓨터를 이어 줍니다. 메시지는 폰과 컴퓨터 사이에서 종단 간 암호화되므로 중계 서버는 내용을 읽을 수 없고, 열 수 있는 키도 갖지 않습니다.</p>
+          <h4>3.1 중계 서버가 보는 것</h4>
+          <ul>
+            <li>방 식별자. 사용자의 컴퓨터 공개 서명 키의 SHA-256 해시이며, 계정도 이름도 기기 이름도 아닙니다.</li>
+            <li>연결이 시작되고 끝난 시각, 오간 데이터의 크기, 폰이 요청한 폰 프로토콜 번호.</li>
+            <li>접속한 IP 주소. 접속 시도 횟수를 세는 데 씁니다.</li>
+          </ul>
+          <h4>3.2 중계 서버가 보관하는 것</h4>
+          <p>중계 서버에는 데이터베이스도 상태 파일도 없습니다. 방 구성원, 방별 24시간 데이터 사용량, 주소별 60초 접속 시도 수는 메모리에만 있고, 서비스를 다시 시작하면 모두 사라집니다.</p>
+          <p>메시지는 저장하지 않습니다. 나중에 전달하려고 쌓아 두지 않으며, 컴퓨터가 꺼져 있으면 폰에 연결할 수 없다고 표시하고 다시 연결될 때 스스로 시도합니다.</p>
+          <h4>3.3 로그</h4>
+          <p>중계 서버는 이벤트마다 한 줄을 운영체제의 시스템 저널에 남깁니다. 이벤트 이름과, 때로는 방 식별자, 데이터 크기, 걸린 한도의 이름입니다. 방 식별자는 해시입니다. 메시지 내용, 파일 이름, 계정, 기기 이름은 절대 적히지 않습니다.</p>
+          <p>저널은 그 줄을 최대 6일 보관하고 전체 64 MiB로 제한합니다. 매시간 도는 작업이 6일이 지난 줄을 지우고 저널을 그 크기로 줄이므로, 한 줄은 기록된 뒤 늦어도 6일 안에 사라집니다.</p>
+          <p>중계 서버 앞의 웹 서버는 접속 로그를 남기지 않습니다. 한도 도달, 서버 장애, 고정된 시험 줄 세 가지 알림만 Google Cloud Logging으로 보내며, 각각 이벤트 이름만 담고 방 식별자도 크기도 주소도 담지 않습니다. Google이 그 알림을 얼마나 보관하는지는 그 로깅 프로젝트의 보관 설정을 따르며, hide의 배포 파일이 정하는 값이 아닙니다.</p>
+
+          <h3>4. 폰 앱</h3>
+          <p>폰 앱에는 계정, 로그인, 광고, 분석이 없습니다. 앱 파일은 분석이 붙지 않은 <code>app.withhide.dev</code>에서 받고, 암호화된 세션으로 사용자의 컴퓨터와만, 알림을 켠 경우 애플 푸시 서비스와만 통신합니다.</p>
+          <h4>4.1 폰이 보관하는 것</h4>
+          <ul>
+            <li>연결한 컴퓨터들의 이름, 방 식별자, 공개 키, 마지막으로 쓴 시각.</li>
+            <li>컴퓨터가 준 자격 증명. 폰 앱의 자체 저장 공간에 둡니다.</li>
+            <li>고른 언어와 밝기, 그리고 앱이 빨리 열리도록 둔 앱 파일 캐시.</li>
+          </ul>
+          <h4>4.2 컴퓨터가 폰에 대해 보관하는 것</h4>
+          <ul>
+            <li>폰 이름(폰이 웹사이트에 자기를 밝히는 값에서 읽어 iPhone, iPad, Android, Phone처럼 적힘), 연결한 시각과 마지막으로 본 시각. 같은 이름의 폰이 둘이면 번호를 붙입니다.</li>
+            <li>자격 증명의 SHA-256 해시. 자격 증명 자체는 저장하지 않습니다.</li>
+            <li>알림 설정, 그리고 알림을 켠 경우 전달에 필요한 정보. 다음 절에 적었습니다.</li>
+          </ul>
+          <p>컴퓨터 한 대에는 폰을 4대까지 연결할 수 있습니다. 7일 동안 쓰지 않은 폰은 자동으로 연결이 끊기고, 컴퓨터의 설정 › 모바일에서 언제든 연결을 끊을 수 있습니다.</p>
+          <h4>4.3 푸시 알림</h4>
+          <p>알림은 앱에서 직접 켜기 전까지 꺼져 있고, 알림이 없어도 앱은 동작합니다. 알림은 에이전트가 사용자를 기다리거나 일을 마쳤다는 것과, 앱이 번역해 보여 주는 짧은 한 줄을 담습니다. 터미널 내용, 코드, 대화는 담지 않습니다.</p>
+          <ul>
+            <li>알림을 받는 데 필요한 구독이나 기기 토큰은 사용자의 컴퓨터에 있는 그 폰의 기록에만 보관합니다. hide의 중계 서버는 둘 다 저장하지 않습니다.</li>
+            <li>컴퓨터가 폰이 암호화된 세션 안에서 건넨 키로 알림 내용을 암호화하고, 폰이 쓰는 푸시 서비스로 보냅니다. 브라우저에서는 그 브라우저의 푸시 서비스이고, hide의 iOS 앱에서는 애플 푸시 알림 서비스이며, 중계 서버는 내용을 저장하지 않고 애플로 전달합니다.</li>
+            <li>따라서 그 푸시 서비스는 폰의 토큰, 그것이 속한 번들 또는 사이트 식별자, 알림이 온 시각과 크기를 봅니다. 내용은 암호화되어 있고 폰이 풀어서 보여 주며, 풀지 못하면 일반적인 문구를 보여 줍니다.</li>
+            <li>알림 내용은 다른 어디로도 가지 않고, 광고에 쓰이지 않습니다.</li>
+          </ul>
+
+          <h3>5. Hide AI</h3>
+          <p>Hide AI 기능(에이전트 라벨, Project Memory, 작업 폴더 이름, 제안)은 사용자가 설치하고 로그인한 에이전트 명령줄 도구를 통해 사용자의 컴퓨터에서 실행됩니다. Claude Code, Codex, Grok, Pi, omp, Antigravity 가 그 대상입니다. 그 공급자에 대한 사용자의 계정을 쓰고, hide는 공급자 자격 증명을 보관하지도, 사본을 두지도 않습니다.</p>
+          <p>기능이 보내는 내용은 저희가 아니라 사용자가 고른 공급자에게, 사용자의 계정과 그 공급자의 약관·개인정보 방침에 따라 사용자의 컴퓨터에서 갑니다. hide는 보내는 글에서 비밀 값, 이메일 주소, 홈 폴더 계정 이름을 가립니다. Hide AI는 기본으로 켜져 있고, 설정 › Hide AI에서 고르기 전까지는 설치되어 로그인된 첫 에이전트에게, 정해진 순서대로 물어봅니다. 설정 › Hide AI에서 끌 수 있고, 끄면 어떤 기능도 모델에 아무것도 묻지 않습니다.</p>
+          <p>폰 앱은 어떤 AI 서비스에도 아무것도 보내지 않습니다. 대화는 사용자의 컴퓨터와 맺은 암호화된 세션으로만 폰에 도착합니다.</p>
+
+          <h3>6. 하지 않는 일</h3>
+          <ul>
+            <li>개인정보를 팔거나 빌려주거나 광고에 공유하지 않습니다.</li>
+            <li>hide의 어느 부분에도 광고, 추적, 사이트 간 식별 SDK를 넣지 않았습니다.</li>
+            <li>중계 서버에서 대화, 명령, 코드를 읽을 수 없고, 읽으려 하지 않습니다.</li>
+            <li>hide 어디에서도 비밀번호, 결제 카드, 공급자 API 키를 요구하지 않습니다.</li>
+          </ul>
+
+          <h3>7. 아동</h3>
+          <p>hide는 소프트웨어 작업을 위한 도구이며 아동을 대상으로 하지 않습니다. 만 13세 미만, 또는 해당 국가가 정한 나이가 그보다 높으면 그 나이 미만 아동의 개인정보를 알면서 모으지 않습니다. 아동의 정보가 저희에게 닿았다고 생각되면 아래 주소로 알려 주세요. 지웁니다.</p>
+
+          <h3>8. 사용자의 선택과 요청</h3>
+          <ul>
+            <li>컴퓨터의 설정 › 개인정보에서 사용 통계를 끕니다.</li>
+            <li>컴퓨터의 설정 › 모바일에서 폰 연결을 끊거나, 폰 앱의 기기 목록에서 연결한 컴퓨터를 지웁니다.</li>
+            <li>데스크톱 앱의 데이터는 상태 폴더 <code>~/.hide</code>를 지워 없애고, 폰의 데이터는 앱을 지워 없앱니다.</li>
+            <li>사용자와 관련될 수 있는 기록의 열람이나 삭제를 원하면 아래 주소로 알려 주세요. 설치 식별자는 무작위이고 어느 사람과도 이어져 있지 않아, 사용자의 기록을 찾지 못할 수 있습니다. 그럴 때는 짐작하지 않고 찾지 못했다고 알려 드립니다.</li>
+          </ul>
+
+          <h3>9. 방침의 변경</h3>
+          <p>hide의 어느 부분이 새로 무엇을 보내거나 보내기를 멈추면, 이 페이지를 같은 릴리스에서 함께 고치고 위의 시행일도 함께 옮깁니다. 모으는 내용이 달라지는 변경은 시행 전에 그 릴리스의 변경 내역에도 적습니다.</p>
+
+          <h3>10. 문의</h3>
+          <p>이 방침에 대한 질문과 방침에 따른 요청: <a href="mailto:hello@withhide.dev?subject=Privacy">hello@withhide.dev</a>. 지원과 자주 겪는 문제는 <a href="./support">지원 페이지</a>에 있습니다.</p>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>hide · Run more agents. Hold less.</span>
+        <p class="footer-contact">Contact, Enterprise and teams: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a></p>
+        <nav aria-label="More about hide">
+          <a href="./privacy">Privacy</a>
+          <a href="./support">Support</a>
+          <a href="https://github.com/with-hide/hide">Source</a>
+          <a href="https://github.com/with-hide/hide/blob/main/docs/README.md">Docs</a>
+          <a href="https://github.com/with-hide/hide/blob/main/docs/INSTALL.md">Install</a>
+          <a href="https://discord.gg/h6zme5kybD">Discord</a>
+          <a href="https://herdr.dev/">Herdr</a>
+          <a href="https://github.com/with-hide/hide/blob/main/LICENSE">FSL license</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
