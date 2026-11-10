@@ -225,6 +225,24 @@ def linux_children_remain():
     raise ProcessError("adopted_child_reap_over_budget")
 
 
+def reap_adopted(root):
+    """Linux: the guardian is a subreaper (`prctl(PR_SET_CHILD_SUBREAPER)`), so
+    every owned process whose parent ended becomes its child and stays a
+    zombie until it is waited. Waiting them as they exit keeps what is left
+    for the final cleanup to what ended in that cleanup, never to every
+    adopted process of a run that lasted an hour. `root` is the native root
+    Popen waits for: it is only looked at (WNOWAIT), never reaped here."""
+    for _ in range(MAX_DESCENDANTS + 1):
+        try:
+            done = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT | 0x40000000)
+            if done is None or done.si_pid == root:
+                return
+            os.waitpid(done.si_pid, os.WNOHANG | 0x40000000)
+        except ChildProcessError:
+            return
+    raise ProcessError("adopted_child_reap_over_budget")
+
+
 def job_over_budget(job):
     """Windows: why `job` must end, measured as the Unix guardian measures its
     group: the resident memory (working set) of its processes summed against
@@ -875,6 +893,8 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
             if rss > MAX_RSS_BYTES:
                 raise ProcessError("owned_processes_over_budget:" + json.dumps(
                     {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":")))
+            if sys.platform.startswith("linux"):
+                reap_adopted(child.pid)
             root = table.get(child.pid)
             if root is None:
                 raise ProcessError("unreaped_owned_root_missing")

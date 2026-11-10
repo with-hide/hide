@@ -46,7 +46,7 @@ const LIVE_STATES = new Set(["connected", "controlling", "observing", "idle"]);
 export function paneTitle(pane: PaneRow): string {
   // The device is already on screen, so the header names the pane by the
   // id its own machine gives it.
-  return pane.identity_label ?? pane.terminal_title ?? pane.herdr_label ?? pane.device_pane_id;
+  return pane.identity_label ?? pane.terminal_title ?? pane.engine_label ?? pane.device_pane_id;
 }
 
 /**

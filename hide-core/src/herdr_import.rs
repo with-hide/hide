@@ -8,15 +8,14 @@
 //! are moved, or nothing could be read and it must drop only what the
 //! engine made itself), the workspaces moved (Hide's from then on, never
 //! offered again, D-9), the conversations waiting to resume because the
-//! Herdr they came from still has them open (D-8), the move the operator
-//! asked for and the core starts with, the mark that the move was committed
-//! (D-27: after it no older build is started on the state folder again),
-//! and what the last move came to, which the screen shows.
+//! Herdr they came from still has them open (D-8), the import the operator
+//! asked for and the core starts with, and what the last import came to,
+//! which the screen shows. An earlier build's commit mark is read and
+//! ignored: this build moves nothing that cannot be read back.
 //!
 //! Every step runs while the core starts, before the engine opens on the
 //! folder: that is the one path a Herdr session takes into the engine, for a
-//! move at a reboot, at the update, later, or for a read-only import (D-7),
-//! so nothing else writes the engine's session then.
+//! read-only import (D-7), so nothing else writes the engine's session then.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -58,11 +57,38 @@ pub(crate) struct Record {
     /// The move the core starts with next.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) asked: Option<Asked>,
-    /// Set right before the first step of a move that cannot be undone.
-    pub(crate) committed: bool,
-    /// What the last move or read came to, for the screen.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Set by an earlier build right before its first step of a move. Read
+    /// and ignored: this build writes no commit mark and makes no move.
+    #[serde(default, skip_serializing)]
+    pub(crate) committed: Option<bool>,
+    /// What the last import or read came to, for the screen.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "read_outcome"
+    )]
     pub(crate) outcome: Option<Outcome>,
+}
+
+/// Reads a record's outcome. An earlier build's `not_stopped` result belongs
+/// to a move this build no longer makes, so it is no outcome: nothing is left
+/// to show for it.
+fn read_outcome<'de, D>(deserializer: D) -> Result<Option<Outcome>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value)
+            if value.get("result").and_then(serde_json::Value::as_str) == Some("not_stopped") =>
+        {
+            Ok(None)
+        }
+        Some(value) => serde_json::from_value(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 /// What reading a machine's Herdr save found.
@@ -112,8 +138,6 @@ pub enum Outcome {
     },
     /// The save could not be read: why, in one line.
     Unreadable { reason: String },
-    /// Hide's Herdr could not be stopped, so nothing was moved.
-    NotStopped,
 }
 
 /// A workspace a move left out, with its name and why.
@@ -386,20 +410,6 @@ pub fn drop_kept_save(engine_dir: &Path) -> Result<(), String> {
     }
 }
 
-/// Whether Hide registered an agent of this machine on the Herdr socket
-/// `herdr_socket`, which makes a save beside a socket no server listens on
-/// Hide's (D-5). A ledger that cannot be read says no.
-pub fn hide_used(state_dir: &Path, herdr_socket: &str) -> bool {
-    crate::delivery::ledger::load(&hide_kit::layout::delivery_ledger(state_dir)).is_ok_and(
-        |ledger| {
-            ledger
-                .agents
-                .iter()
-                .any(|record| record.host_scope == herdr_socket)
-        },
-    )
-}
-
 /// What moves this machine's Herdr save for the screen (D-6 to D-8, B2 to
 /// B5, B11, B14 to B17): `hided` reads the save and the server on its
 /// socket and makes the move, and the core decides what is shown, asking it
@@ -434,19 +444,14 @@ pub enum Server {
     /// None does.
     #[default]
     Stopped,
-    /// Hide's own: moving the save stops it first (D-6).
-    Hide,
-    /// Someone else's, or one whose program the system will not name: its
-    /// save is only imported, and it runs on untouched (D-8).
+    /// A server answers on the socket: its save is only imported, and it
+    /// runs on untouched (D-8).
     Other,
 }
 
 /// How the operator asked for the save to move.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Take {
-    /// Hide's Herdr is stopped, then its session moves and its agents
-    /// resume (D-6).
-    Move,
     /// The save is imported and nothing is stopped; agents whose Herdr runs
     /// on are left waiting (D-8).
     Import,
@@ -457,8 +462,6 @@ pub enum Take {
 pub enum Taken {
     /// The move is asked for and the core role starts again with it.
     Restarting,
-    /// Hide's Herdr could not be stopped, so nothing moved (B4).
-    NotStopped,
     /// Nothing moved: why, for the log.
     Failed(String),
 }
@@ -593,35 +596,6 @@ pub fn ask(engine_dir: &Path, asked: Asked) -> Result<(), String> {
 /// The move the core is to start with, if one was asked for.
 pub fn asked(engine_dir: &Path) -> Result<Option<Asked>, String> {
     Ok(read(engine_dir)?.and_then(|record| record.asked))
-}
-
-/// Marks the move committed (D-27), right before its first step that cannot
-/// be undone: from then on no older build is started on this state folder.
-pub fn commit(engine_dir: &Path) -> Result<(), String> {
-    let turn = changing();
-    let mut record = open(engine_dir, &turn)?;
-    if record.committed {
-        return Ok(());
-    }
-    record.committed = true;
-    write(engine_dir, &record)
-}
-
-/// Whether a move was committed on `engine_dir`'s machine; a record that
-/// cannot be read counts as committed, so no older build is started on a
-/// guess.
-pub fn committed(engine_dir: &Path) -> bool {
-    read(engine_dir).map_or(true, |record| record.is_some_and(|record| record.committed))
-}
-
-/// Records that Hide's Herdr could not be stopped, so nothing was moved, and
-/// puts the asked move away: the operator asks again from the screen.
-pub fn not_stopped(engine_dir: &Path) -> Result<(), String> {
-    let turn = changing();
-    let mut record = open(engine_dir, &turn)?;
-    record.asked = None;
-    record.outcome = Some(Outcome::NotStopped);
-    write(engine_dir, &record)
 }
 
 /// Moves the workspaces of the Herdr save its machine read (`save`) that no import
@@ -1001,17 +975,22 @@ mod tests {
         );
     }
 
-    // D-27: a move is committed once, and a record that cannot be read
-    // counts as committed.
+    // An earlier build's record: its commit mark is read and ignored, and its
+    // `not_stopped` result is no outcome, so the record still reads.
     #[test]
-    fn a_commit_stands_and_an_unreadable_record_counts_as_one() {
+    fn an_earlier_records_commit_mark_and_not_stopped_result_still_read() {
         let dir = tempfile::tempdir().unwrap();
         let engine = dir.path().join("engine");
-        assert!(!committed(&engine));
-        commit(&engine).unwrap();
-        assert!(committed(&engine));
-        std::fs::write(path_in(&engine), "{").unwrap();
-        assert!(committed(&engine));
+        std::fs::create_dir_all(&engine).unwrap();
+        std::fs::write(
+            path_in(&engine),
+            r#"{"format":1,"found":{"state":"nothing"},"moved":[],"pending":[],"committed":true,"outcome":{"result":"not_stopped"}}"#,
+        )
+        .unwrap();
+        let record = read(&engine).unwrap().expect("the earlier record reads");
+        assert_eq!(record.committed, Some(true));
+        assert_eq!(record.outcome, None);
+        assert_eq!(outcome(&engine).unwrap(), None);
     }
 
     // D-4, B7: a moved pane's registration is scoped to the engine with its

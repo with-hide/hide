@@ -123,11 +123,14 @@ type Page = {
  * Chromium hands the keyboard to a page's view as each new document commits,
  * whoever held it: a page that reloads itself (a dashboard's meta refresh) or
  * that an agent navigates would take the keys the operator is typing into a
- * terminal. A navigation that began while the shell (`from` null) or another
- * page held the keyboard gives it back; a press in the page while it loads
- * (`claimed`) keeps it there.
+ * terminal. Every document navigation of a page is one, from its start to its
+ * stop. Whether the page's focus during it is a grab is decided when the focus
+ * arrives, by who holds the keyboard then (`BrowserViews.keyboard`): the shell
+ * or another page gets it back, the page itself keeps it, and a press in the
+ * page while it loads (`claimed`) keeps it there. A decision at the start
+ * would miss a keyboard that moved to the shell during the load.
  */
-type NavigationGrab = { readonly from: Page | null; claimed: boolean };
+type NavigationGrab = { claimed: boolean };
 /**
  * One load the core asked of a page, so its stages are logged against it
  * alone: `native` once its own `loadURL` was called, since until then a
@@ -862,7 +865,7 @@ export class BrowserViews {
     });
     contents.on("did-start-navigation", (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      page.grab = this.keyboard === page || contents.isFocused() ? null : { from: this.keyboard, claimed: false };
+      page.grab = { claimed: false };
     });
     // A press in a loading page is the operator choosing it: its keyboard stays.
     contents.on("input-event", (_event, input) => {
@@ -914,7 +917,8 @@ export class BrowserViews {
     contents.on("blur", () => this.log.event("browser.page_blur", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null }));
     contents.on("focus", () => {
       this.log.event("browser.page_focus", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null, navigating: page.grab !== null });
-      if (page.grab) this.undoGrab(page, page.grab);
+      // The page holding the keyboard already is not taking it from anyone.
+      if (page.grab && this.keyboard !== page) this.undoGrab(page, page.grab, this.keyboard);
       else this.tookKeyboard(page);
     });
     this.guard(page, contents);
@@ -1228,23 +1232,24 @@ export class BrowserViews {
   }
 
   /**
-   * A navigation's commit focused `page`. The press that would claim it
+   * A navigation's commit focused `page` while `from` (a page, or the shell
+   * as null) held the keyboard. The press that would claim it
    * reaches `input-event` after the native focus it causes, in the same
    * turn, so the keyboard goes back on the next one unless a press came.
    * A window in the background is left alone: macOS gives it back the
    * focus it stored on blur when it returns, and focusing contents there
    * would bring the window forward.
    */
-  private undoGrab(page: Page, grab: NavigationGrab): void {
+  private undoGrab(page: Page, grab: NavigationGrab, from: Page | null): void {
     setImmediate(() => {
       if (this.pages.get(page.key) !== page || page.view.webContents.isDestroyed() || !page.view.webContents.isFocused()) return;
       if (grab.claimed) return this.tookKeyboard(page);
       const window = this.window;
       if (!window?.isFocused() || window.webContents.isDestroyed()) return;
-      const from = grab.from && this.pages.get(grab.from.key) === grab.from && grab.from.visible ? grab.from : null;
-      if (from) from.view.webContents.focus();
+      const holder = from && this.pages.get(from.key) === from && from.visible ? from : null;
+      if (holder) holder.view.webContents.focus();
       else window.webContents.focus();
-      this.log.event("browser.navigation_focus_returned", { id: page.id, to: from?.id ?? "shell" });
+      this.log.event("browser.navigation_focus_returned", { id: page.id, to: holder?.id ?? "shell" });
     });
   }
 

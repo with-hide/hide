@@ -188,7 +188,7 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
             .map_err(|error| plain(error.to_string()))?,
         brain: copy::brain_present(state_dir),
         handover,
-        herdr_socket: super::preflight::movable_scope(),
+        engine_scope: super::preflight::movable_scope(),
         ai: hide_core::stored_hide_ai_settings(&env.home),
         failed,
         path_refused: refused,

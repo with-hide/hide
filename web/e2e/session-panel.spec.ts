@@ -9,7 +9,7 @@ import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSe
 import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, openOtherCheckouts, openTaskFolds, screenshot, showTasks } from "./wire";
+import { chooseTheme, countSent, hoverSettledTaskRow, openOtherCheckouts, openTaskFolds, screenshot, showTasks } from "./wire";
 import { quietFor, unchangedForFrames } from "./wait";
 
 test.describe.configure({ timeout: 240_000 });
@@ -132,7 +132,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.keyboard.press("ArrowDown");
     await expect(group("needs_you").locator('[data-task-focus="row"]').first()).toBeFocused();
     // B18: Resolve from the ⋯ menu is saved, and the row stays under 쉬는 중.
-    await row(stopped).hover();
+    await hoverSettledTaskRow(row(stopped), "resting");
     await tasks.locator(`[data-task-more="${stopped}"]`).click();
     await page.locator(`[data-task-menu="${stopped}"] [data-menu-item="resolve"]`).click();
     await expect.poll(resolved(daemon, stopped)).toBe(true);
@@ -194,7 +194,7 @@ test("세션 닫기 in a task's ⋯ menu closes its pane, though its checkout is
     const tasks = await showTasks(page);
     await openTaskFolds(page);
     const row = tasks.locator(`[data-task-row="${behind}"]`);
-    await row.hover();
+    await hoverSettledTaskRow(row, "resting");
     await tasks.locator(`[data-task-more="${behind}"]`).click();
     await page.locator(`[data-task-menu="${behind}"] [data-menu-item="close"]`).click();
     await expect.poll(() => sent.get("close_pane")).toBe(1);

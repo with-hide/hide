@@ -473,7 +473,7 @@ fn the_first_run_row_reaches_the_distribution_only_once_connect_is_pressed() {
         "the listing reached the distribution"
     );
     assert!(shared.lock().unwrap().dispatch_json(&event(
-        "herdr_profile_connect",
+        "machine_profile_connect",
         serde_json::json!({"profile_id": "wsl:Ubuntu", "host_consent": true}),
     )));
     wait_for_attempts(&attempts, 1);

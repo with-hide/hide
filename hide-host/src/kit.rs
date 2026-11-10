@@ -11,10 +11,6 @@
 //! once nothing names them (`hide_kit::legacy::device`), whose paths are
 //! constants of the helper, never a request's.
 //!
-//! A Herdr copy an earlier build put beside the builds
-//! (`hide_kit::device_herdr`) is taken off once no process on the device
-//! runs it (PRD engine-bundle-4-herdr-removal D-10): no build brings one now.
-//!
 //! A core or a node that runs a build Hide placed under a helper root (a
 //! moved core's login item runs one) keeps its kit from that root too, but
 //! leaves the builds where the move and the core update put them
@@ -34,7 +30,6 @@ use crate::error::{ErrorCode, HostError, HostResult};
 use crate::protocol::{KitAction, KitRemoved};
 use crate::serve::{Env, KitPlace};
 
-use hide_kit::device_herdr;
 pub use hide_kit::is_build_name;
 
 /// Answers one `kit` request for the node `env` describes: the helper root
@@ -388,8 +383,6 @@ fn run_for_projects(
             point_current(&placement.root, &placement.version)?;
             remove_other_builds(&placement.root, &placement.version);
             let report = hide_kit::apply(&target(), &scope_of(action));
-            // A copy a server still runs stays, with a record, for a later pass.
-            let _ = remove_herdr(&placement.root);
             to_value(report)
         }
         KitAction::Status => to_value(hide_kit::status(&target())),
@@ -517,72 +510,6 @@ fn remove_other_builds(root: &Path, keep: &str) {
     }
 }
 
-/// Removes every Herdr copy no process on the device runs, so a server the
-/// operator has not restarted keeps the program it runs (PRD
-/// device-herdr-update D-09). A copy whose use cannot be read is kept for the
-/// next pass. A copy kept for its use and a removal that fails each leave one
-/// record on the node's error stream, its diagnostic log.
-fn remove_unused_herdr(root: &Path) {
-    for copy in builds(&device_herdr::herdr_dir(root), None) {
-        if let Some(reason) = herdr_use(&copy) {
-            herdr_copy_record("kit.herdr_copy_kept", &copy, &reason);
-            continue;
-        }
-        if let Err(error) = std::fs::remove_dir_all(&copy) {
-            herdr_copy_record("kit.herdr_copy_remove_failed", &copy, &error.to_string());
-        }
-    }
-}
-
-fn herdr_copy_record(kind: &str, copy: &Path, reason: &str) {
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "component": "kit",
-            "kind": kind,
-            "copy": copy,
-            "reason": reason,
-        })
-    );
-}
-
-/// Why the Herdr copy `folder` stays: a process on the device runs it, or
-/// whether one does cannot be read. `None` when nothing runs it.
-///
-/// On Windows a copy is in use while a process holds any file in it, which
-/// a running Herdr's image is: Windows names a process's image only by the
-/// path it was started from, and a process whose path cannot be read (one
-/// that ends during the look, or that the system will not describe) would
-/// otherwise be left out and its copy removed around it, every file but the
-/// running image gone. A folder whose files cannot all be asked keeps it.
-fn herdr_use(folder: &Path) -> Option<String> {
-    #[cfg(windows)]
-    {
-        match hide_platform::fs::in_use::first_in_use(folder) {
-            Ok(held) => held.map(|file| format!("{} is in use", file.display())),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => Some(format!(
-                "whether its files are in use could not be read: {error}"
-            )),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let program = folder.join(device_herdr::HERDR_PROGRAM);
-        match hide_platform::fs::identity::file_id(&program) {
-            Ok(file) => match hide_platform::process::running(&file) {
-                Ok(pids) if pids.is_empty() => None,
-                Ok(pids) => Some(format!("processes {pids:?} run it")),
-                Err(error) => Some(format!(
-                    "whether a process runs it could not be read: {error}"
-                )),
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => Some(format!("its program could not be read: {error}")),
-        }
-    }
-}
-
 /// A core update's end on the machine running the core (PRD
 /// core-host-node-move B10): `<root>/current` leads to `version`, the build
 /// the core now runs, and every build but it and `kept` is removed, so the
@@ -609,7 +536,6 @@ fn remove_root(root: &Path) -> hide_kit::RemoveOutcome {
             failures.push(format!("{} stayed: {error}", build.display()));
         }
     }
-    let herdr_kept = remove_herdr(root);
     if let Err(error) = hide_kit::current::remove(root) {
         failures.push(format!(
             "{} stayed: {error}",
@@ -620,9 +546,6 @@ fn remove_root(root: &Path) -> hide_kit::RemoveOutcome {
         return hide_kit::RemoveOutcome::Failed {
             reason: failures.join("; "),
         };
-    }
-    if let Some(reason) = herdr_kept {
-        return hide_kit::RemoveOutcome::Kept { reason };
     }
     match std::fs::remove_dir(root) {
         Ok(()) => hide_kit::RemoveOutcome::Removed,
@@ -635,31 +558,6 @@ fn remove_root(root: &Path) -> hide_kit::RemoveOutcome {
                 root.display()
             ),
         },
-    }
-}
-
-/// Takes the Herdr copies an earlier build put on the device off it, on every
-/// pass and when the device leaves Hide: every copy no process runs, the
-/// link, the handoff record and the folder. A copy a server still runs stays
-/// with the folder (D-09), and the answer says why.
-fn remove_herdr(root: &Path) -> Option<String> {
-    let folder = device_herdr::herdr_dir(root);
-    if !folder.exists() {
-        return None;
-    }
-    let current = folder.join(hide_kit::CURRENT);
-    if std::fs::symlink_metadata(&current).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        let _ = hide_platform::fs::link::remove_link(&current);
-    }
-    let _ = std::fs::remove_file(folder.join(device_herdr::HANDOFF_RECORD));
-    remove_unused_herdr(root);
-    match std::fs::remove_dir(&folder) {
-        Ok(()) => None,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => Some(format!(
-            "{} stays while a Herdr server on the device runs a copy in it; delete it once that server stops",
-            folder.display()
-        )),
     }
 }
 
@@ -1010,162 +908,6 @@ mod tests {
             hide_kit::RemoveOutcome::Removed
         );
         assert!(!placement.root.exists());
-    }
-
-    /// A Herdr copy an earlier build left under `root` named `id`, made from
-    /// `program`.
-    fn herdr_copy(root: &Path, id: &str, program: &Path) -> PathBuf {
-        let folder = device_herdr::herdr_dir(root).join(id);
-        std::fs::create_dir_all(&folder).unwrap();
-        let copy = folder.join(device_herdr::HERDR_PROGRAM);
-        std::fs::write(&copy, std::fs::read(program).unwrap()).unwrap();
-        #[cfg(unix)]
-        std::fs::set_permissions(
-            &copy,
-            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
-        )
-        .unwrap();
-        copy
-    }
-
-    /// Set on a copy of this test binary that stands in for a Herdr server
-    /// running a copy: it waits for its parent to end it. A copy of a
-    /// system program will not do, because macOS kills a fresh copy of one
-    /// as it starts.
-    const HELD: &str = "HIDE_HOST_HELD_COPY";
-
-    #[test]
-    fn held_copy_role() {
-        if std::env::var_os(HELD).is_some() {
-            use std::io::Read;
-            let _ = std::io::stdin().read(&mut [0]);
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn an_apply_takes_off_the_herdr_copy_and_link_an_earlier_build_left() {
-        let dir = tempfile::tempdir().unwrap();
-        let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        std::fs::create_dir_all(&placement.home).unwrap();
-        herdr_copy(&placement.root, "1111111111111111", Path::new("/bin/sh"));
-        let folder = device_herdr::herdr_dir(&placement.root);
-        hide_platform::fs::link::replace_link(
-            Path::new("1111111111111111"),
-            &folder.join(hide_kit::CURRENT),
-        )
-        .unwrap();
-        std::fs::write(folder.join(device_herdr::HANDOFF_RECORD), b"{}").unwrap();
-
-        run_for_projects(
-            &placement,
-            KitAction::Apply,
-            "~/.local/bin",
-            &[],
-            Arc::new(AtomicBool::new(true)),
-            None,
-        )
-        .unwrap();
-        assert!(!folder.exists());
-        assert!(current_runs(&placement.root, &placement.version));
-    }
-
-    /// A process running the copy `program` of this test binary, once it
-    /// has replaced its image. On Windows it runs from `program` with the
-    /// `.exe` a program there is started by, in the same copy folder.
-    fn run_copy(program: &Path) -> hide_platform::process::OwnedChild {
-        #[cfg(windows)]
-        let program = &{
-            let image = program.with_extension("exe");
-            std::fs::copy(program, &image).unwrap();
-            image
-        };
-        let server = hide_platform::process::OwnedChild::spawn(
-            std::process::Command::new(program)
-                .args(["--exact", "kit::tests::held_copy_role", "--test-threads=1"])
-                .env(HELD, "1")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null()),
-        )
-        .unwrap();
-        let file = hide_platform::fs::identity::file_id(program).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while hide_platform::process::running(&file).unwrap().is_empty() {
-            assert!(std::time::Instant::now() < deadline, "the copy never ran");
-            std::thread::yield_now();
-        }
-        server
-    }
-
-    /// On Windows too, where `process::running` reads each process's image
-    /// path: a copy a server runs stays whatever that look could read.
-    #[test]
-    fn an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does() {
-        let dir = tempfile::tempdir().unwrap();
-        let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        let root = placement.root;
-        let test_binary = std::env::current_exe().unwrap();
-        let older = herdr_copy(&root, "1111111111111111", &test_binary);
-        let unused = herdr_copy(&root, "0000000000000000", &test_binary);
-        let mut server = run_copy(&older);
-
-        remove_unused_herdr(&root);
-        assert!(older.is_file(), "the copy a server runs stays");
-        assert!(!unused.parent().unwrap().exists());
-
-        server.kill_tree().unwrap();
-        server.wait().unwrap();
-        remove_unused_herdr(&root);
-        assert!(!older.parent().unwrap().exists());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn removal_takes_the_herdr_copies_no_server_runs() {
-        let dir = tempfile::tempdir().unwrap();
-        let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        point_current(&placement.root, &placement.version).unwrap();
-        herdr_copy(&placement.root, "1111111111111111", Path::new("/bin/sh"));
-        hide_platform::fs::link::replace_link(
-            Path::new("1111111111111111"),
-            &device_herdr::herdr_dir(&placement.root).join(hide_kit::CURRENT),
-        )
-        .unwrap();
-        std::fs::write(
-            device_herdr::herdr_dir(&placement.root).join(device_herdr::HANDOFF_RECORD),
-            b"{}",
-        )
-        .unwrap();
-
-        assert_eq!(
-            remove_root(&placement.root),
-            hide_kit::RemoveOutcome::Removed
-        );
-        assert!(!placement.root.exists());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn removal_keeps_the_root_while_a_server_runs_its_herdr_copy_and_says_why() {
-        let dir = tempfile::tempdir().unwrap();
-        let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
-        let copy = herdr_copy(
-            &placement.root,
-            "1111111111111111",
-            &std::env::current_exe().unwrap(),
-        );
-        let mut server = run_copy(&copy);
-
-        let outcome = remove_root(&placement.root);
-        server.kill_tree().unwrap();
-        server.wait().unwrap();
-        let hide_kit::RemoveOutcome::Kept { reason } = outcome else {
-            panic!("a copy in use keeps the root: {outcome:?}");
-        };
-        assert!(reason.contains("Herdr server"), "{reason}");
-        assert!(copy.is_file());
-        assert!(!placement.root.join(&placement.version).exists());
     }
 
     #[test]

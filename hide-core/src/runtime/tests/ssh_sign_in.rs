@@ -768,7 +768,7 @@ fn step_lists_the_host(shared: &Arc<Mutex<Runtime>>) {
 
 fn connect_from_the_step(shared: &Arc<Mutex<Runtime>>) {
     let connect = event(
-        "herdr_profile_connect",
+        "machine_profile_connect",
         serde_json::json!({"profile_id": format!("ssh:{DEVICE}"), "host_consent": true}),
     );
     assert!(shared.lock().unwrap().dispatch_json(&connect));

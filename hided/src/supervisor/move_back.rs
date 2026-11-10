@@ -308,8 +308,8 @@ pub(super) async fn prepare_back(
             }),
         }
     }
-    let (Some(peer_socket), Some(own_socket)) = (inspected.herdr_socket.clone(), own_socket) else {
-        if inspected.herdr_socket.is_none()
+    let (Some(peer_socket), Some(own_socket)) = (inspected.engine_scope.clone(), own_socket) else {
+        if inspected.engine_scope.is_none()
             && !failed.iter().any(|check| check.check == CheckId::Engine)
         {
             failed.push(FailedCheck {
@@ -345,7 +345,6 @@ pub(super) async fn prepare_back(
                 "id": id,
                 "label": id,
                 "ssh_alias": placement.alias,
-                "herdr_socket_path": peer_socket,
             }))
             .map_err(|error| fail(CheckId::Connection, error.to_string()))?
         }

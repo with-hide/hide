@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Which tests a pull request adds or changes, and how often the repeat lane runs them.
+
+A new test that fails one run in ten passes its own pull request nine times in
+ten, so the `repeat` lane (`.github/workflows/repeat.yml`) runs every test a
+pull request adds or changes many times, with no retry: one failed run fails
+the lane. docs/TESTING.md, "Flaky tests", owns the policy and the reasons.
+
+What counts as a changed test, by file, because a changed line says nothing
+reliable about which test it reaches (a helper, a hook, a loop that declares
+tests, a fixture at the top of the file):
+
+* Playwright: a `web/e2e/*.spec.ts` added or modified; every test in the file.
+* Rust: a module of a crate's `tests/it` binary added or modified (`foo.rs`,
+  `foo/mod.rs` or `foo/bar.rs`); every test of that module and its children,
+  picked with nextest's `test(/^module::/)`. A deleted file has none left.
+  `tests/it/support` and `main.rs`, which every module of the binary shares,
+  select the crate's whole `it` binary, and so does a module that lists no
+  test (a helper file such as `stand_ins.rs`): what a helper reaches is not
+  knowable from the diff, and the list decides, once, in `rust_plan`.
+
+The budget is one number for the whole pull request: `BUDGET` test runs. Each
+test runs `repeats(N)` times, N being the tests that will run, counted by the
+tools that run them (`playwright test --list`, `cargo nextest list`), of both kinds:
+`clamp(floor(BUDGET / N), MIN_REPEAT, MAX_REPEAT)`. A pull request that
+changes more than `BUDGET / MIN_REPEAT` tests runs over the budget, because a
+repeat below three shows too little.
+
+`select` is what `scripts/ci-plan.py` calls; the subcommands are what
+`repeat.yml` calls.
+"""
+import argparse
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+ROOT = Path(__file__).resolve().parent.parent
+
+BUDGET = 200
+MIN_REPEAT = 3
+MAX_REPEAT = 10
+# A hand run names its own repeat; this is the most it may ask for, so a typo
+# cannot hold a runner for a day.
+DISPATCH_MAX_REPEAT = 100
+
+WEB_SPEC = re.compile(r"^web/e2e/[^/]+\.spec\.ts$")
+# A crate's `tests/it` binary: the crate directory, then the module's file.
+RUST_MODULE = re.compile(r"^(?P<crate>.+)/tests/it/(?P<module>.+)\.rs$")
+# Helpers every module of the binary shares, and the file that declares the modules.
+RUST_SHARED = ("support", "main")
+# A module name for "every test of the crate's `it` binary".
+WHOLE = "*"
+
+PACKAGE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+MODULE = re.compile(r"^(?:\*|[a-z0-9_]+(?:::[a-z0-9_]+)*)$")
+SPEC_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.spec\.ts$")
+
+RUNNERS = {"linux": "ubuntu-latest", "macos": "macos-15", "windows": "windows-latest"}
+REPORT_BYTES = 16 * 1024 * 1024
+REPORT_FILES = 128
+
+
+def count_value(value):
+    """A required nonnegative count; a missing output is never zero."""
+    if not re.fullmatch(r"[0-9]+", str(value)):
+        raise ValueError(f"missing or invalid test count: {value!r}")
+    return int(value)
+
+
+def choose(event, web, rust, named, web_count, rust_count):
+    """One explicit run decision for both hand runs and counted PR tests."""
+    selected = {"web": bool(web), "rust": bool(rust)}
+    if event == "workflow_dispatch":
+        times = count_value(named)
+        if not 1 <= times <= DISPATCH_MAX_REPEAT or not any(selected.values()):
+            raise ValueError("a hand run needs named tests and a repeat from 1 to 100")
+    else:
+        counts = {}
+        for kind, raw in (("web", web_count), ("rust", rust_count)):
+            counts[kind] = count_value(raw) if selected[kind] else 0
+            if selected[kind] and counts[kind] == 0:
+                raise ValueError(f"selected {kind} files listed no tests")
+        times = repeats(sum(counts.values()))
+    return {"run-web": str(selected["web"]).lower(), "run-rust": str(selected["rust"]).lower(), "repeat": times}
+
+
+def verdict(needs):
+    """A selected repeat leg must succeed and report completed test runs."""
+    if needs["count"]["result"] != "success":
+        raise ValueError("choosing the repeat did not succeed")
+    outputs = needs["count"]["outputs"]
+    times = count_value(outputs["repeat"])
+    for kind in ("web", "rust"):
+        selected = outputs[f"run-{kind}"]
+        if selected not in ("true", "false"):
+            raise ValueError(f"missing or invalid run-{kind} decision: {selected!r}")
+        job = needs[kind]
+        expected = "success" if selected == "true" else "skipped"
+        if job["result"] != expected:
+            raise ValueError(f"{kind}: expected {expected}, got {job['result']}")
+        if selected == "true":
+            completed = count_value(job["outputs"].get("completed", ""))
+            if times == 0 or completed == 0 or completed % times:
+                raise ValueError(f"{kind}: {completed} completed test runs do not prove {times} repeats")
+    if (times > 0) != any(outputs[f"run-{kind}"] == "true" for kind in ("web", "rust")):
+        raise ValueError("the repeat and run decisions disagree")
+
+
+def completed_runs(playwright, junit):
+    """Read actual passes, excluding skips, from the runners' own reports.
+
+    Nextest emits a suite per stress iteration, so each testcase is one run:
+    https://nexte.st/docs/features/stress-tests/#junit-output
+    """
+    paths = [Path(playwright)] if playwright else [Path(path) for path in junit]
+    if not paths or len(paths) > REPORT_FILES or sum(path.stat().st_size for path in paths) > REPORT_BYTES:
+        raise ValueError("test reports are missing or exceed 128 files / 16 MiB")
+    if playwright:
+        report = json.loads(paths[0].read_text(encoding="utf-8"))
+        if report.get("errors"):
+            raise ValueError("the Playwright report contains run errors")
+
+        def passed(suite):
+            return sum(
+                result["status"] == "passed"
+                for spec in suite.get("specs", [])
+                for test in spec["tests"] for result in test["results"]
+            ) + sum(passed(child) for child in suite.get("suites", []))
+
+        completed = passed(report)
+    else:
+        completed = 0
+        for path in paths:
+            report = ET.parse(path).getroot()
+            if report.tag != "testsuites":
+                raise ValueError(f"not a nextest JUnit report: {path}")
+            completed += sum(
+                not any(child.tag in ("skipped", "failure", "error") for child in case)
+                for case in report.iter("testcase")
+            )
+    if completed == 0:
+        raise ValueError("the repeat job completed zero tests")
+    return completed
+
+
+def repeats(total):
+    """How many times each of `total` changed tests runs; 0 when none changed."""
+    if total < 0:
+        raise ValueError(f"a negative test count: {total}")
+    if total == 0:
+        return 0
+    return max(MIN_REPEAT, min(MAX_REPEAT, BUDGET // total))
+
+
+def rust_module(path, crate_dirs):
+    """The `{package, module}` a `tests/it` file selects, or None for a file that is not in a crate's `it` binary."""
+    match = RUST_MODULE.match(path)
+    if not match:
+        return None
+    package = crate_dirs.get(match["crate"])
+    if package is None:
+        return None
+    parts = match["module"].split("/")
+    if parts[0] in RUST_SHARED:
+        return {"package": package, "module": WHOLE}
+    if parts[-1] == "mod":
+        parts = parts[:-1]
+    return {"package": package, "module": "::".join(parts)}
+
+
+def select(entries, crate_dirs):
+    """The changed tests of `git diff --name-status` entries: Playwright spec files and Rust test modules."""
+    web = sorted({name for status, name in entries if status in ("A", "M") and WEB_SPEC.match(name)})
+    modules = set()
+    for status, name in entries:
+        if status not in ("A", "M"):
+            continue
+        found = rust_module(name, crate_dirs)
+        if found:
+            modules.add((found["package"], found["module"]))
+    # The whole binary runs every module, and `foo` runs `foo::bar`, so neither is run twice.
+    wholes = {package for package, module in modules if module == WHOLE}
+    rust = [
+        {"package": package, "module": module} for package, module in sorted(modules)
+        if package not in wholes or module == WHOLE
+        if not any(module.startswith(other + "::") for other_package, other in modules if other_package == package)
+    ]
+    return {"web": web, "rust": rust}
+
+
+def nextest_listed(text):
+    """The tests `cargo nextest list --message-format json` says the filterset runs.
+
+    A test counts when its filter matched; an ignored test does not match
+    unless the run asks for ignored tests, which this lane never does.
+    """
+    suites = json.loads(text).get("rust-suites")
+    if not isinstance(suites, dict):
+        raise ValueError("the nextest list has no rust-suites")
+    return sum(
+        1
+        for suite in suites.values()
+        for case in suite.get("testcases", {}).values()
+        if case.get("filter-match", {}).get("status") == "matches"
+    )
+
+
+def listed_tests(text):
+    """The test count of `playwright test --list` output, from its closing `Total:` line."""
+    found = re.findall(r"^Total: (\d+) tests? in \d+ files?$", text, re.MULTILINE)
+    if len(found) != 1:
+        raise ValueError("the Playwright list has no single `Total: N tests in M files` line")
+    return int(found[0])
+
+
+def spec_path(name):
+    """A hand-run spec name (`s3.spec.ts` or `web/e2e/s3.spec.ts`) as the path of a spec that exists."""
+    name = name.strip()
+    path = name if name.startswith("web/e2e/") else f"web/e2e/{name}"
+    if not WEB_SPEC.match(path) or not SPEC_NAME.match(PurePosixPath(path).name):
+        raise ValueError(f"not a web e2e spec: {name!r} (expected a name like s3.spec.ts)")
+    if not (ROOT / path).is_file():
+        raise ValueError(f"no such spec: {path}")
+    return path
+
+
+def spec_pattern(path):
+    """The Playwright file filter that matches exactly this spec: filters are regular expressions on the full path."""
+    return re.escape(path) + "$"
+
+
+def rust_entry(item):
+    """A hand-run `package:module` as the `{package, module}` it names, refused unless that module exists.
+
+    `package:*` names the crate's whole `it` binary.
+    """
+    package, separator, module = item.partition(":")
+    if not separator or not PACKAGE.match(package) or not MODULE.match(module):
+        raise ValueError(f"not a Rust test module: {item!r} (expected package:module, like hided:seat)")
+    binary = ROOT / package / "tests/it"
+    if not binary.is_dir():
+        raise ValueError(f"no such test binary: {package}/tests/it")
+    parts = module.split("::")
+    if module != WHOLE and not ((binary.joinpath(*parts).with_suffix(".rs")).is_file() or (binary.joinpath(*parts) / "mod.rs").is_file()):
+        raise ValueError(f"no such module: {package}/tests/it/{'/'.join(parts)}.rs")
+    return {"package": package, "module": module}
+
+
+def nextest_filters(modules):
+    """One `(package, filterset)` per package: its binary `it`, the selected modules' tests.
+
+    The filterset is empty for the whole binary.
+    """
+    by_package = {}
+    for module in modules:
+        if not PACKAGE.match(module["package"]) or not MODULE.match(module["module"]):
+            raise ValueError(f"not a Rust test module: {module!r}")
+        by_package.setdefault(module["package"], []).append(module["module"])
+    return [
+        (package, "" if WHOLE in names else "test(/^(" + "|".join(sorted(names)) + ")::/)")
+        for package, names in sorted(by_package.items())
+    ]
+
+
+def rust_plan(modules, lister):
+    """What the Rust job runs, from the tests the built binary lists for each package.
+
+    `lister(package, filterset)` answers how many tests nextest would run. A
+    package with a selected module that lists none (a helper file lists no
+    test of its own, and what it reaches is unknown) runs its whole `it`
+    binary instead, whatever else was selected beside it, so N is always what
+    runs and never an estimate.
+    """
+    plan = []
+    for package, expression in nextest_filters(modules):
+        names = sorted(module["module"] for module in modules if module["package"] == package)
+        if expression and any(lister(package, nextest_filters([{"package": package, "module": name}])[0][1]) == 0 for name in names):
+            expression = ""
+        plan.append({"package": package, "filter": expression, "tests": lister(package, expression)})
+    return plan
+
+
+def nextest_lister(package, expression):
+    """The tests `cargo nextest list` says the package's `it` binary would run under the filterset."""
+    command = ["bash", "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package, "--test", "it"]
+    if expression:
+        command += ["-E", expression]
+    command += ["--message-format", "json"]
+    return nextest_listed(subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout)
+
+
+def resolve(event, web, rust, repeat, runner):
+    """The lane's work from what called it.
+
+    A pull request's call hands over the lists `ci-plan.py` selected (JSON);
+    a hand run names specs and `package:module` tests in plain words and the
+    repeat it wants, which is validated here and never counted.
+    """
+    if event == "workflow_dispatch":
+        if runner not in RUNNERS:
+            raise ValueError(f"unknown runner {runner!r}; expected one of {', '.join(RUNNERS)}")
+        if not re.fullmatch(r"[0-9]+", repeat) or not 1 <= int(repeat) <= DISPATCH_MAX_REPEAT:
+            raise ValueError(f"repeat must be a number from 1 to {DISPATCH_MAX_REPEAT}, not {repeat!r}")
+        specs = sorted({spec_path(name) for name in web.split()})
+        modules = sorted((rust_entry(item) for item in rust.split()), key=lambda found: (found["package"], found["module"]))
+        if not specs and not modules:
+            raise ValueError("name at least one spec (web) or one Rust test module (rust)")
+        # Not listed: the system asked for may not be the one this job runs on, so
+        # a module that lists no test there fails in the Rust job, where it runs.
+        plan = [{"package": package, "filter": expression} for package, expression in nextest_filters(modules)]
+        return {"web": specs, "rust": modules, "runner": runner, "repeat": int(repeat), "counted": False, "plan": plan}
+    specs = json.loads(web or "[]")
+    modules = json.loads(rust or "[]")
+    for path in specs:
+        if not WEB_SPEC.match(path):
+            raise ValueError(f"not a web e2e spec: {path!r}")
+    for module in modules:
+        if not PACKAGE.match(module["package"]) or not MODULE.match(module["module"]):
+            raise ValueError(f"not a Rust test module: {module!r}")
+    # A pull request runs on Linux only; the hand run is the way to another system.
+    return {"web": specs, "rust": modules, "runner": "linux", "repeat": 0, "counted": bool(specs or modules), "plan": []}
+
+
+def write_outputs(values):
+    line = "".join(f"{key}={value}\n" for key, value in values.items())
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(line)
+    sys.stdout.write(line)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    resolve_parser = sub.add_parser("resolve", help="validate what called the lane and write its outputs")
+    resolve_parser.add_argument("--event", required=True)
+    resolve_parser.add_argument("--web", default="")
+    resolve_parser.add_argument("--rust", default="")
+    resolve_parser.add_argument("--repeat", default="")
+    resolve_parser.add_argument("--runner", default="linux")
+    sub.add_parser("count-listed", help="count the tests of `playwright test --list` output on stdin")
+    pattern_parser = sub.add_parser("spec-patterns", help="one Playwright file filter per line for each spec")
+    pattern_parser.add_argument("specs", nargs="+")
+    sub.add_parser("count-nextest", help="count the tests of `cargo nextest list --message-format json` output on stdin")
+    plan_parser = sub.add_parser("rust-plan", help="list the selected modules' tests and write the Rust job's plan")
+    plan_parser.add_argument("--rust", required=True, help="the JSON list of modules")
+    lines_parser = sub.add_parser("plan-lines", help="one `package<TAB>filterset` line per package of a Rust plan")
+    lines_parser.add_argument("--plan", required=True, help="the JSON plan")
+    choose_parser = sub.add_parser("choose", help="write an explicit run decision for every repeat leg")
+    choose_parser.add_argument("--event", required=True)
+    choose_parser.add_argument("--web", required=True)
+    choose_parser.add_argument("--rust", required=True)
+    choose_parser.add_argument("--repeat", default="")
+    choose_parser.add_argument("--web-count", default="")
+    choose_parser.add_argument("--rust-count", default="")
+    sub.add_parser("verdict", help="fail unless every chosen repeat leg completed tests (NEEDS JSON)")
+    report_parser = sub.add_parser("report", help="report completed runs from Playwright JSON or nextest JUnit")
+    reports = report_parser.add_mutually_exclusive_group(required=True)
+    reports.add_argument("--playwright")
+    reports.add_argument("--junit", nargs="+")
+    args = parser.parse_args()
+
+    try:
+        if args.command == "choose":
+            decision = choose(args.event, args.web, json.loads(args.rust), args.repeat, args.web_count, args.rust_count)
+            write_outputs(decision)
+            if os.environ.get("GITHUB_STEP_SUMMARY"):
+                with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                    summary.write(f"Tests counted: web={args.web_count or 'not counted'}, Rust={args.rust_count or 'not counted'}.\n")
+                    summary.write(f"Repeat decision: {json.dumps(decision)}\n")
+        elif args.command == "verdict":
+            verdict(json.loads(os.environ["NEEDS"]))
+            print("Every chosen repeat leg completed its tests.")
+        elif args.command == "report":
+            write_outputs({"completed": completed_runs(args.playwright, args.junit)})
+        elif args.command == "resolve":
+            work = resolve(args.event, args.web, args.rust, args.repeat, args.runner)
+            write_outputs({
+                "web": " ".join(work["web"]),
+                "rust": json.dumps(work["rust"], separators=(",", ":")),
+                "runner": RUNNERS[work["runner"]],
+                "os": work["runner"],
+                "repeat": work["repeat"] or "",
+                "counted": str(work["counted"]).lower(),
+                "web-count-needed": str(work["counted"] and bool(work["web"])).lower(),
+                "rust-count-needed": str(work["counted"] and bool(work["rust"])).lower(),
+                "rust-plan": json.dumps(work["plan"], separators=(",", ":")),
+            })
+        elif args.command == "rust-plan":
+            plan = rust_plan(json.loads(args.rust), nextest_lister)
+            write_outputs({"rust-plan": json.dumps(plan, separators=(",", ":")), "rust-count": sum(entry["tests"] for entry in plan)})
+        elif args.command == "plan-lines":
+            for entry in json.loads(args.plan):
+                if not PACKAGE.match(entry["package"]) or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"]):
+                    raise ValueError(f"not a Rust plan entry: {entry!r}")
+                print(f"{entry['package']}\t{entry['filter']}")
+        elif args.command == "count-nextest":
+            print(nextest_listed(sys.stdin.read()))
+        elif args.command == "count-listed":
+            print(listed_tests(sys.stdin.read()))
+        elif args.command == "spec-patterns":
+            for path in args.specs:
+                print(spec_pattern(path))
+        else:
+            raise ValueError(f"unknown command {args.command}")
+    except (ValueError, KeyError, TypeError, OSError, ET.ParseError, subprocess.CalledProcessError) as error:
+        print(f"ci-repeat: {error}" + (f"\n{error.stderr}" if isinstance(error, subprocess.CalledProcessError) and error.stderr else ""), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

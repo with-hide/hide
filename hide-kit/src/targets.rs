@@ -1034,7 +1034,7 @@ fn pass_own(
         && report.state == ComponentState::Installed
     {
         let untrusted = if writes {
-            crate::codex_trust::ensure_at(target, own.at(&target.home), &own.folder, &[])
+            crate::codex_trust::ensure_at(target, own.at(&target.home), &own.folder)
         } else {
             crate::codex_trust::remembered_at(&own.folder)
         };

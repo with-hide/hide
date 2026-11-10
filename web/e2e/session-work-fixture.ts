@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
-import { closePane, showTabOf, withControl } from "./daemon-actions";
+import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
+import { agentIn, closePane, showTabOf, withControl } from "./daemon-actions";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
-import { agentReading, labelAgentPane, spawnChild, startAgentInProject } from "./fixture-agents";
+import { agentReading, labelAgentPane, setAgentState, spawnChild, startAgentInProject } from "./fixture-agents";
 import type { Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { expect } from "@playwright/test";
@@ -157,6 +157,22 @@ export async function startWork(
   const session = `work-child-${process.pid}-${started.session}`;
   writeFixtureTranscript(claudeProjects(fixture), session, child);
   return { pane: started.pane, session: started.session, child: { pane: await spawnChild(fixture, daemon, started.pane, { name: "child", repo: dir, session }), session } };
+}
+
+/**
+ * Has the stopped agent in `pane`, whose session `session` the core has labelled, ask for a
+ * permission: its next turn, which `label` names and whose line says what it asks, ends at
+ * a permission prompt. A stopped agent that stops again at a prompt ran in between, so the
+ * core ends the line of the turn it had read (the label worker, docs/ARCHITECTURE.md,
+ * Status), and a turn the core already analysed is not analysed again. The request is
+ * therefore a turn of its own, written once the first turn's label has landed, so the
+ * state change that blocks the agent clears nothing the new turn's analysis has not yet
+ * written (with-hide/hide-private#515). Resolves once the core's row of `pane` is blocked.
+ */
+export async function askPermission(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string, label: FixtureLabel): Promise<void> {
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.identity_label === label.task || undefined, `${pane}'s first turn labelled ${label.task}`, 30_000));
+  continueFixtureTranscript(fixture, session, label);
+  await setAgentState(daemon, pane, "blocked");
 }
 
 /** The first work of a session spec: a root labelled `goal`, with its delegated child when the fixture is a family. */

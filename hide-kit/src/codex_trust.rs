@@ -2,9 +2,7 @@
 //!
 //! `hide_agent_hooks::codex_trust` does the work; this decides when. A pass
 //! that finds the Codex hook part in place asks Codex to record trust for it,
-//! so Codex starts without its "Hooks need review" screen for Hide's entries
-//! and for the Herdr integration entry the kit recorded (PRD
-//! codex-herdr-hook-trust).
+//! so Codex starts without its "Hooks need review" screen for Hide's entries.
 //!
 //! A failure is the part's one-line reason and its detail goes to the log.
 //! `status` runs every few seconds while Settings is open and starts no
@@ -20,7 +18,7 @@ use std::sync::Mutex;
 
 use hide_agent_hooks::account::AccountAt;
 use hide_agent_hooks::codex_trust::{
-    HookEntry, TrustFailure, TrustFailureKind, TrustOutcome, trust_own_hooks,
+    TrustFailure, TrustFailureKind, TrustOutcome, trust_own_hooks,
 };
 
 use crate::KitTarget;
@@ -35,23 +33,16 @@ fn memory() -> std::sync::MutexGuard<'static, BTreeMap<PathBuf, String>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Asks Codex to trust Hide's entries, and the entries the kit recorded
-/// Herdr's integration writing (`herdr`, empty unless the kit installed it),
-/// and answers the reason the part is not ready, when it is not. Nothing is
-/// asked of a machine with no Codex, and a Codex with no hook trust says
-/// nothing (D-07).
-pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> {
-    ensure_at(target, AccountAt::Home(&target.home), &target.home, herdr)
+/// Asks Codex to trust Hide's entries and answers the reason the part is not
+/// ready, when it is not. Nothing is asked of a machine with no Codex, and a
+/// Codex with no hook trust says nothing (D-07).
+pub(crate) fn ensure(target: &KitTarget) -> Option<String> {
+    ensure_at(target, AccountAt::Home(&target.home), &target.home)
 }
 
 /// [`ensure`] for the Codex account `at`, remembered by `key`: the home for
 /// the default account, a profile account's folder for its own.
-pub(crate) fn ensure_at(
-    target: &KitTarget,
-    at: AccountAt<'_>,
-    key: &Path,
-    herdr: &[HookEntry],
-) -> Option<String> {
+pub(crate) fn ensure_at(target: &KitTarget, at: AccountAt<'_>, key: &Path) -> Option<String> {
     let helper = target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME);
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target = match hide_agent_hooks::route::HookTarget::new(&helper, &state)
@@ -65,7 +56,7 @@ pub(crate) fn ensure_at(
     };
     let reason = match target.codex.as_ref() {
         None => None,
-        Some(codex) => match trust_own_hooks(codex, at, hook_target, herdr, &target.stop) {
+        Some(codex) => match trust_own_hooks(codex, at, hook_target, &target.stop) {
             TrustOutcome::Unsupported | TrustOutcome::Trusted { .. } => None,
             // Hide is quitting: the pass is abandoned, so nothing is said of
             // the part and nothing is remembered.

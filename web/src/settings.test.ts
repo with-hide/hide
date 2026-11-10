@@ -217,8 +217,6 @@ describe("settings rules", () => {
         started_at_unix: "1",
         state_dir: "/Users/example/.hide/state",
         core_state_path: "/Users/example/.hide/state/core-state.json",
-        herdr_bin_path: null,
-        herdr_socket_path: null,
         keep_alive: false,
         idle_secs: 600,
       },
