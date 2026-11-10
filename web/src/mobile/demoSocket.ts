@@ -164,6 +164,10 @@ export class DemoSocket implements PhoneSocket {
       case "ask_mission_material":
         this.later(ANSWER_MS, () => this.emit({ type: "mission_result", request_id: message.request_id, mission: message.mission, ok: true, reason: null }));
         return;
+      // The sample mission links no View, so none can be opened again.
+      case "reopen_mission_view":
+        this.later(ANSWER_MS, () => this.emit({ type: "mission_result", request_id: message.request_id, mission: message.mission, ok: false, reason: "gone" }));
+        return;
       case "read_pr":
         this.later(ANSWER_MS, () => this.emit({ type: "pr_result", request_id: message.request_id, action: "read_pr", pr: message.pr, ok: true, reason: null }));
         return;

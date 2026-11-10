@@ -23,7 +23,7 @@ import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer } 
 import { STATE_PILL } from "../missionList";
 import { PR_LOOK } from "../prMark";
 import { DECISION_VIEWS_SHOWN, attentionReasonText, escalationWhy, holdReason, kindWord, missionCells, missionOpen, nodeMark, stageWord } from "../missions";
-import { answerMission, askMissionMaterial, openDetail, settleMissionAnswer } from "./connection";
+import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { missionSteps, progress, workerOf } from "./missionModel";
 import type { PrState } from "../snapshot";
@@ -157,7 +157,7 @@ function DecisionCard({ mission, connected }: { mission: PhoneMission; connected
       </p>
       <p className="break-keep text-title leading-normal text-foreground wrap-anywhere" data-phone-question="true">{mission.decision}</p>
       {question?.why ? <p className="break-keep text-body text-muted-foreground wrap-anywhere">{question.why}</p> : null}
-      {mission.decision_views?.length ? <DecisionViews views={mission.decision_views} /> : null}
+      {mission.decision_views?.length ? <DecisionViews mission={mission} views={mission.decision_views} connected={connected} /> : null}
       {view.sent?.line === "unconfirmed" ? (
         <div className="flex min-w-0 flex-col gap-xs" data-phone-answer-sent="unconfirmed">
           <p className="flex min-w-0 items-start gap-xs text-body">
@@ -377,12 +377,15 @@ function stepLine(mission: PhoneMission, node: PhoneMissionNode, kind: "hold" | 
 /**
  * The Views linked to the decision, seen, unseen or closed (PRD
  * mission-human-gate B20): a row opens the 볼 것 of the agent that opened
- * it, where the View opens full screen; one that closed, or whose agent is
- * closed, is listed without a press, a closed one marked `닫힘`.
+ * it, where the View opens full screen; a closed one, marked `닫힘`, asks
+ * the Mac to open it again first and then opens that 볼 것. One whose agent
+ * is closed is listed without a press.
  */
-function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
+function DecisionViews({ mission, views, connected }: { mission: PhoneMission; views: PhoneDecisionView[]; connected: boolean }) {
   const { t } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
+  const reopening = usePhone((s) => (s.missionReopen?.mission === mission.id ? s.missionReopen.view : null));
+  const busy = usePhone((s) => s.missionReopen !== null);
   const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
   const more = views.length - shown.length;
   return (
@@ -391,11 +394,14 @@ function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
       <ul className="flex min-w-0 flex-col divide-y divide-border">
         {shown.map((view) => {
           const pane = view.pane_id;
+          const waiting = reopening === view.view;
           const words = (
             <>
               <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">{view.label}</span>
               {/* The phone has no hover, so the mark's words are read out, not hinted. */}
-              {view.closed ? (
+              {waiting ? (
+                <span className="shrink-0 text-body text-muted-foreground" data-phone-decision-view-opening="true">{t("mobile.mission.reopen.opening")}</span>
+              ) : view.closed ? (
                 <span className="shrink-0 text-body text-muted-foreground">{t("mission.banner.closed")}</span>
               ) : view.unseen ? (
                 <>
@@ -406,10 +412,21 @@ function DecisionViews({ views }: { views: PhoneDecisionView[] }) {
               <span className="shrink-0 text-body text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
             </>
           );
+          // A device on a build before the row's name (`view`) cannot be asked to open its closed row again.
+          const press = !pane || (view.closed && !view.view)
+            ? null
+            : view.closed
+              ? () => reopenMissionView(mission, view)
+              : () => openDetail({ device_id: view.device_id, pane_id: pane }, "looks");
           return (
-            <li key={`${view.device_id}:${view.display_id}`} className="min-w-0">
-              {pane ? (
-                <RowButton className="min-h-(--size-touch-target) gap-sm px-0" data-phone-decision-view={view.display_id} onClick={() => openDetail({ device_id: view.device_id, pane_id: pane }, "looks")}>
+            <li key={view.view} className="min-w-0">
+              {press ? (
+                <RowButton
+                  className="min-h-(--size-touch-target) gap-sm px-0"
+                  data-phone-decision-view={view.display_id}
+                  disabled={view.closed && (busy || !connected)}
+                  onClick={press}
+                >
                   {words}
                 </RowButton>
               ) : (

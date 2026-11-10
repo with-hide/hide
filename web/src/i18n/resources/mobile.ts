@@ -191,6 +191,10 @@ export const mobileEnglish = {
   "mobile.mission.material.failed": "The request for material couldn't be sent.",
   "mobile.mission.material.offline": "Your Mac isn't reachable right now, so the request wasn't sent.",
   "mobile.mission.material.gone": "This question is no longer open.",
+  "mobile.mission.reopen.opening": "Opening on your Mac…",
+  "mobile.mission.reopen.failed": "It couldn't be opened again on your Mac.",
+  "mobile.mission.reopen.offline": "Your Mac isn't reachable right now, so it wasn't opened.",
+  "mobile.mission.reopen.gone": "This question is no longer open.",
 } as const;
 
 const ko = {
@@ -383,6 +387,10 @@ const ko = {
   "mobile.mission.material.failed": "자료 요청을 보내지 못했어요.",
   "mobile.mission.material.offline": "지금은 Mac에 닿지 않아 자료를 요청하지 못했어요.",
   "mobile.mission.material.gone": "이 질문은 더 이상 열려 있지 않아요.",
+  "mobile.mission.reopen.opening": "Mac에서 여는 중…",
+  "mobile.mission.reopen.failed": "Mac에서 다시 열지 못했어요.",
+  "mobile.mission.reopen.offline": "지금은 Mac에 닿지 않아 열지 못했어요.",
+  "mobile.mission.reopen.gone": "이 질문은 더 이상 열려 있지 않아요.",
 } satisfies Catalog<typeof mobileEnglish>;
 
 const zhCN = {
@@ -575,6 +583,10 @@ const zhCN = {
   "mobile.mission.material.failed": "资料请求没有发送成功。",
   "mobile.mission.material.offline": "现在连不上 Mac，资料请求没有发出。",
   "mobile.mission.material.gone": "这个问题已不再开放。",
+  "mobile.mission.reopen.opening": "正在 Mac 上打开…",
+  "mobile.mission.reopen.failed": "没能在 Mac 上重新打开。",
+  "mobile.mission.reopen.offline": "现在连不上 Mac，没有打开。",
+  "mobile.mission.reopen.gone": "这个问题已不再开放。",
 } satisfies Catalog<typeof mobileEnglish>;
 
 const ja = {
@@ -767,6 +779,10 @@ const ja = {
   "mobile.mission.material.failed": "資料のリクエストを送れませんでした。",
   "mobile.mission.material.offline": "今は Mac に届かないため、資料をリクエストできませんでした。",
   "mobile.mission.material.gone": "この質問はもう開いていません。",
+  "mobile.mission.reopen.opening": "Mac で開いています…",
+  "mobile.mission.reopen.failed": "Mac でもう一度開けませんでした。",
+  "mobile.mission.reopen.offline": "今は Mac に届かないため、開けませんでした。",
+  "mobile.mission.reopen.gone": "この質問はもう開いていません。",
 } satisfies Catalog<typeof mobileEnglish>;
 
 export const mobileCatalogs = { en: mobileEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof mobileEnglish>;

@@ -185,11 +185,17 @@ pub struct PhoneEscalation {
 
 /// A View linked to a mission's open decision, as the phone's decision card
 /// lists it: its row opens the 볼 것 of the agent that opened it; a closed
-/// one stays listed, marked closed, with nothing to open.
+/// one stays listed, marked closed, and its row asks the Mac to open it
+/// again first (`reopen_mission_view`) while that agent is there.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PhoneDecisionView {
     pub device_id: String,
     pub display_id: String,
+    /// The name a press asks for it by, which says no path
+    /// (`DecisionView::view`); empty from a device on a build before it,
+    /// whose rows a press cannot name.
+    #[serde(default)]
+    pub view: String,
     pub kind: String,
     pub label: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -199,6 +205,19 @@ pub struct PhoneDecisionView {
     pub by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
+    /// What became of the last press that asked it to open again
+    /// (`DecisionView::reopen`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen: Option<PhoneDecisionReopen>,
+}
+
+/// A press's request id, and whether nothing will open for it; open again
+/// is the row no longer closed.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneDecisionReopen {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refused: bool,
 }
 
 /// What a person's turn asks and where, as a step's waiting reason says it.

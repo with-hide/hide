@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -114,7 +114,7 @@ export type PhoneMissionNode = MissionNodeBrief & {
 };
 
 /** A View linked to a mission's open decision (`PhoneDecisionView`). */
-export type PhoneDecisionView = { device_id: string; display_id: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string };
+export type PhoneDecisionView = { device_id: string; display_id: string; view: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string; reopen?: DecisionReopen };
 
 /** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
 export type PhoneMission = MissionBrief<PhoneMissionNode> & {
@@ -274,7 +274,7 @@ export type ServerFrame =
   | { type: "agents"; groups: AgentGroup[]; omitted?: number; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
   /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read; `omitted` counts the ones past the frame's caps. */
   | { type: "missions"; items: PhoneMission[]; failed: boolean; omitted?: number }
-  /** hided's answer to `answer_mission` and `ask_mission_material`; what the core does with it comes back on the mission itself. */
+  /** hided's answer to `answer_mission`, `ask_mission_material` and `reopen_mission_view`; what the core does with it comes back on the mission itself. */
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
@@ -332,6 +332,8 @@ export type PhoneMessage =
   | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
   /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
   | { type: "ask_mission_material"; request_id: string; mission: string; key: number }
+  /** A closed View of the decision opened again on the Mac first; the row's `reopen` says what became of it. */
+  | { type: "reopen_mission_view"; request_id: string; mission: string; key: number; view: string }
   /** The PR tab's own requests: `pr` is the list's key (`PhonePr.key`), `head` the card's head commit the merge was confirmed for. */
   | { type: "read_pr"; request_id: string; pr: string; look_again?: boolean }
   | { type: "merge_pr"; request_id: string; pr: string; head: string; method?: PrMergeMethod }
@@ -360,7 +362,7 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.prs.refusal.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.mission.reopen.${string}` | `mobile.prs.refusal.${string}`>, LimitKey>;
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -437,6 +439,18 @@ export function missionMaterialFailure(reason: string | null): Notice {
       return { key: "mobile.mission.material.offline" };
     default:
       return { key: "mobile.mission.material.failed" };
+  }
+}
+
+/** Why a closed decision View did not open again, in the phone's words: the question moved on, the Mac was out of reach, or it opened nothing. */
+export function missionReopenFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "gone":
+      return { key: "mobile.mission.reopen.gone" };
+    case "offline":
+      return { key: "mobile.mission.reopen.offline" };
+    default:
+      return { key: "mobile.mission.reopen.failed" };
   }
 }
 

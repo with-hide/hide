@@ -15,6 +15,7 @@ import {
   macNameOf,
   missionAnswerFailure,
   missionMaterialFailure,
+  missionReopenFailure,
   parseFragment,
   prFailure,
   refusalOf,
@@ -26,6 +27,7 @@ import {
   type DetailView,
   type LookRow,
   type PhoneAgent,
+  type PhoneDecisionView,
   type PhoneMessage,
   type PhoneMission,
   type QuickKey,
@@ -310,6 +312,11 @@ function connect(): void {
       onPrResult(frame);
       return;
     }
+    if (frame.type === "missions") {
+      applyFrame(frame);
+      settleMissionReopen();
+      return;
+    }
     if (frame.type === "sleep_result") {
       if (usePhone.getState().sleepAction?.requestId === frame.request_id) clearSleepTimer();
       applyFrame(frame);
@@ -339,6 +346,7 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   failPendingSleep();
   failLoadingLook();
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
+  if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
   if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
@@ -594,7 +602,50 @@ export function askMissionMaterial(mission: PhoneMission): boolean {
   return sent;
 }
 
+/**
+ * A closed View of the decision on the page, pressed: the Mac opens it again first, as the View of the
+ * agent that had it open, and the row's `reopen` then says what became of this press. One at a time.
+ */
+export function reopenMissionView(mission: PhoneMission, view: PhoneDecisionView): boolean {
+  const key = mission.question?.key;
+  if (key === undefined || usePhone.getState().missionReopen) return false;
+  const requestId = newRequestId();
+  const sent = send({ type: "reopen_mission_view", request_id: requestId, mission: mission.id, key, view: view.view });
+  patch(sent
+    ? { missionReopen: { requestId, mission: mission.id, key, view: view.view }, missionAnswerError: null }
+    : { missionAnswerError: { mission: mission.id, notice: missionReopenFailure("offline") } });
+  return sent;
+}
+
+/**
+ * The press ends on what the core did, as the missions frame carries it: the row open again opens the
+ * agent's 볼 것 (or, with that agent gone, leaves the open row as it is), a refusal or a question that
+ * moved on says so, and a device that stopped answering says it is out of reach. The core ends a press
+ * that never opens anything after its wait, so none of these waits for ever.
+ */
+function settleMissionReopen(): void {
+  const { missionReopen: asked, missions } = usePhone.getState();
+  if (!asked) return;
+  const mission = missions?.find((item) => item.id === asked.mission);
+  const row = mission?.question?.key === asked.key ? mission.decision_views?.find((view) => view.view === asked.view) : undefined;
+  const fail = (reason: string) => patch({ missionReopen: null, missionAnswerError: { mission: asked.mission, notice: missionReopenFailure(reason) } });
+  if (!mission || !row) return fail("gone");
+  if (mission.stale) return fail("offline");
+  if (!row.closed) {
+    patch({ missionReopen: null });
+    if (row.pane_id) openDetail({ device_id: row.device_id, pane_id: row.pane_id }, "looks");
+    return;
+  }
+  if (row.reopen?.request_id === asked.requestId && row.reopen.refused) fail("refused");
+}
+
 function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>): void {
+  const asked = usePhone.getState().missionReopen;
+  if (asked && frame.request_id === asked.requestId) {
+    // Accepted, the press waits for the row; refused by hided, nothing reached the core.
+    if (!frame.ok) patch({ missionReopen: null, missionAnswerError: { mission: asked.mission, notice: missionReopenFailure(frame.reason) } });
+    return;
+  }
   if (lastMaterial && frame.request_id === lastMaterial.requestId) {
     const asked = lastMaterial;
     lastMaterial = null;

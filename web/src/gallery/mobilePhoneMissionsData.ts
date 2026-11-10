@@ -39,8 +39,8 @@ function release(views: boolean): PhoneMission {
     question: { key: 3, why: null, options: ["서명 없이 진행", "릴리스 미루기"], recommend: null, node: "sign", asked_at_unix_ms: Date.now() - 6 * MINUTE },
     decision_views: views
       ? [
-          { device_id: "local", display_id: "gallery-sign-report", kind: "browser", label: "서명 없이 내보낼 때 바뀌는 것", unseen: true, by: "conductor", pane_id: "gallery-conductor" },
-          { device_id: "local", display_id: "gallery-sign-log", kind: "file", label: "ci-sign.log", by: "worker" },
+          { device_id: "local", display_id: "gallery-sign-report", view: "gallery-v1", kind: "browser", label: "서명 없이 내보낼 때 바뀌는 것", unseen: true, by: "conductor", pane_id: "gallery-conductor" },
+          { device_id: "local", display_id: "gallery-sign-log", view: "gallery-v2", kind: "file", label: "ci-sign.log", by: "worker" },
         ]
       : undefined,
     nodes: [

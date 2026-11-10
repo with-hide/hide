@@ -928,6 +928,7 @@ async fn handle(
         "human_turn_done" => Some(human_turn_done(mobile, phone_id, message, projection).await),
         "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
         "ask_mission_material" => Some(ask_mission_material(mobile, phone_id, message).await),
+        "reopen_mission_view" => Some(reopen_mission_view(mobile, phone_id, message).await),
         "read_pr" | "merge_pr" | "read_pr_feedback" => {
             Some(pr_request(mobile, phone_id, kind, message).await)
         }
@@ -1322,6 +1323,69 @@ async fn ask_mission_material(mobile: &Arc<Mobile>, phone_id: &str, message: &Va
                 "scope.refused",
                 Some(phone_id),
                 &format!("mission_material:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_mission_event(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// What a phone's `reopen_mission_view` asks, once it names a row its list
+/// holds: the desktop row's own `mission_view_reopen` event, under the
+/// press's request id, whose outcome comes back on that row
+/// (`PhoneDecisionView::reopen`).
+fn mission_view_reopen_event(
+    message: &Value,
+    missions: &PhoneMissions,
+    request_id: &str,
+) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let (Some(key), Some(view)) = (
+        message.get("key").and_then(Value::as_u64),
+        message
+            .get("view")
+            .and_then(Value::as_str)
+            .filter(|view| !view.is_empty()),
+    ) else {
+        return Err("invalid_request");
+    };
+    if !mission.decision_views.iter().any(|row| row.view == view) {
+        return Err("gone");
+    }
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "mission_view_reopen",
+        "payload": {"mission": mission.id, "key": key, "view": view, "request_id": request_id},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// A phone's press on a closed View of a mission's decision: claimed and
+/// dispatched as an answer is, so a repeat of the same press opens it once;
+/// what the core then did, opened or refused, comes back on the row.
+async fn reopen_mission_view(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let bytes = match mission_view_reopen_event(message, &mobile.missions(), request_id) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_view_reopen:{reason}"),
             );
             return answer(false, Some(reason));
         }
@@ -2610,6 +2674,78 @@ mod tests {
         assert_eq!(reason(&refused), Some("gone"));
         assert!(matches!(
             mobile.reserve_input(&phone, "g"),
+            Reservation::Write
+        ));
+    }
+
+    /// A phone's press on a closed decision View is the desktop row's own
+    /// `mission_view_reopen` event under the press's request id, claimed
+    /// once per press, and a row the phone's list does not hold is refused
+    /// before anything is claimed.
+    #[tokio::test]
+    async fn a_phone_reopen_is_the_desktop_rows_event_claimed_once_per_press() {
+        let rest = json!({
+            "navigator": {"agents": []},
+            "missions": {"items": [{
+                "id": "mission-1", "title": "Ship it", "device_id": "test-node", "status": "running",
+                "decision": "Merge now?",
+                "question": {"key": 4, "options": ["merge", "wait"], "recommend": 1, "asked_at_unix_ms": 1},
+                "decision_views": [{"device_id": "test-node", "checkout_path": "/repo", "display_id": "d3",
+                                    "view": "0a1b2c3d4e5f6071", "kind": "file", "label": "notes.md",
+                                    "closed": true, "by": "conductor"}],
+                "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude", "present": true, "takes_answers": true},
+                "nodes": [], "created_at_unix_ms": 1,
+            }]},
+        });
+        let missions = PhoneMissions::project(
+            &rest,
+            "test-node",
+            &super::super::projection::project(&rest, "test-node"),
+        );
+        let reopen = |request: &str, body: Value| {
+            let mut message = mission_message(request, body);
+            message["type"] = json!("reopen_mission_view");
+            message
+        };
+        let row = json!({"view": "0a1b2c3d4e5f6071"});
+        let event: Value = serde_json::from_slice(
+            &mission_view_reopen_event(&reopen("p", row.clone()), &missions, "p").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event["kind"], "mission_view_reopen");
+        assert_eq!(
+            event["payload"],
+            json!({"mission": "mission-1", "key": 4, "view": "0a1b2c3d4e5f6071", "request_id": "p"})
+        );
+        assert_eq!(
+            mission_view_reopen_event(&reopen("p", json!({"view": "ffff"})), &missions, "p"),
+            Err("gone")
+        );
+        assert_eq!(
+            mission_view_reopen_event(&reopen("p", json!({})), &missions, "p"),
+            Err("invalid_request")
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(missions));
+        let phone = paired(&mobile);
+        let first = reopen_mission_view(&mobile, &phone, &reopen("p", row.clone())).await;
+        assert_eq!(
+            (first["request_id"].as_str(), first["ok"].as_bool()),
+            (Some("p"), Some(true)),
+            "{first}"
+        );
+        assert!(matches!(
+            mobile.reserve_input(&phone, "p"),
+            Reservation::Seen(InputState::Written)
+        ));
+        let refused =
+            reopen_mission_view(&mobile, &phone, &reopen("q", json!({"view": "ffff"}))).await;
+        assert_eq!(reason(&refused), Some("gone"));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "q"),
             Reservation::Write
         ));
     }
