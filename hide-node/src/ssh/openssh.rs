@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use hide_node_link::device::{Cancel, Refusal, SshFailure, SshProblem};
-use hide_platform::process::{RunFailure, run_to_end};
+use hide_platform::process::{RunFailure, is_foreign_pane_identity, run_to_end};
 
 /// What Hide sets when the configuration leaves it at OpenSSH's default
 /// (B28): a dial that gets no answer gives up, and a link whose network went
@@ -253,13 +253,13 @@ impl SshProgram {
     }
 
     /// `ssh` with the account's configuration: `-F` and `HOME` for a private
-    /// home, and an environment without the Herdr pane identity this
+    /// home, and an environment without the foreign pane identity this
     /// process may carry, so the alias's proxy command sees the account's own.
     pub fn command(&self) -> Command {
         let mut command = Command::new(&self.path);
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
-            if name.starts_with("HERDR_") || name.starts_with("HIDE_") {
+            if is_foreign_pane_identity(&name) || name.starts_with("HIDE_") {
                 command.env_remove(&key);
             }
         }

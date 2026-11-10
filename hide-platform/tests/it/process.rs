@@ -17,11 +17,12 @@ use hide_platform::fs::identity::{canonical, file_id};
 #[cfg(unix)]
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
-    CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cpu_time, cwd_of, descendants, descends_from,
-    detach, group_members, image_of, is_alive, kill_tree, measure_tree, name_of, observed_cwd_of,
-    parent_of, restrict_to_login_environment, run_to_end, run_to_end_tied, running,
-    set_output_aside, start_time, terminate, terminate_group,
+    CaptureFailureKind, FOREIGN_PANE_IDENTITY, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS,
+    OwnedChild, OwnerWatch, RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cpu_time, cwd_of,
+    descendants, descends_from, detach, group_members, image_of, is_alive,
+    is_foreign_pane_identity, kill_tree, measure_tree, name_of, observed_cwd_of, parent_of,
+    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
+    start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -3260,6 +3261,26 @@ fn a_pipe_holder_outside_the_tree_does_not_hold_the_answer() {
         "stderr was cut: {} bytes",
         finished.stderr.len()
     );
+}
+
+/// The one rule that withholds the operator's Herdr pane identity from a Hide
+/// pane: every copy (the holder's pane environment, the desk process, the
+/// node's ssh command) calls `is_foreign_pane_identity`, so the prefix and its
+/// case rule are fixed here and nowhere else.
+#[test]
+fn the_foreign_pane_identity_is_the_herdr_prefix_whatever_the_case() {
+    assert_eq!(FOREIGN_PANE_IDENTITY, "HERDR_");
+    for name in [
+        "HERDR_PANE_ID",
+        "HERDR_SOCKET_PATH",
+        "herdr_env",
+        "Herdr_Session",
+    ] {
+        assert!(is_foreign_pane_identity(name), "{name} is withheld");
+    }
+    for name in ["HIDE_PANE_ID", "HERDRX", "HERD", "PATH", "CLAUDECODE"] {
+        assert!(!is_foreign_pane_identity(name), "{name} is kept");
+    }
 }
 
 /// What a child that must find the account's login is started with: the
