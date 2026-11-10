@@ -96,6 +96,8 @@ pub enum CommandKind {
     BrowserHelp,
     /// `hide guide`: the agent's guide to Hide (`crate::guide`).
     Guide,
+    /// `hide issue help`: the guide for reporting a bug in Hide itself.
+    IssueHelp,
     WorkspaceBootstrap,
     /// `hide workspace memory`: a hook's Project Memory from the core, with
     /// the prompt on stdin (PRD core-host-node-move B14).
@@ -200,6 +202,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
         "guide" => "usage: hide guide".to_owned(),
+        "issue" => usage(crate::issue_cli::USAGE),
         "contract" => "usage: hide contract --json".to_owned(),
         _ => return None,
     })
@@ -213,7 +216,7 @@ fn help_text() -> String {
     let indent =
         |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
     let mut text = String::from(
-        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
+        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide issue help           how to report a bug in Hide itself\n  hide contract --json      the commands tools call, as JSON\n",
     );
     for lines in [
         crate::delivery_cli::USAGE,
@@ -313,6 +316,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("guide") => match iter.next() {
             None => Ok(CommandKind::Guide),
             Some(_) => Err("usage: hide guide".to_owned()),
+        },
+        Some("issue") => match (iter.next().map(String::as_str), iter.next()) {
+            (Some("help" | "--help"), None) => Ok(CommandKind::IssueHelp),
+            _ => Err(usage(crate::issue_cli::USAGE)),
         },
         Some("contract") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("--json"), None) => Ok(CommandKind::Contract),
@@ -841,6 +848,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         print!("{}", crate::guide::text());
         return Ok(());
     }
+    if kind == CommandKind::IssueHelp {
+        print!("{}", crate::issue_cli::HELP);
+        return Ok(());
+    }
     let env = match needed_keys(&kind).map_or_else(env::load, env::load_for) {
         Ok(env) => env,
         Err(_errors)
@@ -914,6 +925,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         | CommandKind::Usage(_)
         | CommandKind::BrowserHelp
         | CommandKind::Guide
+        | CommandKind::IssueHelp
         | CommandKind::Version { .. }
         | CommandKind::Contract => unreachable!("handled above"),
         CommandKind::Open => open(&env),

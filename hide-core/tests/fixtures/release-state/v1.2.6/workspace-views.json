@@ -1,0 +1,363 @@
+{
+  "schema_version": 5,
+  "workspaces": [
+    {
+      "device_id": "c0de0000000000000000000000000001",
+      "path": "/home/me/core-proj",
+      "open": true,
+      "documents": true,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794273105628,
+      "made_unix_ms": 1794272981765,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "d2",
+            "displays": [
+              {
+                "id": "d2",
+                "path": "/home/me/core-proj/README.md",
+                "kind": "file",
+                "committed": null,
+                "preview": false,
+                "last_focused_unix_ms": 1794272999076,
+                "opener": {
+                  "device_id": "c0de0000000000000000000000000001",
+                  "terminal_id": "h1:p1",
+                  "session": "6a5fa5f524196c64e79ba56d7c09be869e77dcdb22a14aba5e62169d0621254b",
+                  "resume": "fd0c7fe3-2930-44b2-b40b-69712253e1b0",
+                  "provider": "claude",
+                  "name": "Claude"
+                },
+                "openers": [
+                  {
+                    "device_id": "c0de0000000000000000000000000001",
+                    "terminal_id": "h1:p1",
+                    "session": "6a5fa5f524196c64e79ba56d7c09be869e77dcdb22a14aba5e62169d0621254b",
+                    "resume": "fd0c7fe3-2930-44b2-b40b-69712253e1b0",
+                    "provider": "claude",
+                    "name": "Claude"
+                  }
+                ],
+                "unseen": {
+                  "opened_unix_ms": 1794272999076
+                }
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 3
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "h1:t3",
+            "displays": [
+              {
+                "id": "h1:t1",
+                "focused": 1794273105326
+              },
+              {
+                "id": "h1:t3",
+                "focused": 1794273111636
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 2,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {
+        "release-state-start-43": {
+          "group_id": null,
+          "area_id": "a1",
+          "draft_tab_id": "draft:1",
+          "live_tab_id": "h1:t3",
+          "pane_id": "h1:p3",
+          "add_pane": false,
+          "marker": "9678ec9aa14721e458d8ce421adf3d03ea26c06fac7ce5269eacd47bbc06020e",
+          "state": "ready",
+          "agent_kind": "claude",
+          "agent_phase": "started",
+          "recorded_at": 1794273105388,
+          "seen_in_topology": true,
+          "effect": {
+            "workspace_id": "h1",
+            "seed_tab_id": null,
+            "target": null,
+            "expected_command": [
+              "/bin/bash",
+              "--init-file",
+              "/home/me/.hide/shell-integration/105128048e946541/bash/interactive.bash"
+            ],
+            "shell_env": {},
+            "shell_readiness": "integrated",
+            "binding": {
+              "tab_id": "h1:t3",
+              "pane_id": "h1:p3",
+              "identity": {
+                "terminal_id": "h1:p3",
+                "shell_pid": 2098,
+                "shell_started": 21648
+              }
+            }
+          }
+        },
+        "release-state-start-45": {
+          "group_id": null,
+          "area_id": "a1",
+          "draft_tab_id": "draft:2",
+          "live_tab_id": "h1:t4",
+          "pane_id": "h1:p4",
+          "add_pane": false,
+          "marker": "5df96aa3d4766ea8fa882b4986b15d5d3027fe87247d6df5f37215b59a0a7fb1",
+          "state": "ready",
+          "agent_kind": "claude",
+          "agent_phase": "started",
+          "recorded_at": 1794273105583,
+          "seen_in_topology": true,
+          "effect": {
+            "workspace_id": "h1",
+            "seed_tab_id": null,
+            "target": null,
+            "expected_command": [
+              "/bin/bash",
+              "--init-file",
+              "/home/me/.hide/shell-integration/105128048e946541/bash/interactive.bash"
+            ],
+            "shell_env": {},
+            "shell_readiness": "integrated",
+            "binding": {
+              "tab_id": "h1:t4",
+              "pane_id": "h1:p4",
+              "identity": {
+                "terminal_id": "h1:p4",
+                "shell_pid": 2225,
+                "shell_started": 21668
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "device_id": "de510000000000000000000000000002",
+      "path": "/home/remote/dev-proj",
+      "open": true,
+      "documents": true,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 1794273105461,
+      "made_unix_ms": 1794272985965,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "d2",
+            "displays": [
+              {
+                "id": "d2",
+                "path": "/home/remote/dev-proj/notes.md",
+                "kind": "file",
+                "committed": null,
+                "preview": false,
+                "last_focused_unix_ms": 1794272996773,
+                "opener": {
+                  "device_id": "de510000000000000000000000000002",
+                  "terminal_id": "h1:p2",
+                  "session": "d1f819a49db6de35a60b311f7aef6638f2b4482e3dde9cb9321e0fe24e9eac17",
+                  "resume": "2386ee90-1e67-4b3b-99fc-1d5f8ce01a37",
+                  "provider": "claude",
+                  "name": "Claude"
+                },
+                "openers": [
+                  {
+                    "device_id": "de510000000000000000000000000002",
+                    "terminal_id": "h1:p1",
+                    "session": "b0c56ad89fadba1a187de802a79ebe7f3216c1ed381d51a3332b41ce1108629f",
+                    "resume": "59b98643-90ee-4bfd-90d1-7c5520148a68",
+                    "provider": "claude",
+                    "name": "Claude"
+                  },
+                  {
+                    "device_id": "de510000000000000000000000000002",
+                    "terminal_id": "h1:p2",
+                    "session": "d1f819a49db6de35a60b311f7aef6638f2b4482e3dde9cb9321e0fe24e9eac17",
+                    "resume": "2386ee90-1e67-4b3b-99fc-1d5f8ce01a37",
+                    "provider": "claude",
+                    "name": "Claude"
+                  }
+                ],
+                "unseen": {
+                  "opened_unix_ms": 1794272997843
+                }
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 3
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "remote:de510000000000000000000000000002:tab:h1:t4",
+            "displays": [
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h1:t1",
+                "focused": 1794273003044
+              },
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h1:t2",
+                "focused": 1794273003035
+              },
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h1:t3",
+                "focused": 0
+              },
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h1:t4",
+                "focused": 1794273105461
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 1,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "pane_moves": {
+        "release-state-move-19": {
+          "request": {
+            "request_id": "release-state-move-19",
+            "workspace": {
+              "device_id": "de510000000000000000000000000002",
+              "checkout_path": "/home/remote/dev-proj"
+            },
+            "group_id": null,
+            "source": {
+              "pane_id": "remote:de510000000000000000000000000002:pane:h1:p3",
+              "tab_id": "remote:de510000000000000000000000000002:tab:h1:t1",
+              "area_id": "a1"
+            },
+            "destination": {
+              "type": "tab",
+              "tab_id": "remote:de510000000000000000000000000002:tab:h1:t2",
+              "pane_id": "remote:de510000000000000000000000000002:pane:h1:p2",
+              "area_id": "a1"
+            }
+          },
+          "terminal_id": "h1:p3",
+          "workspace_id": "h1",
+          "phase": "completed",
+          "started_at": 1794273003027,
+          "message": null,
+          "target_terminal": "h1:p2",
+          "new_tab_slot": false,
+          "result_pane": "h1:p3",
+          "result_tab": "h1:t2"
+        }
+      },
+      "agent_starts": {
+        "release-state-start-44": {
+          "group_id": null,
+          "area_id": "a1",
+          "draft_tab_id": "draft:1",
+          "live_tab_id": "remote:de510000000000000000000000000002:tab:h1:t4",
+          "pane_id": "remote:de510000000000000000000000000002:pane:h1:p5",
+          "add_pane": false,
+          "marker": "e210328ff78f6f874d0ae9d2b2899eda9cb63455a82d77a7324dc1e2529e22af",
+          "state": "ready",
+          "agent_kind": "claude",
+          "agent_phase": "started",
+          "recorded_at": 1794273105433,
+          "seen_in_topology": true,
+          "effect": {
+            "workspace_id": "h1",
+            "seed_tab_id": null,
+            "target": null,
+            "expected_command": [
+              "/bin/bash",
+              "--init-file",
+              "/home/remote/.hide/shell-integration/105128048e946541/bash/interactive.bash"
+            ],
+            "shell_env": {},
+            "shell_readiness": "integrated",
+            "binding": {
+              "tab_id": "h1:t4",
+              "pane_id": "h1:p5",
+              "identity": {
+                "terminal_id": "h1:p5",
+                "shell_pid": 2059,
+                "shell_started": 21653
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "device_id": "de510000000000000000000000000002",
+      "path": "/home/remote/.hide/worktrees/dev-proj/plan-child",
+      "open": false,
+      "documents": false,
+      "tool": null,
+      "pinned": false,
+      "last_used_unix_ms": 0,
+      "made_unix_ms": 1794273027714,
+      "view_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": null,
+            "displays": []
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_layout": {
+        "root": {
+          "area": {
+            "id": "a1",
+            "active": "remote:de510000000000000000000000000002:tab:h2:t2",
+            "displays": [
+              {
+                "id": "remote:de510000000000000000000000000002:tab:h2:t2",
+                "focused": 0
+              }
+            ]
+          }
+        },
+        "active_area": "a1",
+        "next_id": 2
+      },
+      "agent_groups": {
+        "initialized": true,
+        "next_id": 0,
+        "items": [],
+        "selected": null,
+        "drafts": []
+      },
+      "agent_starts": {}
+    }
+  ]
+}

@@ -367,9 +367,10 @@ it("opens the Partial popover from the chip and lists every feature with a mark 
 
 it("lists the two skills Hide installs, each with its mark, what it is for and the help it points at (PRD hide-task-skill-merge B8)", async () => {
   const { all, q, unmount } = await mount(state([device("local")]));
-  expect(all("[data-agents-skill]").map((row) => row.getAttribute("data-agents-skill"))).toEqual(["hide", "hide-mission"]);
+  expect(all("[data-agents-skill]").map((row) => row.getAttribute("data-agents-skill"))).toEqual(["hide", "hide-mission", "hide-issue"]);
   expect(q('[data-agents-skill="hide-mission"]')?.textContent).toBe("hide-missionLead agents in a mission; do small tasks directly · hide mission help");
   expect(q('[data-agents-skill="hide-mission"] svg')?.getAttribute("class")).toContain("lucide-waypoints");
+  expect(q('[data-agents-skill="hide-issue"]')?.textContent).toBe("hide-issueReport a bug in Hide with its error and steps · gh issue create");
   await unmount();
 });
 

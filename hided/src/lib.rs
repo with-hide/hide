@@ -28,6 +28,7 @@ pub mod file_url;
 pub mod guide;
 mod herdr_transition;
 pub mod index;
+pub mod issue_cli;
 pub mod link_mux;
 pub mod login_item;
 pub mod mission_cli;
