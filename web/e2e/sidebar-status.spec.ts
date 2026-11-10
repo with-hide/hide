@@ -27,9 +27,10 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     const childSession = "fixture-two";
     continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE });
     const elsewhere = await elsewhereTab(fixture, daemon);
-    await finishUnseenTurn(fixture, daemon, parent, elsewhere);
+    // The child works first: typing its screen shows its own tab, which would read the parent's turn.
     continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, progress: "계보 투영 구현 중" });
     await setAgentState(daemon, child, "working");
+    await finishUnseenTurn(fixture, daemon, parent, elsewhere);
     // A finished turn not read yet is not hidden by the working child: the root is Done, counting the child on its line; once read, it waits on the child again (status-model.md, A quiet row that waits).
     await withControl(daemon, async (control) => {
       await control.until((rest) => { const row = agentIn(rest, parent); return (row?.group === "done" && row.children_left === 1) || undefined; }, `${parent} done past its working child`, 20_000);
