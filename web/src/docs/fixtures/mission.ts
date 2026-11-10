@@ -4,6 +4,7 @@
 import { withCoreWaits } from "../../gallery/missionWaits";
 import type { Mission, MissionNode, MissionWorker, SnapshotRest } from "../../snapshot";
 import { minutesAgo } from "./agent";
+import { docsProject } from "./project";
 
 export const MISSION_ID = "docs-mission";
 const CONDUCTOR_PANE = "docs-conductor";
@@ -35,13 +36,14 @@ export function missionFixture(): { mission: Mission; rest: SnapshotRest } {
     delay: null, report: null, created_at_unix_ms: minutesAgo(60), started_at_unix_ms: minutesAgo(50), closed_at_unix_ms: null, running: 1,
     stale: false, github_stale: false, github_read_at_unix_ms: minutesAgo(1), conductor_letters: null,
   });
-  const rest = {
+  const { rest: base } = docsProject();
+  const rest: SnapshotRest = {
     missions: { items: [mission] },
     mission_events: { mission: mission.id, events: [], dropped: 0 },
-    navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local", label: "This Mac", kit: { agents: [] } }], workspaces: [] },
+    navigator: base.navigator,
     overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [] },
     status: { remote: [] },
     ui_state: { conductor_settings: { concurrency: 4, default_scope: "pr", candidates: [], default_strength: "normal", clean_merged: true, map_flow: "down" } },
-  } as unknown as SnapshotRest;
+  };
   return { mission, rest };
 }

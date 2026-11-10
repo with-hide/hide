@@ -5,10 +5,9 @@ import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../../actions";
 import { markTone } from "../../agentRow";
 import { PaneView } from "../../PaneView";
-import { sidebarScene, REFERENCE_FOLDS } from "../../gallery/sceneData";
 import type { AgentRow, PaneHeader, PaneRow } from "../../snapshot";
 import { useShellStore } from "../../store";
-import { NOW, minutesAgo } from "../fixtures/agent";
+import { docsAgent, docsState, minutesAgo } from "../fixtures/agent";
 import { docsProject } from "../fixtures/project";
 import { PartFrame } from "../frame";
 import type { PartProps } from "../renderers";
@@ -17,18 +16,18 @@ const PANE = "a1c3";
 
 function fixture(asking: boolean) {
   const { rest, checkout } = docsProject();
-  const scene = sidebarScene("reference", REFERENCE_FOLDS, NOW);
-  const own = (id: string) => scene.agents.find((row) => row.pane_id === id)!;
-  const quiet = { pulls: null, descendant_mark: null, forked_from: null, revisit: null, raised: undefined, request: undefined } as const;
-  const parent: AgentRow = { ...own("a1"), ...quiet, identity_label: "Ship orders v2", lineage_child_pane_ids: [PANE], lineage_collapsed: true, descendant_counts: undefined };
-  const pane: AgentRow = {
-    ...own(PANE), ...quiet, identity_label: "Fix the checkout bug", group: "working", mark: "going", status_code: "working", activity: "working", wait: undefined, delegated: true,
+  const working = docsState({
+    working: true, root: false, bucket: "working", attention_rank: 3, search_tone: "working", subtree: "working", link: "working", link_rank: 1, verb: "working",
+    chip_tone: { kind: "working", read: false }, mark_tone: { kind: "working", read: false },
+  });
+  const parent: AgentRow = docsAgent("a1", { identity_label: "Ship orders v2", lineage_child_pane_ids: [PANE], lineage_collapsed: true });
+  const pane: AgentRow = docsAgent(PANE, {
+    identity_label: "Fix the checkout bug", group: "working", mark: "going", status_code: "working", activity: "working", delegated: true, state: working,
     lineage_parent_pane_id: "a1", lineage_path_pane_ids: ["a1", PANE], lineage_child_pane_ids: ["a1g1", "a1g2"], direct_child_counts: { error: 0, approval: 0, question: 0, working: 1, done: 1 },
-  };
-  const helper = (id: string, label: string, over: Partial<AgentRow>): AgentRow => ({ ...own(id), ...quiet, identity_label: label, lineage_parent_pane_id: PANE, lineage_path_pane_ids: ["a1", PANE, id], lineage_child_pane_ids: [], ...over });
+  });
   const helpers = [
-    helper("a1g1", "Write the tests", { group: "working", mark: "going", status_code: "working", demand: "none" }),
-    helper("a1g2", "Update the docs", { group: "seen", mark: "quiet", status_code: "done", activity: "stopped", demand: "none" }),
+    docsAgent("a1g1", { identity_label: "Write the tests", group: "working", mark: "going", status_code: "working", activity: "working", delegated: true, state: { ...working, tree_rank: 1 }, lineage_parent_pane_id: PANE, lineage_path_pane_ids: ["a1", PANE, "a1g1"] }),
+    docsAgent("a1g2", { identity_label: "Update the docs", group: "seen", mark: "quiet", status_code: "done", activity: "stopped", delegated: true, state: docsState({ root: false, tree_rank: 2 }), lineage_parent_pane_id: PANE, lineage_path_pane_ids: ["a1", PANE, "a1g2"] }),
   ];
   const header: PaneHeader = {
     working: !asking, notice: null, request: { text: "Fix the checkout bug", images: 0 },

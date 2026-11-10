@@ -29,7 +29,16 @@ function fixture() {
     workspace_id: project.id, unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
     rows: ROWS, questions: [], analysis: "idle", consent_required: false, usable_cards: ROWS.length, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null, expanded: null, search: null,
   };
-  const ready = { ...rest, status: { ...rest.status, background_ai: { enabled: true, provider: "claude", chosen: true, unavailable_reason: null, providers: [{ id: "claude", label: "Claude Code", agent: "claude-code", state: "ready", selectable: true }] } } } as unknown as SnapshotRest;
+  const ready: SnapshotRest = {
+    ...rest,
+    status: {
+      ...rest.status!,
+      background_ai: {
+        enabled: true, provider: "claude", chosen: true, unavailable_reason: null,
+        providers: [{ id: "claude", label: "Claude Code", agent: "claude-code", state: "ready", headline: "Ready", message: null, installed: true, selectable: true, retry_at_ms: null, model: "", models: [], models_fixed: false, cli_default: true, models_unavailable_reason: null }],
+      },
+    },
+  };
   return { rest: ready, memory };
 }
 

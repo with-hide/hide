@@ -1,6 +1,7 @@
 // The parts the user docs draw: the product's own components over invented English values, one part per
 // `?part=` so a docs page frames the picture it needs and loads only that picture's code. Nothing here reads a
 // daemon; the build is `docs-embed.config.ts`, which `hided` never serves.
+import "./clock";
 import { lazy, StrictMode, Suspense, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import "../index.css";

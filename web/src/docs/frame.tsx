@@ -15,7 +15,14 @@ export function PartFrame({ part, height, children }: { part: PartId; /** A part
   useLayoutEffect(() => {
     const element = box.current;
     if (!element || window.parent === window) return;
-    const report = () => window.parent.postMessage({ type: HEIGHT_MESSAGE, part, height: Math.ceil(element.getBoundingClientRect().height) }, "*");
+    // The page hears a height only when it changed: the load and the observer's first call would send the same one twice.
+    let posted = -1;
+    const report = () => {
+      const height = Math.ceil(element.getBoundingClientRect().height);
+      if (height === posted) return;
+      posted = height;
+      window.parent.postMessage({ type: HEIGHT_MESSAGE, part, height }, "*");
+    };
     report();
     const observer = new ResizeObserver(report);
     observer.observe(element);
