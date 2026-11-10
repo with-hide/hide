@@ -132,9 +132,7 @@ impl ReportFailure {
 }
 
 fn failure_path(home: &Path) -> PathBuf {
-    home.join(".hide")
-        .join("agent-hooks")
-        .join("last-report-failure.json")
+    crate::route::records_folder(home).join("last-report-failure.json")
 }
 
 /// Records the outcome of one report: a failure replaces the last one, a

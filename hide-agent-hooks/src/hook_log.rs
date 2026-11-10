@@ -1,6 +1,7 @@
-//! The hooks' bounded log, `~/.hide/agent-hooks/spawn-guard.log`: one
-//! structured line for each refusal a guard makes (the guardrails, the plan
-//! record, the global-instruction guard, the opener guard), each failed
+//! The hooks' bounded log, `spawn-guard.log` in the daemon's records folder
+//! (`~/.hide/agent-hooks` for a daemon on the account's own state folder):
+//! one structured line for each refusal a guard makes (the guardrails, the
+//! plan record, the global-instruction guard, the opener guard), each failed
 //! report and each daemon the hooks could not ask. A line names the pane, the
 //! runtime and the cause, never the command, a path or a prompt. The file
 //! keeps the name of the first guard that wrote it, so a machine has one log
@@ -12,13 +13,13 @@ use std::time::Duration;
 
 use hide_platform::fs::{self, private};
 
-/// The log's file name in `~/.hide/agent-hooks`.
+/// The log's file name in the hooks' records folder.
 const LOG_NAME: &str = "spawn-guard.log";
 pub(crate) const LOG_LIMIT: u64 = 256 * 1024;
 const LOG_LOCK_WAIT: Duration = Duration::from_millis(100);
 
 pub(crate) fn log_path(home: &Path) -> PathBuf {
-    home.join(".hide").join("agent-hooks").join(LOG_NAME)
+    crate::route::records_folder(home).join(LOG_NAME)
 }
 
 pub(crate) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
