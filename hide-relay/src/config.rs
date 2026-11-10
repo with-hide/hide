@@ -80,17 +80,12 @@ impl Config {
         // The ids land in headers Apple reads, so a value that could split a
         // header is refused here rather than at the first send.
         for value in [&key_id, &team_id, &topic].into_iter().flatten() {
-            if value.is_empty()
-                || value.len() > 128
-                || !value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-            {
+            if !crate::apns::identifier_valid(value) {
                 return Err("invalid_apns_id");
             }
         }
         if let Some(endpoint) = &endpoint
-            && !endpoint_is_loopback(endpoint)
+            && !crate::apns::endpoint_is_loopback(endpoint)
         {
             return Err("invalid_apns_endpoint");
         }
@@ -113,22 +108,10 @@ impl Config {
     }
 }
 
-/// The stand-in lives on this machine: `http://127.0.0.1:<port>` (h2c) or
-/// `https://127.0.0.1:<port>` with a test certificate.
-fn endpoint_is_loopback(endpoint: &str) -> bool {
-    let Some(rest) = endpoint
-        .strip_prefix("http://127.0.0.1:")
-        .or_else(|| endpoint.strip_prefix("https://127.0.0.1:"))
-    else {
-        return false;
-    };
-    let port = rest.split('/').next().unwrap_or("");
-    port.parse::<u16>().is_ok_and(|port| port != 0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apns::endpoint_is_loopback;
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()

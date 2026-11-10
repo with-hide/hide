@@ -56,10 +56,19 @@ impl Fixture {
     /// Apple's client reads `unix`, which starts at the real time, so a test
     /// moves the provider token's schedule without waiting.
     pub async fn pushing(push: PushLimits, apple: &Apple, key: &TestKey) -> Self {
+        Self::pushing_with(Limits::default(), push, apple, key).await
+    }
+    /// The same, with the relay's own budgets lowered too.
+    pub async fn pushing_with(
+        limits: Limits,
+        push: PushLimits,
+        apple: &Apple,
+        key: &TestKey,
+    ) -> Self {
         let endpoint = apple.url();
         let origin = key.provider();
         Self::build(
-            Limits::default(),
+            limits,
             push,
             "127.0.0.1:0".parse().unwrap(),
             true,
@@ -165,6 +174,15 @@ impl Fixture {
         .unwrap()
         .unwrap();
     }
+    /// How many `cap_exceeded` lines name `cap`.
+    pub fn caps(&self, name: &str) -> usize {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.event == "cap_exceeded" && e.cap == Some(name))
+            .count()
+    }
     pub fn cap(&self, name: &str) {
         assert!(
             self.events
@@ -216,6 +234,9 @@ pub struct Apple {
     /// How many TCP connections this Apple accepted, so a test can prove the
     /// relay keeps one and does not open one per request.
     connections: Arc<AtomicU64>,
+    /// Open by default; while closed, each request is recorded and its
+    /// answer waits, so a test can hold the relay's sends in flight.
+    gate: Arc<tokio::sync::watch::Sender<bool>>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
 }
@@ -228,6 +249,8 @@ impl Apple {
         let answer = Arc::new(Mutex::new((StatusCode::OK, String::new())));
         let next = Arc::new(Mutex::new(None));
         let connections = Arc::new(AtomicU64::new(0));
+        let gate = Arc::new(tokio::sync::watch::Sender::new(true));
+        let gated = gate.clone();
         let recorded = requests.clone();
         let answering = answer.clone();
         let once = next.clone();
@@ -245,6 +268,7 @@ impl Apple {
                 let recorded = recorded.clone();
                 let answering = answering.clone();
                 let once = once.clone();
+                let gated = gated.clone();
                 tokio::spawn(async move {
                     // h2c: the HTTP/2 protocol before any TLS this stand-in
                     // does not carry, which is the whole point of a local
@@ -254,6 +278,7 @@ impl Apple {
                             let recorded = recorded.clone();
                             let answering = answering.clone();
                             let once = once.clone();
+                            let mut gate = gated.subscribe();
                             async move {
                                 let path = request.uri().path().to_owned();
                                 let headers = request
@@ -278,6 +303,7 @@ impl Apple {
                                     headers,
                                     body,
                                 });
+                                let _ = gate.wait_for(|open| *open).await;
                                 let (status, reason) = once
                                     .lock()
                                     .unwrap()
@@ -309,6 +335,7 @@ impl Apple {
             answer,
             next,
             connections,
+            gate,
             stop: Some(stop),
             task: Some(task),
         }
@@ -326,6 +353,14 @@ impl Apple {
     /// The answer the next request gets, before the standing one.
     pub fn answer_next(&self, status: StatusCode, reason: &str) {
         *self.next.lock().unwrap() = Some((status, reason.to_owned()));
+    }
+
+    /// Holds every answer until `release`.
+    pub fn hold(&self) {
+        self.gate.send_replace(false);
+    }
+    pub fn release(&self) {
+        self.gate.send_replace(true);
     }
 
     pub fn requests(&self) -> Vec<AppleRequest> {

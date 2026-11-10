@@ -7,6 +7,10 @@ use std::sync::atomic::Ordering;
 /// The device token a test relay forwards, and the one Apple sees.
 const TOKEN: &str = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
 
+fn limits_of(per_minute: usize, per_day: usize) -> PushLimits {
+    limits(per_minute, per_day)
+}
+
 fn limits(per_minute: usize, per_day: usize) -> PushLimits {
     PushLimits {
         per_room_per_minute: per_minute,
@@ -480,8 +484,11 @@ fn the_relay_starts_only_with_an_owner_only_readable_key() {
     };
     let key = TestKey::new();
     write("apns.p8", key.pem().as_bytes(), 0o400);
-    write("wide.p8", key.pem().as_bytes(), 0o440);
+    // systemd's credential read through an ACL shows as 0440: allowed.
+    write("acl.p8", key.pem().as_bytes(), 0o440);
+    write("world.p8", key.pem().as_bytes(), 0o444);
     write("other.p8", key.pem().as_bytes(), 0o604);
+    write("group-write.p8", key.pem().as_bytes(), 0o460);
     write("garbage.p8", b"not a key", 0o400);
     write(
         "truncated.p8",
@@ -490,10 +497,12 @@ fn the_relay_starts_only_with_an_owner_only_readable_key() {
     );
     let limits = PushLimits::default();
     assert!(load(&config("apns.p8"), limits, unix_clock()).is_ok());
+    assert!(load(&config("acl.p8"), limits, unix_clock()).is_ok());
     for (name, reason) in [
         ("missing.p8", "apns_key_unreadable"),
-        ("wide.p8", "apns_key_permissions"),
+        ("world.p8", "apns_key_permissions"),
         ("other.p8", "apns_key_permissions"),
+        ("group-write.p8", "apns_key_permissions"),
         ("garbage.p8", "apns_key_unreadable"),
         ("truncated.p8", "apns_key_unreadable"),
     ] {
@@ -573,4 +582,223 @@ fn the_documented_apple_body_wraps_the_vector_ciphertext() {
             r#"{{"aps":{{"alert":{{"loc-key":"hide-notification"}},"mutable-content":1}},"hide":"{vector}"}}"#
         )
     );
+}
+
+/// A push request before admission is a message in the wrong place: the
+/// socket is refused, and Apple sees nothing.
+#[tokio::test]
+async fn a_push_request_before_admission_is_refused() {
+    let apple = Apple::start().await;
+    let key = TestKey::new();
+    let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
+    let mut early = fixture.socket("192.0.2.1").await;
+    text(&mut early, &push_message(1, TOKEN, "collapse", &payload())).await;
+    refused(&mut early, Refusal::InvalidMessage).await;
+    // Between the hello and its proof is still before admission.
+    let mut pending = fixture.socket("192.0.2.2").await;
+    let device_key = DeviceKey::from_seed(&[85; 32]);
+    let hello = DeviceHello::new(&device_key.public_key(), 7).unwrap();
+    send(
+        &mut pending,
+        hide_relay_protocol::admission::ClientMessage::Device { hello },
+    )
+    .await;
+    assert!(matches!(
+        control(&mut pending).await,
+        ServerMessage::Challenge { .. }
+    ));
+    text(
+        &mut pending,
+        &push_message(2, TOKEN, "collapse", &payload()),
+    )
+    .await;
+    refused(&mut pending, Refusal::InvalidMessage).await;
+    assert!(apple.requests().is_empty());
+    fixture.stop().await;
+}
+
+/// A field the relay fixes itself, an unknown environment or a missing field
+/// is answered `failed` on the path the relay runs, and Apple sees nothing.
+#[tokio::test]
+async fn a_request_naming_its_own_topic_or_an_unknown_environment_is_failed() {
+    let apple = Apple::start().await;
+    let key = TestKey::new();
+    let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    register_push(&mut device, &DeviceKey::from_seed(&[86; 32])).await;
+    let good: serde_json::Value =
+        serde_json::from_str(&push_message(1, TOKEN, "collapse", &payload())).unwrap();
+    let cases = [
+        (
+            "topic",
+            serde_json::json!("com.example.other"),
+            "push_invalid",
+        ),
+        ("apns-priority", serde_json::json!("5"), "push_invalid"),
+        (
+            "environment",
+            serde_json::json!("staging"),
+            "push_environment_invalid",
+        ),
+    ];
+    for (id, (name, value, event)) in (1..).zip(cases) {
+        let mut wrong = good.clone();
+        wrong["id"] = id.into();
+        wrong[name] = value;
+        assert_eq!(
+            answer_push(&mut device, &wrong.to_string(), id).await,
+            PushOutcome::Failed,
+            "{name}"
+        );
+        assert!(
+            fixture
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.event == event),
+            "{name}"
+        );
+    }
+    let mut missing = good.clone();
+    missing["id"] = 9.into();
+    missing.as_object_mut().unwrap().remove("token");
+    assert_eq!(
+        answer_push(&mut device, &missing.to_string(), 9).await,
+        PushOutcome::Failed
+    );
+    assert!(apple.requests().is_empty());
+    // The device socket still works.
+    let message = push_message(10, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &message, 10).await,
+        PushOutcome::Delivered
+    );
+    fixture.stop().await;
+}
+
+/// The relay-wide per-second cap answers `rate_limited` across rooms, logs
+/// once in its window, and leaves another phone of the room exchanging.
+#[tokio::test]
+async fn the_relay_wide_cap_answers_rate_limited_and_the_room_keeps_its_phones() {
+    let apple = Apple::start().await;
+    let key = TestKey::new();
+    let push = PushLimits {
+        per_second: 2,
+        ..PushLimits::default()
+    };
+    let mut fixture = Fixture::pushing(push, &apple, &key).await;
+    let mut first = fixture.socket("192.0.2.1").await;
+    let hello = register_push(&mut first, &DeviceKey::from_seed(&[87; 32])).await;
+    let mut second = fixture.socket("192.0.2.2").await;
+    register_push(&mut second, &DeviceKey::from_seed(&[88; 32])).await;
+    let mut phone = fixture.socket("192.0.2.3").await;
+    let connection = join(&mut phone, &hello.room, &mut first).await;
+    let (mut phone_noise, mut device_noise) = noise(&mut phone, &mut first, connection).await;
+    let message = |id| push_message(id, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut first, &message(1), 1).await,
+        PushOutcome::Delivered
+    );
+    assert_eq!(
+        answer_push(&mut second, &message(1), 1).await,
+        PushOutcome::Delivered
+    );
+    for id in 2..5 {
+        assert_eq!(
+            answer_push(&mut first, &message(id), id).await,
+            PushOutcome::RateLimited
+        );
+        assert_eq!(
+            answer_push(&mut second, &message(id), id).await,
+            PushOutcome::RateLimited
+        );
+    }
+    assert_eq!(fixture.caps("pushes_per_second"), 1, "one line a window");
+    // Over the cap, the room's phone and device still exchange frames.
+    exchange(
+        &mut phone,
+        &mut first,
+        &mut phone_noise,
+        &mut device_noise,
+        b"still here",
+    )
+    .await;
+    // The next second opens a new window.
+    fixture.clock.fetch_add(1_000, Ordering::SeqCst);
+    assert_eq!(
+        answer_push(&mut first, &message(9), 9).await,
+        PushOutcome::Delivered
+    );
+    assert_eq!(apple.requests().len(), 3);
+    fixture.stop().await;
+}
+
+/// The streams in flight to Apple are capped: past it a request is answered
+/// `rate_limited` at once, while the held one still completes.
+#[tokio::test]
+async fn the_concurrency_cap_answers_rate_limited_while_a_send_is_in_flight() {
+    let apple = Apple::start().await;
+    apple.hold();
+    let key = TestKey::new();
+    let push = PushLimits {
+        concurrent: 1,
+        ..PushLimits::default()
+    };
+    let mut fixture = Fixture::pushing(push, &apple, &key).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    register_push(&mut device, &DeviceKey::from_seed(&[89; 32])).await;
+    text(&mut device, &push_message(1, TOKEN, "collapse", &payload())).await;
+    apple.wait_for(1).await;
+    assert_eq!(
+        answer_push(
+            &mut device,
+            &push_message(2, TOKEN, "collapse", &payload()),
+            2
+        )
+        .await,
+        PushOutcome::RateLimited
+    );
+    fixture.cap("concurrent_pushes");
+    apple.release();
+    let ServerMessage::PushResult(result) = control(&mut device).await else {
+        panic!("push_result")
+    };
+    assert_eq!((result.id, result.result), (1, PushOutcome::Delivered));
+    assert_eq!(apple.requests().len(), 1);
+    fixture.stop().await;
+}
+
+/// Requests past a room's cap still cost the room: each one's bytes are
+/// charged to its daily byte budget, which ends the device socket like any
+/// frame past it, and the cap is logged once however many arrive.
+#[tokio::test]
+async fn requests_past_a_cap_spend_the_room_s_bytes_and_log_once() {
+    let apple = Apple::start().await;
+    let key = TestKey::new();
+    let message = push_message(1, TOKEN, "collapse", &payload());
+    let limits = hide_relay::limits::Limits {
+        bytes_per_room_per_day: 10 * message.len() as u64,
+        ..hide_relay::limits::Limits::default()
+    };
+    let mut fixture = Fixture::pushing_with(limits, limits_of(1, 10), &apple, &key).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    register_push(&mut device, &DeviceKey::from_seed(&[90; 32])).await;
+    assert_eq!(
+        answer_push(&mut device, &message, 1).await,
+        PushOutcome::Delivered
+    );
+    for _ in 1..10 {
+        assert_eq!(
+            answer_push(&mut device, &message, 1).await,
+            PushOutcome::RateLimited
+        );
+    }
+    assert_eq!(fixture.caps("pushes_per_room_per_minute"), 1);
+    // The eleventh request is past the room's bytes for the day.
+    text(&mut device, &message).await;
+    refused(&mut device, Refusal::DailyLimit).await;
+    fixture.cap("bytes_per_room_per_day");
+    assert_eq!(apple.requests().len(), 1);
+    fixture.stop().await;
 }
