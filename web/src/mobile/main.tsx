@@ -11,7 +11,7 @@ import { App } from "./App";
 import { openNoticed, start } from "./connection";
 import { PhoneLanguageBoundary } from "./language";
 import { openKey } from "./protocol";
-import { hostedPhone } from "./relayRuntime";
+import { hostedPhone, serviceWorkerAllowed } from "./relayRuntime";
 import { followPhoneTheme } from "./settings";
 import { patch, usePhone } from "./store";
 import { PALETTE_HIDE_CLASS, readColorTheme } from "../theme";
@@ -25,7 +25,7 @@ usePhone.subscribe((state, previous) => {
   if (state.colorTheme !== previous.colorTheme) followColorTheme(state.colorTheme);
 });
 
-if ("serviceWorker" in navigator) {
+if (serviceWorkerAllowed()) {
   void navigator.serviceWorker.register(hostedPhone() ? "/sw.js" : "/m/sw.js", { scope: hostedPhone() ? "/" : "/m/" }).catch(() => {
     if (hostedPhone()) patch({ relayError: "loadError" });
   });

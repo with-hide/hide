@@ -10,11 +10,11 @@ import { MISSION_ATTENTION_REASONS } from "../snapshot";
 import { staleTags, type AgentGroup } from "./protocol";
 import { patch, usePhone } from "./store";
 import { send, currentHost } from "./connection";
-import { hostedPhone } from "./relayRuntime";
+import { hostedPhone, serviceWorkerAllowed } from "./relayRuntime";
 import { dropHostPush, registerHostPush } from "./hosts";
 
 export function pushSupported(): boolean {
-  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  return serviceWorkerAllowed() && "PushManager" in window && "Notification" in window;
 }
 
 export function permission(): NotificationPermission | "unsupported" {
@@ -30,7 +30,7 @@ function applicationServerKey(base64url: string): Uint8Array<ArrayBuffer> {
 }
 
 async function registration(): Promise<ServiceWorkerRegistration | null> {
-  if (!("serviceWorker" in navigator)) return null;
+  if (!serviceWorkerAllowed()) return null;
   try {
     const host = currentHost();
     if (hostedPhone()) {
@@ -121,7 +121,7 @@ export async function syncPush(): Promise<void> {
 
 /** A revoked phone keeps no subscription of its own (D-19). */
 export async function forgetPush(): Promise<void> {
-  if (!("serviceWorker" in navigator)) return;
+  if (!serviceWorkerAllowed()) return;
   const host = currentHost();
   if (hostedPhone()) { if (host) await dropHostPush(host.room); return; }
   try {

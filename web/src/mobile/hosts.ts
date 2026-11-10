@@ -1,3 +1,5 @@
+import { serviceWorkerAllowed } from "./relayRuntime";
+
 /** Only paired-device identity and credentials persist, never a QR code or conversation. */
 export interface PairedHost {
   room: string;
@@ -70,7 +72,7 @@ export function registerHostPush(room: string): Promise<ServiceWorkerRegistratio
 }
 
 async function removeHostPush(room: string): Promise<void> {
-  if ("serviceWorker" in navigator) {
+  if (serviceWorkerAllowed()) {
     // A removal waits for its admitted registration; it cannot leave a late worker behind.
     const pending = pushWorkers.get(room);
     if (pending) await pending.catch(() => undefined);
