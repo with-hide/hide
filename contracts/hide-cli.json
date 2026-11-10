@@ -6255,7 +6255,19 @@
                 },
                 {
                     "conflicts": [
-                        "--line"
+                        "--clear"
+                    ],
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "span"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--line",
+                        "--for"
                     ],
                     "name": "--clear",
                     "required": false,
@@ -6613,7 +6625,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:976d0ed4f0b6636b350b41294335d4294acf00c7bffdf76ca0f70fabe5917d58",
+    "digest": "sha256:95315d95fb5d7613f4c69540f5db16cce84315bdec2478229972d211e93082b8",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -6677,6 +6689,7 @@
         "paste_text": "non-empty, at most 16384 bytes, no control characters but line breaks (LF, CR) and tabs",
         "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",
+        "span": "whole minutes or hours, such as 30m or 2h",
         "text": "non-empty, no control characters, does not start with --",
         "unsigned": "a decimal integer from 0 to 18446744073709551615"
     }

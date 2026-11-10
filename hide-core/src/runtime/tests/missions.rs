@@ -10341,3 +10341,51 @@ fn the_operators_done_passes_a_gate_through_its_one_entry() {
             .any(|wake| wake.event == WakeEvent::GatePassed && wake.node == "fix")
     );
 }
+
+/// A delay ends by itself: one set with `--for` at its end, and one a build
+/// before that end kept is given a day from the first judgment.
+#[test]
+fn a_mission_delay_ends_by_itself() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let minute = 60_000;
+    let now = crate::runtime::unix_milliseconds();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    let delay = |runtime: &Runtime| {
+        let mission = runtime.missions.book.get("mission-1").unwrap();
+        (mission.delay.clone(), mission.delay_until_unix_ms)
+    };
+    let until = delay(&runtime).1.expect("a delay has an end");
+    assert!(until >= now + 30 * minute);
+    runtime.stall_missions(until - 1);
+    assert_eq!(delay(&runtime).0.as_deref(), Some("disk"));
+    assert!(runtime.stall_missions(until));
+    assert_eq!(delay(&runtime), (None, None));
+    // A delay kept with no end is given a day.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.delay = Some("usage".into());
+    assert!(runtime.stall_missions(until + minute));
+    assert_eq!(delay(&runtime).1, Some(until + minute + 24 * 60 * minute));
+    // A delay with no end is refused.
+    assert!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "delay", "line": "disk"})
+        )
+        .is_err()
+    );
+}

@@ -6,7 +6,7 @@
   "mission_delivery": ["pr", "direct"],
   "mission_node_status": ["planned", "working", "done", "dropped"],
   "mission_blocked": ["upstream_dropped"],
-  "mission_attention_reason": ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate"],
+  "mission_attention_reason": ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"],
   "mission_attention_to": ["conductor", "operator"],
   "mission_hide_action": ["done", "attached", "woke"],
   "mission_fix_reason": ["ci_failed", "conflict", "changes_requested"],

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> --for <30m|2h> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -110,7 +110,7 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
         ],
         &["--clear"],
     ),
-    ("delay", &["--mission", "--line"], &["--clear"]),
+    ("delay", &["--mission", "--line", "--for"], &["--clear"]),
     (
         "close",
         &["--mission", "--as", "--report", "--report-file"],
@@ -181,6 +181,27 @@ fn key(value: &str) -> Result<String, String> {
     } else {
         Err(format!("{value} is not a mission or node key"))
     }
+}
+
+/// A span of whole minutes or hours (`30m`, `2h`), within the core's
+/// `missions::DELAY_LIMIT_MINUTES`.
+fn minutes(flag: &str, value: &str) -> Result<u32, String> {
+    let limit = hide_core::missions::DELAY_LIMIT_MINUTES;
+    let refused = || {
+        format!(
+            "{flag} takes minutes or hours, such as 30m or 2h, up to {}h",
+            limit / 60
+        )
+    };
+    let count = |digits: &str| digits.parse::<u32>().ok();
+    let minutes = match (value.strip_suffix('m'), value.strip_suffix('h')) {
+        (Some(digits), _) => count(digits),
+        (_, Some(digits)) => count(digits).and_then(|hours| hours.checked_mul(60)),
+        _ => None,
+    };
+    minutes
+        .filter(|minutes| (1..=limit).contains(minutes))
+        .ok_or_else(refused)
 }
 
 fn number(flag: &str, value: &str) -> Result<u32, String> {
@@ -515,11 +536,20 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 return Err(USAGE.to_owned());
             }
             let line = one(&values, &set, "--line", "--clear")?
-                .ok_or("give --line <text> or --clear")?
+                .ok_or("give --line <text> --for <30m|2h> or --clear")?
                 .map(str::to_owned);
+            let for_minutes = match (&line, values.get("--for")) {
+                (Some(_), Some(value)) => Some(minutes("--for", value)?),
+                (Some(_), None) => {
+                    return Err("--line needs --for <30m|2h>: a delay always ends".to_owned());
+                }
+                (None, Some(_)) => return Err("--for goes with --line, not --clear".to_owned()),
+                (None, None) => None,
+            };
             MissionCommand::Delay {
                 mission: mission_of(&values)?,
                 line,
+                for_minutes,
             }
         }
         "close" => {
@@ -1113,5 +1143,40 @@ mod tests {
         assert_eq!(patch.commit, Some(None));
         assert!(parse(words(&["node", "check", "--checks", "six"]).iter()).is_err());
         assert!(parse(words(&["node", "check", "--verdict", "maybe"]).iter()).is_err());
+    }
+
+    /// A delay always ends: `--line` takes `--for`, in minutes or hours up
+    /// to a day, and a clear takes none.
+    #[test]
+    fn a_delay_names_how_long_it_holds() {
+        let delay = |line: &[&str]| parse(words(line).iter());
+        let Ok(MissionCli::Command(MissionCommand::Delay { for_minutes, .. })) =
+            delay(&["delay", "--line", "disk", "--for", "2h"])
+        else {
+            panic!("a delay command");
+        };
+        assert_eq!(for_minutes, Some(120));
+        let Ok(MissionCli::Command(MissionCommand::Delay { for_minutes, .. })) =
+            delay(&["delay", "--line", "disk", "--for", "30m"])
+        else {
+            panic!("a delay command");
+        };
+        assert_eq!(for_minutes, Some(30));
+        for refused in [
+            &["delay", "--line", "disk"][..],
+            &["delay", "--line", "disk", "--for", "25h"],
+            &["delay", "--line", "disk", "--for", "0m"],
+            &["delay", "--line", "disk", "--for", "2시"],
+            &["delay", "--clear", "--for", "1h"],
+        ] {
+            assert!(delay(refused).is_err(), "{refused:?}");
+        }
+        let Ok(MissionCli::Command(MissionCommand::Delay {
+            line, for_minutes, ..
+        })) = delay(&["delay", "--clear"])
+        else {
+            panic!("a delay command");
+        };
+        assert_eq!((line, for_minutes), (None, None));
     }
 }

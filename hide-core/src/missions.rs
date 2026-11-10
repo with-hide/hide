@@ -267,13 +267,26 @@ pub enum AttentionReason {
     /// ask it on its row (PRD mission-human-gate D-23): the mission's own
     /// item, answered on the decision card.
     HumanGate,
+    /// The node could start, nothing holds it, and it was not started
+    /// (`mission_health::stall_acts`).
+    NotStarted,
+    /// A warning its Conductor was sent stood with nothing moving
+    /// (`mission_health::stall_acts`): the Conductor already had its letter,
+    /// so it reaches the operator at once.
+    WarningStood,
+    /// The node's pull request waited on CI, a review or the merge for longer
+    /// than any of those takes (`mission_health::stall_acts`).
+    WaitStood,
 }
 
 impl AttentionReason {
     /// A reason only the operator can settle goes to them at once (B26);
     /// the others ask the Conductor first (D-05).
     pub fn operator_first(self) -> bool {
-        matches!(self, Self::ConductorFailed | Self::HumanGate)
+        matches!(
+            self,
+            Self::ConductorFailed | Self::HumanGate | Self::WarningStood
+        )
     }
 
     /// The operator's choices for a raise of this reason, in the order the
@@ -290,7 +303,12 @@ impl AttentionReason {
         use OperatorAction::{Attach, Done, Drop, Leave, Resume};
         let own: &[OperatorAction] = match self {
             Self::MergedUnproven | Self::CloseRefused => &[Done],
-            Self::WorkerEnded | Self::PrClosed | Self::WakeRefused => &[Drop],
+            Self::WorkerEnded
+            | Self::PrClosed
+            | Self::WakeRefused
+            | Self::NotStarted
+            | Self::WarningStood
+            | Self::WaitStood => &[Drop],
             Self::UnplannedPr => &[Attach],
             Self::ConductorFailed => &[Resume, Drop],
             // Answered on the gate's decision card, never past it here.
@@ -314,6 +332,9 @@ impl AttentionReason {
             Self::WakeRefused => "wake_refused",
             Self::CloseRefused => "close_refused",
             Self::HumanGate => "human_gate",
+            Self::NotStarted => "not_started",
+            Self::WarningStood => "warning_stood",
+            Self::WaitStood => "wait_stood",
         }
     }
 }
@@ -1398,6 +1419,13 @@ pub struct Mission {
     /// Why new nodes wait on usage (B13).
     #[serde(default)]
     pub delay: Option<String>,
+    /// When `delay` ends by itself: a hold always has an end, at most
+    /// `DELAY_LIMIT_MINUTES` after it was set, so a mission never rests
+    /// unseen behind one. A delay a build before this kept, with no end,
+    /// is given one `DELAY_LIMIT_MINUTES` after this build first reads it
+    /// (`Runtime::warn_missions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_until_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
@@ -1438,6 +1466,10 @@ pub struct Mission {
 
 /// How long the operator's handover waits for the session it started.
 pub const HANDOVER_TTL_MS: u64 = 10 * 60_000;
+
+/// The longest a mission's delay holds: one day, after which the mission
+/// goes on and a node still not started is a stall (`mission_health`).
+pub const DELAY_LIMIT_MINUTES: u32 = 24 * 60;
 
 /// Whether `token` can name a handover: 16 to 64 letters, digits and `-`.
 pub(crate) fn valid_handover(token: &str) -> bool {
@@ -1949,7 +1981,8 @@ pub enum MissionCommand {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         show: Vec<String>,
     },
-    /// Sets or clears why new nodes wait on usage (B13).
+    /// Sets or clears why new nodes wait on usage (B13), for at most
+    /// `DELAY_LIMIT_MINUTES`.
     Delay {
         #[serde(default)]
         mission: Option<String>,
@@ -1957,6 +1990,10 @@ pub enum MissionCommand {
         /// out is refused rather than read as a clear.
         #[serde(deserialize_with = "present")]
         line: Option<String>,
+        /// How long the delay holds, in minutes: required with a line,
+        /// absent with a clear.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_minutes: Option<u32>,
     },
     Close {
         #[serde(default)]
@@ -2126,11 +2163,20 @@ impl MissionCommand {
                         .iter()
                         .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
             }
-            Self::Delay { mission, line } => {
+            Self::Delay {
+                mission,
+                line,
+                for_minutes,
+            } => {
                 id_ok(mission)
                     && line
                         .as_deref()
                         .is_none_or(|line| valid_text(line, LINE_LIMIT))
+                    && match (line, for_minutes) {
+                        (Some(_), Some(minutes)) => (1..=DELAY_LIMIT_MINUTES).contains(minutes),
+                        (None, None) => true,
+                        _ => false,
+                    }
             }
             Self::Close {
                 mission, report, ..
@@ -3607,6 +3653,7 @@ pub(crate) mod tests {
             answer: None,
             answer_failed: None,
             delay: None,
+            delay_until_unix_ms: None,
             report: None,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,

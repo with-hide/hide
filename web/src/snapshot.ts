@@ -1399,7 +1399,7 @@ export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 export type MissionBlocked = "upstream_dropped";
 
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
-export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate"] as const;
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";

@@ -101,6 +101,8 @@ pub struct MissionView {
     /// (with-hide/hide-private#678).
     pub conductor_letters: Option<crate::delivery::held::HeldLetters>,
     pub delay: Option<String>,
+    /// When the delay ends by itself (`Mission::delay_until_unix_ms`).
+    pub delay_until_unix_ms: Option<u64>,
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
     pub started_at_unix_ms: Option<u64>,
@@ -574,6 +576,10 @@ pub(crate) struct MissionRuntime {
     pub(super) sleep_marks: Vec<super::agent_sleep::missions::SleepMark>,
     /// What the last health evaluation read (PRD mission-node-simple D-08).
     pub(super) health_made: super::mission_health::HealthMadeFrom,
+    /// When this daemon first judged stalls (`stall_missions`). Memory only:
+    /// a restart or an update starts every stall clock from its first
+    /// judgment, so nothing that rested before it is raised at once.
+    pub(super) stall_watched_from: Option<u64>,
     /// The merged worktrees a done node's evaluation retires (Settings ›
     /// Mission's cleanup switch).
     pub(super) cleanup: super::mission_cleanup::MissionCleanup,
@@ -923,7 +929,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 _ => "shows signs its worker is stuck".to_owned(),
             };
             format!(
-                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is not told.",
+                "Node {} {what} (mission {} \"{}\").\nRead it with `hide mission show {} --mission {}` and judge whether its worker needs another approach or the node a fresh worker; the operator is told if the warning still stands in 30 minutes.",
                 wake.node, mission.id, mission.title, wake.node, mission.id
             )
         }
@@ -965,7 +971,15 @@ fn attention_words(
             "its gate waits on the operator".to_owned(),
             "nothing: the operator answers on the decision card",
         ),
-        Some(Reason::ConductorFailed) | None => (
+        Some(Reason::NotStarted) => (
+            "it could start and was not started".to_owned(),
+            "start its worker; or, to hold it, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`; the operator is told in ten minutes",
+        ),
+        Some(Reason::WaitStood) => (
+            format!("{pr} has waited over an hour on CI, a review or the merge"),
+            "find what it waits on and move it, or merge it; the operator is told in ten minutes",
+        ),
+        Some(Reason::ConductorFailed | Reason::WarningStood) | None => (
             "the operator is asked to look".to_owned(),
             "nothing unless the operator asks",
         ),
@@ -1594,6 +1608,7 @@ impl Runtime {
                     answer: None,
                     answer_failed: None,
                     delay: None,
+                    delay_until_unix_ms: None,
                     report: None,
                     created_at_unix_ms: now,
                     updated_at_unix_ms: now,
@@ -1851,9 +1866,11 @@ impl Runtime {
                 )?;
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
-            MissionCommand::Delay { mission, line } => {
-                self.set_mission_delay(&actor, mission.as_deref(), line, now)
-            }
+            MissionCommand::Delay {
+                mission,
+                line,
+                for_minutes,
+            } => self.set_mission_delay(&actor, mission.as_deref(), line, for_minutes, now),
             MissionCommand::Close {
                 mission,
                 end,
@@ -2069,12 +2086,15 @@ impl Runtime {
         actor: &Actor,
         mission: Option<&str>,
         line: Option<String>,
+        for_minutes: Option<u32>,
         now: u64,
     ) -> Result<(Value, bool), String> {
         let id = self.conducted_mission(actor, mission, true)?;
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
-        let changed = target.delay != line;
+        let until = for_minutes.map(|minutes| now + u64::from(minutes) * 60_000);
+        let changed = target.delay != line || target.delay_until_unix_ms != until;
         target.delay = line;
+        target.delay_until_unix_ms = until;
         if changed {
             target.updated_at_unix_ms = now;
             self.save_missions();
@@ -3762,6 +3782,7 @@ impl Runtime {
                 .conductor_letters(mission, ledger, crate::delivery::worker::now())
                 .0,
             delay: mission.delay.clone(),
+            delay_until_unix_ms: mission.delay.as_ref().and(mission.delay_until_unix_ms),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,
             started_at_unix_ms: mission.started_at_unix_ms,

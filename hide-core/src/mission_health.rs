@@ -438,6 +438,19 @@ fn still_holds(
         // finished: once any node works again there is nothing to close and
         // the question goes, with its choices.
         AttentionReason::CloseRefused => mission.nodes.iter().all(|node| node.status.finished()),
+        // A stall goes once the move it waited for came: the node started
+        // or a delay now holds it, its warnings went, its pull request no
+        // longer waits on others.
+        AttentionReason::NotStarted => unstarted_since(mission, node).is_some(),
+        AttentionReason::WarningStood => {
+            node.status == NodeStatus::Working && !node.warnings.is_empty()
+        }
+        AttentionReason::WaitStood => {
+            node.status == NodeStatus::Working
+                && (facts.pulls.is_none()
+                    || waiting_pull(node, facts.pulls)
+                        .is_some_and(|pull| Some(pull.number) == attention.pr))
+        }
     }
 }
 
@@ -596,6 +609,120 @@ pub(crate) fn warn_acts(
         }
     }
     acts
+}
+
+/// How long a node that could start goes unstarted before its Conductor is
+/// asked; the raise reaches the operator `RAISE_TO_OPERATOR_MS` later.
+pub(crate) const UNSTARTED_THAT_STALLS_MS: u64 = 20 * 60_000;
+/// How long a warning its Conductor was sent stands with nothing moving
+/// before it reaches the operator.
+pub(crate) const WARNING_THAT_STALLS_MS: u64 = 30 * 60_000;
+/// How long a pull request waits on CI, a review or the merge, counted from
+/// its last push, before its Conductor is asked: twice the slowest CI run of
+/// this repository's own `verify` (30 minutes, 2026-11-10).
+pub(crate) const WAIT_THAT_STALLS_MS: u64 = 60 * 60_000;
+
+/// What the runtime knows beside the record that a stall is judged on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StallFacts {
+    /// The mission has as many workers as its cap, so a node not started
+    /// waits for a place rather than on its Conductor.
+    pub cap_full: bool,
+    /// When this daemon first judged stalls: no clock starts before it, so
+    /// an update does not raise every node that rested while no build
+    /// judged it.
+    pub watched_from: u64,
+}
+
+/// The raises a mission's stalled nodes take at `now`: wherever it is
+/// someone's move and that move did not come, so a mission never rests
+/// unseen. A node that could start (every node it depends on is done) and
+/// was not, with no delay, no question to the operator and a place under
+/// the cap, after `UNSTARTED_THAT_STALLS_MS`; a warning that stood
+/// `WARNING_THAT_STALLS_MS`; a pull request that waited on others
+/// `WAIT_THAT_STALLS_MS` since its last push. A pull request GitHub's
+/// answer does not hold decides nothing. Each is raised once
+/// (`raised_before`), and `still_holds` takes it off once it moved.
+pub(crate) fn stall_acts(
+    mission: &Mission,
+    pulls: Option<&GithubProjectSnapshot>,
+    stall: StallFacts,
+    now: u64,
+) -> Vec<Act> {
+    if mission.status != MissionStatus::Running {
+        return Vec::new();
+    }
+    let stood = |since: u64, limit: u64| now.saturating_sub(since.max(stall.watched_from)) >= limit;
+    let mut acts = Vec::new();
+    for (at, node) in mission.nodes.iter().enumerate() {
+        if node.attention.is_some() {
+            continue;
+        }
+        if let Some(since) = unstarted_since(mission, node)
+            && !stall.cap_full
+            && stood(since, UNSTARTED_THAT_STALLS_MS)
+        {
+            raise(&mut acts, node, at, AttentionReason::NotStarted, None, None);
+            continue;
+        }
+        if node.status != NodeStatus::Working {
+            continue;
+        }
+        if let Some(warning) = node
+            .warnings
+            .iter()
+            .map(|warning| warning.since_unix_ms)
+            .min()
+            && stood(warning, WARNING_THAT_STALLS_MS)
+        {
+            let pr = node.current_pr();
+            raise(&mut acts, node, at, AttentionReason::WarningStood, pr, None);
+            continue;
+        }
+        if let Some(pull) = waiting_pull(node, pulls)
+            && node
+                .quiet_since()
+                .is_some_and(|since| stood(since, WAIT_THAT_STALLS_MS))
+        {
+            let pr = Some(pull.number);
+            raise(&mut acts, node, at, AttentionReason::WaitStood, pr, None);
+        }
+    }
+    acts
+}
+
+/// Since when `node` could have started and was not: a planned node of
+/// the mission's own work whose every dependency is done, while no delay
+/// holds the mission and no question to the operator is open on it. The
+/// later of the mission's start and the last dependency's finish.
+fn unstarted_since(mission: &Mission, node: &MissionNode) -> Option<u64> {
+    if node.status != NodeStatus::Planned
+        || node.kind == NodeKind::External
+        || mission.delay.is_some()
+        || mission.decision.is_some()
+    {
+        return None;
+    }
+    let mut since = mission.started_at_unix_ms?;
+    for key in &node.depends_on {
+        let upstream = mission.nodes.iter().find(|other| &other.key == key)?;
+        if upstream.status != NodeStatus::Done {
+            return None;
+        }
+        since = since.max(upstream.finished_at_unix_ms.unwrap_or(since));
+    }
+    Some(since)
+}
+
+/// The node's current pull request while it waits on CI, a review or the
+/// merge with nothing for its worker to do.
+fn waiting_pull<'a>(
+    node: &MissionNode,
+    pulls: Option<&'a GithubProjectSnapshot>,
+) -> Option<&'a PullRequestSnapshot> {
+    let pull = find(pulls?, node.current_pr()?)?;
+    (worker_waits(node, pulls) == Some(true) && pull.badge != PullRequestBadge::Merged)
+        .then_some(pull)
 }
 
 /// When a checker last answered the node's review.
@@ -1354,5 +1481,113 @@ mod tests {
         m.nodes[0].kind = NodeKind::Research;
         m.nodes[0].delivery = None;
         assert!(warn_acts(&m, None, 300 * MINUTE).is_empty());
+    }
+
+    const WATCHED: StallFacts = StallFacts {
+        cap_full: false,
+        watched_from: 0,
+    };
+
+    fn stalled(node: usize, reason: AttentionReason, pr: Option<u32>) -> Act {
+        Act::Raise {
+            node,
+            reason,
+            pr,
+            agent: None,
+        }
+    }
+
+    /// A mission whose `b` could start once `a` finished at ten minutes.
+    fn startable() -> Mission {
+        let mut m = running(&["a", "b"]);
+        m.status = MissionStatus::Running;
+        m.started_at_unix_ms = Some(0);
+        m.nodes[0].status = NodeStatus::Done;
+        m.nodes[0].finished_at_unix_ms = Some(10 * MINUTE);
+        m.nodes[1].status = NodeStatus::Planned;
+        m.nodes[1].depends_on = vec!["a".into()];
+        m.nodes[1].agent_id = None;
+        m
+    }
+
+    /// A node that could start and was not stalls twenty minutes after it
+    /// could, counted from no earlier than the daemon's first judgment, and
+    /// not while a delay holds the mission, the cap is full, or what it
+    /// depends on is not done.
+    #[test]
+    fn a_node_that_could_start_stalls_twenty_minutes_after_it_could() {
+        let m = startable();
+        assert!(stall_acts(&m, None, WATCHED, 30 * MINUTE - 1).is_empty());
+        assert_eq!(
+            stall_acts(&m, None, WATCHED, 30 * MINUTE),
+            [stalled(1, AttentionReason::NotStarted, None)]
+        );
+        let full = StallFacts {
+            cap_full: true,
+            ..WATCHED
+        };
+        assert!(stall_acts(&m, None, full, 60 * MINUTE).is_empty());
+        let updated = StallFacts {
+            watched_from: 25 * MINUTE,
+            ..WATCHED
+        };
+        assert!(stall_acts(&m, None, updated, 45 * MINUTE - 1).is_empty());
+        assert_eq!(stall_acts(&m, None, updated, 45 * MINUTE).len(), 1);
+        let mut delayed = startable();
+        delayed.delay = Some("disk".into());
+        assert!(stall_acts(&delayed, None, WATCHED, 60 * MINUTE).is_empty());
+        let mut waiting = startable();
+        waiting.nodes[0].status = NodeStatus::Working;
+        assert!(stall_acts(&waiting, None, WATCHED, 60 * MINUTE).is_empty());
+    }
+
+    /// A warning its Conductor was sent reaches the operator once it stood
+    /// thirty minutes; a stall raised once is not raised again.
+    #[test]
+    fn a_warning_that_stands_thirty_minutes_stalls_once() {
+        let mut m = reviewed();
+        m.nodes[0]
+            .warnings
+            .push(warn(WarningKind::NoPush, 90 * MINUTE));
+        assert!(stall_acts(&m, None, WATCHED, 120 * MINUTE - 1).is_empty());
+        assert_eq!(
+            stall_acts(&m, None, WATCHED, 120 * MINUTE),
+            [stalled(0, AttentionReason::WarningStood, None)]
+        );
+        m.nodes[0]
+            .handled
+            .push(cause_key(AttentionReason::WarningStood, None, None));
+        assert!(stall_acts(&m, None, WATCHED, 200 * MINUTE).is_empty());
+    }
+
+    /// A pull request waiting on CI, a review or the merge stalls an hour
+    /// after the node's last push; a stale answer decides nothing.
+    #[test]
+    fn a_pull_request_waiting_an_hour_on_others_stalls() {
+        let mut m = reviewed();
+        m.nodes[0].prs = vec![7];
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
+        let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
+        assert!(stall_acts(&m, Some(&waiting), WATCHED, 60 * MINUTE - 1).is_empty());
+        assert_eq!(
+            stall_acts(&m, Some(&waiting), WATCHED, 60 * MINUTE),
+            [stalled(0, AttentionReason::WaitStood, Some(7))]
+        );
+        assert!(stall_acts(&m, None, WATCHED, 60 * MINUTE).is_empty());
+    }
+
+    /// A stall goes once its move came: the node that could not start
+    /// started.
+    #[test]
+    fn a_stall_clears_once_the_node_moves() {
+        let mut m = startable();
+        m.nodes[1].attention = Some(attention(AttentionReason::NotStarted, None));
+        let pulls = listed(Vec::new());
+        let nodes = vec![NodeFacts::default(), NodeFacts::default()];
+        assert!(
+            !evaluate(&m, &facts(Some(&pulls), nodes.clone())).contains(&Act::Clear { node: 1 })
+        );
+        m.nodes[1].status = NodeStatus::Working;
+        assert!(evaluate(&m, &facts(Some(&pulls), nodes)).contains(&Act::Clear { node: 1 }));
     }
 }

@@ -342,6 +342,7 @@ fn mission(
         end_asked: false,
         conductor_letters: None,
         delay: None,
+        delay_until_unix_ms: None,
         report: None,
         created_at_unix_ms: 0,
         started_at_unix_ms: None,

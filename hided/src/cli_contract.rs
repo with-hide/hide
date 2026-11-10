@@ -43,6 +43,8 @@ pub enum Input {
     Commit,
     /// Two decimal integers as `<passed>/<total>`.
     Ratio,
+    /// A span of whole minutes or hours, `30m` or `2h`.
+    Span,
     /// A watch approval: not blank, at most 256 bytes, without control
     /// characters.
     Approval,
@@ -66,6 +68,7 @@ impl Input {
             Sha256 => "sha256",
             Commit => "commit",
             Ratio => "ratio",
+            Span => "span",
             Approval => "approval",
             Unsigned => "unsigned",
             Json => "json",
@@ -207,7 +210,8 @@ const fn spec(
 }
 
 use Input::{
-    Approval, Body, Commit, Json, Key, OneOf, PasteText, Ratio, Session, Sha256, Text, Unsigned,
+    Approval, Body, Commit, Json, Key, OneOf, PasteText, Ratio, Session, Sha256, Span, Text,
+    Unsigned,
 };
 
 const ID: &[Arg] = &[Arg {
@@ -1294,7 +1298,8 @@ pub const COMMANDS: &[Spec] = &[
         &[
             optional("--mission", Key),
             cleared("--line", Text, &["--clear"]),
-            clearing("--clear", &["--line"]),
+            cleared("--for", Span, &["--clear"]),
+            clearing("--clear", &["--line", "--for"]),
         ],
         &["mission"],
     ),
@@ -1592,6 +1597,7 @@ fn body() -> Value {
             "approval": "not blank, at most 256 bytes, no control characters",
             "commit": "7 to 64 hexadecimal digits",
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
+            "span": "whole minutes or hours, such as 30m or 2h",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
             "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
@@ -1742,6 +1748,7 @@ mod tests {
             ),
             Commit => ("abc1234", "xyz"),
             Ratio => ("3/4", "x/4"),
+            Span => ("30m", "30"),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
