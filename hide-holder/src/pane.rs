@@ -102,7 +102,7 @@ pub struct Observed {
     pub prompts: u64,
     pub bracketed_paste: bool,
     /// The screen's last rows as the screen rules read them: as many as it
-    /// has rows, as Herdr reads an agent's screen; empty when not asked.
+    /// has rows, as an agent's screen is read; empty when not asked.
     pub screen: String,
     /// The title and progress the screen rules read.
     pub rules_title: String,
@@ -368,9 +368,9 @@ impl Pane {
 
     /// Named keys as the program asked to be told of them now: an arrow in
     /// application cursor mode, Escape under a keyboard protocol. Built as
-    /// Herdr builds a named key's event for its pane (`encode_terminal_key`),
-    /// with macOS Option kept as Alt; none of these keys is a chord Herdr's
-    /// legacy-shell table changes.
+    /// the terminal encodes a named key's event (derived from Herdr's
+    /// `encode_terminal_key`), with macOS Option kept as Alt; none of these
+    /// keys is a chord the legacy-shell table changes.
     pub fn keys(&self, keys: &[Key]) -> Result<Vec<u8>, hide_vt::Error> {
         use hide_vt::ffi;
         let mut encoder = hide_vt::KeyEncoder::new()?;
@@ -506,7 +506,7 @@ impl Pane {
         Ok(Some(bytes))
     }
 
-    /// A wheel, as Herdr routes it: a report to a program that tracks the
+    /// A wheel: a report to a program that tracks the
     /// mouse, an arrow key on the alternate screen with mode 1007, or else
     /// the screen moves through its scrollback.
     pub fn scroll(&mut self, scroll: &Scroll) -> Result<Wheel, hide_vt::Error> {
@@ -578,7 +578,7 @@ impl Pane {
     }
 
     /// Where the screen is in its scrollback, in rows above the bottom
-    /// (Herdr's `pane.get` scroll metrics).
+    /// (the scroll metrics a client reads).
     pub fn scroll_position(&self) -> Result<Answer, hide_vt::Error> {
         let (offset_from_bottom, max_offset_from_bottom) = self.position()?;
         Ok(Answer::Scroll {
@@ -588,7 +588,7 @@ impl Pane {
     }
 
     /// Moves the screen to `offset_from_bottom` rows above the bottom, past
-    /// the top clamped to it (Herdr's `pane.scroll`); answers where it is
+    /// the top clamped to it; answers where it is
     /// then and whether it moved.
     pub fn scroll_to(&mut self, offset_from_bottom: u64) -> Result<(Answer, bool), hide_vt::Error> {
         let (before, max) = self.position()?;
@@ -612,7 +612,7 @@ impl Pane {
         Ok((max.saturating_sub(bar.offset) as u64, max as u64))
     }
 
-    /// The last `lines` rows as text with soft wraps joined (Herdr's recent
+    /// The last `lines` rows as text with soft wraps joined (the
     /// unwrapped read), cut from the oldest side to [`MAX_READ_BYTES`]. The
     /// screen's scroll position is not touched: rows are read by their place
     /// in the whole screen.
@@ -622,7 +622,7 @@ impl Pane {
     }
 
     /// The rows the screen shows now, wherever the screen connection
-    /// scrolled it, as text with soft wraps joined (Herdr's `visible` read),
+    /// scrolled it, as text with soft wraps joined,
     /// cut as a read is. The scroll position is not touched.
     pub fn read_visible(&self) -> Result<Answer, hide_vt::Error> {
         let rows = self.terminal.rows()?;
@@ -640,9 +640,8 @@ impl Pane {
     }
 
     /// The rows the screen shows now, wherever the screen connection
-    /// scrolled it, with their styling as escape sequences (Herdr's
-    /// `visible_ansi`), cut as a read is. The scroll position is not
-    /// touched.
+    /// scrolled it, with their styling as escape sequences, cut as a read is.
+    /// The scroll position is not touched.
     pub fn read_screen(&self) -> Result<Answer, hide_vt::Error> {
         let rows = self.terminal.rows()?;
         let cols = self.terminal.cols()?;
@@ -656,8 +655,7 @@ impl Pane {
     }
 
     /// The rows [`Pane::read`] reads, as the terminal drew them, soft wraps
-    /// kept, with their styling as escape sequences (Herdr's
-    /// `recent_ansi_snapshot`), cut as a read is.
+    /// kept, with their styling as escape sequences, cut as a read is.
     pub fn read_rows(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
         let cols = self.terminal.cols()?;
         let Some((start, end)) = self.recent_range(usize::from(lines))? else {
@@ -697,7 +695,7 @@ impl Pane {
         Ok((text, truncated))
     }
 
-    /// Herdr's `ghostty_recent_read_range`: on the alternate screen its last
+    /// Derived from Herdr's `ghostty_recent_read_range`: on the alternate screen its last
     /// rows; on the primary one, rows up to the last that has text or the
     /// cursor's, whichever is lower.
     fn recent_range(&self, lines: usize) -> Result<Option<(usize, usize)>, hide_vt::Error> {

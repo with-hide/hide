@@ -327,7 +327,7 @@ impl GuidanceAgent {
                 Layout::event_map(at.place(AgentId::Grok.adapter(), AccountPath::Hooks), true)
             }
             // agy reads one global `hooks.json` whose top-level keys are
-            // named blocks; Hide's is `hide` (Herdr's was `herdr`). Hide creates
+            // named blocks; Hide's is `hide`. Hide creates
             // the file when agy has none and deletes it again only when
             // nothing is left in it.
             Self::Antigravity => Layout {

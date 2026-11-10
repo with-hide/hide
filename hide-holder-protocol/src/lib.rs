@@ -52,8 +52,8 @@
 //! position,
 //! and is answered once and closed; it never takes the holder over and
 //! leaves the screen connection and its scroll position as they were
-//! (D-11, D-18), except [`Ask::ScrollTo`], which moves the screen as Herdr's
-//! `pane.scroll` lets any client do, so a pane search can show its match.
+//! (D-11, D-18), except [`Ask::ScrollTo`], which moves the screen as any
+//! client may ask, so a pane search can show its match.
 //!
 //! A connection whose first message is a watch ([`Opening::Watch`]) follows
 //! the pane's facts (PRD engine-bundle-3-core-owns D-18, D-21): it takes
@@ -108,7 +108,7 @@ pub const MAX_PASTE: usize = 512 * 1024;
 
 /// The most bytes a [`Submit`]'s submitting part carries, and the most its
 /// text carries beyond [`MAX_PASTE`]: a focus report before it and a paste
-/// boundary after it, as Herdr's `agent.prompt` sends them.
+/// boundary after it, as an agent prompt sends them.
 pub const MAX_SUBMIT_ENTER: usize = 64;
 
 /// The most parts a [`Submit`]'s text has.
@@ -149,11 +149,11 @@ pub const MAX_CLIPBOARD: usize = 192 * 1024;
 
 /// The most bytes of a [`Facts`]'s folder.
 pub const MAX_CWD: usize = 4 * 1024;
-/// The most characters of a [`Facts`]'s title, Herdr's bound on a title it
-/// keeps; four bytes a character at most.
+/// The most characters of a [`Facts`]'s title, the bound on a title the
+/// holder keeps; four bytes a character at most.
 pub const MAX_TITLE_CHARS: usize = 256;
 const MAX_TITLE: usize = MAX_TITLE_CHARS * 4;
-/// The most arguments a [`Program`] carries, and their bytes in all, Herdr's
+/// The most arguments a [`Program`] carries, and their bytes in all, the
 /// bounds on a resume's arguments.
 pub const MAX_ARGS: usize = 64;
 pub const MAX_ARGV_BYTES: usize = 8 * 1024;
@@ -902,25 +902,24 @@ pub enum Ask {
     /// The pane's shell and the processes in its terminal's foreground.
     Processes,
     /// The rows the screen shows now, wherever it is scrolled to, with
-    /// their styling as escape sequences (Herdr's `visible` read in its
-    /// `ansi` format). A holder built before styled reads refuses it
+    /// their styling as escape sequences. A holder built before styled reads refuses it
     /// `hello_invalid`.
     Screen,
     /// The last `lines` rows of the screen and its scrollback as the
     /// terminal drew them, soft wraps kept, with their styling as escape
-    /// sequences (Herdr's `recent` read in its `ansi` format), at most
+    /// sequences, at most
     /// [`MAX_READ_LINES`]; the rows are the ones [`Ask::Read`] reads.
     Rows { lines: u16 },
     /// Where the screen is scrolled to in its scrollback, answered
-    /// [`Answer::Scroll`] (Herdr's `pane.get` scroll metrics).
+    /// [`Answer::Scroll`].
     Scroll,
     /// Moves the screen to `offset_from_bottom` rows above the bottom of
     /// its scrollback, past the top clamped to it, and answers where it is
-    /// then (Herdr's `pane.scroll`); the connection that holds the pane is
+    /// then; the connection that holds the pane is
     /// sent the moved screen. The only ask that changes the screen.
     ScrollTo { offset_from_bottom: u64 },
     /// The rows the screen shows now, wherever it is scrolled to, as text
-    /// with soft wraps joined (Herdr's `visible` read).
+    /// with soft wraps joined.
     Visible,
 }
 
@@ -978,8 +977,7 @@ pub enum Answer {
 
 /// A key by its name, which the holder encodes for the program's keyboard
 /// settings at that moment (PRD engine-bundle-3-core-owns D-21): an arrow in
-/// application cursor mode, Escape under a keyboard protocol, as Herdr
-/// encodes a named key for its pane.
+/// application cursor mode, Escape under a keyboard protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Key {
@@ -1054,7 +1052,7 @@ pub enum ClientMessage {
     Terminate,
 }
 
-/// One submission, as Herdr's `agent.prompt` makes it, never without text
+/// One submission, as an agent prompt makes it, never without text
 /// or a submit: the holder writes
 /// `text`'s parts to the program in order and flushes them, waits `gap`,
 /// then writes `enter`,
