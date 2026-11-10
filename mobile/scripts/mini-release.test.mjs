@@ -28,7 +28,9 @@ const until = async (what, check, ms = 20000) => {
   }
 };
 
-describe('the release command on the build machine', { timeout: 30000 }, () => {
+// Each case runs the whole script, which starts tens of processes; under a loaded machine (fifteen of these files at
+// once take 30 s a case) the bound is the load's, not the case's.
+describe('the release command on the build machine', { timeout: 120000 }, () => {
   let home;
   let bin;
   let accountTmp;
@@ -125,7 +127,7 @@ exit 0`);
 
   const env = (extra = {}) => ({ PATH: `${bin}:/usr/bin:/bin`, HOME: home, TMPDIR: accountTmp, ...extra });
   const args = (slug = 'branch', build = '20261110120000', again = '0') => ['release', slug, '1.2.5', build, COMMIT, again];
-  const run = (extra = {}, argv = args()) => spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: env(extra), timeout: 60000 });
+  const run = (extra = {}, argv = args()) => spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: env(extra), timeout: 100000 });
   // A run that keeps going in the background; `out` grows as it prints.
   const start = (extra = {}, argv = args()) => {
     const child = spawn('bash', [script, ...argv], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
