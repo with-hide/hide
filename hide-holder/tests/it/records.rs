@@ -451,6 +451,33 @@ fn an_end_the_holder_could_not_record_is_settled_as_a_lost_holder() {
     assert_eq!(end.reason, EndReason::HolderLost, "{ended:?}");
 }
 
+/// A node that cannot reach a holder while it runs asks whether the record's
+/// holder is gone; the answer changes nothing, and a holder that still runs
+/// is never called gone.
+#[test]
+fn a_holder_that_ended_without_saying_why_is_told_from_one_that_runs() {
+    let folder = Folder::new();
+    let started = folder.start(&folder.role_request("p1", "exit_when_told"));
+    let holder = started.holder.expect("the holder wrote itself in");
+    assert!(!folder.panes.holder_gone("p1"), "a running holder");
+    let lock = record::lock(
+        &layout::pane_records_lock(&folder.state),
+        Duration::from_secs(5),
+    )
+    .unwrap()
+    .expect("the records' lock");
+    std::fs::write(folder.go(), b"").unwrap();
+    Running::named(holder).wait_gone();
+    drop(lock);
+    assert!(folder.panes.holder_gone("p1"));
+    assert_eq!(folder.record("p1").phase, Phase::Running, "nothing ended");
+    assert!(!folder.panes.holder_gone("absent"));
+
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
+    assert!(matches!(found.panes.get("p1"), Some(Judgment::Ended(_))));
+    assert!(!folder.panes.holder_gone("p1"), "an ended pane");
+}
+
 #[test]
 fn holders_whose_records_cannot_be_judged_are_left_running() {
     let folder = Folder::new();
