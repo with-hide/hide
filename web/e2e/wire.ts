@@ -169,6 +169,20 @@ export async function taskRow(page: Page, pane: string, goal: string): Promise<L
 }
 
 /**
+ * Hovers a task row once the core has settled it in `state`, so its row
+ * actions (the record and ⋯ buttons, shown on hover) stay under the pointer.
+ * The core moves a task between groups as an agent's turn is read or a record
+ * regains its ask, and the list draws the row anew in its new group: a hover
+ * given before the move belongs to the row that is gone, the new one is not
+ * hovered under a still pointer, and its buttons stay hidden, so a click on
+ * them waits out its whole timeout (with-hide/hide-private#130).
+ */
+export async function hoverSettledTaskRow(row: Locator, state: string): Promise<void> {
+  await expect(row).toHaveAttribute("data-task-state", state, { timeout: 45_000 }); // wait-ok: the core settles the task row in its group
+  await row.hover();
+}
+
+/**
  * The boxes of a dependency graph's cards under `scope`, once the layout
  * worker has placed them: until then the cards stand in plain layers, and the
  * placed drawing mounts them anew, so a box read in between is of a card

@@ -780,6 +780,11 @@ class Journey:
         self.record["sleep_wake"] = record
         before = (self.engine_agent() or {}).get("agent_session") or {}
         record["session_before"] = before
+        # Hide ends an agent only while the engine reads it idle or done, and
+        # a Sleep it refused is not asked again for an hour: the turn the
+        # last cell waited for ended on the agent's hook, which the engine's
+        # own reading of the screen can trail.
+        self.wait_at_rest()
         # The operator has looked at the pane before they choose Sleep from its menu.
         self.daemon.dispatch("pane_visit", {"pane_id": self.pane})
         self.daemon.dispatch("agent_sleep", {"pane_id": self.pane})
@@ -1033,6 +1038,14 @@ class Journey:
             return turn, read, value
         finally:
             self.pane, self.session, self.reference = saved
+
+    def wait_at_rest(self):
+        """The engine reads the agent idle or done, the state Sleep needs."""
+        try:
+            self.runtime.wait(lambda: (self.engine_agent() or {}).get("agent_status") in ("idle", "done"), 60)
+        except ProcessError as error:
+            raise ProcessError(f"agent_not_at_rest: engine reads {(self.engine_agent() or {}).get('agent_status')}"
+                               ) from error
 
     def wait_ready(self):
         """The engine reads the woken agent ready for input."""

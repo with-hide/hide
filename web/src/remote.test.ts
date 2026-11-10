@@ -31,7 +31,7 @@ function tab(id: string, paneIds: string[], working: string[] = [], device = "st
       id: paneId,
       device_id: device,
       device_pane_id: paneId,
-      herdr_label: paneId,
+      engine_label: paneId,
       terminal_title: null,
       cwd: "/home/remote/app",
       status_code: "idle",
@@ -314,9 +314,9 @@ describe("commands with an SSH device selected", () => {
   it("reorders the device's own strip, naming its checkout", () => {
     seed(rest("studio"));
     const { sent, actions } = recorder();
-    actions.reorderTab("herdr:remote:studio:tab:w9:t2", 0);
+    actions.reorderTab("engine:remote:studio:tab:w9:t2", 0);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ kind: "reorder_tab", payload: { tab_id: "herdr:remote:studio:tab:w9:t2", to_index: 0 } });
+    expect(sent[0]).toMatchObject({ kind: "reorder_tab", payload: { tab_id: "engine:remote:studio:tab:w9:t2", to_index: 0 } });
     expect(String(sent[0]?.payload.checkout_id)).toMatch(/^remote:studio:/);
   });
 
@@ -330,7 +330,7 @@ describe("commands with an SSH device selected", () => {
 });
 
 describe("deviceCatalogLine", () => {
-  const device: Device = { agent_scope: emptyScope(), id: "studio", label: "Studio", kind: "remote", state: "ready", message: null, ssh_alias: "studio", herdr_socket_path: null, agent_count: 0 } as Device;
+  const device: Device = { agent_scope: emptyScope(), id: "studio", label: "Studio", kind: "remote", state: "ready", message: null, ssh_alias: "studio", agent_count: 0 } as Device;
   const status = (state: string, session: RemoteSession | null, catalog?: RemoteStatus["catalog"]): RemoteStatus => ({
     target_id: "studio",
     state,

@@ -129,7 +129,7 @@ export type AgentRow = {
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;
   /** The name the engine knows the agent by (`hide agent spawn --name`); absent when it was given none. */
-  herdr_name?: string;
+  given_name?: string;
   agent_kind: string;
   /** The checkout that physically owns this pane. */
   checkout_label?: string | null;
@@ -809,7 +809,7 @@ export type PaneRow = {
   ports?: number[];
   servers?: { host: string; port: number }[];
   id: string;
-  herdr_label: string | null;
+  engine_label: string | null;
   terminal_title: string | null;
   cwd: string;
   status_code: AgentStatusCode;
@@ -840,7 +840,7 @@ export type Tab = {
 
 export type StripTab = {
   id: string;
-  kind: "herdr" | "file" | "diff" | "session";
+  kind: "engine" | "file" | "diff" | "session";
   source_id: string;
   label: string;
   preview: boolean;
@@ -1536,7 +1536,9 @@ export type DecisionReopen = { request_id: string; refused?: boolean };
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
 export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
-export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
+/** What a waiting answer waits for (`mission_answer_hold`, `AnswerHold`): the Conductor works, the operator's own typing is in its input, the quiet period just after either, a menu of its own waits, another wait that ends on its own, or `지금 보내기` was pressed. */
+export type MissionAnswerHold = "working" | "typing" | "recent" | "approval" | "other" | "forced";
+export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState; /** Absent from an older core and from the phone's relay. */ hold?: MissionAnswerHold };
 /** Why the last answer did not reach the Conductor, or why one still waits (`session_unreadable`) (`mission_answer_failure`, B28, B39). */
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed" | "session_unreadable";
 
@@ -2065,8 +2067,6 @@ export type Device = {
   ssh_alias: string | null;
   /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
   wsl_distro?: string | null;
-  /** The engine socket the registration names on the device; null reads its default server. */
-  herdr_socket_path?: string | null;
   agent_count: number;
   test: { state: string; checked_at_unix_ms: number | null; stages: DeviceTestStage[] } | null;
   host?: DeviceHost;
@@ -2133,7 +2133,7 @@ export type MachineProfile = {
   wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;
   connect_state: string;
-  /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */
+  /** Why Hide declined to connect it (`profile_refusal`); a tried connection that failed has none. */
   connect_refusal: MachineProfileRefusal | null;
 };
 export type MachineProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: MachineProfile[]; truncated: boolean };
@@ -2377,7 +2377,6 @@ export type DeviceCatalog = {
 
 export type EngineStatus = {
   state?: string;
-  socket_path?: string | null;
   message?: string | null;
   expected_protocol?: number | null;
   received_protocol?: number | null;
@@ -2385,13 +2384,13 @@ export type EngineStatus = {
 };
 
 /**
- * What this machine's Herdr save offers to move into Hide's own engine, and what the last move came to (PRD
- * engine-bundle-4-herdr-removal D-6 to D-8). `move` while Hide's own Herdr runs, which moving stops (the question);
- * `import` for any other save, read only; `result` when only the last move's left-out workspaces wait to be read.
- * `herdr_running` says a Herdr runs on with the save's conversations open, so an import opens them as shells.
+ * What this machine's Herdr save offers to import into Hide's own engine, and what the last import came to (PRD
+ * engine-bundle-4-herdr-removal D-7, D-8). `import` for a save, read only; `result` when only the last import's
+ * left-out workspaces wait to be read. `herdr_running` says a Herdr runs on with the save's conversations open, so an
+ * import opens them as shells.
  */
 export type HerdrImport = {
-  kind: "move" | "import" | "result";
+  kind: "import" | "result";
   stage: "offered" | "moving" | "failed" | "moved";
   workspaces: number;
   tabs: number;
@@ -2399,7 +2398,7 @@ export type HerdrImport = {
   /** Conversations an earlier import left open in their Herdr, which an import resumes now that it is closed (B15). */
   waiting: number;
   herdr_running: boolean;
-  failure: "not_stopped" | "unreadable" | null;
+  failure: "unreadable" | null;
   reason: string | null;
   refused: { label: string; reason: string }[];
   /** The device whose save this is; absent for this machine's (B18). */
@@ -3535,7 +3534,7 @@ export type SnapshotRest = {
   };
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
-    herdr?: EngineStatus;
+    engine?: EngineStatus;
     /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
     herdr_import?: HerdrImport | null;
     /** What each device of Hide's own engine offers, each naming its `device` (B18). */
@@ -3548,7 +3547,7 @@ export type SnapshotRest = {
     ssh_hosts?: SshHosts;
     /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
-    herdr_profiles?: MachineProfiles;
+    machine_profiles?: MachineProfiles;
     /** What Settings › Agents' last profile request came to; absent until one was made. */
     agent_profile_answer?: AgentProfileAnswer;
     /** The core's final automatic start choice for each project and agent. */

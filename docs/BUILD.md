@@ -713,9 +713,125 @@ The mini runs other work, and nothing prunes a branch it does not own, so each b
 Run `bash mobile/scripts/build-ios.sh clean` from those branches, or `rm -rf` a folder it names after `xcrun simctl delete` of its `hide-ios-<branch>` simulator, then retry.
 The build prints the machine's free disk when it ends.
 
-`bash scripts/verify-web.sh mobile test` runs the node tests of `mobile/` (the assembler against a pin that differs or a protocol that is missing, the pin generator, and the Capacitor version check, which also refuses a plugin package or product the app links without the fixed plugin list changing), which `pr.yml`'s checks lane runs.
-The Swift tests need Xcode, so only the build command above runs them today; wiring them into CI is the release workflow's work.
-The simulator build is signed ad hoc (`CODE_SIGN_IDENTITY=-`, no account or certificate), not left unsigned, because the simulator gives the Keychain only to an app that carries its entitlements and answers -34018 to an unsigned one; real signing, TestFlight and the release lane belong to the release workflow, not this command.
+`bash scripts/verify-web.sh mobile test` runs the node tests of `mobile/` (the assembler against a pin that differs or a protocol that is missing, the pin generator, the Capacitor version check, which also refuses a plugin package or product the app links without the fixed plugin list changing, and the release gate below), which `pr.yml`'s checks lane runs.
+The Swift tests need Xcode, so only the build command above runs them; [Swift tests are not in CI](#swift-tests-are-not-in-ci) says why.
+The simulator build is signed ad hoc (`CODE_SIGN_IDENTITY=-`, no account or certificate), not left unsigned, because the simulator gives the Keychain only to an app that carries its entitlements and answers -34018 to an unsigned one; [The release build](#the-release-build) signs and uploads one with the team's own certificate.
+
+### The release build
+
+`bash mobile/scripts/build-ios.sh release` is the one command that makes a signed build of the app and uploads it to TestFlight.
+It refuses a working tree with tracked changes, `HIDE_IOS_SKIP_PHONE_BUILD` (a release builds the phone bundle from the commit it uploads) and a commit that already has an upload record ([Uploading a commit twice](#uploading-a-commit-twice)); it runs everything `build` runs (the phone build, the pin check, `cap sync`, the Swift tests on the mini, and a failing test stops it before anything is signed), and then, on the mini (`mobile/scripts/mini-release.sh`, piped over `ssh` like `mini-ios.sh`):
+
+1. takes the machine's release lock and reads the secrets, checking all of them ([secrets](#the-releases-secrets));
+2. archives the app in the Release configuration with signing off, with the version and build number given on the command line (never written into the repository);
+3. exports the archive with automatic signing, which makes the App Store profile and signs with the team's cloud-managed Apple Distribution certificate, so no distribution private key exists on the mini and no keychain is read or changed;
+4. unpacks the signed ipa, reads its property lists and signature, and runs the release checks ([Release checks](#release-checks)); one failed check stops the command with every failure named, before anything is uploaded;
+5. validates and uploads that same ipa with `xcrun altool --validate-app` and `--upload-app`, then writes the upload record and prints the build's state once with the delivery id Apple gave the upload. `HIDE_IOS_NO_UPLOAD=1` stops after the validation, before anything is sent to TestFlight, which proves a change to the command without making a build.
+
+It exits non-zero with the reason at the first failure (a step outside the tools names itself), prints the end of the log once the log has been searched for a secret, and ends each long step that outlives its bound (archive 20 minutes, export and validate 15, upload 30; a whole run took about 6).
+Each step runs in a process group of its own, so a bound or a signal ends it with everything it started.
+A whole run took about 6 minutes and the mini's free disk fell by about 1 GB (2026-11-10: 24 GB to 23 GB), most of the time in the Swift tests, Apple's validation and the upload.
+The command stops before it starts only when the mini has less than 5 GB free, a few times what a run uses, so a run cannot fill the disk under the mini's other work; a run that runs out of space anyway fails at the step that ran out.
+
+**Version and build number.**
+The version is the numeric part of the repository's own (`HIDE_VERSION`, else the newest `v<version>` tag, as `desktop/scripts/build-identity.mjs` resolves it for the desktop app), so `0.4.0-rc.1` and `0.4.0-main.<commit>` are both `0.4.0`.
+The build number is the UTC time of the machine that starts the command, taken after the Swift tests and just before the mini starts, `YYYYMMDDHHMMSS`: it rises with every run, a second run on the same commit uploads under a new number, and nothing is edited by hand.
+App Store Connect refuses a build number that is not higher than every earlier build of the same version, so two runs that overlap are decided by the order they upload in, and a mini whose clock runs backwards is refused after the upload with Apple's own message.
+A run that fails before the upload, or whose upload Apple refused, is run again as it is.
+`bash mobile/scripts/build-ios.sh status <delivery id>` reads an upload's state again (`altool --build-status`, with the key from the same files) and changes nothing; it exits non-zero when altool fails or does not answer in 5 minutes.
+The version is the last tag's until a release is tagged, so a run between releases uploads another build of the last version: once Apple has approved a version, a run from main that still carries it is refused by Apple's validation after the whole build, and the next tag or `HIDE_VERSION` is the way out.
+Builds made between releases are development builds; expire them in App Store Connect before an external group or a review sees the build list.
+
+#### What a release owns
+
+`mini-release.sh` lists, in one place, everything a run creates, and one cleanup removes exactly that list on a normal end, a failed step, TERM, HUP or INT, and a closed standard output:
+
+| What | Where | How it goes |
+| --- | --- | --- |
+| The machine's release lock | `~/hide-ios-build/.release.lock` | held by the kernel (`flock`) on a descriptor of the running shell, so it ends with the shell however that ends; its text (pid, start time, branch) only names the holder, and is emptied |
+| The work folder | `~/hide-ios-build/<branch>/release/` | removed: the archive, derived data, the archive's result bundle and the one the export is given, the export, the unpacked ipa, the temporary folder and the private home the tools that reach App Store Connect run with |
+| xcodebuild's distribution logs | `App_*.xcdistributionlogs` and `XcodeDistPipeline.*` in the account's temporary folder | deleted unread, by name, those made since the run started |
+
+A dropped ssh connection sends the remote no hang-up and closes its output; the script ignores SIGPIPE, so its next write fails and it ends through the same cleanup, which never stops on its own output.
+The step that was running when the connection dropped finishes first (an upload goes, and is recorded).
+The lock is one per machine, not per branch, because what it guards is: the account's temporary folder, the disk floor, the Apple account and its build numbers.
+While it is held a second release, of any branch, is refused naming the holder, and a `build` or `clean` of the holder's branch is refused too; `status` and `uploads` take no lock.
+Only the lock's "held by another" answer reads as a running release; a lock that cannot be taken or read (no `perl`, a file that will not open) stops the command naming that.
+The lock is taken when `mini-release.sh` starts, after `release`'s own build phase on the mini (the `ios/` copy, the Debug build and tests, the `release-inputs/` copy), which `busy` checks but does not hold: a second `release` or a `build` of the same branch started during that phase can still copy another tree under the first (a known gap; closing it means archiving from a copy made under the lock).
+A run ended by SIGKILL or a restart skips the cleanup and leaves `release/`, whose private home holds altool's log (the key id and path) and xcodebuild's URL cache (tokens that expire in 20 minutes), until the next release of that branch or `clean` removes it; nothing else can run then to remove it.
+xcodebuild writes its distribution logs, which hold a signed token and the key's ids, into the account's temporary folder, which it takes from the system (confstr) and not from `$TMPDIR` or the home, so they cannot be put in the work folder; the machine lock is what makes deleting them by name safe, and the one case it does not cover is an export another program starts on the mini during a release.
+`xcodebuild -exportArchive`, `altool --validate-app`, `--upload-app` and `--build-status` run with `CFFIXED_USER_HOME` set to the work folder's private home: altool's logs (its command line with the key id and path) and xcodebuild's URL cache (signed App Store Connect tokens) land there and go with it.
+The home's `Library/Caches` is made before the tools start: without it CFNetwork puts the URL cache in the account's cache folder (`getconf DARWIN_USER_CACHE_DIR`) instead, which a run on the mini showed.
+On the mini (2026-11-10, commit 955d040723) the export still signed with the cloud certificate and got its App Store profile, and Apple's validation passed, that way; afterwards `~/Library/Logs/ContentDelivery/com.apple.itunes.altool/`, `~/Library/Caches/com.apple.dt.xcodebuild/`, the account's provisioning profile folders and the account's cache folder were unchanged, and no altool URL cache appeared in the cache folder.
+
+What stays on the mini after a run: `~/hide-ios-build/<branch>/release.log`, redacted and searched; `~/hide-ios-build/uploads.log`, the upload record; the empty lock file (a lock file is never deleted, since a run that opened the old one and a run that made a new one could both hold a lock); and in the account's temporary folder (mode 700) what Apple's frameworks leave under names any program uses, so they are not deleted by name: per run about 20 to 30 `CFNetworkDownload_*.tmp` files of 1 to 2 KB from the export and validation, 3 `cms~~~*` files of about 5 KB, and 5 `ResultBundle_*` folders of 28 to 100 KB from the export, which writes these beside the one `-resultBundlePath` names.
+On the mini none of those holds the key id or a token (counted, not read, 2026-11-10); nothing in this command removes them, and macOS clears the temporary folder of old files on its own schedule (the day's earlier runs' files were still there that evening).
+`clean` removes the branch folder.
+
+#### Uploading a commit twice
+
+The mini's `~/hide-ios-build/uploads.log`, one for the machine, gets a line when an upload starts and another when it ends: time, commit, version, build number, delivery id (`started` has none yet), state and branch.
+A caller whose connection dropped, which sends the remote no hang-up, may not know whether the upload went, and `build-ios.sh` then says to read the record; `bash mobile/scripts/build-ios.sh uploads` prints it, `status <delivery id>` asks Apple, and a `started` line with no `uploaded` line after it means look in App Store Connect before running again.
+`release` refuses a commit that has any line in the record, under any branch name (main after a merge, a renamed branch), before the build and again on the mini, and says which; `HIDE_IOS_RELEASE_AGAIN=1` uploads it again on purpose (a new build number, the same commit).
+
+**Why altool uploads.**
+Xcode 26.6 also uploads from `xcodebuild -exportArchive` with `destination` set to `upload`, but that signs again while it uploads, so the bytes that were checked are not the bytes that went.
+`xcrun altool --upload-app` (altool 26.40.1) sends the exact ipa the checks read, and `--validate-app` runs Apple's own validation on it first.
+Apple's move from altool to notarytool is for notarization; the upload and validate commands are in 26.40.1's help.
+Both tools put the key's id and issuer id on their command line (visible to the same account's `ps` on the mini) and read the key file by path; the id, the issuer id and the path are not the key, and the file's body is never an argument.
+
+#### The release's secrets
+
+Three values, registered in `mobile/release-env.json` (the key, its shape, and what a missing one costs), shown by `mobile/release.env.example`, and held equal by a test.
+They are the App Store Connect Team API key's id, its issuer id and the path of its `.p8` file.
+They live on the mini in `~/.config/hide-ios/` (mode 700): `AuthKey_<key id>.p8` and `release.env` (both mode 600), and in no checkout and no GitHub secret; the same three names set in the mini's environment work without the file.
+The key needs the Admin role, since an App Manager key cannot make the cloud-managed distribution certificate and profiles.
+The command checks every key before it builds, in one report: a missing key, a value of the wrong shape, a key file named for another key id or readable by another account each stop it, naming the key and the kind of problem and never a value.
+A line of `release.env` that is not a registered name is refused, and the file is read as `KEY=VALUE` lines, never run.
+
+The key file is read by Apple's tools from its path and by nothing else: the command checks its name, owner and mode and never opens, copies or hashes it, and never passes its body anywhere.
+The ids and the path reach xcodebuild and altool as arguments (they are not the key); every pattern the command searches or replaces them with travels in a pipe, never in a file or another program's arguments.
+Nothing runs under `set -x`, and every line xcodebuild and altool print passes through a filter that replaces the three values, in any letter case, with the names of their keys, and a whole token with `<token>`, before it reaches the log or the terminal.
+Before a failed step shows the end of its log, and at every exit, the log is searched for the three values in any letter case, for anything shaped like a token or part of one (`eyJ` and a JSON header) and for a PEM private key header; if one is there the log is deleted, the end of it is not shown and the command fails.
+The search cannot see a key's body printed without its PEM header; nothing in the command has a path to print it, since only Apple's tools read the file.
+`mobile/scripts/mini-release.test.mjs` runs the script with stand-ins for the Apple tools and the macOS commands it asks questions of (so it runs in the `checks` lane, not only on a Mac): the stand-ins print their arguments and a token and write distribution logs where the real export does, and the tests prove that the script never reads the key file (it runs with the file unreadable), no copy of the key exists while the export runs, no value is in the arguments of a `sed` or `grep`, the log and the output hold none of the values, and the run leaves nothing behind after a failed export, a step outside the tools, a time bound (with the step's grandchildren), TERM during the export and a standard output closed mid-run; and that a second branch's release is refused while one runs, a lock whose text names a live process the kernel does not hold the lock for is not believed, and the upload record refuses the same commit under another branch name.
+Rotating a key is replacing the two files; nothing in the repository changes.
+
+#### Release checks
+
+`mobile/scripts/check-release-app.sh` reads the signed app, not the project, so a setting that never reached the binary cannot pass.
+It lists every failed check and the upload never starts after one.
+`mobile/scripts/check-release-app.test.mjs` spoils each fact in turn and requires its check to fail; the signature's Apple Distribution authority is checked by `mini-release.sh` and tested in `mini-release.test.mjs`.
+
+| The signed app | Must be |
+| --- | --- |
+| Identity | bundle id `me.grab.hide.ios`, the version and build number the command passed, iPhone only, minimum iOS 15.0, built with an iOS 26 SDK (Apple's upload rule since 2026-04-28) |
+| Export compliance | `ITSAppUsesNonExemptEncryption` is in the app and `false`, and no `ITSEncryptionExportComplianceCode`; the value rests on the operator's two answers in App Store Connect's questionnaire (the app uses standard encryption algorithms, and is not distributed in France), so a build no longer waits at Missing Compliance; answer them again, and change the value, if the encryption method changes or distribution in France or the EU starts (a `true` without the code Apple issues after reviewing documents is refused at validation, error 90592) |
+| Debug left out | Capacitor `loggingBehavior` none, `CAPACITOR_DEBUG` not on, no App Transport Security exception, no `server.url` or cleartext, no allowed navigation, web view inspection off, the debug pairing hook's name (`HIDE_DEBUG_PAIR_LINK`) absent from the binary and `BridgeGate` present in it |
+| Privacy manifest | `PrivacyInfo.xcprivacy` in the app: no tracking, no tracking domains, nothing collected, and a reason for every required-reason API it declares; Capacitor 8.6.0's own two frameworks declare none and call none (read from the archive's symbols on 2026-11-10); the app's own code reads `UserDefaults` for the first-run marker that clears a Keychain item left by an earlier install, so its manifest declares `NSPrivacyAccessedAPICategoryUserDefaults` with reason `CA92.1`, and a node that adds code calling another required-reason API adds its declaration in the same change |
+| Signature | signed by an Apple Distribution certificate, valid with `--strict --deep`; the profile is an App Store profile of team `GH6F6ZA497` for iOS, with no device list |
+| Entitlements | exactly the list in `mobile/release-expect.json`; a node that adds a capability (`aps-environment` production with push, Associated Domains with universal links) adds its entitlement to that list in the same change, and a build with an entitlement nobody listed fails |
+| Web bundle | every file of `public/` is in the manifest `mobile/scripts/bundle-manifest.mjs` made after `cap sync` (the assembled folder, every retained file as pinned, and the two Cordova files Capacitor adds), with its SHA-256, and none is missing |
+
+The Release configuration of the project itself sets `CAPACITOR_DEBUG = false` and carries no `DEBUG` condition; the Debug configuration alone reads `ios/debug.xcconfig`.
+The app icon is the placeholder the project carries until the native node's icon lands; App Store Connect's processing is what judges it.
+
+#### Swift tests are not in CI
+
+The Swift tests (`HideShell` and the app's own controller) run on the mini in `build` and again at the start of `release`, and nowhere else.
+What closes this is a macOS lane for the paths under `mobile/ios/`: a `MACOS_PATHS` entry and its job in `scripts/ci-plan.py`, a lane in `pr.yml` and a runner for it, with the mini's `hide-ci` runner ([The Mac mini CI runner](#the-mac-mini-ci-runner)) the candidate because a hosted macOS runner queues for 53 minutes at the 90th percentile ([TESTING.md](TESTING.md#where-the-macos-runners-went)).
+It also needs the operator's decision to share the mini's disk and one job at a time with a simulator build, and a change to a workflow plans every lane, so it is a separate change and not part of making the upload.
+The release gate's own tests (the check script, the manifest, the secrets) are node tests and run in the `checks` lane with the rest of `mobile/`.
+
+#### Later: from the desktop release
+
+The release workflow of the private repository can run this command after it publishes a desktop release: `HIDE_VERSION=<tag> bash mobile/scripts/build-ios.sh release` on the operator's Mac, which reaches the mini the same way and needs the same three files there.
+A workflow on the candidate runner is not possible as it stands: that runner accepts only `release-candidate.yml` on main, runs as an account with no access to the key, and a hosted macOS job would need the key as a GitHub secret.
+The protocol order in [Retained bundles and the pin](#retained-bundles-and-the-pin) applies first: build the app from the main that carries the new protocol's bundle, with the previous one pinned.
+
+#### When a node adds an extension or a capability
+
+The release gate reads only the app. A node that adds a notification service extension adds, in the same change: its `aps-environment` (`production`, which the export turns the project's `development` into) in `mobile/release-expect.json`; the extension signed first with its own entitlements file before `embed entitlements` signs the app, which signs `App.app` alone; the same checks for each `PlugIns/*.appex` in `check-release-app.sh` (a bundle id under `me.grab.hide.ios.`, the app's version and build, its exact entitlements with no `get-task-allow`, an App Store profile of the team, the Apple Distribution authority, and a privacy manifest of its own when it reads `UserDefaults`); one manifest per target in the privacy-manifest test; and the extension's App ID capabilities (app group, keychain sharing) registered in the developer account, since automatic signing creates its second profile but not its capabilities.
 
 ### Retained bundles and the pin
 

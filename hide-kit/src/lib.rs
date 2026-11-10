@@ -27,8 +27,6 @@ mod codex_trust;
 mod coordination_retirement;
 pub mod current;
 mod device;
-pub mod device_herdr;
-mod herdr_integration;
 pub mod holders;
 mod hooks;
 pub mod layout;
@@ -940,11 +938,10 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     );
     changed |= profiles_changed;
     // Whether this pass wrote the entries or found them, Codex trusts Hide's,
-    // after the agents' pass took out a Herdr integration the kit installed.
     // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
         && !target.stop.load(Ordering::Relaxed)
-        && let Some(failure) = codex_trust::ensure(target, &[])
+        && let Some(failure) = codex_trust::ensure(target)
         && let Some(part) = components
             .iter_mut()
             .find(|part| part.id == ComponentId::CodexHook)
@@ -1190,12 +1187,9 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     }
     // Before the record goes: it is what says which integrations were Hide's
     // and which profile accounts hold Hide's pieces (PRD agent-profiles D-28).
-    let (herdr, profiles) = match record::load(&target.home, &target.install) {
-        Ok(mut record) => (
-            agent_kit::remove_herdr(target, &mut record),
-            targets::remove(target, &record),
-        ),
-        Err(_) => (Vec::new(), Vec::new()),
+    let profiles = match record::load(&target.home, &target.install) {
+        Ok(record) => targets::remove(target, &record),
+        Err(_) => Vec::new(),
     };
     if let Err(reason) = record::forget(&target.home, &target.install) {
         components.push((
@@ -1206,7 +1200,6 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
         ));
     }
     let mut agents = agent_kit::remove(target);
-    agents.extend(herdr);
     agents.extend(profiles);
     RemoveReport { components, agents }
 }

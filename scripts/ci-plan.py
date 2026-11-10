@@ -31,6 +31,7 @@ reasons for them.
 """
 import argparse
 from fnmatch import fnmatchcase
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -40,6 +41,13 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# The tests a pull request adds or changes, which the `repeat` lane runs many
+# times (scripts/ci-repeat.py owns what counts as one).
+_REPEAT = importlib.util.spec_from_file_location("ci_repeat", Path(__file__).resolve().parent / "ci-repeat.py")
+ci_repeat = importlib.util.module_from_spec(_REPEAT)
+_REPEAT.loader.exec_module(ci_repeat)
+NO_REPEAT = {"web": [], "rust": []}
 
 # The order is the order the summary prints.
 LANES = (
@@ -63,6 +71,7 @@ LANES = (
     "web-e2e",
     "remote-mailbox",
     "remote-mailbox-arm",
+    "repeat",
     "desktop-e2e",
     "package",
     "merge-rust",
@@ -91,8 +100,10 @@ PATH_LANES = tuple(lane for lane in LANES if lane not in MERGE_GROUP_ONLY_LANES)
 # every CLI too. `holder-restart` installs every pinned CLI too and runs each
 # in a pane holder across a node restart on all three systems, for a change to
 # the holder, the node's holder code, the pins or the lane's own scripts; the
-# nightly runs it on its own.
-FULL_LANES = tuple(lane for lane in PATH_LANES if lane not in ("package", "agent-clis", "holder-restart"))
+# nightly runs it on its own. `repeat` runs the tests a pull request adds or
+# changes, which a push to main or the nightly has no diff to name (a pull
+# request that edits a CI definition does plan it, with the tests it changes).
+FULL_LANES = tuple(lane for lane in PATH_LANES if lane not in ("package", "agent-clis", "holder-restart", "repeat"))
 
 # Crates whose change reaches what differs by operating system: the platform
 # layer, the install kit and hooks, and the daemon and
@@ -425,6 +436,7 @@ POLICY_ONLY = (
     "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh",
     "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
+    "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
     "scripts/check-agent-folders.sh",
@@ -527,6 +539,8 @@ NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
     ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
     ("scripts/check-relay-protocol.sh", {"relay-protocol"}),
+    # The repeat lane's selection and budget, which the plan job also imports.
+    ("scripts/ci-repeat.py", {"repeat"}),
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
@@ -777,6 +791,8 @@ def select(entries, crates, root=ROOT, full_reason=None):
     reasons = {lane: [] for lane in LANES}
     packages = set()
     full = []
+    crate_dirs = {directory: crate["name"] for directory, crate in crates.items()}
+    repeat = ci_repeat.select(entries, crate_dirs)
     all_lanes = any(fnmatchcase(name, pattern) for _, name in entries for pattern in ALL_LANE_PATHS)
     if full_reason:
         full.append(full_reason)
@@ -801,6 +817,8 @@ def select(entries, crates, root=ROOT, full_reason=None):
         reasons["policy"].append(reason)
         for lane in lanes:
             reasons[lane].append(reason)
+        if any(ci_repeat.select([(status, name)], crate_dirs).values()):
+            reasons["repeat"].append(f"changed test: {name}")
     if full:
         # Preserve main/nightly defaults; a PR editing CI exercises everything.
         for lane in PATH_LANES if all_lanes else FULL_LANES:
@@ -812,6 +830,9 @@ def select(entries, crates, root=ROOT, full_reason=None):
         "lanes": planned,
         "rust_packages": sorted(packages) if reasons["rust"] else [],
         "reasons": {lane: reasons[lane] for lane in planned},
+        # What the `repeat` lane runs; a plan of that lane for a CI definition
+        # or the script itself, with no changed test, runs nothing.
+        "repeat": repeat,
     }
 
 
@@ -1020,13 +1041,14 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
     # Never call select with an empty delta: an empty comparison deliberately
     # plans every lane. Preserve the original green anchor even after these
     # checks succeed, so a later run compares with the app code actually tested.
-    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}}
+    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}, "repeat": NO_REPEAT}
     rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
     return pull_request_macos({
         "full": False,
         "lanes": rerun["lanes"],
         "rust_packages": rerun["rust_packages"],
         "reasons": rerun["reasons"],
+        "repeat": rerun["repeat"],
         "commits": result["commits"],
         "reuse": {"run": verified["run"], "why": why},
         "verified": verified,
@@ -1158,6 +1180,9 @@ def main():
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
                 output.write(f"macos={str(result['macos']['runs']).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
+                repeat = result.get("repeat", NO_REPEAT)
+                output.write(f"repeat-web={json.dumps(repeat['web'], separators=(',', ':'))}\n")
+                output.write(f"repeat-rust={json.dumps(repeat['rust'], separators=(',', ':'))}\n")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
                 server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")

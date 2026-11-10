@@ -7,7 +7,8 @@
 // operator with its PR's CI failure beside the choices, a stuck worker and an outside PR closed unmerged in the
 // operator's turn; its choices radio rows, one long enough to wrap, the recommended one tagged), decision-views (a decision about
 // screens with the Views linked to it to look at: one seen, one not looked at, one closed that opens again), decision-sent (its answer waiting
-// for the Conductor's turn), decision-unreadable (its answer waiting on a
+// for the Conductor's turn; `decision-hold-working`, `-typing`, `-recent`, `-approval` and `-forced` say what it waits for, the first three with
+// Send now), decision-unreadable (its answer waiting on a
 // Conductor session Hide cannot read), decision-unconfirmed (its answer typed without
 // the engine confirming it), stack (the merge order), no-conductor, stale, failed
 // (the record unreadable), wide (a row wider than the slot, shrunk to fit),
@@ -34,7 +35,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionLanding, MissionMapFlow, MissionNode, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
@@ -299,7 +300,8 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
   // An answer sent from the banner draws the decision with that answer on it.
-  const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed";
+  const held = shown.startsWith("decision-hold-") ? (shown.slice("decision-hold-".length) as MissionAnswerHold) : undefined;
+  const answered = shown === "decision-sent" || shown === "decision-unreadable" || shown === "decision-unconfirmed" || held !== undefined;
   // A decision about screens to look at, with the Views linked to it.
   const looking = shown === "decision-views";
   // The stalled state (hide-private issues 678-680) runs a worker on the Mac mini.
@@ -333,7 +335,7 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
       : state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기: 목록 화면은 지금 올리고, 검색 화면은 API가 머지된 뒤 따로 올려요"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : null,
-    answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting" } : null,
+    answer: answered ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-unconfirmed" ? "unconfirmed" : "waiting", ...(held ? { hold: held } : {}) } : null,
     answer_failed: shown === "decision-unreadable" ? "session_unreadable" : null,
     decision_views: looking ? [
       { device_id: "local", checkout_path: "/repo/hide.worktrees/screen", display_id: "d7", view: "v7", kind: "browser" as const, label: "전후 비교 · screens.html", by: "conductor" as const },

@@ -1047,6 +1047,10 @@ pub(super) struct MissionAnswerPayload {
     /// Types an answer again that was typed without the engine confirming it.
     #[serde(default)]
     pub(super) resend: bool,
+    /// Types the answer now, past the Conductor's work and a draft that
+    /// reads empty (`지금 보내기`).
+    #[serde(default)]
+    pub(super) now: bool,
     /// Sent from a phone (`hided`'s phone path), which a gate's record
     /// names as where the answer came from (PRD mission-human-gate D-21).
     #[serde(default)]
@@ -2168,7 +2172,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
         "agent_definitions_read" => decode!(AgentDefinitionsReadPayload, AgentDefinitionsRead),
         "herdr_profiles_list" => decode!(MachineProfilesListPayload, MachineProfilesList),
-        "herdr_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
+        "machine_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
@@ -4173,6 +4177,9 @@ impl Runtime {
                     settings.map_flow = map_flow;
                 }
                 self.set_conductor_settings(settings)
+            }
+            Event::MissionAnswer(payload) if payload.now => {
+                self.mission_answer_now(&payload.mission, payload.key)
             }
             Event::MissionAnswer(payload) => self.mission_answer_event_from(
                 &payload.mission,

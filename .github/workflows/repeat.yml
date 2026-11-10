@@ -1,0 +1,268 @@
+# The tests a pull request adds or changes, run many times with no retry, so a
+# new test that fails one run in ten fails its own pull request (docs/TESTING.md,
+# "Flaky tests"). `pr.yml` calls it from the `repeat` lane with what
+# `scripts/ci-plan.py` selected (web specs and Rust `tests/it` modules, by file;
+# `scripts/ci-repeat.py` owns what counts as a changed test and the budget of 200
+# test runs for the whole pull request), always on Linux. A hand run names the
+# specs or Rust modules, how many times, and the system, so a fix is shown on
+# the system that failed without a temporary commit:
+#
+#   gh workflow run repeat.yml --ref <branch> -f runner=windows \
+#     -f web='s3.spec.ts' -f repeat=10
+#   gh workflow run repeat.yml --ref <branch> -f rust='hided:handshake hided:seat'
+#
+# The web specs run through `web-e2e.yml` (the same build, fixtures and runner
+# setup as the suite), the Rust modules under nextest on the same dependency
+# caches as the `rust` lane. Neither retries, and neither files a flaky issue.
+name: repeat changed tests
+
+on:
+  workflow_call:
+    inputs:
+      web:
+        description: The changed web specs, a JSON list of paths.
+        type: string
+        default: '[]'
+      rust:
+        description: The changed Rust test modules, a JSON list of {package, module, path}.
+        type: string
+        default: '[]'
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: The system to run on.
+        type: choice
+        options: [linux, macos, windows]
+        default: linux
+      web:
+        description: Web spec files to repeat, space-separated (s3.spec.ts).
+        type: string
+        default: ''
+      rust:
+        description: Rust test modules of a crate's tests/it binary, space-separated as package:module (hided:handshake).
+        type: string
+        default: ''
+      grep:
+        description: Playwright --grep filter, to repeat some tests of the named specs.
+        type: string
+        default: ''
+      repeat:
+        description: How many times each test runs, 1 to 100.
+        type: string
+        default: '10'
+
+permissions:
+  contents: read
+
+jobs:
+  # Validates what called the lane and, for a pull request, counts the changed
+  # tests to choose the repeat; a hand run has named its own.
+  count:
+    name: choose the repeat
+    runs-on: ubuntu-latest
+    # The web install and listing (5 minutes each) or the Rust build and listing (25), whichever the pull request needs, with setup.
+    timeout-minutes: 45
+    outputs:
+      web: ${{ steps.resolve.outputs.web }}
+      rust: ${{ steps.resolve.outputs.rust }}
+      runner: ${{ steps.resolve.outputs.runner }}
+      os: ${{ steps.resolve.outputs.os }}
+      repeat: ${{ steps.repeat.outputs.repeat }}
+      run-web: ${{ steps.repeat.outputs.run-web }}
+      run-rust: ${{ steps.repeat.outputs.run-rust }}
+      rust-plan: ${{ steps.rust-count.outputs.rust-plan || steps.resolve.outputs.rust-plan }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - name: Resolve what was asked
+        id: resolve
+        timeout-minutes: 2
+        env:
+          EVENT: ${{ github.event_name }}
+          WEB: ${{ inputs.web }}
+          RUST: ${{ inputs.rust }}
+          REPEAT: ${{ inputs.repeat }}
+          RUNNER: ${{ inputs.runner || 'linux' }}
+        run: python3 scripts/ci-repeat.py resolve --event "$EVENT" --web "$WEB" --rust "$RUST" --repeat "$REPEAT" --runner "$RUNNER"
+      - uses: pnpm/action-setup@v6
+        if: steps.resolve.outputs.web-count-needed == 'true'
+        timeout-minutes: 5
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        if: steps.resolve.outputs.web-count-needed == 'true'
+        timeout-minutes: 5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install web dependencies
+        if: steps.resolve.outputs.web-count-needed == 'true'
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      - name: Count the web tests
+        # The specs' own listing, so a loop that declares tests counts as many
+        # as it runs. A listing that fails fails the lane.
+        id: web-count
+        if: steps.resolve.outputs.web-count-needed == 'true'
+        timeout-minutes: 5
+        env:
+          SPECS: ${{ steps.resolve.outputs.web }}
+        run: |
+          # shellcheck disable=SC2086 # the spec paths hold no space or glob character
+          python3 scripts/ci-repeat.py spec-patterns $SPECS > "$RUNNER_TEMP/specs.txt"
+          args=()
+          while IFS= read -r pattern; do args+=("$pattern"); done < "$RUNNER_TEMP/specs.txt"
+          bash scripts/verify-web.sh web e2e-list --reporter=list "${args[@]}" > "$RUNNER_TEMP/list.txt"
+          echo "web-count=$(python3 scripts/ci-repeat.py count-listed < "$RUNNER_TEMP/list.txt")" >> "$GITHUB_OUTPUT"
+      - name: Install cargo-nextest
+        if: steps.resolve.outputs.rust-count-needed == 'true'
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - uses: ./.github/actions/rust-cache
+        if: steps.resolve.outputs.rust-count-needed == 'true'
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: false
+      - uses: ./.github/actions/vt-cache
+        if: steps.resolve.outputs.rust-count-needed == 'true'
+        timeout-minutes: 5
+        with:
+          save: false
+      - name: Count the Rust tests
+        # What nextest lists for the changed modules' filtersets, ignored tests
+        # excluded, so N is the tests that run. A package whose modules list
+        # none (a helper file) runs its whole `it` binary instead, and a
+        # change to `support` or `main.rs` selects that whole binary; the
+        # decision is `rust_plan` in scripts/ci-repeat.py. This builds the
+        # changed crates' tests once, and the Rust job builds them again on its
+        # own runner. A listing that fails fails the lane.
+        id: rust-count
+        if: steps.resolve.outputs.rust-count-needed == 'true'
+        timeout-minutes: 25
+        env:
+          RUST: ${{ steps.resolve.outputs.rust }}
+        run: python3 scripts/ci-repeat.py rust-plan --rust "$RUST"
+      - name: Choose the repeat
+        id: repeat
+        timeout-minutes: 2
+        env:
+          EVENT: ${{ github.event_name }}
+          WEB_COUNT: ${{ steps.web-count.outputs.web-count }}
+          RUST_COUNT: ${{ steps.rust-count.outputs.rust-count }}
+          NAMED: ${{ steps.resolve.outputs.repeat }}
+          WEB: ${{ steps.resolve.outputs.web }}
+          RUST: ${{ steps.resolve.outputs.rust }}
+        run: |
+          python3 scripts/ci-repeat.py choose --event "$EVENT" --web "$WEB" --rust "$RUST" \
+            --repeat "$NAMED" --web-count "$WEB_COUNT" --rust-count "$RUST_COUNT"
+
+  web:
+    name: repeat web specs
+    needs: count
+    if: needs.count.outputs.run-web == 'true'
+    uses: ./.github/workflows/web-e2e.yml
+    permissions:
+      contents: read
+    with:
+      lane: repeat-${{ needs.count.outputs.os }}
+      runner: ${{ needs.count.outputs.runner }}
+      shards: 1
+      grep: ${{ inputs.grep || '' }}
+      specs: ${{ needs.count.outputs.web }}
+      repeat: ${{ needs.count.outputs.repeat }}
+
+  rust:
+    name: repeat Rust tests (${{ needs.count.outputs.os }})
+    needs: count
+    if: needs.count.outputs.run-rust == 'true'
+    runs-on: ${{ needs.count.outputs.runner }}
+    # The budget's 200 runs, after a build of the changed crates' tests.
+    timeout-minutes: 90
+    outputs:
+      completed: ${{ steps.report.outputs.completed }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests,
+      # and the pane holder's screen tests draw on a headless xterm under Node.
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: 22
+      - name: Install the real shells
+        # The same shells as the `rust` lane, from the cached packages
+        # (.github/actions/apt-install); macOS has its own.
+        if: runner.os == 'Linux'
+        timeout-minutes: 7
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh fish tcsh csh
+          minutes: 4
+      - name: Install the holder tests' xterm
+        timeout-minutes: 3
+        run: bash scripts/verify-web.sh install holder
+      # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: false
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
+      - name: Install cargo-nextest
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - name: Repeat the Rust tests
+        # `--retries 0` over the `ci` profile's one retry, so one failed run
+        # fails the job. The count job expands a PR helper or all-ignored
+        # module to its crate's whole `it` binary. Once chosen, a plan that
+        # runs no test fails on a PR as on a hand run.
+        timeout-minutes: 75
+        env:
+          PLAN: ${{ needs.count.outputs.rust-plan }}
+          REPEAT: ${{ needs.count.outputs.repeat }}
+        run: |
+          set -euo pipefail
+          case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+          # Only reports from this execution can prove completed work.
+          rm -f target/nextest/ci/junit*.xml
+          python3 scripts/ci-repeat.py plan-lines --plan "$PLAN" > "$RUNNER_TEMP/filters.txt"
+          while IFS=$'\t' read -r package expression; do
+            echo "::group::$package ${expression:-the whole it binary} x $REPEAT"
+            filter=()
+            if [ -n "$expression" ]; then filter=(-E "$expression"); fi
+            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests=fail -p "$package" --test it ${filter[@]+"${filter[@]}"}
+            echo "::endgroup::"
+          done < "$RUNNER_TEMP/filters.txt"
+      - name: Report completed Rust runs
+        id: report
+        timeout-minutes: 2
+        run: python3 scripts/ci-repeat.py report --junit target/nextest/ci/junit*.xml
+
+  verdict:
+    name: every chosen test ran
+    needs: [count, web, rust]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 2
+      - name: Require completed runs from every chosen leg
+        timeout-minutes: 2
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-repeat.py verdict

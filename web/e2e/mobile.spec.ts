@@ -19,7 +19,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, openProject, sendKeys, withControl } from "./daemon-actions";
+import { closePane, coreLog, loggedCount, openProject, sendKeys, untilLogged, withControl } from "./daemon-actions";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
@@ -28,6 +28,7 @@ import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
 import { screenshot, THIS_MACHINE } from "./wire";
 import { chord } from "./chords";
+import { quietFor } from "./wait";
 
 test.describe.configure({ timeout: 240_000 });
 
@@ -219,16 +220,6 @@ async function shownPairingUrl(page: Page, daemon: Daemon): Promise<string> {
   return pairingUrl(page, daemon);
 }
 
-function coreLog(daemon: Daemon): string {
-  const dir = path.join(daemon.stateDir, "Logs");
-  if (!fs.existsSync(dir)) return "";
-  return fs
-    .readdirSync(dir)
-    .filter((name) => name.startsWith("core"))
-    .map((name) => fs.readFileSync(path.join(dir, name), "utf8"))
-    .join("\n");
-}
-
 type Listed = { kind: string; pane_id?: string; read?: boolean; children?: Listed[]; more_children?: Listed[] };
 
 /** Whether a top row, or a child under it, is the pane. */
@@ -271,9 +262,23 @@ function readOf(frames: string[], pane: string): boolean | null {
   return null;
 }
 
-async function noPushFor(received: Push[], count: number, ms = 3_000): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+/** No push arrived past the first `count`. */
+function noPushBeyond(received: Push[], count: number): void {
   expect(received).toHaveLength(count);
+}
+
+/**
+ * Runs `act`, which raises a notice the push setting must not send, and returns once the daemon has logged that it
+ * skipped one for the setting, with the push list still `count` long. The daemon decides per notice, before it queues
+ * any send, so the test waits for that record and not for a time in which a push would have arrived. The count is
+ * taken before `act`, because one taken after can already include the record.
+ */
+async function pushSkippedByMode(daemon: Daemon, received: Push[], count: number, act: () => Promise<void>): Promise<void> {
+  const skipped = { component: "mobile_push", kind: "push.skipped", reason: "mode" };
+  const before = loggedCount(daemon, skipped);
+  await act();
+  await untilLogged(daemon, skipped, before + 1, "a push skipped for the push setting");
+  noPushBeyond(received, count);
 }
 
 test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push rules and revoke", async ({ browser, page }) => {
@@ -383,7 +388,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     // B41: an idle list sends nothing; the phone hears only changes.
     const agentFrames = () => frames.filter((frame) => frame.includes('"type":"agents"')).length;
     const idleStart = agentFrames();
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await quietFor(page, 3_000, "an idle phone list is sent no agents frame");
     expect(agentFrames() - idleStart).toBeLessThanOrEqual(1);
     await screenshot(phone, "mobile-phone-list");
 
@@ -521,26 +526,25 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "정말 배포할까요?");
     await expect.poll(() => groupOf(frames, one)).toBe("needs_you");
+    // The ask is listed read, so the daemon raises no notice and logs no decision: the read row is the state to wait for.
     await expect.poll(() => readOf(frames, one)).toBe(true);
-    await noPushFor(push.received, 1);
+    noPushBeyond(push.received, 1);
     await phone.locator('[data-phone-back="true"]').tap();
 
     // B33 (off): nothing.
     await choosePush(page, "off");
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await ask(fixture, daemon!, two, "끔에서는 조용히");
+    await pushSkippedByMode(daemon!, push.received, 1, () => ask(fixture, daemon!, two, "끔에서는 조용히"));
     await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
-    await noPushFor(push.received, 1);
 
     // B33 (only while the app is closed): nothing while the desktop is connected. The
     // desktop then reads two, which clears its notification (B34).
     await choosePush(page, "app_closed");
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await finish(two);
+    await pushSkippedByMode(daemon!, push.received, 1, () => finish(two));
     await expect.poll(() => groupOf(frames, two)).toBe("done");
-    await noPushFor(push.received, 1);
     await expect.poll(() => coreLog(daemon as Daemon)).toContain('"mode":"app_closed","renderers":1');
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);

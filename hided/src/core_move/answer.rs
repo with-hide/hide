@@ -98,8 +98,10 @@ pub struct Inspection {
     /// The brain state files the folder holds.
     pub brain: Vec<String>,
     pub handover: Option<Handover>,
-    /// The scope its core would own (once a Herdr socket); none when its engine names none.
-    pub herdr_socket: Option<String>,
+    /// The scope its core would own (once an engine scope); none when its engine names none.
+    /// An answer from a build that still says `herdr_socket` reads the same value.
+    #[serde(alias = "herdr_socket")]
+    pub engine_scope: Option<String>,
     /// Its Hide AI settings as stored there, `Ok(None)` when none are, and
     /// `Err` when they could not be read.
     pub ai: Result<Option<serde_json::Value>, String>,
@@ -127,6 +129,40 @@ mod tests {
 
     /// Every answer reads back as written, so the two ends of one build
     /// agree on the wire by construction.
+    /// An inspection answer from a build that named the scope `herdr_socket`
+    /// reads its value under `engine_scope`, and this build's answer reads back.
+    #[test]
+    fn an_inspection_names_its_scope_engine_scope_and_reads_the_old_herdr_socket() {
+        let inspection = Inspection {
+            node: "node-a".to_owned(),
+            state_dir: "/state".to_owned(),
+            brain: Vec::new(),
+            handover: None,
+            engine_scope: Some("scope-1".to_owned()),
+            ai: Ok(None),
+            failed: Vec::new(),
+            path_refused: None,
+        };
+        let mut wire = serde_json::to_value(&inspection).unwrap();
+        assert_eq!(wire["engine_scope"], "scope-1");
+        assert!(wire.get("herdr_socket").is_none());
+        assert_eq!(
+            serde_json::from_value::<Inspection>(wire.clone())
+                .unwrap()
+                .engine_scope,
+            Some("scope-1".to_owned())
+        );
+        let object = wire.as_object_mut().unwrap();
+        object.remove("engine_scope");
+        object.insert("herdr_socket".to_owned(), serde_json::json!("scope-1"));
+        assert_eq!(
+            serde_json::from_value::<Inspection>(wire)
+                .unwrap()
+                .engine_scope,
+            Some("scope-1".to_owned())
+        );
+    }
+
     #[test]
     fn each_answer_reads_back_as_it_was_written() {
         let handover = Handover::new(
