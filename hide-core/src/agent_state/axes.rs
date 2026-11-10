@@ -221,7 +221,8 @@ pub fn apply_lineage(
         ancestry.push((ancestors, root));
     }
     // What moves on below each row: a descendant working, or stopped on a
-    // background task its session proves. A reply wait is decided from this
+    // background task its session proves or on its pull request's running
+    // checks. A reply wait is decided from this
     // and is not part of it, so two rows that wait on each other's answer
     // never hold each other up.
     let mut progress_below = vec![false; agents.len()];
@@ -430,12 +431,21 @@ fn turn_read_finished(agent: &SidebarAgentSnapshot) -> bool {
 }
 
 /// Whether the row moves its own work on: running with nothing asked of
-/// anyone, or stopped on a background task its session proves. A demand
-/// waits on someone else, and one whose activity the engine cannot classify is
-/// not vouched for, so neither is progress.
+/// anyone, or stopped on a background task its session proves or on its pull
+/// request's running checks. A demand waits on someone else, and one whose
+/// activity the engine cannot classify is not vouched for, so neither is
+/// progress.
 fn progressing(agent: &SidebarAgentSnapshot) -> bool {
     let (demand, activity, _) = axes_of(agent);
-    (demand == AgentDemand::None && activity == AgentActivity::Working) || background_wait(agent)
+    (demand == AgentDemand::None && activity == AgentActivity::Working)
+        || background_wait(agent)
+        || checks_wait(agent)
+}
+
+/// Whether a quiet row waits on its pull request's running checks, or on the
+/// GitHub read a turn that printed its address set off (`lay_checks`).
+fn checks_wait(agent: &SidebarAgentSnapshot) -> bool {
+    agent.checks_wait.is_some() && quiet_itself(agent)
 }
 
 /// Whether the answer to one letter is still being made: the recipient, the
@@ -463,7 +473,7 @@ fn answer_in_progress(
 fn own_wait(agent: &SidebarAgentSnapshot, answering: bool) -> Option<AgentWait> {
     if background_wait(agent) {
         Some(AgentWait::Background)
-    } else if agent.checks_wait.is_some() && quiet_itself(agent) {
+    } else if checks_wait(agent) {
         Some(AgentWait::Checks)
     } else if answering && quiet_itself(agent) {
         Some(AgentWait::Reply)

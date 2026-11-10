@@ -1,7 +1,7 @@
 import { CheckIcon, CircleAlertIcon, FileDiffIcon, FilePlusIcon, GlobeIcon, PencilIcon, ThumbsUpIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
-import { useElapsed } from "./components/elapsed";
+import { useElapsed, useMinuteClock } from "./components/elapsed";
 import { FileMark } from "./components/file-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
@@ -14,7 +14,7 @@ import { cn } from "./lib/utils";
 import type { DecisionView, Mission } from "./snapshot";
 import { composingKey } from "./keys";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer, type PressedAnswer } from "./missionAnswer";
-import { DECISION_VIEWS_SHOWN } from "./missions";
+import { DECISION_VIEWS_SHOWN, gateAsked, gateWaitedLong } from "./missions";
 
 // The decision a mission waits on, answered where it is asked, first in the
 // page's 내 차례 (PRD mission-plan-visibility D-13, D-20, D-30, B25-B30, B39;
@@ -39,6 +39,9 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   const returnFocus = useRef(false);
   // While the mission's device does not answer, the wait is not counted on (B35).
   const waited = useElapsed(mission.stale ? null : (question?.asked_at_unix_ms ?? null));
+  // A gate asked for more than 24 hours says so beside its wait, in grey; nothing passes on its own (PRD mission-human-gate D-22, B22).
+  const minute = useMinuteClock();
+  const long = gateWaitedLong(gateAsked(mission)?.gate, minute);
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
   const view = answerView(mission, device, pressed);
   const views = mission.decision_views ?? [];
@@ -102,6 +105,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           </button>
         ) : null}
         {waited ? <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-banner-waited="true">{t("mission.banner.waited", { elapsed: waited })}</span> : null}
+        {long ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-banner-long="true">· {t("mission.gate.long")}</span> : null}
         {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}

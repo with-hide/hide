@@ -46,6 +46,7 @@ describe('the release command on the build machine', { timeout: 120000 }, () => 
     for (const file of ['release-env.json', 'release-expect.json']) copyFileSync(join(mobile, file), join(base(slug), 'release-inputs', file));
     put(join(base(slug), 'release-inputs/check-release-app.sh'), '#!/bin/bash\nexit 0\n', 0o755); // its own tests are check-release-app.test.mjs
     put(join(base(slug), 'release-inputs/bundle-manifest.json'), '{"schema":1,"files":{}}');
+    put(join(base(slug), 'release-inputs/relay-source.txt'), `${'a'.repeat(64)}\n`);
     put(join(base(slug), 'ios/App/App/App.entitlements'), '<plist/>');
   };
   // Where the real export writes its distribution logs whatever $TMPDIR and the home say: confstr's temporary folder.

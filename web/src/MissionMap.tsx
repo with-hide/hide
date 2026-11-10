@@ -8,6 +8,7 @@ import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed"
 import { ConductorRow } from "./components/mission-conductor-row";
 import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
+import { GatePlanList, GateStrip } from "./components/mission-gate";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
 import { PullList, ResultTiles } from "./components/mission-results";
@@ -33,6 +34,8 @@ import { useWorkerEscalation } from "./missionWorkers";
 import {
   attentionWords,
   defectEdges,
+  gatesAhead,
+  gateWaitedLong,
   openAttention,
   hideWords,
   missionHeadCells,
@@ -127,6 +130,7 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
       {mission.report && !open ? <ReportLine mission={mission} /> : null}
       <ConductorRow mission={mission} actions={actions} />
       <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
+      <GatePlan mission={mission} onSelect={select} />
       {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       {mission.nodes.length === 0 ? (
@@ -188,6 +192,11 @@ function useWide(root: HTMLElement | null): boolean {
     return () => observer.disconnect();
   }, [root]);
   return wide;
+}
+
+/** Where the operator will look, over a plan that waits for approval (PRD mission-human-gate D-08, B1). */
+function GatePlan({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
+  return <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} onSelect={onSelect} className="px-md pb-sm" />;
 }
 
 /**
@@ -354,8 +363,12 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const look = nodeLook(mission, node);
   const result = cardResult(node, mission.github_stale, t);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
-  // Only a card waiting on the operator is the operator's turn; one waiting on the Conductor reads as work in progress.
-  const yours = attention !== null && node.attention!.to === "operator";
+  // A place the plan has the operator look (PRD mission-human-gate D-06): ahead it is a tinted strip, reached it is the operator's turn, looked at it is grey with a check.
+  const gate = node.gate ?? null;
+  const minute = useMinuteClock();
+  const long = gateWaitedLong(gate, minute);
+  // Only a card waiting on the operator is the operator's turn; one waiting on the Conductor, or a gate still ahead, reads as work in progress (B9).
+  const yours = (attention !== null && node.attention!.to === "operator") || gate?.state === "open";
   const warning = warningWords(mission, node, t);
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
@@ -391,6 +404,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         ...(work ? [node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : t("mission.steps.planned", { count: work.steps.length })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
+        ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
         ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
         ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
@@ -456,14 +470,25 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
           {took ? <span className="flex shrink-0 items-center gap-xxs"><span data-node-took="true">{run || device ? "· " : ""}{took}</span></span> : null}
         </span>
       ) : null}
-      {result || attention || warning ? (
+      {/* What the operator will look at is a strip of the card itself, up to two lines, read without a hover (D-06). */}
+      {gate ? <GateStrip gate={gate} /> : null}
+      {result || attention || warning || gate?.state === "open" ? (
         <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
           {/* The marks keep one line; the ones past the card's width leave it rather than overlap, a branch truncates, and `⚠` and `!` keep their place at the right end (B30). */}
           <span className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span>
           {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
+          {gate?.state === "open" && !attention ? (
+            <span className="shrink-0 font-semibold text-mission-hold" data-node-gate-tag="open">
+              {t("agents.mark.turn")}
+              {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+            </span>
+          ) : null}
           {attention ? (
             <Hint label={attention.why}>
-              <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>{yours ? t("agents.mark.turn") : attention.who}</span>
+              <span className={cn("shrink-0", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
+                {yours ? t("agents.mark.turn") : attention.who}
+                {long ? <span className="font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+              </span>
             </Hint>
           ) : null}
         </span>

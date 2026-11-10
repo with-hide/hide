@@ -1,14 +1,18 @@
 // The phone's Settings tab: the fourth place of the bottom bar. In this order: the computers this phone is connected to
 // (switch, connect another, remove after a confirmation), notifications, language and appearance as one-line values that
 // open a sheet to choose from, the privacy policy and support, and the versions. The same screen in a browser, in the
-// iOS app and in the demo; only what a place cannot do differs (the app has no browser notification to turn on, the demo
+// iOS app and in the demo; only what a place cannot do differs (the app's notifications are a switch of its own, the demo
 // has one sample computer). A choice applies at once and is kept on this phone only (settings.ts).
 
 import { BellIcon, ChevronRightIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Button } from "../components/ui/button";
 import { RowButton } from "../components/ui/row-button";
+import { Switch } from "../components/ui/switch";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { appHost } from "./appHost";
+import { push } from "./appBridge";
+import { appPushRow, refreshAppPush, turnOffAppPush, turnOnAppPush, useAppPush } from "./appPush";
 import { DemoHostPanel } from "./Demo";
 import { HostList } from "./HostList";
 import { notificationRow } from "./protocol";
@@ -50,14 +54,42 @@ function BrowserNotifications() {
   );
 }
 
-/** The app's notification row says only what is true now; the control that turns notifications on comes with the delivery that makes it work. */
+/**
+ * The app's notification row: one switch, and under it the one sentence that is true now (appPush.ts). A refusal by iOS
+ * is told with the way to iOS Settings, because only iOS can turn it back on.
+ */
 function AppNotifications() {
   const { t } = useInterfaceTranslation();
+  const demo = usePhone((s) => s.demo);
+  const state = useAppPush();
+  const row = appPushRow(state, demo);
+  useEffect(() => {
+    void refreshAppPush();
+    // Back from iOS Settings: the permission may have changed there.
+    const again = () => { if (!document.hidden) void refreshAppPush(); };
+    document.addEventListener("visibilitychange", again);
+    return () => document.removeEventListener("visibilitychange", again);
+  }, []);
+  const hint = row === "asking" ? t("mobile.settings.notificationsAsking")
+    : row === "refused" ? t("mobile.settings.notificationsRefused")
+    : row === "failed" ? t("mobile.settings.notificationsFailed")
+    : row === "on" ? t(state.outdated ? "mobile.settings.notificationsOutdated" : "mobile.settings.notificationsOnHint")
+    : t("mobile.settings.notificationsOffHint");
   return (
-    <p className="flex items-start gap-md py-sm text-body leading-relaxed text-muted-foreground" data-phone-notifications="app-unavailable">
-      <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
-      <span>{t("mobile.settings.notificationsApp")}</span>
-    </p>
+    <div className="flex flex-col gap-xs py-sm" data-phone-notifications={row}>
+      <div className="flex min-h-(--size-touch-target) items-center gap-md">
+        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+        <span id="app-notifications-label" className="min-w-0 flex-1 text-title text-foreground">{t("mobile.settings.notifications")}</span>
+        <Switch
+          aria-labelledby="app-notifications-label"
+          checked={row === "on" || row === "asking"}
+          disabled={row === "asking" || row === "refused"}
+          onCheckedChange={(on) => { void (on ? turnOnAppPush() : turnOffAppPush()); }}
+        />
+      </div>
+      <p className="pl-xl text-body leading-relaxed text-muted-foreground" role={row === "failed" ? "alert" : "status"}>{hint}</p>
+      {row === "refused" ? <Button variant="text" className="min-h-(--size-touch-target) self-start px-none pl-xl text-body" data-phone-notifications-settings="true" onClick={() => void push.openSettings().catch(() => undefined)}>{t("mobile.settings.notificationsOpenSettings")}</Button> : null}
+    </div>
   );
 }
 

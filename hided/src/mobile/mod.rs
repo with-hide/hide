@@ -117,6 +117,35 @@ impl Route {
     }
 }
 
+/// How many notices wait for the relay link per phone, and how long one stays worth sending.
+/// A notice is about what an agent is doing now; past a minute it is old news.
+const HELD_PER_PHONE: usize = 8;
+const HELD_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// A notice that found no relay link. The follower's first pass runs before the relay socket is admitted, so without
+/// this the notice is dropped. At most one waits per agent tag (a newer notice for the tag replaces it, as it replaces
+/// the older one on the phone), and the link's coming up sends each once.
+struct Held {
+    payload: Value,
+    at: std::time::Instant,
+}
+
+/// Puts a notice at the end of a phone's held queue: it replaces the one held for the same agent tag, and the oldest
+/// go past `HELD_PER_PHONE`.
+fn hold_in(held: &mut VecDeque<Held>, payload: Value, at: std::time::Instant) {
+    let tag = payload.get("tag").cloned();
+    held.retain(|older| older.payload.get("tag") != tag.as_ref());
+    held.push_back(Held { payload, at });
+    while held.len() > HELD_PER_PHONE {
+        held.pop_front();
+    }
+}
+
+/// A held notice waits at most `HELD_MAX_AGE`: a flush after that drops it instead of sending a stale question.
+fn held_expired(at: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(at) > HELD_MAX_AGE
+}
+
 struct Inner {
     settings: MobileSettings,
     phones: Phones,
@@ -132,6 +161,8 @@ struct Inner {
     observers: HashSet<u64>,
     /// Tags of agents made Seen since each phone's last push (PRD D-21).
     pending_clear: HashMap<String, BTreeSet<AgentKey>>,
+    /// Notices for an iOS app phone that found no relay link, kept until one is up (`Held`).
+    held: HashMap<String, VecDeque<Held>>,
     /// Input request ids each phone sent, and how each ended (PRD B27).
     inputs: HashMap<String, VecDeque<(String, InputState)>>,
     /// An exposed Mobile's last pass could not read Tailscale; one such miss
@@ -346,6 +377,7 @@ impl Mobile {
                 relay_cleanup_failure: None,
                 observers: HashSet::new(),
                 pending_clear: HashMap::new(),
+                held: HashMap::new(),
                 inputs: HashMap::new(),
                 missed_check: false,
                 reconcile_owed: PassOwed(true),
@@ -1851,6 +1883,18 @@ impl Mobile {
             })
     }
 
+    /// Where a request id stands, when this phone has sent it before; nothing is claimed. A repeat is answered from
+    /// this before anything else about the request is judged, because what the first write changed (the agent left
+    /// its question, its pane may have closed) must not turn the answer to the same intent into a refusal.
+    pub fn claimed_input(&self, phone_id: &str, request_id: &str) -> Option<InputState> {
+        self.lock()
+            .inputs
+            .get(phone_id)?
+            .iter()
+            .find(|(id, _)| id == request_id)
+            .map(|(_, state)| *state)
+    }
+
     /// Claims an input request id before it is written, in one step, so a
     /// repeat on this or another socket of the phone never writes it twice.
     pub fn reserve_input(&self, phone_id: &str, request_id: &str) -> Reservation {
@@ -1951,10 +1995,102 @@ impl Mobile {
                 }
                 Err("token_gone")
             }
+            // Apple refuses the token itself: the build's environment or topic and the relay's do not agree, or the
+            // token is malformed. That is a configuration problem to read in the log, not a gone install, so the
+            // registration stays: dropping it would only make the app register the same token again on the next
+            // connection and be refused again.
+            PushOutcome::TokenRejected => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "registration.rejected", "phone_id": phone_id,
+                    "environment": registration.environment,
+                }));
+                Err("token_rejected")
+            }
             PushOutcome::RateLimited => Err("rate_limited"),
             PushOutcome::Unavailable => Err("unavailable"),
             PushOutcome::Failed => Err("failed"),
         }
+    }
+
+    /// Sends one notice to an iOS app phone, or keeps it when the relay link is not up yet. Blocking, like
+    /// `push_to_app`; the outcome is a diagnostic naming the reason, never the notice.
+    pub fn push_or_hold(&self, phone_id: &str, payload: Value) {
+        match self.push_to_app(phone_id, &payload) {
+            Ok(()) => {
+                // A live send is newer than anything held for the tag.
+                self.forget_held(phone_id, &payload);
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                    "route": "app", "tag": payload.get("tag"),
+                }));
+            }
+            Err("relay_unavailable") => {
+                self.hold(phone_id, payload);
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.held", "phone_id": phone_id, "route": "app",
+                }));
+            }
+            Err(reason) => hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                "route": "app", "reason": reason,
+            })),
+        }
+    }
+
+    /// Keeps a notice for `phone_id` until the relay link is up, replacing the one held for the same agent tag and
+    /// dropping the oldest past `HELD_PER_PHONE`.
+    fn hold(&self, phone_id: &str, payload: Value) {
+        let mut inner = self.lock();
+        let held = inner.held.entry(phone_id.to_owned()).or_default();
+        hold_in(held, payload, std::time::Instant::now());
+    }
+
+    /// Drops what is held for the tag of a notice that has just gone out live.
+    fn forget_held(&self, phone_id: &str, payload: &Value) {
+        let tag = payload.get("tag");
+        if let Some(held) = self.lock().held.get_mut(phone_id) {
+            held.retain(|older| older.payload.get("tag") != tag);
+        }
+    }
+
+    /// Sends what waited for the relay link, once each: the link is up, so a notice that fails now fails as any
+    /// other and is not held again. A notice older than `HELD_MAX_AGE` is dropped. Blocking work runs on a
+    /// blocking thread, like every other push.
+    pub(crate) fn flush_held(self: &Arc<Self>) {
+        let waiting: Vec<(String, Held)> = {
+            let mut inner = self.lock();
+            std::mem::take(&mut inner.held)
+                .into_iter()
+                .flat_map(|(phone, held)| held.into_iter().map(move |held| (phone.clone(), held)))
+                .collect()
+        };
+        if waiting.is_empty() {
+            return;
+        }
+        let mobile = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            for (phone_id, held) in waiting {
+                if *mobile.stopping.borrow() {
+                    return;
+                }
+                if held_expired(held.at, std::time::Instant::now()) {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.expired", "phone_id": phone_id,
+                    }));
+                    continue;
+                }
+                match mobile.push_to_app(&phone_id, &held.payload) {
+                    Ok(()) => hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                        "route": "app", "after": "held", "tag": held.payload.get("tag"),
+                    })),
+                    Err(reason) => hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                        "route": "app", "after": "held", "reason": reason,
+                    })),
+                }
+            }
+        });
     }
 
     pub fn set_notifications(&self, phone_id: &str, notifications: Notifications) {
@@ -2283,7 +2419,12 @@ impl Mobile {
                     .remove(phone_id)
                     .unwrap_or_default();
                 match self.push_payload(&notice, &clear) {
-                    Ok(payload) => jobs.push((phone_id.clone(), route.clone(), payload)),
+                    Ok(mut payload) => {
+                        if let Some(agent) = projection.find(&notice.key) {
+                            push::with_ask(&mut payload, agent);
+                        }
+                        jobs.push((phone_id.clone(), route.clone(), payload));
+                    }
                     Err(reason) => hide_core::diagnostic!(json!({
                         "component":"mobile_push", "kind":"push.failed", "reason":reason,
                     })),
@@ -2299,16 +2440,7 @@ impl Mobile {
                 let subscription = match route {
                     Route::Web(subscription) => subscription,
                     Route::App => {
-                        match mobile.push_to_app(&phone_id, &payload) {
-                            Ok(()) => hide_core::diagnostic!(json!({
-                                "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
-                                "route": "app", "tag": payload.get("tag"),
-                            })),
-                            Err(reason) => hide_core::diagnostic!(json!({
-                                "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
-                                "route": "app", "reason": reason,
-                            })),
-                        }
+                        mobile.push_or_hold(&phone_id, payload);
                         continue;
                     }
                 };
@@ -2383,6 +2515,52 @@ mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
     use hide_core::agent_state::phone::project;
+
+    #[test]
+    fn a_phones_held_queue_keeps_one_per_agent_and_at_most_eight() {
+        let at = std::time::Instant::now();
+        let notice = |tag: &str, title: &str| json!({"tag": tag, "title": title});
+        let titles = |held: &VecDeque<Held>| -> Vec<String> {
+            held.iter()
+                .map(|held| held.payload["title"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut held = VecDeque::new();
+        hold_in(&mut held, notice("a", "first"), at);
+        hold_in(&mut held, notice("b", "other"), at);
+        hold_in(&mut held, notice("a", "newer"), at);
+        assert_eq!(
+            titles(&held),
+            ["other", "newer"],
+            "a newer notice replaces the tag's older one"
+        );
+        for number in 0..12 {
+            hold_in(
+                &mut held,
+                notice(&format!("t{number}"), &format!("n{number}")),
+                at,
+            );
+        }
+        assert_eq!(held.len(), HELD_PER_PHONE, "past the cap the oldest go");
+        assert_eq!(
+            titles(&held),
+            ["n4", "n5", "n6", "n7", "n8", "n9", "n10", "n11"]
+        );
+    }
+
+    #[test]
+    fn a_held_notice_is_dropped_after_sixty_seconds_and_not_before() {
+        let at = std::time::Instant::now();
+        let second = Duration::from_secs(1);
+        assert!(!held_expired(at, at));
+        assert!(
+            !held_expired(at, at + HELD_MAX_AGE),
+            "exactly sixty seconds still goes out"
+        );
+        assert!(held_expired(at, at + HELD_MAX_AGE + second));
+        // A clock that did not move forward never expires one.
+        assert!(!held_expired(at + HELD_MAX_AGE * 2, at));
+    }
 
     /// Two changes that arrive before a pass starts are one pass, a pass that
     /// already read them leaves nothing for the next, and a forced pass runs
