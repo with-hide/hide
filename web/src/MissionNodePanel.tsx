@@ -1,10 +1,11 @@
-import { ArrowRightIcon, ChevronRightIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, ChevronRightIcon, EyeIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentMarkOf } from "./agentLogos";
 import { CheckerPopover, useCheckerStatus, VerdictReason, VERDICT_TONE } from "./components/mission-checker";
 import { CriterionMark } from "./components/criterion-mark";
+import { useMinuteClock } from "./components/elapsed";
 import { MapPanel, MapPanelHead } from "./components/map-page";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
@@ -24,6 +25,7 @@ import {
   criterionName,
   criterionNote,
   eventWords,
+  gateWaitedLong,
   hideWords,
   landingLeft,
   lineOutrun,
@@ -59,6 +61,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
   return (
     <MapPanel data={{ "data-mission-detail": node.key }}>
       <Head mission={mission} node={node} events={events} end={end} onClose={onClose} actions={actions} />
+      <Gate mission={mission} node={node} />
       <Attention mission={mission} node={node} actions={actions} />
       <Now mission={mission} node={node} events={events} />
       <Plan mission={mission} node={node} actions={actions} />
@@ -192,6 +195,46 @@ function Part({ title, children, part }: { title: ReactNode; children: ReactNode
 }
 
 /**
+ * The place the plan has the operator look at this node (PRD mission-human-gate
+ * D-07, B10), as one tinted card: the eye, `볼 것` and when at its head, what to
+ * look at as its large bold line, and once looked at where the answer came from
+ * with its words (`창에서 답함 · “ㄱㄱ”`, B21). Reached it has the deep border
+ * and `내 차례`, with `오래 기다림` after 24 hours (B22, B23); looked at it is a
+ * border and grey text. While the open decision asks about this node the card
+ * is not drawn: the panel's own question and choices already say it (D-25).
+ */
+function Gate({ mission, node }: { mission: Mission; node: MissionNode }) {
+  const { t } = useInterfaceTranslation();
+  const minute = useMinuteClock();
+  const gate = node.gate;
+  if (!gate) return null;
+  if (gate.state === "open" && nodeQuestion(mission, node) !== null) return null;
+  const long = gateWaitedLong(gate, minute);
+  const when = gate.state === "open" ? t("agents.mark.turn") : gate.state === "passed" ? t("mission.gate.passed") : t("mission.gate.when");
+  return (
+    <section
+      className={cn("flex min-w-0 flex-col gap-xs rounded-md border px-sm py-sm", gate.state === "open" ? "border-mission-hold bg-mission-hold/10" : gate.state === "ahead" ? "border-mission-hold/40 bg-mission-hold/5" : "border-border")}
+      data-panel-part="gate"
+      data-panel-gate={gate.state}
+    >
+      <div className="flex min-w-0 items-center gap-xs text-caption">
+        {gate.state === "passed" ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : <EyeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />}
+        <span className={cn("font-semibold", gate.state === "passed" ? "text-muted-foreground" : "text-mission-hold")}>{t("mission.gate.title")}</span>
+        <span className={cn("min-w-0 flex-1 truncate text-right", gate.state === "open" ? "font-semibold text-mission-hold" : "text-muted-foreground")} title={when} data-panel-gate-when="true">{when}</span>
+        {long ? <span className="shrink-0 text-muted-foreground" data-panel-gate-long="true">· {t("mission.gate.long")}</span> : null}
+      </div>
+      <p className={cn("min-w-0 break-words text-title font-semibold", gate.state === "passed" && "text-muted-foreground")}>{gate.look}</p>
+      {gate.state === "passed" && gate.via ? (
+        <p className="min-w-0 break-words text-caption text-muted-foreground" data-panel-gate-via={gate.via}>
+          {t(`mission.gate.via.${gate.via}`)}
+          {gate.said ? <> · <span className="text-foreground">“{gate.said}”</span></> : null}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
  * What waits on someone to look at the node (PRD mission-node-simple B2,
  * B15-B17): who looks, why, and the operator's choices for that reason, which
  * the operator may take before the Conductor does; each settles it with one
@@ -200,7 +243,8 @@ function Part({ title, children, part }: { title: ReactNode; children: ReactNode
 function Attention({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const words = attentionWords(node, t);
-  if (!words || !node.attention || !openAttention(mission, node)) return null;
+  // A reached gate is said by the gate card above, and its choices by the mission's 내 차례 (D-25).
+  if (!words || !node.attention || !openAttention(mission, node) || node.attention.reason === "human_gate") return null;
   return (
     <Part title={t("mission.attention")} part="attention">
       <p className="min-w-0 break-words border-l-2 border-mission-hold pl-sm" data-panel-attention={node.attention.reason} data-panel-attention-to={node.attention.to}>

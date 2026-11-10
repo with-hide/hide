@@ -4,6 +4,7 @@ import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { KindHelpButton } from "./components/kind-help-dialog";
 import { KindIcon, KindMark } from "./components/kind-mark";
+import { GateAheadCount } from "./components/mission-gate";
 import { useElapsed } from "./components/elapsed";
 import { PILL_TONE, ProgressCells, STATE_PILL_TONE } from "./components/mission-tone";
 import { PrMark } from "./components/pr-mark";
@@ -36,7 +37,7 @@ import {
   type MissionGroup,
   type MissionProject,
 } from "./missionList";
-import { missionCells, missionCounts, type TurnItem } from "./missions";
+import { gatesAhead, missionCells, missionCounts, type TurnItem } from "./missions";
 import { MissionNumber } from "./missionParts";
 import { useWorkerEscalation } from "./missionWorkers";
 import { machineName } from "./screenMachine";
@@ -333,19 +334,38 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
         )}
       </span>
       <span className="pointer-events-none relative hidden min-w-0 truncate text-caption text-subtle-foreground missions-split:block" title={project ?? undefined} data-mission-row-project={mission.workspace_id}>{project}</span>
-      <Steps mission={mission} />
+      <Steps mission={mission} onOpen={() => actions.showMissionOnScreen(mission.id)} />
       <span className="pointer-events-none relative text-right text-caption text-muted-foreground"><Time mission={mission} /></span>
     </div>
   );
 }
 
-function Steps({ mission }: { mission: Mission }) {
+/**
+ * How many places the plan still has the operator look, a quiet grey eye and
+ * number at the row's end with `내가 볼 곳 N` on hover (PRD mission-human-gate
+ * D-18, B18); none when none is ahead, and never in 내 차례's colour or count.
+ * Over the table row's overlay it takes the pointer for its hover, so its press
+ * opens the mission as the row does (`onOpen`).
+ */
+function GateCount({ mission, onOpen }: { mission: Mission; onOpen?: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const ahead = gatesAhead(mission).length;
+  if (ahead === 0) return null;
+  return (
+    <Hint label={t("mission.gate.planTitle", { count: ahead })}>
+      <span className={cn("flex shrink-0", onOpen && "pointer-events-auto")} onClick={onOpen}><GateAheadCount count={ahead} /></span>
+    </Hint>
+  );
+}
+
+function Steps({ mission, onOpen }: { mission: Mission; onOpen: () => void }) {
   const { done, total } = missionCounts(mission);
   if (mission.nodes.length === 0) return <span />;
   return (
     <span className="pointer-events-none relative flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
       <ProgressCells tones={missionCells(mission)} size="chip" className="min-w-0 overflow-hidden" />
       <span className="shrink-0 font-mono tabular-nums" data-mission-row-counts={`${done}/${total}`}>{done}/{total}</span>
+      <GateCount mission={mission} onOpen={onOpen} />
     </span>
   );
 }
@@ -483,10 +503,15 @@ function ListRow({ entry, selected, connected, actions }: { entry: MissionEntry;
         <span className={cn("min-w-0 flex-1 truncate text-body", group === "closed" ? "text-subtle-foreground" : "text-foreground")} title={mission.title}>{mission.title}</span>
         <span className="shrink-0 text-caption text-muted-foreground"><Time mission={mission} /></span>
       </span>
-      {group === "turn" && turn[0] ? (
-        <span className="min-w-0 truncate pl-(--size-icon-sm) text-caption text-mission-hold">{t(missionPillKey(mission, turn[0]))}</span>
-      ) : group !== "closed" && mission.nodes.length > 0 ? (
-        <span className="pl-(--size-icon-sm)"><ProgressCells tones={missionCells(mission)} size="chip" /></span>
+      {group !== "closed" && ((group === "turn" && turn[0]) || mission.nodes.length > 0) ? (
+        <span className="flex min-w-0 items-center gap-xs pl-(--size-icon-sm)">
+          {group === "turn" && turn[0] ? (
+            <span className="min-w-0 flex-1 truncate text-caption text-mission-hold">{t(missionPillKey(mission, turn[0]))}</span>
+          ) : (
+            <span className="min-w-0 flex-1"><ProgressCells tones={missionCells(mission)} size="chip" /></span>
+          )}
+          <GateCount mission={mission} />
+        </span>
       ) : null}
     </RowButton>
   );
