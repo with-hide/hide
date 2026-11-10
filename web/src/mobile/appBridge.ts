@@ -45,9 +45,12 @@ export const keychain = {
   },
 };
 
-/** The camera scanner: the text of one QR code, or a rejection with `cancelled`, `camera_denied` or `camera_unavailable`. The camera permission is asked here, on the person's tap. */
-export async function scanQr(hint: string): Promise<string> {
-  const answer = await bridge().nativePromise("HideScanner", "scan", { hint }) as { value?: unknown };
+/** The words the native scanner draws (`ScannerText`): it owns no catalog, so the page sends them in its language. */
+export interface ScannerWords { title: string; hint: string; whereTitle: string; whereBody: string; deniedTitle: string; deniedBody: string; openSettings: string; close: string }
+
+/** The camera scanner: the text of one Hide pairing link, or a rejection with `cancelled`, `busy` or `invalid_text`. The camera permission is asked here, on the person's tap, and a camera that is refused or unusable is the scanner's own guidance screen, closed by the person. */
+export async function scanQr(text: ScannerWords): Promise<string> {
+  const answer = await bridge().nativePromise("HideScanner", "scan", { text: { ...text } }) as { value?: unknown };
   if (typeof answer.value !== "string") throw new Error("scan_invalid");
   return answer.value;
 }

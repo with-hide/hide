@@ -7,11 +7,15 @@ import { relayReady } from "./relayRuntime";
 import { appHost } from "./appHost";
 import { nativeCode, scanQr } from "./appBridge";
 
-/** The app's own camera view: it asks for the camera when the person taps, reads one code and gives its text to the same decoder. */
-async function scanInApp(t: TFunction, onPair: (pair: PairingQr) => void, fail: (error: "cameraError" | "qrError") => void): Promise<void> {
+/** The app's own camera view: it asks for the camera when the person taps, reads one Hide link (any other code is ignored) and gives its text to the same decoder. */
+export async function scanInApp(t: TFunction, onPair: (pair: PairingQr) => void, fail: (error: "cameraError" | "qrError") => void): Promise<void> {
   let text: string;
-  try { text = await scanQr(t("mobile.relay.scanHint")); }
-  catch (error) { if (nativeCode(error) !== "cancelled") fail("cameraError"); return; }
+  try {
+    text = await scanQr({
+      title: t("mobile.scanner.title"), hint: t("mobile.scanner.hint"), whereTitle: t("mobile.scanner.whereTitle"), whereBody: t("mobile.scanner.whereBody"),
+      deniedTitle: t("mobile.scanner.deniedTitle"), deniedBody: t("mobile.scanner.deniedBody"), openSettings: t("mobile.scanner.openSettings"), close: t("common.close"),
+    });
+  } catch (error) { if (nativeCode(error) !== "cancelled") fail("cameraError"); return; }
   try { await relayReady(); onPair(decodeQr(text)); }
   catch { fail("qrError"); }
 }
