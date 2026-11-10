@@ -5415,13 +5415,16 @@ mod tests {
 
     /// A gate that closes once a start's line is typed (a wake's record goes
     /// when the woken agent shows) is no reason to end the start: the wait
-    /// sends nothing, so its executor still gets its profile and the start
-    /// reads as started.
+    /// sends nothing, so its attempt still ends as what a fresh read of its
+    /// process shows. The order is held as state: the line is typed, the gate
+    /// is closed, the executor is `Ready` and its program runs, and only then
+    /// does the waiter enter, so a wait that asks the gate ends at its first
+    /// look and none can slip a decision in before.
     #[test]
-    fn a_gate_that_closes_after_a_start_was_typed_does_not_end_its_attempt() {
+    fn a_gate_that_closed_after_a_start_was_typed_does_not_end_the_wait_for_its_attempt() {
         use hide_node_link::panes::AgentExecEvent;
         let (holders, engine, pane) = shell_pane();
-        let start = profile_launch(&engine, &pane, answered("gw", None), &[]);
+        let id = hide_agent_hooks::hook_request::fresh_attempt().unwrap();
         let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let gated = OwnEngine {
             shared: Arc::clone(&engine.shared),
@@ -5437,17 +5440,24 @@ mod tests {
             })],
             saver: None,
         };
-        start_played(&gated, &holders, &start, WAIT, |attempt| {
-            assert_eq!(
-                engine.exec_attempt(&pane, attempt).unwrap(),
-                checked(attempt)
-            );
-            open.store(false, Ordering::Release);
-            reads(&holders, EXECUTOR, 41, executor_words(attempt));
-            exec_report(&engine, &pane, attempt, AgentExecEvent::Ready, EXECUTOR).unwrap();
-            reads(&holders, EXECUTOR, 41, words(&["claude", "--model", "x"]));
-        })
-        .unwrap();
+        let finish = attempt::Finish::new(&gated, &pane, &id);
+        gated
+            .type_agent_start(
+                &pane,
+                agents::PaneAgent::started("claude-code", Some("worker"), None),
+                "line",
+                false,
+                Some(checked(&id)),
+            )
+            .unwrap();
+        open.store(false, Ordering::Release);
+        reads(&holders, EXECUTOR, 41, executor_words(&id));
+        exec_report(&engine, &pane, &id, AgentExecEvent::Ready, EXECUTOR).unwrap();
+        reads(&holders, EXECUTOR, 41, words(&["claude", "--model", "x"]));
+        assert_eq!(
+            gated.await_attempt(finish, Instant::now() + Duration::from_secs(30)),
+            attempt::Outcome::Started
+        );
     }
 
     /// A start whose waiter goes before anything decided it ends its
