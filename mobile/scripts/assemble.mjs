@@ -15,8 +15,17 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // Files of the browser build that do nothing inside the app: the app registers no service worker.
 const NOT_IN_APP = new Set(['sw.js']);
 
+// A read of a published file is the same read every time, so a network stumble is tried again, a few times.
+const ATTEMPTS = 3;
+async function read(url, fetcher) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await get(url, fetcher); }
+    catch (error) { if (attempt === ATTEMPTS) throw error; }
+  }
+}
+
 async function json(url, fetcher) {
-  return JSON.parse((await get(url, fetcher)).bytes);
+  return JSON.parse((await read(url, fetcher)).bytes);
 }
 
 async function write(root, path, bytes) {
@@ -60,7 +69,7 @@ export async function assemble({ dist, out, origin = ORIGIN, fetcher = fetch }) 
   const retained = published.filter((number) => number !== current);
   for (const number of retained) {
     for (const [path, entry] of Object.entries(site.files).filter(([path]) => path.startsWith(`p/${number}/`))) {
-      const { bytes } = await get(`${origin}/${path}`, fetcher);
+      const { bytes } = await read(`${origin}/${path}`, fetcher);
       if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) throw new Error(`Retained phone file differs from the site inventory: ${path}`);
       await write(out, path, bytes);
     }

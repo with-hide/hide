@@ -5,6 +5,7 @@
 #   build  (default) the phone bundle, `cap sync`, copy the project to the mini, build the app for the simulator
 #          and run the HideShell tests there
 #   run    install the built app in a simulator of its own on the mini, launch it, print the simulator's id
+#          (HIDE_IOS_PAIR_LINK=<link> makes the debug build follow that pairing link at launch)
 #   clean  delete that simulator and the build state on the mini (the folder itself stays)
 #
 # This Mac cannot run Xcode, the mini can. Everything the mini builds lives in ~/hide-ios-build/<branch>/ there,
@@ -37,7 +38,13 @@ case "$command" in
             --exclude 'App/build' --exclude 'DerivedData' --exclude 'xcuserdata' --exclude '.build' \
             mobile/ios/ "$host:$remote/ios/"
         ;;
-    run | clean) ;;
+    run)
+        # Debug builds only: a pairing link the simulator follows at launch (see ShellViewController).
+        if [[ -n "${HIDE_IOS_PAIR_LINK:-}" ]]; then
+            printf '%s' "$HIDE_IOS_PAIR_LINK" | ssh "$host" "umask 077; mkdir -p '$remote' && cat > '$remote/pair-link'"
+        fi
+        ;;
+    clean) ;;
     *) printf 'usage: %s [build | run | clean]\n' "$0" >&2; exit 2 ;;
 esac
 

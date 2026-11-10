@@ -681,6 +681,31 @@ Without both installed CLI paths this external-binary case is explicitly skipped
 The existing phone browser journey checks that CSP blocks an external script.
 These checks prove the release contract, not actual credentials, hosting, DNS, a live upload or a physical phone; those remain the deployment node's acceptance checks.
 
+## The iOS app
+
+`mobile/` is the Capacitor host that carries the phone web app inside an iOS app (bundle id `me.grab.hide.ios`, team `GH6F6ZA497`, iPhone only, iOS 15 or later, the lowest Capacitor 8 supports); [ARCHITECTURE.md](ARCHITECTURE.md#the-ios-app-host) owns what it is.
+Xcode does not run on every Mac this repository is built on, so the app builds on the Mac mini and nothing about the build needs node or Rust there.
+
+`bash mobile/scripts/build-ios.sh` is the one command.
+It runs, on this machine:
+
+1. `bash scripts/verify-web.sh web build:phone`, the same phone build the hosted site uses (`HIDE_IOS_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`, for a run after only Swift changed);
+2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`;
+3. `mobile/scripts/assemble.mjs`, which fills `mobile/www/` (ignored): the loader and the current protocol's bundle from step 1, and every older `p/<n>/` bundle the production phone site still serves, each file read from `https://app.withhide.dev` and held to the size and SHA-256 that site's `phone-site.json` records (a file that differs, a missing file, or a page whose content policy is not the phone site's stops the build), then `protocols.json` as their union and no `sw.js`;
+4. `cap sync ios`, which copies that folder into the Xcode project;
+5. an `rsync` of `mobile/ios/` to `~/hide-ios-build/<branch>/ios/` on the machine named by `HIDE_IOS_BUILD_HOST` (default `mini`), where `mobile/scripts/mini-ios.sh` is piped over `ssh` to run `xcodebuild` for the simulator with derived data and the Swift packages inside that folder, then the `HideShell` unit tests on an iOS Simulator.
+
+`bash mobile/scripts/build-ios.sh run` installs the built app in a simulator of its own on the mini (`hide-ios-<branch>`, created if missing) and launches it; with `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build).
+`bash mobile/scripts/build-ios.sh clean` deletes that simulator and the build state there; the branch folder itself stays.
+`bash scripts/verify-web.sh mobile test` runs the assembler's unit test (a retained file that differs from the site's inventory, or a page whose content policy is weaker, stops it), which `pr.yml`'s checks lane runs.
+A simulator capture is `xcrun simctl io <device> screenshot <file>` on the mini.
+The app is built unsigned for the simulator; signing, TestFlight and the release lane belong to the release workflow, not this command.
+
+The bundles in the app are chosen when the app is built, and the app never fetches code when it runs.
+A desktop that speaks a newer phone protocol than any bundle inside the app makes the loader show its version screen worded for the app ("Update the Hide app"), and only a new app release clears it.
+So a protocol bump and an app release take this order: raise `PHONE_PROTOCOL` and release the desktop, whose candidate uploads the new `p/<n>/` to the hosted site; build the app from that main (the assembler picks the new bundle up from source and the older ones from the site); submit it and wait for approval; and only then ship the desktop that speaks the new protocol to users, because until the app is approved an iOS phone stays on the version screen.
+Raising a protocol number for an addition is not needed ([ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion)), which keeps this order for the rare change an older side would misread.
+
 ## Mobile relay server
 
 Installing, updating and operating the production relay is owned by a private operations document, not this guide.

@@ -36,8 +36,16 @@ case "$command" in
         id=$(device_id)
         [[ -n "$id" ]] || id=$(xcrun simctl create "$device_name" 'iPhone 17' com.apple.CoreSimulator.SimRuntime.iOS-26-5)
         xcrun simctl bootstatus "$id" -b > /dev/null
+        xcrun simctl terminate "$id" "$bundle_id" 2> /dev/null || true
         xcrun simctl install "$id" "$derived/Build/Products/Debug-iphonesimulator/App.app"
-        xcrun simctl launch "$id" "$bundle_id"
+        # A pairing link for the simulator check (debug builds only) arrives in a private file, never in an argument.
+        link_file=$base/pair-link
+        if [[ -f "$link_file" ]]; then
+            SIMCTL_CHILD_HIDE_DEBUG_PAIR_LINK=$(cat "$link_file") xcrun simctl launch "$id" "$bundle_id"
+            rm -f "$link_file"
+        else
+            xcrun simctl launch "$id" "$bundle_id"
+        fi
         printf 'simulator: %s\n' "$id"
         ;;
     clean)

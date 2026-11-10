@@ -119,3 +119,20 @@ final class NavigationPolicyTests: XCTestCase {
 }
 
 private final class Dummy: NSObject, WKNavigationDelegate {}
+
+final class PhoneRouterTests: XCTestCase {
+    func testProtocolBundlesAreTheirOwnPagesAndEverythingElseKeepsCapacitorsRule() {
+        var router = PhoneRouter()
+        router.basePath = "/app"
+        XCTAssertEqual(router.route(for: "/p/5/"), "/app/p/5/index.html")
+        XCTAssertEqual(router.route(for: "/p/12"), "/app/p/12/index.html")
+        XCTAssertEqual(router.route(for: "/"), "/app/index.html")
+        XCTAssertEqual(router.route(for: "/p/5/assets/phone-bundle-abc.js"), "/app/p/5/assets/phone-bundle-abc.js")
+        XCTAssertEqual(router.route(for: "/p/5/look-frame.html"), "/app/p/5/look-frame.html")
+        XCTAssertEqual(router.route(for: "/assets/relay_bg.wasm"), "/app/assets/relay_bg.wasm")
+        // Not a protocol folder: the loader answers, as for any address of a page.
+        XCTAssertEqual(router.route(for: "/p/05/"), "/app/index.html")
+        XCTAssertEqual(router.route(for: "/p/5/x/"), "/app/index.html")
+        XCTAssertEqual(router.route(for: "/p/"), "/app/index.html")
+    }
+}
