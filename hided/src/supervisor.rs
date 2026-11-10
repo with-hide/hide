@@ -868,7 +868,7 @@ async fn prepare(
             detail: format!("{}: {}", inspected.state_dir, held.join(", ")),
         });
     }
-    let Some(target_socket) = inspected.herdr_socket.clone() else {
+    let Some(target_socket) = inspected.engine_scope.clone() else {
         if !inspected
             .failed
             .iter()
