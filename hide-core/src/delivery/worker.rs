@@ -1182,12 +1182,19 @@ fn settle(
     let mut accepted = vec![false; batch.len()];
     let mut transitions = false;
     for (index, request) in batch.iter().enumerate() {
+        let probe_started = Instant::now();
+        probe_effect(&request.effect, "current_start", probe_started.elapsed());
         let result = match current(runtime, request, &candidate, now) {
             Err(code) => Err(code),
             // Checked after each request: a later one that drops a letter
             // can bring the batch's end back under a limit this one broke.
-            Ok(()) => match apply(&mut candidate, request, now).and_then(|landed| {
+            Ok(()) => match {
+                probe_effect(&request.effect, "current_end", probe_started.elapsed());
+                apply(&mut candidate, request, now)
+            }.and_then(|landed| {
+                probe_effect(&request.effect, "applied", probe_started.elapsed());
                 candidate.check()?;
+                probe_effect(&request.effect, "checked", probe_started.elapsed());
                 Ok(landed)
             }) {
                 Ok((value, publish)) => {
