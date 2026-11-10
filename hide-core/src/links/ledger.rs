@@ -731,6 +731,11 @@ pub struct SessionWorkSummary {
     pub open_missed: usize,
     pub subtree_open_missed: usize,
     pub missed: Vec<MissedWork>,
+    /// The questions to the operator that still wait, oldest first, as the
+    /// record's `나를 기다리는 것` lists them; the row reads them (status-model.md,
+    /// A question still waiting). Core only.
+    #[serde(skip)]
+    pub asks: Vec<MissedWork>,
     /// The line the record keeps for the session's last judged turn, empty
     /// when none was judged: a task's `마지막에 한 말` (PRD
     /// project-panel-results D-21). Core only.

@@ -285,6 +285,7 @@ impl Runtime {
                     crate::model::AskSubject::MissionAttention { .. } => "mission_attention",
                     crate::model::AskSubject::InputUnconfirmed { .. } => "input_unconfirmed",
                     crate::model::AskSubject::HumanTurn { .. } => "human_turn",
+                    crate::model::AskSubject::OpenAsk { .. } => "open_ask",
                 }),
             }));
         }

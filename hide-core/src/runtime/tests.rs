@@ -117,6 +117,8 @@ mod named_tab;
 mod node_agent_areas;
 #[path = "tests/node_issues.rs"]
 mod node_issues;
+#[path = "tests/open_asks.rs"]
+mod open_asks;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
 mod overview_graph;

@@ -1259,6 +1259,9 @@ impl Runtime {
         let recorded =
             crate::agent_state::work::family::Recorded::from_summaries(projects.values());
         summaries.projects = projects;
+        // The sessions' open questions are read from the summaries.
+        self.plans.asks_edit += 1;
+        self.refresh_plan_reviews();
         self.refresh_inactive_groups();
         if recorded != self.recorded_pulls {
             self.recorded_pulls = recorded;

@@ -628,7 +628,6 @@ mod tests {
             pull_requests: Vec::new(),
             answer: None,
             letters: None,
-            asked: Vec::new(),
         });
         request.pull_requests.push(AgentPullRequestSnapshot {
             number: pull.number,
@@ -708,6 +707,7 @@ mod tests {
                     open_missed: 0,
                     subtree_open_missed: 0,
                     missed: Vec::new(),
+                    asks: Vec::new(),
                     last_line: None,
                     committed_at_unix_ms: None,
                     parent: parent.map(session),

@@ -13,9 +13,10 @@ import { cn } from "./lib/utils";
 import { renderMarkdown } from "./mobile/markdown";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { sessionOfAgent } from "./sessionWork";
-import { type AgentRow, type AskedTurn, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PeerLine, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead } from "./snapshot";
+import { type AgentRow, type LabelEnd, type LetterLine, type LetterMark, type PaneHeader, type PeerLine, type PaneTurnRequest, type RequestSender, type TurnAnswer, type TurnAnswerRead, type WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
-import { askedLines, lettersBefore, peerCount } from "./turnCard";
+import { lettersBefore, peerCount } from "./turnCard";
+import { OpenAskList, OpenAsksMark } from "./components/open-asks";
 
 /** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
@@ -134,7 +135,7 @@ export function PaneTurnCard({ paneId, actions, trigger, anchorClassName = "flex
             dismiss();
           }}
         >
-          <TurnCard agent={agent} header={header} onReadWhole={(offset) => actions.readTurnAnswer(paneId, offset)} onRecord={session ? () => {
+          <TurnCard agent={agent} header={header} onReadWhole={(offset) => actions.readTurnAnswer(paneId, offset)} onAsk={(asked, id, status) => actions.setMissedStatus(asked, id, status)} onRecord={session ? () => {
             close();
             actions.openSessionRecord(session);
           } : null} />
@@ -306,21 +307,6 @@ function LetterRow({ letter }: { letter: LetterLine }) {
   );
 }
 
-function AskedRow({ asked }: { asked: AskedTurn }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <CardRow
-      glyph={<span className="font-semibold text-warning">!</span>}
-      who={t("paneTurn.askedTo")}
-      words={<span className="text-warning">{asked.line} · {t("paneTurn.unanswered")}</span>}
-      at={asked.at_unix_ms}
-      className="-mx-xs rounded-xs bg-warning/10 px-xs"
-      label={`${t("paneTurn.askedTo")} · ${asked.line} · ${t("paneTurn.unanswered")}`}
-      data-turn-card-asked="true"
-    />
-  );
-}
-
 /**
  * The agent's answer to the request: the label's line in bold and the first
  * lines of its own last message dimmed under it, or that message alone in
@@ -379,12 +365,13 @@ function AnswerItem({ answer, pill, read, onReadWhole, opened = false }: { answe
  * rail: the turns before (oldest first, dimmed, each ringed in how it ended),
  * the shown request in a bubble under who sent it and when (its summary and
  * its own first two lines, who asked after), the agent's answer to it once
- * that turn is over, the agents it worked with since, one line each, which
- * opens into the letters in time order, the questions its later turns put to
- * the operator under them, and the agent's half now: what it does as a coloured verb
- * with the label's words. A part with nothing to say is not drawn (B7).
+ * that turn is over, the questions it put to the operator that still wait
+ * (나를 기다리는 것, the session record's list, each with 넘기기), the agents it
+ * worked with since, one line each, which opens into the letters in time
+ * order, and the agent's half now: what it does as a coloured verb with the
+ * label's words. A part with nothing to say is not drawn (B7).
  */
-export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened, lettersOpened }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null; onReadWhole: (offset: number) => void; /** The gallery's opened answer. */ answerOpened?: boolean; /** The gallery's opened letters. */ lettersOpened?: boolean }) {
+export function TurnCard({ agent, header, onRecord, onReadWhole, onAsk, answerOpened, lettersOpened }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null; onReadWhole: (offset: number) => void; onAsk: (session: WorkSession, id: string, status: "open" | "dismissed") => void; /** The gallery's opened answer. */ answerOpened?: boolean; /** The gallery's opened letters. */ lettersOpened?: boolean }) {
   const { t } = useInterfaceTranslation();
   const read = useShellStore((state) => (state.rest?.turn_answer?.pane_id === agent.pane_id ? state.rest.turn_answer : undefined));
   const view = agent.request;
@@ -401,11 +388,15 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened, l
   const answerIsNow = answer !== null && !view?.later_by && response !== null && !response.asks && !header?.working;
   const [lettersOpen, setLettersOpen] = useState(lettersOpened ?? false);
   const letters = view?.letters;
-  const asked = askedLines(view?.asked, response?.asks === true);
+  const open = agent.open_asks ?? null;
+  // A line put away here is undone in the agent's session, also once the core lists none.
+  const asking = open?.session ?? sessionOfAgent(agent);
+  // A question of the list laid on the row is the list's to say, not a second line's.
+  const askIsListed = header?.band?.subject?.cause === "open_ask";
   const before = lettersBefore(letters);
   const progress = letters?.progress ?? 0;
-  const later = letters !== undefined || asked.length > 0;
-  const rail = raw !== null || response !== null || earlier.length > 0 || answer !== null || later;
+  const later = letters !== undefined;
+  const rail = raw !== null || response !== null || earlier.length > 0 || answer !== null || later || open !== null;
   return (
     <div className="flex min-w-0 flex-col [word-break:keep-all]" data-turn-card="true">
       <div className="flex flex-col gap-sm px-sm pt-sm">
@@ -447,6 +438,22 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened, l
                 opened={answerOpened}
               />
             ) : null}
+            <OpenAskList
+              asks={open?.items ?? []}
+              onSet={(id, status) => asking && onAsk(asking, id, status)}
+              time={(at) => <Clock at={at} />}
+              frame={(list, count) => (
+                <RailItem dot="past-asks" data-turn-card-asks={count}>
+                  <div className="flex min-w-0 flex-col rounded-md border border-warning/60 bg-warning/10 px-sm pt-xs">
+                    <h3 className="flex items-center gap-xs text-micro font-semibold text-warning">
+                      <OpenAsksMark count={count} />
+                      <span>{t("record.waiting")}</span>
+                    </h3>
+                    {list}
+                  </div>
+                </RailItem>
+              )}
+            />
             {later ? (
               <RailItem dot="letters" data-turn-card-letters={letters?.letters ?? 0}>
                 {letters ? (
@@ -479,14 +486,9 @@ export function TurnCard({ agent, header, onRecord, onReadWhole, answerOpened, l
                     )}
                   </>
                 ) : null}
-                {asked.length > 0 ? (
-                  <ol className={cn("flex min-w-0 flex-col gap-xxs", letters && "mt-xs")}>
-                    {asked.map((one, index) => <AskedRow key={index} asked={one} />)}
-                  </ol>
-                ) : null}
               </RailItem>
             ) : null}
-            {response && !answerIsNow ? (
+            {response && !answerIsNow && !askIsListed ? (
               <RailItem dot={tone}>
                 <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-turn-card-response="true">
                   <span className={cn("mr-xs inline-flex items-center rounded-full px-xs font-semibold", TONE[tone])}>{response.verb}</span>

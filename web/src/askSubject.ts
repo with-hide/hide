@@ -10,7 +10,7 @@ import type { AskSubject } from "./snapshot";
 
 export { humanTurnText };
 
-/** What is asked: a plan review's words, a mission decision's own line, a mission node waiting on the operator (`<node> · <why>`), a brief or letter the agent has not confirmed (`input_unconfirmed`), or a person's turn, `인증 · github.com/login` (PRD ask-human B9), whose device a row draws as its chip. */
+/** What is asked: a plan review's words, a mission decision's own line, a mission node waiting on the operator (`<node> · <why>`), a brief or letter the agent has not confirmed (`input_unconfirmed`), a person's turn, `인증 · github.com/login` (PRD ask-human B9), whose device a row draws as its chip, or a question the agent put to the operator that still waits, in its own words (`open_ask`). */
 export function askSubjectText(t: TFunction<"translation">, subject: AskSubject): string {
   switch (subject.cause) {
     case "plan_review":
@@ -26,6 +26,8 @@ export function askSubjectText(t: TFunction<"translation">, subject: AskSubject)
     }
     case "human_turn":
       return humanTurnText(t, subject);
+    case "open_ask":
+      return subject.line;
   }
 }
 

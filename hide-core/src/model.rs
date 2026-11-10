@@ -1727,6 +1727,30 @@ pub enum AskSubject {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device: Option<String>,
     },
+    /// A question the agent put to the operator that still waits, as Hide
+    /// AI recorded it in the session's `나를 기다리는 것`: the record's id
+    /// for it, which 넘기기 names, and its words (docs/status-model.md, A
+    /// question still waiting).
+    OpenAsk { id: String, line: String },
+}
+
+/// The questions a row's session put to the operator that still wait, as
+/// the session record's `나를 기다리는 것` lists them, oldest first: what
+/// the row's `?N`, the pane's mark and the turn card draw, and the session
+/// 넘기기 names (docs/status-model.md, A question still waiting).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpenAsksSnapshot {
+    pub session: crate::links::ledger::SessionIdentity,
+    pub items: Vec<OpenAskSnapshot>,
+}
+
+/// One question that still waits on the operator.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpenAskSnapshot {
+    /// The record's id for it, which 넘기기 names.
+    pub id: String,
+    pub text: String,
+    pub at_unix_ms: u64,
 }
 
 /// A person's turn a row's own agent declared, as the row carries it.
@@ -1992,6 +2016,12 @@ pub struct SidebarAgentSnapshot {
     /// core lays stays read).
     #[serde(skip)]
     pub(crate) laid_asks: BTreeSet<String>,
+    /// The questions the row's session put to the operator that still wait
+    /// and that the operator has sent nothing since, whether or not one is
+    /// laid on the row (`runtime/plans.rs::lay_reviews_on`); absent while
+    /// none does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_asks: Option<OpenAsksSnapshot>,
     /// Derived: whether the row draws its status word. It leaves working and
     /// read rows, where the mark already says it, and stays on rows that
     /// still concern the operator.
@@ -8891,6 +8921,10 @@ mod wire_enum_tests {
                 place: "github.com/login".into(),
                 device: Some("mini".into()),
             },
+            AskSubject::OpenAsk {
+                id: "m1".into(),
+                line: "line".into(),
+            },
         ];
         for variant in &subjects {
             match variant {
@@ -8898,7 +8932,8 @@ mod wire_enum_tests {
                 | AskSubject::MissionDecision { .. }
                 | AskSubject::MissionAttention { .. }
                 | AskSubject::InputUnconfirmed { .. }
-                | AskSubject::HumanTurn { .. } => {}
+                | AskSubject::HumanTurn { .. }
+                | AskSubject::OpenAsk { .. } => {}
             }
         }
         let causes = subjects
