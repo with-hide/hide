@@ -504,3 +504,73 @@ fn the_relay_starts_only_with_an_owner_only_readable_key() {
         );
     }
 }
+
+/// An older hided reads a pushing relay's `registered` with its own shape (a
+/// copy of the unit variant it knew) and keeps serving its phones.
+#[tokio::test]
+async fn an_older_device_reads_a_pushing_relay_and_keeps_its_phones() {
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum OldServer {
+        Challenge { challenge: serde_json::Value },
+        Registered,
+    }
+    let apple = Apple::start().await;
+    let key = TestKey::new();
+    let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    let device_key = DeviceKey::from_seed(&[84; 32]);
+    let hello = DeviceHello::new(&device_key.public_key(), 7).unwrap();
+    send(
+        &mut device,
+        hide_relay_protocol::admission::ClientMessage::Device {
+            hello: hello.clone(),
+        },
+    )
+    .await;
+    let ServerMessage::Challenge { challenge } = control(&mut device).await else {
+        panic!("challenge")
+    };
+    send(
+        &mut device,
+        hide_relay_protocol::admission::ClientMessage::Proof {
+            signature: device_key.sign(&hello, &challenge).unwrap(),
+        },
+    )
+    .await;
+    let tokio_tungstenite::tungstenite::Message::Text(text) = next(&mut device).await else {
+        panic!("registered")
+    };
+    assert_eq!(text.as_str(), r#"{"type":"registered","push":true}"#);
+    assert_eq!(
+        serde_json::from_str::<OldServer>(&text).unwrap(),
+        OldServer::Registered
+    );
+    let mut phone = fixture.socket("192.0.2.2").await;
+    join(&mut phone, &hello.room, &mut device).await;
+    assert!(apple.requests().is_empty());
+    fixture.stop().await;
+}
+
+/// The documented body vector (`docs/RELAY_PROTOCOL.md`, The notification
+/// body): RFC 8291 Appendix A's ciphertext as hided sends it, in the body the
+/// relay builds for Apple.
+#[test]
+fn the_documented_apple_body_wraps_the_vector_ciphertext() {
+    use hide_relay::apns::Apns;
+    use hide_relay_protocol::admission::{PushEnvironment, PushRequest};
+    let vector = "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN";
+    let request = PushRequest {
+        id: 1,
+        environment: PushEnvironment::Sandbox,
+        token: TOKEN.into(),
+        collapse: "collapse".into(),
+        payload: vector.into(),
+    };
+    assert_eq!(
+        String::from_utf8(Apns::body(&request).unwrap()).unwrap(),
+        format!(
+            r#"{{"aps":{{"alert":{{"loc-key":"hide-notification"}},"mutable-content":1}},"hide":"{vector}"}}"#
+        )
+    );
+}
