@@ -27,6 +27,10 @@ name: web e2e lane
 
 on:
   workflow_call:
+    outputs:
+      completed:
+        description: Actual completed test runs from the single-shard repeat report.
+        value: ${{ jobs.e2e.outputs.completed }}
     inputs:
       lane:
         description: Names the lane in job names and artifact names.
@@ -164,6 +168,8 @@ jobs:
     # A repetition is bounded by the repeat lane's budget of test runs, not by
     # the suite, and a Windows runner is the slowest.
     timeout-minutes: ${{ inputs.specs != '' && 150 || 40 }}
+    outputs:
+      completed: ${{ steps.repeat-report.outputs.completed }}
     defaults:
       run:
         shell: bash
@@ -313,6 +319,11 @@ jobs:
           else
             bash scripts/verify-web.sh web e2e "${args[@]}"
           fi
+      - name: Report completed repeat runs
+        id: repeat-report
+        if: inputs.specs != ''
+        timeout-minutes: 2
+        run: python3 scripts/ci-repeat.py report --playwright web/e2e-report.json
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

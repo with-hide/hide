@@ -68,8 +68,8 @@ jobs:
       runner: ${{ steps.resolve.outputs.runner }}
       os: ${{ steps.resolve.outputs.os }}
       repeat: ${{ steps.repeat.outputs.repeat }}
-      web-tests: ${{ steps.repeat.outputs.web-tests }}
-      rust-tests: ${{ steps.repeat.outputs.rust-tests }}
+      run-web: ${{ steps.repeat.outputs.run-web }}
+      run-rust: ${{ steps.repeat.outputs.run-rust }}
       rust-plan: ${{ steps.rust-count.outputs.rust-plan || steps.resolve.outputs.rust-plan }}
     steps:
       - uses: actions/checkout@v7
@@ -148,33 +148,20 @@ jobs:
         id: repeat
         timeout-minutes: 2
         env:
-          COUNTED: ${{ steps.resolve.outputs.counted }}
-          WEB_COUNT: ${{ steps.web-count.outputs.web-count || '0' }}
-          RUST_COUNT: ${{ steps.rust-count.outputs.rust-count || '0' }}
+          EVENT: ${{ github.event_name }}
+          WEB_COUNT: ${{ steps.web-count.outputs.web-count }}
+          RUST_COUNT: ${{ steps.rust-count.outputs.rust-count }}
           NAMED: ${{ steps.resolve.outputs.repeat }}
           WEB: ${{ steps.resolve.outputs.web }}
           RUST: ${{ steps.resolve.outputs.rust }}
         run: |
-          if [ "$COUNTED" = true ]; then
-            python3 scripts/ci-repeat.py budget --web "$WEB_COUNT" --rust "$RUST_COUNT" | tee "$RUNNER_TEMP/budget.txt"
-            repeat=$(sed -n 's/^repeat=//p' "$RUNNER_TEMP/budget.txt")
-            echo "web-tests=$WEB_COUNT" >> "$GITHUB_OUTPUT"
-            echo "rust-tests=$RUST_COUNT" >> "$GITHUB_OUTPUT"
-            echo "$WEB_COUNT web tests and $RUST_COUNT Rust tests run: each runs $repeat times." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$WEB" = '' ] && [ "$RUST" = '[]' ]; then
-            echo "repeat=0" >> "$GITHUB_OUTPUT"
-            echo "No changed test to repeat." >> "$GITHUB_STEP_SUMMARY"
-          else
-            # A hand run names its repeat; each named module must have a test.
-            echo "repeat=$NAMED" >> "$GITHUB_OUTPUT"
-            echo "Each named test runs $NAMED times." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python3 scripts/ci-repeat.py choose --event "$EVENT" --web "$WEB" --rust "$RUST" \
+            --repeat "$NAMED" --web-count "$WEB_COUNT" --rust-count "$RUST_COUNT"
 
   web:
     name: repeat web specs
     needs: count
-    # Nothing to run when the pull request's specs list no test.
-    if: needs.count.outputs.web != '' && needs.count.outputs.web-tests != '0'
+    if: needs.count.outputs.run-web == 'true'
     uses: ./.github/workflows/web-e2e.yml
     permissions:
       contents: read
@@ -189,11 +176,12 @@ jobs:
   rust:
     name: repeat Rust tests (${{ needs.count.outputs.os }})
     needs: count
-    # A pull request's modules that list no test (a helper file) run nothing.
-    if: needs.count.outputs.rust != '[]' && needs.count.outputs.rust-tests != '0'
+    if: needs.count.outputs.run-rust == 'true'
     runs-on: ${{ needs.count.outputs.runner }}
     # The budget's 200 runs, after a build of the changed crates' tests.
     timeout-minutes: 90
+    outputs:
+      completed: ${{ steps.report.outputs.completed }}
     defaults:
       run:
         shell: bash
@@ -239,24 +227,42 @@ jobs:
         run: bash scripts/install-nextest.sh
       - name: Repeat the Rust tests
         # `--retries 0` over the `ci` profile's one retry, so one failed run
-        # fails the job. A pull request's modules were listed by the count
-        # job; one that lists no test (a helper file, or tests that are all
-        # `#[ignore]` and have their own lane, `gh workflow run
-        # remote-mailbox.yml -f repeat=10`) runs none here and warns. A hand
-        # run that names a module with no test fails.
+        # fails the job. The count job expands a PR helper or all-ignored
+        # module to its crate's whole `it` binary. Once chosen, a plan that
+        # runs no test fails on a PR as on a hand run.
         timeout-minutes: 75
         env:
           PLAN: ${{ needs.count.outputs.rust-plan }}
           REPEAT: ${{ needs.count.outputs.repeat }}
-          NO_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'fail' || 'warn' }}
         run: |
           set -euo pipefail
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+          # Only reports from this execution can prove completed work.
+          rm -f target/nextest/ci/junit*.xml
           python3 scripts/ci-repeat.py plan-lines --plan "$PLAN" > "$RUNNER_TEMP/filters.txt"
           while IFS=$'\t' read -r package expression; do
             echo "::group::$package ${expression:-the whole it binary} x $REPEAT"
             filter=()
             if [ -n "$expression" ]; then filter=(-E "$expression"); fi
-            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests="$NO_TESTS" -p "$package" --test it ${filter[@]+"${filter[@]}"}
+            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests=fail -p "$package" --test it ${filter[@]+"${filter[@]}"}
             echo "::endgroup::"
           done < "$RUNNER_TEMP/filters.txt"
+      - name: Report completed Rust runs
+        id: report
+        timeout-minutes: 2
+        run: python3 scripts/ci-repeat.py report --junit target/nextest/ci/junit*.xml
+
+  verdict:
+    name: every chosen test ran
+    needs: [count, web, rust]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 2
+      - name: Require completed runs from every chosen leg
+        timeout-minutes: 2
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-repeat.py verdict

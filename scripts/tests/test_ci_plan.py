@@ -908,8 +908,8 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
-        # The count, the web specs' run and the Rust modules' run.
-        return 3
+        # The count, the web specs' run, the Rust modules' run and the verdict.
+        return 4
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -1057,11 +1057,10 @@ class Workflows(unittest.TestCase):
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
         # for the device link's crates, its device test and the device kit
         # contract (with-hide/hide-private#501).
-        # The repeat lane's three jobs (the count, the web specs and the Rust
-        # modules, each only for the tests the pull request changes) raise it
-        # from 51 to 54: a changed test is the one input the other lanes do not
-        # run many times.
-        self.assertLessEqual(most, 54, "a run starts more jobs than the suites and native SDK contracts need")
+        # The repeat lane's count, web specs, Rust modules and final verdict
+        # raise it from 51 to 55. The verdict requires actual completed runs
+        # from every leg the count chose.
+        self.assertLessEqual(most, 55, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

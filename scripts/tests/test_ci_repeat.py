@@ -263,20 +263,50 @@ class Resolve(unittest.TestCase):
 class Command(unittest.TestCase):
     """The script as the workflow runs it."""
 
-    def run_script(self, *args, stdin=None):
+    def run_script(self, *args, stdin=None, needs=None):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             result = subprocess.run(
                 [sys.executable, str(SCRIPT), *args], input=stdin, text=True, capture_output=True,
-                env={**os.environ, "GITHUB_OUTPUT": str(output)},
+                env={**os.environ, "GITHUB_OUTPUT": str(output), **({"NEEDS": json.dumps(needs)} if needs is not None else {})},
             )
             written = output.read_text(encoding="utf-8") if output.exists() else ""
         return result, dict(line.split("=", 1) for line in written.splitlines())
 
-    def test_budget_writes_the_repeat_and_the_total(self):
-        result, outputs = self.run_script("budget", "--web", "3", "--rust", "47")
+    def test_hand_and_pr_decisions_always_write_both_run_flags(self):
+        for event, web, rust, extra, expected in [
+            ("workflow_dispatch", "web/e2e/s3.spec.ts", "[]", ["--repeat", "10"], ("true", "false", "10")),
+            ("workflow_dispatch", "", '[{"package":"hided","module":"seat"}]', ["--repeat", "3"], ("false", "true", "3")),
+            ("pull_request", "web/e2e/s3.spec.ts", "[]", ["--web-count", "50"], ("true", "false", "4")),
+            ("pull_request", "web/e2e/s3.spec.ts", '[{"package":"hided","module":"seat"}]',
+             ["--web-count", "3", "--rust-count", "47"], ("true", "true", "4")),
+            ("pull_request", "", "[]", [], ("false", "false", "0")),
+        ]:
+            with self.subTest(event=event, expected=expected):
+                result, outputs = self.run_script("choose", "--event", event, "--web", web, "--rust", rust, *extra)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((outputs["run-web"], outputs["run-rust"], outputs["repeat"]), expected)
+
+    def test_a_pr_selection_needs_a_real_positive_count(self):
+        for kind, selection in (("web", "web/e2e/s3.spec.ts"), ("rust", '[{"package":"hided","module":"seat"}]')):
+            for count in ("", "0", "-1"):
+                with self.subTest(kind=kind, count=count):
+                    result, outputs = self.run_script(
+                        "choose", "--event", "pull_request", "--web", selection if kind == "web" else "",
+                        "--rust", selection if kind == "rust" else "[]", f"--{kind}-count", count,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(outputs, {})
+
+    def test_the_workflow_verdict_exits_nonzero_for_a_successful_zero_run(self):
+        needs = {"count": {"result": "success", "outputs": {"run-web": "true", "run-rust": "false", "repeat": "10"}},
+                 "web": {"result": "success", "outputs": {"completed": "0"}}, "rust": {"result": "skipped"}}
+        result, _ = self.run_script("verdict", needs=needs)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("0 completed test runs", result.stderr)
+        needs["web"]["outputs"]["completed"] = "10"
+        result, _ = self.run_script("verdict", needs=needs)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(outputs, {"repeat": "4", "total": "50"})
 
     def test_a_hand_run_resolves_to_outputs_the_jobs_read(self):
         result, outputs = self.run_script(
@@ -312,6 +342,94 @@ class Command(unittest.TestCase):
         plan = json.dumps([{"package": "hided", "filter": "test(/^(seat)::/)", "tests": 1}, {"package": "hide-platform", "filter": "", "tests": 9}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual(result.stdout, "hided\ttest(/^(seat)::/)\nhide-platform\t\n")
+
+
+class Verdict(unittest.TestCase):
+    """Chosen tests cannot disappear between selection and a green workflow."""
+
+    def needs(self, event, kind, completed="30", result="success"):
+        decision = repeat.choose(event, "web/e2e/s3.spec.ts" if kind == "web" else "",
+                                 [{"package": "hided", "module": "seat"}] if kind == "rust" else [], "3", "100", "100")
+        return {"count": {"result": "success", "outputs": decision},
+                "web": {"result": "skipped", "outputs": {}}, "rust": {"result": "skipped", "outputs": {}},
+                kind: {"result": result, "outputs": {"completed": completed}}}
+
+    def test_a_hand_run_and_a_pr_require_actual_runs_of_each_chosen_kind(self):
+        for event in ("workflow_dispatch", "pull_request"):
+            for kind in ("web", "rust"):
+                with self.subTest(event=event, kind=kind):
+                    repeat.verdict(self.needs(event, kind))
+                    for count in ("", "0", "null", "-1", "1", "29"):
+                        with self.subTest(completed=count), self.assertRaises(ValueError):
+                            repeat.verdict(self.needs(event, kind, completed=count))
+                    for outcome in ("skipped", "cancelled", "failure"):
+                        with self.subTest(outcome=outcome), self.assertRaises(ValueError):
+                            repeat.verdict(self.needs(event, kind, result=outcome))
+
+    def test_missing_decisions_failed_count_and_missing_jobs_fail_closed(self):
+        for field in ("run-web", "run-rust", "repeat"):
+            needs = self.needs("workflow_dispatch", "web")
+            del needs["count"]["outputs"][field]
+            with self.subTest(field=field), self.assertRaises((ValueError, KeyError)):
+                repeat.verdict(needs)
+        needs = self.needs("pull_request", "rust")
+        needs["count"]["result"] = "failure"
+        with self.assertRaises(ValueError):
+            repeat.verdict(needs)
+        del needs["count"]
+        with self.assertRaises(KeyError):
+            repeat.verdict(needs)
+
+    def test_only_a_pr_with_nothing_chosen_may_skip_both_legs(self):
+        decision = repeat.choose("pull_request", "", [], "", "", "")
+        needs = {"count": {"result": "success", "outputs": decision},
+                 "web": {"result": "skipped"}, "rust": {"result": "skipped"}}
+        repeat.verdict(needs)
+        decision["repeat"] = "10"
+        with self.assertRaises(ValueError):
+            repeat.verdict(needs)
+
+    def test_the_required_verify_aggregate_receives_a_failed_repeat_lane(self):
+        lanes = {"lanes": '["repeat"]'}
+        needs = {lane: {"result": "failure" if lane == "repeat" else "skipped"} for lane in ci.LANES}
+        needs["plan"] = {"result": "success", "outputs": lanes}
+        with self.assertRaises(ValueError):
+            ci.aggregate(needs)
+
+
+class Reports(unittest.TestCase):
+    """Execution reports, rather than a list or a successful shell, prove work."""
+
+    def test_playwright_counts_passed_results_inside_nested_suites_and_repeat_copies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            for statuses, expected in ((["passed"] * 10 + ["skipped"], 10), (["skipped"], 0), ([], 0)):
+                path.write_text(json.dumps({"suites": [{"suites": [{"specs": [{"tests": [
+                    {"results": [{"status": status}]} for status in statuses
+                ]}]}]}]}), encoding="utf-8")
+                if expected:
+                    self.assertEqual(repeat.completed_runs(str(path), None), expected)
+                else:
+                    with self.assertRaisesRegex(ValueError, "zero tests"):
+                        repeat.completed_runs(str(path), None)
+            path.write_text('{"errors":[{"message":"No tests found"}]}', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                repeat.completed_runs(str(path), None)
+
+    def test_nextest_counts_stress_iterations_and_reports_from_multiple_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / f"junit.{index}.xml" for index in range(2)]
+            for path in paths:
+                path.write_text('<testsuites>' + ''.join(
+                    f'<testsuite name="it@stress-{index}"><testcase name="one"/><testcase name="ignored"><skipped/></testcase></testsuite>'
+                    for index in range(3)
+                ) + '</testsuites>', encoding="utf-8")
+            self.assertEqual(repeat.completed_runs(None, paths), 6)
+            paths[0].write_text('<testsuites><testsuite><testcase><skipped/></testcase></testsuite></testsuites>', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "zero tests"):
+                repeat.completed_runs(None, paths[:1])
+            with self.assertRaises(OSError):
+                repeat.completed_runs(None, [Path(directory) / "missing.xml"])
 
 
 if __name__ == "__main__":
