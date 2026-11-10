@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn a_first_run_keeps_the_panes_the_hooks_recorded_and_reads_them_once() {
         let home = tempfile::tempdir().unwrap();
-        let panes = hide_agent_hooks::counters::state_directory(home.path());
+        let panes = hide_agent_hooks::counters::state_directory(home.path()).unwrap();
         std::fs::create_dir_all(&panes).unwrap();
         std::fs::write(
             panes.join("w1_p1.json"),

@@ -137,23 +137,29 @@ pub struct Reporter<'a> {
     pub session: Option<&'a str>,
 }
 
-/// Where the counts live. Under Hide's own directory, never the runtime's.
-pub fn state_directory(home: &Path) -> PathBuf {
-    state_directory_in(&crate::route::records_folder(home))
+/// Where the counts live, under the pane records of this process's
+/// installation ([`crate::route::pane_records`]): Hide's own directory, never
+/// the runtime's, and never another installation's part of it.
+///
+/// A state route this process cannot read is its own error rather than the
+/// account's folder, so a hook writes nowhere rather than into another
+/// daemon's records (engineering rule 4).
+pub fn state_directory(home: &Path) -> io::Result<PathBuf> {
+    Ok(state_directory_in(&crate::route::pane_records(home)?))
 }
 
-/// [`state_directory`] in a records folder named directly: the daemon's own,
-/// as its node or a first run of its core reads it ([`crate::route::records_root`]).
-fn state_directory_in(records: &Path) -> PathBuf {
-    records.join("panes")
+/// [`state_directory`] under the pane records folder named directly: one
+/// installation's, as a node, a first run of its core or a test names it.
+pub fn state_directory_in(pane_records: &Path) -> PathBuf {
+    pane_records.join("panes")
 }
 
-fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    record_path_in(&crate::route::records_folder(home), pane_id)
+fn record_path(home: &Path, pane_id: &str) -> io::Result<PathBuf> {
+    Ok(record_path_in(&crate::route::pane_records(home)?, pane_id))
 }
 
-fn record_path_in(records: &Path, pane_id: &str) -> PathBuf {
-    crate::route::pane_file(&state_directory_in(records), pane_id)
+fn record_path_in(pane_records: &Path, pane_id: &str) -> PathBuf {
+    crate::route::pane_file(&state_directory_in(pane_records), pane_id)
 }
 
 /// How long one event waits for another event of the same pane to finish its
@@ -406,10 +412,12 @@ impl SessionRecord {
     }
 }
 
-/// The records of `pane_id`'s file, oldest first; none for a pane no hook
-/// wrote, or whose file cannot be read.
+/// The records of `pane_id`'s file of this process's installation, oldest
+/// first; none for a pane no hook wrote, for a file that cannot be read, and
+/// for a records folder whose route does not resolve.
 pub fn records(home: &Path, pane_id: &str) -> Vec<SessionRecord> {
-    records_in(&crate::route::records_folder(home), pane_id)
+    crate::route::pane_records(home)
+        .map_or_else(|_| Vec::new(), |records| records_in(&records, pane_id))
 }
 
 /// [`records`] in a records folder named directly, as a first run of the
@@ -432,7 +440,8 @@ pub fn records_in(records: &Path, pane_id: &str) -> Vec<SessionRecord> {
 /// makes, or that holds no record of an agent and its version, is passed
 /// over.
 pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)> {
-    every_pane_in(&crate::route::records_folder(home), limit)
+    crate::route::pane_records(home)
+        .map_or_else(|_| Vec::new(), |records| every_pane_in(&records, limit))
 }
 
 /// [`every_pane`] in a records folder named directly.
@@ -574,7 +583,7 @@ fn prefix_string<'a>(payload: &'a [u8], key: &str) -> Option<&'a str> {
 }
 
 fn read_file(home: &Path, pane_id: &str) -> io::Result<PaneFile> {
-    read_file_in(&crate::route::records_folder(home), pane_id)
+    read_file_in(&crate::route::pane_records(home)?, pane_id)
 }
 
 fn read_file_in(records: &Path, pane_id: &str) -> io::Result<PaneFile> {
@@ -621,7 +630,7 @@ pub fn apply(
     transcript: Option<&Path>,
 ) -> io::Result<Applied> {
     apply_in(
-        &crate::route::records_folder(home),
+        &crate::route::pane_records(home)?,
         pane_id,
         change,
         who,
@@ -771,7 +780,7 @@ pub fn store(
     counters: PaneCounters,
     who: Reporter<'_>,
 ) -> io::Result<()> {
-    let path = record_path(home, pane_id);
+    let path = record_path(home, pane_id)?;
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
     }
@@ -823,7 +832,7 @@ fn hold(
     home: &Path,
     mode: hide_platform::fs::lock::Mode,
 ) -> io::Result<hide_platform::fs::lock::Lock> {
-    hold_in(&crate::route::records_folder(home), mode)
+    hold_in(&crate::route::pane_records(home)?, mode)
 }
 
 fn hold_in(
@@ -848,7 +857,7 @@ fn lock_path_in(records: &Path) -> PathBuf {
 
 /// Drops a pane's record. Used by the diagnosis when a pane is gone.
 pub fn forget(home: &Path, pane_id: &str) -> io::Result<()> {
-    match fs::remove_file(record_path(home, pane_id)) {
+    match fs::remove_file(record_path(home, pane_id)?) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -872,8 +881,8 @@ pub fn retain<'a>(
     let keep: HashSet<PathBuf> = live_pane_ids
         .into_iter()
         .map(|pane_id| record_path(home, pane_id))
-        .collect();
-    let directory = state_directory(home);
+        .collect::<io::Result<HashSet<PathBuf>>>()?;
+    let directory = state_directory(home)?;
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -1145,7 +1154,7 @@ mod tests {
         change(&root, "w1:pB", Change::Started(None), WHO).unwrap();
         change(&root, "w2:pC", Change::Started(None), WHO).unwrap();
         // A file the sweep did not write is not its business.
-        fs::write(state_directory(&root).join("notes.txt"), b"kept").unwrap();
+        fs::write(state_directory(&root).unwrap().join("notes.txt"), b"kept").unwrap();
 
         assert_eq!(retain(&root, ["w1:pA", "w2:pC"]).unwrap(), 1);
         assert_eq!(read(&root, "w1:pA").working, 1);
@@ -1155,7 +1164,7 @@ mod tests {
             PaneCounters::default(),
             "a dead session's count is gone rather than waiting to be redrawn"
         );
-        assert!(state_directory(&root).join("notes.txt").exists());
+        assert!(state_directory(&root).unwrap().join("notes.txt").exists());
 
         // Idempotent: the same live set sweeps nothing the second time.
         assert_eq!(retain(&root, ["w1:pA", "w2:pC"]).unwrap(), 0);
@@ -1334,7 +1343,7 @@ mod tests {
         }
         let own = change(&root, pane, Change::None, WHO).unwrap();
         assert_eq!((own.working, own.done), (1, 1));
-        let file = PaneFile::decode(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        let file = PaneFile::decode(&fs::read(record_path(&root, pane).unwrap()).unwrap()).unwrap();
         assert_eq!(file.sessions.len(), 2);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1351,7 +1360,7 @@ mod tests {
             };
             change(&root, pane, Change::Started(None), who).unwrap();
         }
-        let file = PaneFile::decode(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        let file = PaneFile::decode(&fs::read(record_path(&root, pane).unwrap()).unwrap()).unwrap();
         assert_eq!(file.sessions.len(), SESSIONS_PER_PANE);
         assert_eq!(file.sessions[0].session.as_deref(), Some("s-1"));
         fs::remove_dir_all(&root).unwrap();
@@ -1361,9 +1370,9 @@ mod tests {
     fn a_file_an_older_helper_wrote_is_read_as_its_one_session() {
         let root = home("older");
         let pane = "w7B:pM";
-        fs::create_dir_all(state_directory(&root)).unwrap();
+        fs::create_dir_all(state_directory(&root).unwrap()).unwrap();
         fs::write(
-            record_path(&root, pane),
+            record_path(&root, pane).unwrap(),
             br#"{"working":2,"done":4,"version":8,"agent":"claude-code","session":"session-a"}"#,
         )
         .unwrap();
@@ -1460,7 +1469,7 @@ mod tests {
             change(&root, pane, Change::Stopped(Some(&id)), WHO).unwrap();
         }
         assert_eq!(counts(&root, pane), (0, (FINISHED_LIMIT + 5) as u32));
-        let file = PaneFile::decode(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        let file = PaneFile::decode(&fs::read(record_path(&root, pane).unwrap()).unwrap()).unwrap();
         assert_eq!(file.sessions[0].finished.len(), FINISHED_LIMIT);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1550,7 +1559,7 @@ mod tests {
         change(&root, "w1:p1", Change::Started(None), WHO).unwrap();
         change(&root, "h1:p2", Change::Started(None), WHO).unwrap();
         change(&root, "h1:p2", Change::Started(None), WHO).unwrap();
-        fs::write(state_directory(&root).join("x1_p3.json"), "{}").unwrap();
+        fs::write(state_directory(&root).unwrap().join("x1_p3.json"), "{}").unwrap();
         let mut found: Vec<(String, u32)> = every_pane(&root, 16)
             .into_iter()
             .map(|(pane, records)| (pane, records[0].counters.working))

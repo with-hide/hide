@@ -5411,6 +5411,7 @@ pub(crate) mod tests {
                 },
             }],
             last_report_failure: None,
+            records_error: None,
         }
     }
 

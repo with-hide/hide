@@ -236,18 +236,83 @@ pub fn account_records(home: &Path) -> PathBuf {
     home.join(".hide").join("agent-hooks")
 }
 
-/// [`records_root`] for the daemon this process asks ([`state_dir`]): what a
-/// hook writes beside its pane records, and what a node or a daemon reading
-/// them resolves the same way, since each runs with the environment that
-/// names its own state folder.
+/// [`records_root`] for the state folder `state`, refusing a folder that
+/// cannot be read rather than answering the account's own.
 ///
-/// A route that does not read leaves the account's own folder, and the
-/// request itself fails as `record`. So does a state folder that is gone: an
-/// entry whose daemon was removed has none to write for, and a hook that
-/// created it again would rebuild a folder the operator took away.
-pub fn records_folder(home: &Path) -> PathBuf {
-    let state = state_dir(home).ok().filter(|state| state.is_dir());
-    records_root(home, state.as_deref())
+/// A state folder other than the account's own must be a folder this process
+/// can see: one that is missing, one it may not read, and one that is not a
+/// folder at all each keep their own failure rather than folding into `false`
+/// and becoming `~/.hide/agent-hooks` (engineering rule 4). A hook that
+/// answered the account's folder instead would write into another daemon's
+/// records, where nothing reads them and the operator's file changes for no
+/// reason. The account's own folder is answered without a look at the disk:
+/// it holds the records whether or not the daemon has made its state folder
+/// yet, and that is where every build so far wrote them.
+pub fn records_folder_of(home: &Path, state: &Path) -> std::io::Result<PathBuf> {
+    if state == crate::state_folder::default_state_dir(home) {
+        return Ok(account_records(home));
+    }
+    // The kind is the kernel's and stays it: a missing folder, one this
+    // process may not read and one that is not a folder are three different
+    // answers, and the sentence beside the kind is what names the folder
+    // `doctor` and the log show (engineering rules 4 and 10).
+    let metadata = std::fs::metadata(state).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "the hooks' state folder {} could not be read: {error}",
+                state.display()
+            ),
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            format!(
+                "the hooks' state folder {} is not a folder",
+                state.display()
+            ),
+        ));
+    }
+    Ok(records_in(state))
+}
+
+/// [`records_folder_of`] for the daemon this process asks ([`state_dir`]):
+/// what a hook writes beside its pane records, and what a node or a daemon
+/// reading them resolves the same way, since each runs with the environment
+/// that names its own state folder.
+///
+/// A route that does not read is an error here and `record` at the request,
+/// and so is a state folder the caller cannot see; neither falls back to the
+/// account's folder.
+pub fn records_folder(home: &Path) -> std::io::Result<PathBuf> {
+    let state = state_dir(home).map_err(|cause| {
+        std::io::Error::other(format!("the hook's state route could not be read: {cause}"))
+    })?;
+    records_folder_of(home, &state)
+}
+
+/// [`pane_records_at`] for the daemon whose state folder is `state` and the
+/// installation `install`: the one rule a hook resolving its own environment
+/// and a node or a core handed its state folder both apply
+/// ([`pane_records_of`]), so the folder a pane's hooks write and the folder
+/// its daemon reads are the same one.
+///
+/// A node or a core names the state folder it serves rather than reading the
+/// environment, so the folder it reads is the folder of the daemon that
+/// started its panes even where the environment names another, and a test
+/// daemon reads its own records rather than the operator's. A state folder
+/// that does not read is that error here too, never the account's folder.
+pub fn records_of_state(
+    home: &Path,
+    state: Option<&Path>,
+    install: Option<&str>,
+) -> std::io::Result<PathBuf> {
+    let records = match state {
+        Some(state) => records_folder_of(home, state)?,
+        None => account_records(home),
+    };
+    Ok(pane_records_at(&records, install))
 }
 
 /// The folder the hooks keep their records by pane in: the daemon's own for
@@ -255,14 +320,14 @@ pub fn records_folder(home: &Path) -> PathBuf {
 /// of its own for a pane another installation started, whose pane ids are
 /// that installation's core's and whose records the app's core neither reads
 /// nor sweeps.
-pub fn pane_records(home: &Path) -> PathBuf {
+pub fn pane_records(home: &Path) -> std::io::Result<PathBuf> {
     pane_records_of(home, std::env::var(INSTALL_VARIABLE).ok().as_deref())
 }
 
 /// [`pane_records`] for the panes the installation `install` starts, as a
 /// node that starts them reads them; `None` for panes that name none.
-pub fn pane_records_of(home: &Path, install: Option<&str>) -> PathBuf {
-    records_of(&records_folder(home), install)
+pub fn pane_records_of(home: &Path, install: Option<&str>) -> std::io::Result<PathBuf> {
+    Ok(pane_records_at(&records_folder(home)?, install))
 }
 
 /// The file of `pane_id`'s record in `folder`. A pane id is in Herdr's shape
@@ -283,8 +348,9 @@ pub fn pane_file(folder: &Path, pane_id: &str) -> PathBuf {
 }
 
 /// The records of the panes the installation `install` starts, under a
-/// records folder resolved for this process ([`records_folder`]).
-fn records_of(records: &Path, install: Option<&str>) -> PathBuf {
+/// records folder resolved for this process ([`records_folder`]) or named by
+/// a caller that already resolved one.
+pub fn pane_records_at(records: &Path, install: Option<&str>) -> PathBuf {
     match install.and_then(mark) {
         Some(mark) => records.join("installs").join(mark),
         None => records.to_path_buf(),
@@ -461,11 +527,11 @@ mod tests {
     fn a_pane_of_another_installation_keeps_its_records_apart() {
         let home = Path::new("/home");
         let own = home.join(".hide").join("agent-hooks");
-        assert_eq!(records_of(&own, None), own);
-        assert_eq!(records_of(&own, Some(APP_INSTALL)), own);
-        let device = records_of(&own, Some("root:/helper"));
+        assert_eq!(pane_records_at(&own, None), own);
+        assert_eq!(pane_records_at(&own, Some(APP_INSTALL)), own);
+        let device = pane_records_at(&own, Some("root:/helper"));
         assert!(device.starts_with(own.join("installs")));
-        assert_ne!(device, records_of(&own, Some("root:/other")));
+        assert_ne!(device, pane_records_at(&own, Some("root:/other")));
     }
 
     /// A daemon whose state folder is the account's own keeps the records
@@ -482,5 +548,74 @@ mod tests {
         let moved = Path::new("/elsewhere/state");
         assert_eq!(records_root(home, Some(moved)), moved.join("agent-hooks"));
         assert_eq!(records_in(moved), moved.join("agent-hooks"));
+    }
+
+    /// A state folder the caller can see is answered with the records folder
+    /// in it, and the account's own is answered without a look at the disk:
+    /// it holds the records whether or not the daemon made it yet.
+    #[test]
+    fn a_state_folder_this_process_can_see_keeps_its_records_and_the_account_s_own_needs_no_disk() {
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path();
+        let account = crate::state_folder::default_state_dir(home_path);
+        assert_eq!(
+            records_folder_of(home_path, &account).unwrap(),
+            account_records(home_path)
+        );
+        let moved = home_path.join("elsewhere");
+        std::fs::create_dir_all(&moved).unwrap();
+        assert_eq!(
+            records_folder_of(home_path, &moved).unwrap(),
+            records_in(&moved)
+        );
+    }
+
+    /// A state folder that is missing, one that is a file and not a folder,
+    /// and one the process may not read each keep their own failure rather
+    /// than folding into the account's folder: a hook that answered the
+    /// account's folder instead would write into another daemon's records
+    /// (engineering rule 4).
+    #[cfg(unix)]
+    #[test]
+    fn a_state_folder_that_does_not_read_is_its_own_failure_and_never_the_accounts() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path();
+        let missing = home_path.join("not-there");
+        let error = records_folder_of(home_path, &missing).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+        let file = home_path.join("a-file");
+        std::fs::write(&file, b"").unwrap();
+        let error = records_folder_of(home_path, &file).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+
+        // A folder someone else owns and this process may not enter: the
+        // step that needs it fails, and the failure is not `NotFound`.
+        let locked = home_path.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let guarded = records_folder_of(home_path, &locked);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if let Err(error) = guarded {
+            assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+        }
+    }
+
+    /// The one rule a hook and the daemon that reads what it wrote both
+    /// apply: a pane other than the app's keeps its records under the
+    /// installation's mark, inside the folder its state folder names.
+    #[test]
+    fn a_state_folder_and_an_installation_compose_by_one_rule() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let moved = root.path().join("elsewhere").join("state");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&moved).unwrap();
+        let app = records_of_state(&home, Some(&moved), None).unwrap();
+        assert_eq!(app, moved.join("agent-hooks"));
+        let device = records_of_state(&home, Some(&moved), Some("root:/helper")).unwrap();
+        assert!(device.starts_with(moved.join("agent-hooks").join("installs")));
     }
 }

@@ -266,6 +266,12 @@ pub struct Diagnosis {
     /// two apart.
     #[serde(default)]
     pub last_report_failure: Option<ReportFailure>,
+    /// Why the hooks' records folder could not be resolved, when it could
+    /// not: the failure record was then not read at all, and a hook that
+    /// could not write one left `last_report_failure` empty for a reason
+    /// that is not "nothing failed" (engineering rule 4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records_error: Option<String>,
 }
 
 impl Diagnosis {
@@ -275,7 +281,11 @@ impl Diagnosis {
     /// ([`crate::route::records_folder`]). It performs file reads and no
     /// writes, so it is safe to call from a background reader.
     pub fn read(home: &Path, search: &OsStr) -> Self {
-        Self::read_with_probe(home, |runtime| runtime_compatibility(runtime, search))
+        Self::read_toward(
+            home,
+            |runtime| runtime_compatibility(runtime, search),
+            crate::route::records_folder(home),
+        )
     }
 
     /// [`read`](Self::read) for a daemon whose hook records are `records`,
@@ -284,19 +294,28 @@ impl Diagnosis {
         Self::read_toward(
             home,
             |runtime| runtime_compatibility(runtime, search),
-            records,
+            Ok(records.to_path_buf()),
         )
-    }
-
-    fn read_with_probe(home: &Path, probe: impl Fn(AgentRuntime) -> MemoryCompatibility) -> Self {
-        Self::read_toward(home, probe, &crate::route::records_folder(home))
     }
 
     fn read_toward(
         home: &Path,
         probe: impl Fn(AgentRuntime) -> MemoryCompatibility,
-        records: &Path,
+        records: std::io::Result<PathBuf>,
     ) -> Self {
+        // A folder that does not resolve is kept as its own answer: the
+        // failure record is unread, which is not the same as "nothing
+        // failed", and folding the two into one empty read is how a hook's
+        // lost record used to look like a clean bill (engineering rule 4).
+        let (last_report_failure, records_error) = match records {
+            Ok(records) => (last_failure_at(&records), None),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "the hooks' records folder could not be read: {error}"
+                )),
+            ),
+        };
         Self {
             runtimes: AgentRuntime::ALL
                 .into_iter()
@@ -309,7 +328,8 @@ impl Diagnosis {
                     memory_compatibility: probe(runtime),
                 })
                 .collect(),
-            last_report_failure: last_failure_at(records),
+            last_report_failure,
+            records_error,
         }
     }
 
@@ -344,6 +364,9 @@ impl Diagnosis {
             .collect::<Vec<_>>();
         if let Some(failure) = &self.last_report_failure {
             lines.push(format!("Last report failed: {}", failure.message()));
+        }
+        if let Some(error) = &self.records_error {
+            lines.push(format!("Hook records unreadable: {error}"));
         }
         lines.join("\n")
     }
@@ -650,7 +673,8 @@ mod tests {
         let home = std::env::temp_dir().join(format!("hide-diagnosis-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".claude")).unwrap();
-        let diagnosis = Diagnosis::read_with_probe(&home, compatible);
+        let diagnosis =
+            Diagnosis::read_toward(&home, compatible, Ok(crate::route::account_records(&home)));
         assert_eq!(diagnosis.runtimes.len(), 2);
         let claude = &diagnosis.runtimes[0];
         assert_eq!(claude.status, HookStatus::NotInstalled);
@@ -660,6 +684,42 @@ mod tests {
         assert!(!codex.offers_install() && !codex.offers_removal());
         let settings = Path::new(".claude").join("settings.json");
         assert!(diagnosis.render().contains(&settings.display().to_string()));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A records folder that does not resolve is not read as "nothing
+    /// failed": the reason is kept as its own field, drawn in `doctor`'s
+    /// text, and carried on the answer the core stores and logs as
+    /// `records.unreadable` (engineering rules 4 and 10).
+    #[test]
+    fn a_records_folder_that_does_not_read_is_its_own_answer() {
+        let home =
+            std::env::temp_dir().join(format!("hide-diagnosis-unread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let cause = std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the hooks' state folder /nowhere does not exist",
+        );
+        let diagnosis = Diagnosis::read_toward(&home, compatible, Err(cause));
+        assert_eq!(diagnosis.last_report_failure, None);
+        let error = diagnosis
+            .records_error
+            .as_deref()
+            .expect("the failed read is kept as its own answer");
+        assert!(error.contains("/nowhere"), "{error}");
+        assert!(
+            diagnosis.render().contains("Hook records unreadable:"),
+            "{}",
+            diagnosis.render()
+        );
+
+        // A folder that reads keeps no such answer, so the field means what
+        // it says.
+        let readable =
+            Diagnosis::read_toward(&home, compatible, Ok(crate::route::account_records(&home)));
+        assert_eq!(readable.records_error, None);
+        assert!(!readable.render().contains("Hook records unreadable:"));
         let _ = std::fs::remove_dir_all(&home);
     }
 

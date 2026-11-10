@@ -1620,8 +1620,21 @@ pub fn handle_with_progress(
                 )
             })?;
             // The records the hooks of this node's daemon wrote: the account's
-            // own folder, or the one its state folder keeps them in.
-            let records = hide_agent_hooks::route::records_root(&home, env.state.as_deref());
+            // own folder or the one its state folder keeps them in, composed
+            // with the installation whose panes this node starts by the rule
+            // those panes' hooks apply (the pane id is this node's core's).
+            let install = crate::kit::running_install().map(|install| install.id);
+            let records = hide_agent_hooks::route::records_of_state(
+                &home,
+                env.state.as_deref(),
+                install.as_deref(),
+            )
+            .map_err(|error| {
+                HostError::new(
+                    ErrorCode::Io,
+                    format!("the hooks' records folder could not be read: {error}"),
+                )
+            })?;
             to_value(hide_agent_hooks::Diagnosis::read_at(
                 &home, &search, &records,
             ))
@@ -1631,7 +1644,13 @@ pub fn handle_with_progress(
             // The hooks keep their records in the folder of the installation
             // that started their pane, which is this node's own.
             let install = crate::kit::running_install().map(|install| install.id);
-            let folder = hide_kit::layout::owed_confirmations_of(&home, install.as_deref());
+            let folder = hide_kit::layout::owed_confirmations_of(&home, install.as_deref())
+                .map_err(|error| {
+                    HostError::new(
+                        ErrorCode::Io,
+                        format!("the hooks' records folder could not be read: {error}"),
+                    )
+                })?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since| {

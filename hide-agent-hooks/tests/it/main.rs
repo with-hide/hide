@@ -28,12 +28,18 @@ mod plan_record;
 mod pre_tool;
 mod programs;
 mod records_refused;
+mod records_route;
 mod session_start_probes;
 mod stand_in_daemon;
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
 mod windows_hook_command;
 mod windows_scripts;
+
+/// Held by every test that changes process-wide state, such as the state
+/// folder this process's hooks resolve, since these modules share one process
+/// under `cargo test` (docs/TESTING.md).
+static PROCESS_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A validated route for public installer fixtures, independent of the account.
 fn hook_target(helper: &std::path::Path) -> hide_agent_hooks::route::HookTarget<'_> {

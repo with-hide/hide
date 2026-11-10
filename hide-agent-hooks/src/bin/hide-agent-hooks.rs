@@ -1305,7 +1305,10 @@ fn report_pane(
             // a session nor a start has nothing to report under, and its
             // record failure is all that is left to keep.
             if !starts && who.session.is_none() {
-                let failed = Err(format!("the pane's count could not be changed: {error}"));
+                let failed = report::outcome(
+                    Err(format!("the pane's count could not be changed: {error}")),
+                    Ok(()),
+                );
                 report::record_and_say(home, &pane_id, agent, event.name(), &failed);
                 return;
             }

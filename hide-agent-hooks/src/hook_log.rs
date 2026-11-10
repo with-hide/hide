@@ -18,8 +18,28 @@ const LOG_NAME: &str = "spawn-guard.log";
 pub(crate) const LOG_LIMIT: u64 = 256 * 1024;
 const LOG_LOCK_WAIT: Duration = Duration::from_millis(100);
 
-pub(crate) fn log_path(home: &Path) -> PathBuf {
-    crate::route::records_folder(home).join(LOG_NAME)
+/// The log's path for the daemon this process asks; a route that does not
+/// resolve is an error, so a refusal is never logged into another daemon's
+/// folder (engineering rule 4).
+pub(crate) fn log_path(home: &Path) -> std::io::Result<PathBuf> {
+    Ok(crate::route::records_folder(home)?.join(LOG_NAME))
+}
+
+/// [`log_path`] under the records folder named directly: a daemon's own, as
+/// its diagnosis and a test read it.
+pub(crate) fn log_path_at(records: &Path) -> PathBuf {
+    records.join(LOG_NAME)
+}
+
+/// Appends one line to the log of the daemon this process asks. A guard's
+/// line is best effort: a route that does not resolve writes nothing at all
+/// rather than into another daemon's folder (engineering rule 4), and the
+/// refusal itself still reaches the agent on standard error where the guard
+/// says it there.
+pub(crate) fn append(home: &Path, line: &str) {
+    if let Ok(path) = log_path(home) {
+        let _ = append_line(&path, line);
+    }
 }
 
 pub(crate) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
@@ -57,8 +77,7 @@ mod tests {
 
     #[test]
     fn a_line_is_private_and_the_log_keeps_one_older_generation_past_its_limit() {
-        let home = tempfile::tempdir().unwrap();
-        let path = log_path(home.path());
+        let path = tempfile::tempdir().unwrap().path().join(LOG_NAME);
         append_line(&path, r#"{"kind":"first"}"#).unwrap();
         assert!(private::is_private(&path).unwrap());
         let big = "x".repeat(LOG_LIMIT as usize);

@@ -185,6 +185,7 @@ fn prompt_hook_with_blocked_diagnostic_output_exits_without_holding_submission()
     // Reaching a persisted claim and remaining blocked distinguishes this
     // scenario from an early failure that never exercised output pressure.
     let path = hide_agent_hooks::counters::state_directory(home.path())
+        .unwrap()
         .parent()
         .unwrap()
         .join("delivery-diagnostics.json");

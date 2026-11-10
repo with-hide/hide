@@ -1994,6 +1994,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
             },
         ],
         last_report_failure: None,
+        records_error: None,
     }));
 
     let hooks = &runtime.snapshot.status.agent_hooks;
@@ -2039,6 +2040,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
         event: "SessionStart".to_owned(),
         error: "unavailable".to_owned(),
         at_unix_ms: 1,
+        ..hide_agent_hooks::report::ReportFailure::default()
     });
     assert!(runtime.ingest_hook_diagnosis(refused));
     let message = runtime
@@ -2418,6 +2420,7 @@ fn a_delegation_session_projects_every_state_the_operator_has_to_tell_apart() {
             },
         ],
         last_report_failure: None,
+        records_error: None,
     });
 
     let pane = |id: &str| {

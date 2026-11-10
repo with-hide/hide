@@ -52,14 +52,14 @@ pub struct Owed {
 /// The folder owed confirmations are kept in, under the hooks' records of
 /// the pane this process runs in (`hide_kit::layout::owed_confirmations`
 /// names it).
-pub fn folder(home: &Path) -> PathBuf {
-    crate::route::pane_records(home).join("owed-confirmations")
+pub fn folder(home: &Path) -> std::io::Result<PathBuf> {
+    Ok(crate::route::pane_records(home)?.join("owed-confirmations"))
 }
 
 /// The folder of the panes the installation `install` starts, as a node
 /// reads it ([`crate::route::pane_records_of`]).
-pub fn folder_of(home: &Path, install: Option<&str>) -> PathBuf {
-    crate::route::pane_records_of(home, install).join("owed-confirmations")
+pub fn folder_of(home: &Path, install: Option<&str>) -> std::io::Result<PathBuf> {
+    Ok(crate::route::pane_records_of(home, install)?.join("owed-confirmations"))
 }
 
 fn path(folder: &Path, pane: &str) -> PathBuf {
@@ -80,7 +80,7 @@ pub fn owe(
     ids: &[String],
     now: u64,
 ) -> Result<(), &'static str> {
-    let folder = folder(home);
+    let folder = folder(home).map_err(|_| "owed_record")?;
     sweep(&folder, now);
     let path = path(&folder, pane);
     let (mut owed, owed_at_unix_ms) = match read(&path) {
@@ -218,7 +218,11 @@ mod tests {
     }
 
     fn taken(home: &Path, pane: &str, now: u64) -> Option<Owed> {
-        take(&folder(home), pane, now)
+        take(&folder_of_home(home), pane, now)
+    }
+
+    fn folder_of_home(home: &Path) -> PathBuf {
+        folder(home).expect("the account's own records folder")
     }
 
     /// The node hands over what the pane's hook could not confirm, once:
@@ -257,11 +261,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
         assert_eq!(taken(home.path(), "w1:p1", NOW + DELIVERY_EXPIRY_MS), None);
-        assert_eq!(count(&folder(home.path())), 0);
+        assert_eq!(count(&folder_of_home(home.path())), 0);
         owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
-        std::fs::write(path(&folder(home.path()), "w1:p1"), b"{").unwrap();
+        std::fs::write(path(&folder_of_home(home.path()), "w1:p1"), b"{").unwrap();
         assert_eq!(taken(home.path(), "w1:p1", NOW), None);
-        assert_eq!(count(&folder(home.path())), 0);
+        assert_eq!(count(&folder_of_home(home.path())), 0);
     }
 
     /// A record being taken is moved aside first, so a hook that misses
@@ -277,7 +281,7 @@ mod tests {
             taken(home.path(), "w1:p1", NOW).map(|owed| owed.ids),
             Some(ids(&["letter-2"]))
         );
-        assert_eq!(count(&folder(home.path())), 0);
+        assert_eq!(count(&folder_of_home(home.path())), 0);
     }
 
     /// A node reads the folder of the installation that starts its panes:
@@ -285,14 +289,17 @@ mod tests {
     #[test]
     fn a_node_reads_the_records_of_its_own_installation() {
         let home = tempfile::tempdir().unwrap();
-        assert_eq!(folder_of(home.path(), None), folder(home.path()));
         assert_eq!(
-            folder_of(home.path(), Some(crate::route::APP_INSTALL)),
-            folder(home.path())
+            folder_of(home.path(), None).unwrap(),
+            folder_of_home(home.path())
+        );
+        assert_eq!(
+            folder_of(home.path(), Some(crate::route::APP_INSTALL)).unwrap(),
+            folder_of_home(home.path())
         );
         assert_ne!(
-            folder_of(home.path(), Some("candidate")),
-            folder(home.path())
+            folder_of(home.path(), Some("candidate")).unwrap(),
+            folder_of_home(home.path())
         );
     }
 
@@ -306,7 +313,7 @@ mod tests {
             owe(home.path(), "w1:p1", "s1", &long, NOW),
             Err("owed_record")
         );
-        assert_eq!(count(&folder(home.path())), 0);
+        assert_eq!(count(&folder_of_home(home.path())), 0);
     }
 
     /// Another pane's record the system does not let a miss read now is
@@ -317,7 +324,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
-        let other = path(&folder(home.path()), "w1:p1");
+        let other = path(&folder_of_home(home.path()), "w1:p1");
         std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o000)).unwrap();
         owe(home.path(), "w1:p2", "s2", &ids(&["letter-2"]), NOW).unwrap();
         assert!(other.exists());
@@ -356,7 +363,7 @@ mod tests {
         )
         .unwrap();
         let read_ids = || {
-            read(&path(&folder(home.path()), "w1:p1"))
+            read(&path(&folder_of_home(home.path()), "w1:p1"))
                 .unwrap()
                 .unwrap()
                 .ids
@@ -395,6 +402,6 @@ mod tests {
             NOW + DELIVERY_EXPIRY_MS,
         )
         .unwrap();
-        assert_eq!(count(&folder(home.path())), 1);
+        assert_eq!(count(&folder_of_home(home.path())), 1);
     }
 }

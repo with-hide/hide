@@ -2466,6 +2466,7 @@ mod tests {
                     },
                 }],
                 last_report_failure: None,
+                records_error: None,
             });
             if let Some(passed) = checked {
                 let miss = (!passed).then_some("not_placeholder");
@@ -2747,8 +2748,7 @@ mod tests {
         /// Whether the pane's machine still keeps the confirmation.
         fn kept(&self) -> bool {
             hide_agent_hooks::owed::folder_of(self.home.path(), None)
-                .join("recipient.json")
-                .exists()
+                .is_ok_and(|folder| folder.join("recipient.json").exists())
         }
 
         /// The engine's state of the pane moves to `status` at `at`.
@@ -2811,7 +2811,7 @@ mod tests {
     #[test]
     fn a_handed_letter_is_asked_about_again_once_its_pane_state_moves() {
         let owing = Owing::start(Vec::new());
-        let folder = hide_agent_hooks::owed::folder_of(owing.home.path(), None);
+        let folder = hide_agent_hooks::owed::folder_of(owing.home.path(), None).unwrap();
         let record = std::fs::read(folder.join("recipient.json")).unwrap();
         std::fs::remove_file(folder.join("recipient.json")).unwrap();
         let mut doorbell = Doorbell::default();
