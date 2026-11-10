@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { enterWorkspace, pinState, setLanePinned, showExplorer } from "../../web/e2e/wire";
 import { afterCleanup } from "../../web/e2e/worker-owned";
-import { fitWindow, launchShell, NEEDS_FOCUS, startStack, test } from "./fixture";
+import { fitWindow, focusPage, launchShell, NEEDS_FOCUS, startStack, test } from "./fixture";
 
 const TITLE = "New tab page";
 
@@ -22,7 +22,9 @@ async function enterPage(app: ElectronApplication, page: Page) {
     });
     return counted.pageFocus ?? 0;
   });
-  await expect.poll(() => focusPageTakingAppFocus(app)).toBe(true);
+  await expect.poll(() => app.evaluate(({ BrowserWindow }, title) => BrowserWindow.getAllWindows()[0]!.contentView.children.some((child) =>
+    (child as { webContents?: Electron.WebContents }).webContents?.getTitle() === title), TITLE), { message: "the page has loaded" }).toBe(true);
+  await focusPage(app, { title: TITLE });
   await expect.poll(() => page.evaluate(() => (window as unknown as Counted).pageFocus ?? 0), { message: "the shell hears the page take the keyboard" }).toBeGreaterThan(before);
 }
 
@@ -39,27 +41,6 @@ async function handBack(page: Page) {
     return element.closest("[data-pane-view]") !== null;
   });
   expect(inPane).toBe(true);
-}
-
-/**
- * TAKES THE APP'S FOCUS: a page holds the keyboard only in the key window, so
- * this steals it for the app where the machine grants that, and the menu
- * command then takes the host's real hand-back path. A click in the shell DOM
- * does not move the contents' focus, so the shell takes it first and the page
- * reports entering again. False until the page has loaded.
- */
-function focusPageTakingAppFocus(app: ElectronApplication): Promise<boolean> {
-  return app.evaluate(({ app: electron, BrowserWindow }, title) => {
-    const window = BrowserWindow.getAllWindows()[0]!;
-    const view = window.contentView.children.find((child) =>
-      (child as { webContents?: Electron.WebContents }).webContents?.getTitle() === title);
-    if (!view) return false;
-    electron.focus({ steal: true });
-    window.focus();
-    window.webContents.focus();
-    (view as unknown as { webContents: Electron.WebContents }).webContents.focus();
-    return true;
-  }, TITLE);
 }
 
 const menuClick = (app: ElectronApplication, id: string) =>

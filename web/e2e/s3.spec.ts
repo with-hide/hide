@@ -1756,7 +1756,10 @@ test("a View tab a daemon restart restores takes its unsaved draft back (S6 B19)
   const { file } = fixture;
   const original = fs.readFileSync(file, "utf8");
   try {
-    fs.chmodSync(file, 0o444);
+    // Saving atomically needs a writable parent, but reopening the file
+    // must still yield an editable document. Making the file itself read-only
+    // prevents draft restoration once the restarted node reads its metadata.
+    fs.chmodSync(path.dirname(file), 0o555);
     const content = page.locator('[data-editor-codemirror] .cm-content');
     await content.click();
     await page.keyboard.press("ControlOrMeta+KeyA");
@@ -1775,7 +1778,7 @@ test("a View tab a daemon restart restores takes its unsaved draft back (S6 B19)
     await expect(page.locator("[data-draft-recovery]")).toHaveCount(0);
     expect(fs.readFileSync(file, "utf8")).toBe(original);
   } finally {
-    fs.chmodSync(file, 0o644);
+    fs.chmodSync(path.dirname(file), 0o755);
     close(fixture);
   }
 });

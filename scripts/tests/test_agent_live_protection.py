@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, descendants, marked_descendants,
                                            procargs_owned, require_complete, snapshot, validate_linux_procfs)
 from agent_live_check.processes import (OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
-                                       control_plane, largest, linux_children_remain, signal_reserved_group)
+                                       control_plane, largest, linux_children_remain, reap_adopted,
+                                       signal_reserved_group)
 from agent_live_check.protection import ConfigGuard, ProtectionError, stamp, validate_isolation
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.runtime import Runtime
@@ -1019,6 +1020,30 @@ else:raise RuntimeError("group_survived_reap")
         with patch("agent_live_check.processes.os.waitpid", side_effect=[(222, 0), ChildProcessError]):
             self.assertFalse(linux_children_remain())
 
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "only the Linux guardian is a subreaper")
+    def test_linux_adopted_children_are_reaped_as_they_exit_not_only_at_the_final_cleanup(self):
+        # An agent run ends hundreds of processes whose parent ended first.
+        # The guardian adopts each as a zombie, and the cleanup reaps at most
+        # MAX_DESCENDANTS + 1 in one pass, so a run that left more of them
+        # unreaped failed its cleanup although everything had ended.
+        with OwnedProcesses() as owner:
+            code, _, _ = owner.run([sys.executable, str(Path(__file__).with_name("orphan_batches.py"))],
+                                   env=dict(os.environ))
+        self.assertEqual(code, 0)
+
+    def test_linux_reaping_adopted_children_leaves_the_root_to_its_own_wait(self):
+        exited = SimpleNamespace(si_pid=222)
+        root = SimpleNamespace(si_pid=111)
+        with patch("agent_live_check.processes.os.waitid", side_effect=[exited, root]) as peek, \
+                patch("agent_live_check.processes.os.waitpid") as reap:
+            reap_adopted(111)
+        self.assertTrue(all(call.args[2] & os.WNOWAIT for call in peek.call_args_list))
+        reap.assert_called_once_with(222, os.WNOHANG | 0x40000000)
+        with patch("agent_live_check.processes.os.waitid", return_value=exited), \
+                patch("agent_live_check.processes.os.waitpid"):
+            with self.assertRaisesRegex(ProcessError, "adopted_child_reap_over_budget"):
+                reap_adopted(111)
 
     def test_readable_marked_double_fork_is_cleaned(self):
         with tempfile.TemporaryDirectory(prefix="agent-detach-") as name:
