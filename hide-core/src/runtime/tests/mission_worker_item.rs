@@ -129,13 +129,14 @@ fn conducting(candidates: Vec<Candidate>) -> Spawner {
     spawner
 }
 
-/// The Conductor's reviewer, beside it in its checkout, started with
-/// `--profile <profile>` or none.
+/// The Conductor's reviewer, beside it in its checkout so the fake engine
+/// makes no tab, started with `--profile <profile>` or none; beside its
+/// caller it has no parent, which the item these tests judge does not read.
 fn reviewer(profile: Option<&str>) -> Command {
     Command::Agents {
         command: crate::coordination::Command::Spawn {
             pick: None,
-            parent: Some("here".into()),
+            parent: None,
             machine: None,
             // The name the fake engine shows its started agent under.
             name: "worker".into(),

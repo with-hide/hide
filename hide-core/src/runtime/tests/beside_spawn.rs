@@ -351,7 +351,7 @@ struct Ask<'a> {
 }
 
 const BESIDE: Ask<'static> = Ask {
-    parent: Some("here"),
+    parent: None,
     beside: true,
     machine: None,
     branch: "topic",
@@ -418,13 +418,15 @@ impl Spawner {
 }
 
 /// B1, B3, B13: the child is split right of the caller in the caller's tab,
-/// on the caller's device, without focus, and belongs to the caller.
+/// on the caller's device, without focus, and is the operator's root with
+/// the caller as its origin.
 #[test]
 fn a_beside_spawn_splits_the_callers_pane_for_the_child() {
     let spawner = spawner();
     let child = spawner.spawn("one", BESIDE).unwrap();
     assert_eq!(child["pane"], "w2:p1");
-    assert_eq!(child["parent"], "agent-1");
+    assert_eq!(child["parent"], Value::Null);
+    assert_eq!(child["origin"], "agent-1");
     assert_eq!(child["project"], CHECKOUT);
     assert_eq!(spawner.count("split_beside"), 1);
     assert_eq!(spawner.count("create_tab"), 0);
@@ -492,6 +494,30 @@ fn a_beside_spawn_outside_the_callers_checkout_creates_nothing() {
         "create_tab",
         "start_agent",
     ] {
+        assert_eq!(spawner.count(method), 0, "{method}");
+    }
+}
+
+/// An agent opened beside its caller is the operator's to watch, so a spawn
+/// that asks for both a parent and `--beside` is refused before anything is
+/// registered, reserved or created, whichever parent it names.
+#[test]
+fn a_beside_spawn_with_a_parent_creates_nothing() {
+    let spawner = spawner();
+    for parent in ["here", "agent-1"] {
+        assert_eq!(
+            spawner.spawn(
+                "supervised",
+                Ask {
+                    parent: Some(parent),
+                    ..BESIDE
+                }
+            ),
+            Err("beside_with_parent".to_owned())
+        );
+    }
+    assert!(spawner.ledger().spawns.is_empty());
+    for method in ["split_beside", "create_tab", "start_agent"] {
         assert_eq!(spawner.count(method), 0, "{method}");
     }
 }

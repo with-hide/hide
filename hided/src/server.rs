@@ -1416,6 +1416,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "target_unavailable" => {
             "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
         }
+        "no_parent" => {
+            "You have no parent: no agent answers for you, so your work is the operator's to read; send to a named agent from hide agent list instead"
+        }
         "mission_cap_reached" => {
             "The mission's workers are at its cap; wait for one to finish and end it with hide agent end <id>, then run the same command again with the same intent"
         }
@@ -1476,6 +1479,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
+        }
+        "beside_with_parent" => {
+            "An agent opened with --beside is the operator's to watch and has no parent; leave out --parent to open it beside you, or leave out --beside to supervise it in a new tab"
         }
         // A spawn's agent profile (docs/ARCHITECTURE.md, Starting an agent
         // with a profile): only an unanswered machine is worth the same
@@ -5423,6 +5429,7 @@ mod tests {
             "session_too_long",
             "target_ambiguous",
             "target_unavailable",
+            "no_parent",
             "codex_capability_unknown",
             "agent_hook_off",
             "agent_not_set_up",
@@ -5433,6 +5440,7 @@ mod tests {
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_with_parent",
             "beside_pane_unavailable",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
