@@ -1941,8 +1941,8 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
             origin: crate::model::LinkOrigin::Inbound,
             host_consent: None,
         },
-        old_owner_engine_socket: "/tmp/macbook-herdr.sock".to_owned(),
-        new_owner_engine_socket: "/tmp/mini-herdr.sock".to_owned(),
+        old_owner_engine_socket: "/tmp/macbook-engine.sock".to_owned(),
+        new_owner_engine_socket: "/tmp/mini-engine.sock".to_owned(),
     };
     let moved = crate::node_migration::id_table(
         &change,

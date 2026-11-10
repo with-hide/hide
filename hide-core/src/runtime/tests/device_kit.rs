@@ -1204,20 +1204,20 @@ fn removing_one_keeps_the_kit_for(
             .unwrap();
         device.host_consent.as_mut().unwrap().identity = Some(own);
         let mut twin = device.clone();
-        twin.id = "studio-second-herdr".to_owned();
+        twin.id = "studio-second".to_owned();
         twin.origin = crate::model::LinkOrigin::Dialed {
             ssh_alias: "studio-by-address".to_owned(),
             naming: crate::model::DeviceNaming::Named,
         };
         twin.host_consent.as_mut().unwrap().identity = Some(twin_identity);
-        twin.label = "Studio, second Herdr".to_owned();
+        twin.label = "Studio, second".to_owned();
         registrations.push(twin);
         runtime.refresh_device_snapshots();
     }
     // The removal confirmation reads this to say the kit stays.
     assert_eq!(
         kit(&shared).shares_account_with.as_deref(),
-        Some("Studio, second Herdr")
+        Some("Studio, second")
     );
     dispatch(
         &shared,

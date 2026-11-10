@@ -30,7 +30,7 @@ use crate::model::{PaneLayoutDirection, PaneLayoutNodeSnapshot};
 use crate::recent_closed::ClosedLayoutNode;
 use crate::sidebar::{SessionLayoutPanePayload, SessionLayoutRect, SessionLayoutSplitPayload};
 
-/// Every split is kept between these ratios, as Herdr keeps them.
+/// Every split is kept between these ratios.
 pub(crate) const RATIO_MIN: f32 = 0.1;
 pub(crate) const RATIO_MAX: f32 = 0.9;
 
@@ -136,7 +136,8 @@ pub(crate) fn split_leaf_at(
 }
 
 /// Removes `pane` and puts its sibling in the parent's place. Returns the
-/// sibling's first leaf, the pane that takes focus when the closed one had focus (as in Herdr).
+/// sibling's first leaf, the pane that takes focus when the closed one had
+/// focus.
 pub(crate) fn remove_leaf(node: &mut PaneLayoutNodeSnapshot, pane: &str) -> Option<String> {
     let PaneLayoutNodeSnapshot::Split { first, second, .. } = node else {
         return None;
@@ -549,8 +550,8 @@ mod tests {
         }
     }
 
-    /// Herdr's choice: a pane at the tab's side moves the split on its other
-    /// edge, and a pane with no split of the axis moves nothing.
+    /// A pane at the tab's side moves the split on its other edge, and a pane
+    /// with no split of the axis moves nothing.
     #[test]
     fn a_pane_at_the_tab_s_side_moves_the_split_on_its_other_edge() {
         use PaneLayoutDirection::{Down, Right};

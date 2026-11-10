@@ -179,8 +179,7 @@ pub struct ServerPong {
     pub version: String,
     pub protocol: u32,
     /// Whether it can hand its panes to another engine program
-    /// (`server.live_handoff`); Herdr did so on Unix only, and the own engine
-    /// does not.
+    /// (`server.live_handoff`); the own engine does not.
     pub live_handoff: bool,
 }
 

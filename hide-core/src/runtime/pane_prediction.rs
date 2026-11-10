@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resize_is_clamped_like_herdr_and_needs_a_split_of_its_axis() {
+    fn a_resize_is_clamped_by_the_engine_and_needs_a_split_of_its_axis() {
         let tree = layout(split(Right, 0.6, pane("w1:p1"), pane("w1:p2")), "w1:p1");
         let Some(Prediction::Resize { ratio, .. }) =
             resize_prediction(&tree, "w1:p1", PaneResizeDirection::Right, 0.5)

@@ -1606,7 +1606,7 @@ fn deliver(
     // The line is the one the reservation saved, so the prompt hook of the
     // turn it opens is recognized by it (`mailbox::rang`).
     // The engine owns submission for each input reader, including Windows paste
-    // bursts, as Herdr's `agent.prompt` did (herdrdev/herdr#3187). Raw pane
+    // bursts (herdrdev/herdr#3187). Raw pane
     // input bypasses that contract.
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the

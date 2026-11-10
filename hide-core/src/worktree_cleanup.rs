@@ -1726,7 +1726,7 @@ pub(crate) fn spawn_gone_checkout_close(
                 "component": "cleanup",
                 "kind": kind,
                 "workspace_id": gone.workspace_id,
-                "herdr_workspace_ids": gone.engine_workspace_ids,
+                "engine_workspace_ids": gone.engine_workspace_ids,
                 "checkout": gone.path,
                 "pane_count": gone.panes.len(),
                 "outcome": outcome,

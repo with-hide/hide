@@ -713,30 +713,30 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
             "focused_workspace_id": focused_workspace_id,
             "focused_pane_id": focused_pane_id,
             "workspaces": [
-                {"workspace_id": "herdr-a", "label": "Alpha", "active_tab_id": "herdr-a:t1"},
-                {"workspace_id": "herdr-b", "label": "Beta", "active_tab_id": "herdr-b:t1"}
+                {"workspace_id": "ws-a", "label": "Alpha", "active_tab_id": "ws-a:t1"},
+                {"workspace_id": "ws-b", "label": "Beta", "active_tab_id": "ws-b:t1"}
             ],
             "tabs": [
-                {"workspace_id": "herdr-a", "tab_id": "herdr-a:t1", "label": "1"},
-                {"workspace_id": "herdr-b", "tab_id": "herdr-b:t1", "label": "1"}
+                {"workspace_id": "ws-a", "tab_id": "ws-a:t1", "label": "1"},
+                {"workspace_id": "ws-b", "tab_id": "ws-b:t1", "label": "1"}
             ],
             "panes": [
-                {"pane_id": "herdr-a:p1", "cwd": path_a},
-                {"pane_id": "herdr-b:p1", "cwd": path_b}
+                {"pane_id": "ws-a:p1", "cwd": path_a},
+                {"pane_id": "ws-b:p1", "cwd": path_b}
             ],
             "layouts": [
                 {
-                    "workspace_id": "herdr-a", "tab_id": "herdr-a:t1", "zoomed": false,
+                    "workspace_id": "ws-a", "tab_id": "ws-a:t1", "zoomed": false,
                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
-                    "focused_pane_id": "herdr-a:p1",
-                    "panes": [{"pane_id": "herdr-a:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+                    "focused_pane_id": "ws-a:p1",
+                    "panes": [{"pane_id": "ws-a:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                     "splits": []
                 },
                 {
-                    "workspace_id": "herdr-b", "tab_id": "herdr-b:t1", "zoomed": false,
+                    "workspace_id": "ws-b", "tab_id": "ws-b:t1", "zoomed": false,
                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
-                    "focused_pane_id": "herdr-b:p1",
-                    "panes": [{"pane_id": "herdr-b:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+                    "focused_pane_id": "ws-b:p1",
+                    "panes": [{"pane_id": "ws-b:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                     "splits": []
                 }
             ]
@@ -744,7 +744,7 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
         .expect("two-checkout session payload")
     };
 
-    runtime.ingest_session(Ok(payload("herdr-a", "herdr-a:p1")));
+    runtime.ingest_session(Ok(payload("ws-a", "ws-a:p1")));
     let checkout_b = runtime
         .snapshot()
         .navigator
@@ -755,7 +755,7 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
         .map(|checkout| checkout.id.clone())
         .expect("second registered checkout is projected");
     assert!(runtime.dispatch_json(&correlated_pane_focus_event(
-        "herdr-b:p1",
+        "ws-b:p1",
         "relationship-cross-checkout",
     )));
     assert_eq!(
@@ -768,10 +768,10 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
     );
     assert_eq!(
         runtime.snapshot().terminal.pane_id.as_deref(),
-        Some("herdr-b:p1")
+        Some("ws-b:p1")
     );
 
-    runtime.ingest_session(Ok(payload("herdr-b", "herdr-b:p1")));
+    runtime.ingest_session(Ok(payload("ws-b", "ws-b:p1")));
     finish_running_pane_focus(&mut runtime, Ok(()));
     assert_eq!(
         runtime
@@ -3126,7 +3126,7 @@ fn tab_strip_reorder_index_counts_positions_before_the_tab_leaves_the_list() {
 
 #[test]
 fn tab_strip_reorder_asks_the_engine_and_lands_only_once_the_engine_reports_the_order() {
-    let (mut runtime, checkout_id, directory) = strip_checkout("herdr-move");
+    let (mut runtime, checkout_id, directory) = strip_checkout("ws-move");
     let checkout_path = directory.to_string_lossy().into_owned();
     let tabs = ["w-order:t1", "w-order:t2"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -3261,7 +3261,7 @@ fn tab_strip_reorder_indexes_a_move_in_the_whole_workspace_not_one_checkout() {
 
 #[test]
 fn tab_strip_reorder_keeps_the_engine_s_order_and_reports_when_a_move_is_refused() {
-    let (mut runtime, checkout_id, directory) = strip_checkout("herdr-refused");
+    let (mut runtime, checkout_id, directory) = strip_checkout("ws-refused");
     let checkout_path = directory.to_string_lossy().into_owned();
     let tabs = ["w-order:t1", "w-order:t2"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -3326,7 +3326,7 @@ fn tab_strip_reorder_keeps_the_engine_s_order_and_reports_when_a_move_is_refused
 /// refusal to hold it back.
 #[test]
 fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
-    let (mut runtime, checkout_id, directory) = strip_checkout("herdr-retry");
+    let (mut runtime, checkout_id, directory) = strip_checkout("ws-retry");
     let checkout_path = directory.to_string_lossy().into_owned();
     let tabs = ["w-order:t1", "w-order:t2"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
@@ -3424,7 +3424,7 @@ fn tab_strip_reorder_a_refused_drag_can_simply_be_dragged_again() {
 
 #[test]
 fn tab_strip_reorder_ignores_a_result_a_later_drag_has_replaced() {
-    let (mut runtime, checkout_id, directory) = strip_checkout("herdr-superseded");
+    let (mut runtime, checkout_id, directory) = strip_checkout("ws-superseded");
     let tabs = ["w-order:t1", "w-order:t2"];
     assert!(runtime.ingest_session(Ok(tab_order_payload(
         &directory.to_string_lossy(),
@@ -3555,14 +3555,14 @@ fn a_plain_terminal_pane_cwd_is_reconciled_into_its_checkout() {
     let payload: SessionSnapshotPayload = crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": [],
         "tabs": [{
-            "workspace_id": "herdr-workspace",
-            "tab_id": "herdr-workspace:t1",
+            "workspace_id": "ws-remote",
+            "tab_id": "ws-remote:t1",
             "label": "2"
         }],
         "panes": [{"pane_id": "plain:p1", "cwd": checkout_path}],
         "layouts": [{
-            "workspace_id": "herdr-workspace",
-            "tab_id": "herdr-workspace:t1",
+            "workspace_id": "ws-remote",
+            "tab_id": "ws-remote:t1",
             "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "plain:p1",
@@ -3581,7 +3581,7 @@ fn a_plain_terminal_pane_cwd_is_reconciled_into_its_checkout() {
     assert_eq!(runtime.snapshot().navigator.workspaces.len(), 1);
     assert_eq!(
         runtime.snapshot().navigator.workspaces[0].session_workspace_ids,
-        vec!["herdr-workspace".to_owned()]
+        vec!["ws-remote".to_owned()]
     );
     let checkout = runtime
         .snapshot()
@@ -4249,7 +4249,7 @@ fn tab_strip_reorder_a_drag_past_another_workspaces_tabs_needs_no_engine_move() 
 /// in the mixed strip the operator sees.
 #[test]
 fn tab_strip_reorder_a_drag_within_one_workspace_uses_that_workspaces_index() {
-    let (mut runtime, checkout_id, directory) = strip_checkout("split-herdr");
+    let (mut runtime, checkout_id, directory) = strip_checkout("split-ws");
     let checkout_path = directory.to_string_lossy().into_owned();
     assert!(runtime.ingest_session(Ok(split_checkout_payload(
         &checkout_path,

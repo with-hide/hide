@@ -5,7 +5,7 @@
 //! its logo and the comments the operator leaves on the View go to it in one
 //! letter (D-08). The opener is kept by the agent's engine terminal and native
 //! session, never by its pane id, because a pane id can come to name another shell
-//! (Herdr gave the same id to another shell after a restart; D-23, B40); the
+//! (an id was given to another shell after a restart; D-23, B40); the
 //! pane is found again each time it is needed.
 //!
 //! Comments belong to the checkout's entry in `workspace-views.json`, keyed
