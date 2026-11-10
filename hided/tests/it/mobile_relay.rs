@@ -949,3 +949,113 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
     assert!(!wire.contains("letter-7"));
     running.stop();
 }
+
+/// An app phone's record as `phones.json` keeps it, with the key `key` registered for `APP_TOKEN`.
+fn write_app_phone(dir: &Path, key: &AppKey) {
+    use std::os::unix::fs::PermissionsExt;
+    let state_dir = dir.join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let private = |name: &str, value: Value| {
+        let path = state_dir.join(name);
+        std::fs::write(&path, value.to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let registration = key.registration(APP_TOKEN);
+    private(
+        "mobile.json",
+        json!({"enabled": true, "method": "relay", "push_mode": "always"}),
+    );
+    private(
+        "phones.json",
+        json!({"phones": [{
+            "id": "phone-1", "name": "iPhone", "credential_sha256": "0".repeat(64),
+            "paired_at_ms": now, "last_seen_ms": now, "notifications": "on", "origin": "relay",
+            "apns": {
+                "token": APP_TOKEN, "environment": "sandbox",
+                "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"],
+            },
+        }]}),
+    );
+}
+
+#[tokio::test]
+async fn notices_that_found_no_relay_link_are_sent_once_when_it_comes_up() {
+    use hide_relay_protocol::admission::{PushOutcome, PushResult};
+    let dir = tempfile::tempdir().unwrap();
+    let key = AppKey::new();
+    write_app_phone(dir.path(), &key);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let running = hided::start_daemon(env(dir.path(), listener.local_addr().unwrap().port()))
+        .await
+        .unwrap();
+    // The listener has not accepted the relay's socket yet, so there is no link: each notice is held.
+    let notice = |tag: &str, title: &str| json!({"title": title, "state": "needs_you", "tag": tag, "device_id": "d", "pane_id": "w1:p1", "clear": []});
+    let mobile = std::sync::Arc::clone(&running.mobile);
+    tokio::task::spawn_blocking(move || {
+        // The same agent twice: the newer replaces the older. A second agent keeps its own.
+        mobile.push_or_hold("phone-1", notice("d|w1:p1", "first"));
+        mobile.push_or_hold("phone-1", notice("d|w1:p2", "other agent"));
+        mobile.push_or_hold("phone-1", notice("d|w1:p1", "newer"));
+    })
+    .await
+    .unwrap();
+
+    let mut device = accept_answering(
+        &listener,
+        ServerMessage::Registered { push: true }.encode().unwrap(),
+    )
+    .await;
+    let mut requests = Vec::new();
+    for _ in 0..2 {
+        let request = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match next(&mut device).await {
+                    Some(Message::Text(text)) => {
+                        let ClientMessage::Push(request) = ClientMessage::decode(&text).unwrap()
+                        else {
+                            panic!("expected push_request, got {text}");
+                        };
+                        return request;
+                    }
+                    Some(_) => {}
+                    other => panic!("relay link ended: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("a held notice is sent once the link is up");
+        control(
+            &mut device,
+            ServerMessage::PushResult(PushResult {
+                id: request.id,
+                result: PushOutcome::Delivered,
+            }),
+        )
+        .await;
+        requests.push(request);
+    }
+    // One per agent in the order they were held; the first agent's older notice was replaced by the newer one.
+    assert_ne!(
+        requests[0].collapse, requests[1].collapse,
+        "two agents, two collapse values"
+    );
+    let body = URL_SAFE_NO_PAD.decode(&requests[1].payload).unwrap();
+    let plain: Value = serde_json::from_slice(&key.decrypt(&body)).unwrap();
+    assert_eq!(plain["title"], "newer");
+    // Nothing else is sent: a flush sends each held notice once and holds nothing again.
+    let more = tokio::time::timeout(Duration::from_millis(1500), async {
+        loop {
+            if let Some(Message::Text(text)) = next(&mut device).await {
+                return text;
+            }
+        }
+    })
+    .await;
+    assert!(more.is_err(), "no third request: {more:?}");
+    running.stop();
+}

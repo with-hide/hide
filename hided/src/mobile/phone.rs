@@ -1711,10 +1711,28 @@ async fn input(
         return json!({"type": "input_result", "ok": false, "reason": "invalid_request"});
     };
     let answer = |ok: bool, reason: Option<&str>| json!({"type": "input_result", "request_id": request_id, "ok": ok, "reason": reason});
-    let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
+    let Some((key, agent)) =
+        key_of(message).and_then(|key| projection.find(&key).map(|agent| (key, agent)))
+    else {
         refusal_logged("scope.refused", Some(phone_id), "input_not_an_agent");
         return answer(false, Some("gone"));
     };
+    // An input that was written for one ask (a notification's Reply) lands only while the agent is still in that
+    // ask: `turn` is the `ask.turn` of the notice, the agent's last change of state. Without it the input is the
+    // phone screen's own, made while looking at the agent.
+    match message.get("turn") {
+        None => {}
+        Some(Value::String(turn)) => {
+            let asking = matches!(agent.demand.as_str(), "question" | "approval");
+            if !asking
+                || agent.changed_at_unix_ms.map(|at| at.to_string()).as_deref()
+                    != Some(turn.as_str())
+            {
+                return answer(false, Some("stale"));
+            }
+        }
+        Some(_) => return answer(false, Some("invalid_request")),
+    }
     let text = message.get("text").and_then(Value::as_str);
     let engine_key = message.get("key").and_then(Value::as_str);
     let problem = match (text, engine_key) {
@@ -1919,6 +1937,53 @@ mod tests {
             });
         }
         super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
+    }
+
+    fn asking_projection(demand: &str, changed_at: u64) -> Projection {
+        let agent = json!({
+            "pane_id": "w1:p1", "group": "needs_you", "mark": "turn", "identity_label": "Review parser",
+            "agent_kind": "claude", "status_code": demand, "demand": demand, "changed_at_unix_ms": changed_at,
+        });
+        super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
+    }
+
+    /// A reply written for one ask never lands in another: a notice's Reply, answered after the agent has asked
+    /// something else or moved on, is refused as stale and writes nothing.
+    #[tokio::test]
+    async fn an_input_written_for_an_ask_is_refused_once_the_agent_is_in_another() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let ask = |request: &str, turn: Value| {
+            input_message(request, json!({"text": "yes", "turn": turn}))
+        };
+        let waiting = asking_projection("question", 5);
+        for (request, turn, listed) in [
+            ("older", json!("4"), &waiting),
+            ("later", json!("5"), &asking_projection("approval", 6)),
+            ("moved-on", json!("5"), &sleeping_projection(None)),
+        ] {
+            let answer = input(&mobile, "phone-a", &ask(request, turn), listed).await;
+            assert_eq!(
+                (answer["ok"].as_bool(), reason(&answer)),
+                (Some(false), Some("stale")),
+                "{request}"
+            );
+        }
+        let wrong_type = input(&mobile, "phone-a", &ask("number", json!(5)), &waiting).await;
+        assert_eq!(reason(&wrong_type), Some("invalid_request"));
+        // The matching turn passes the check and goes on to the write, which these tests do not wire.
+        let matching = input(&mobile, "phone-a", &ask("same", json!("5")), &waiting).await;
+        assert_ne!(reason(&matching), Some("stale"));
+        // The phone screen's own input carries no turn and is not held to one.
+        let own = input(
+            &mobile,
+            "phone-a",
+            &input_message("own", json!({"text": "yes"})),
+            &waiting,
+        )
+        .await;
+        assert_ne!(reason(&own), Some("stale"));
     }
 
     fn pane() -> AgentKey {

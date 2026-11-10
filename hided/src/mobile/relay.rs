@@ -451,6 +451,8 @@ async fn connect(
     };
     // The link is handed out only while this loop runs.
     let _published = Published::new(mobile, link);
+    // What waited for the link goes out now that it is published.
+    mobile.flush_held();
     let mut pending = PendingPushes::default();
     let mut peers: HashMap<u32, Peer> = HashMap::new();
     let mut ping = tokio::time::interval(Duration::from_secs(20));

@@ -117,6 +117,19 @@ impl Route {
     }
 }
 
+/// How many notices wait for the relay link per phone, and how long one stays worth sending.
+/// A notice is about what an agent is doing now; past a minute it is old news.
+const HELD_PER_PHONE: usize = 8;
+const HELD_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// A notice that found no relay link. The follower's first pass runs before the relay socket is admitted, so without
+/// this the notice is dropped. At most one waits per agent tag (a newer notice for the tag replaces it, as it replaces
+/// the older one on the phone), and the link's coming up sends each once.
+struct Held {
+    payload: Value,
+    at: std::time::Instant,
+}
+
 struct Inner {
     settings: MobileSettings,
     phones: Phones,
@@ -132,6 +145,8 @@ struct Inner {
     observers: HashSet<u64>,
     /// Tags of agents made Seen since each phone's last push (PRD D-21).
     pending_clear: HashMap<String, BTreeSet<AgentKey>>,
+    /// Notices for an iOS app phone that found no relay link, kept until one is up (`Held`).
+    held: HashMap<String, VecDeque<Held>>,
     /// Input request ids each phone sent, and how each ended (PRD B27).
     inputs: HashMap<String, VecDeque<(String, InputState)>>,
     /// An exposed Mobile's last pass could not read Tailscale; one such miss
@@ -346,6 +361,7 @@ impl Mobile {
                 relay_cleanup_failure: None,
                 observers: HashSet::new(),
                 pending_clear: HashMap::new(),
+                held: HashMap::new(),
                 inputs: HashMap::new(),
                 missed_check: false,
                 reconcile_owed: PassOwed(true),
@@ -1957,6 +1973,95 @@ impl Mobile {
         }
     }
 
+    /// Sends one notice to an iOS app phone, or keeps it when the relay link is not up yet. Blocking, like
+    /// `push_to_app`; the outcome is a diagnostic naming the reason, never the notice.
+    pub fn push_or_hold(&self, phone_id: &str, payload: Value) {
+        match self.push_to_app(phone_id, &payload) {
+            Ok(()) => {
+                // A live send is newer than anything held for the tag.
+                self.forget_held(phone_id, &payload);
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                    "route": "app", "tag": payload.get("tag"),
+                }));
+            }
+            Err("relay_unavailable") => {
+                self.hold(phone_id, payload);
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.held", "phone_id": phone_id, "route": "app",
+                }));
+            }
+            Err(reason) => hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                "route": "app", "reason": reason,
+            })),
+        }
+    }
+
+    /// Keeps a notice for `phone_id` until the relay link is up, replacing the one held for the same agent tag and
+    /// dropping the oldest past `HELD_PER_PHONE`.
+    fn hold(&self, phone_id: &str, payload: Value) {
+        let tag = payload.get("tag").cloned();
+        let mut inner = self.lock();
+        let held = inner.held.entry(phone_id.to_owned()).or_default();
+        held.retain(|older| older.payload.get("tag") != tag.as_ref());
+        held.push_back(Held {
+            payload,
+            at: std::time::Instant::now(),
+        });
+        while held.len() > HELD_PER_PHONE {
+            held.pop_front();
+        }
+    }
+
+    /// Drops what is held for the tag of a notice that has just gone out live.
+    fn forget_held(&self, phone_id: &str, payload: &Value) {
+        let tag = payload.get("tag");
+        if let Some(held) = self.lock().held.get_mut(phone_id) {
+            held.retain(|older| older.payload.get("tag") != tag);
+        }
+    }
+
+    /// Sends what waited for the relay link, once each: the link is up, so a notice that fails now fails as any
+    /// other and is not held again. A notice older than `HELD_MAX_AGE` is dropped. Blocking work runs on a
+    /// blocking thread, like every other push.
+    pub(crate) fn flush_held(self: &Arc<Self>) {
+        let waiting: Vec<(String, Held)> = {
+            let mut inner = self.lock();
+            std::mem::take(&mut inner.held)
+                .into_iter()
+                .flat_map(|(phone, held)| held.into_iter().map(move |held| (phone.clone(), held)))
+                .collect()
+        };
+        if waiting.is_empty() {
+            return;
+        }
+        let mobile = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            for (phone_id, held) in waiting {
+                if *mobile.stopping.borrow() {
+                    return;
+                }
+                if held.at.elapsed() > HELD_MAX_AGE {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.expired", "phone_id": phone_id,
+                    }));
+                    continue;
+                }
+                match mobile.push_to_app(&phone_id, &held.payload) {
+                    Ok(()) => hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                        "route": "app", "after": "held", "tag": held.payload.get("tag"),
+                    })),
+                    Err(reason) => hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                        "route": "app", "after": "held", "reason": reason,
+                    })),
+                }
+            }
+        });
+    }
+
     pub fn set_notifications(&self, phone_id: &str, notifications: Notifications) {
         if self
             .lock()
@@ -2283,7 +2388,12 @@ impl Mobile {
                     .remove(phone_id)
                     .unwrap_or_default();
                 match self.push_payload(&notice, &clear) {
-                    Ok(payload) => jobs.push((phone_id.clone(), route.clone(), payload)),
+                    Ok(mut payload) => {
+                        if let Some(agent) = projection.find(&notice.key) {
+                            push::with_ask(&mut payload, agent);
+                        }
+                        jobs.push((phone_id.clone(), route.clone(), payload));
+                    }
                     Err(reason) => hide_core::diagnostic!(json!({
                         "component":"mobile_push", "kind":"push.failed", "reason":reason,
                     })),
@@ -2299,16 +2409,7 @@ impl Mobile {
                 let subscription = match route {
                     Route::Web(subscription) => subscription,
                     Route::App => {
-                        match mobile.push_to_app(&phone_id, &payload) {
-                            Ok(()) => hide_core::diagnostic!(json!({
-                                "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
-                                "route": "app", "tag": payload.get("tag"),
-                            })),
-                            Err(reason) => hide_core::diagnostic!(json!({
-                                "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
-                                "route": "app", "reason": reason,
-                            })),
-                        }
+                        mobile.push_or_hold(&phone_id, payload);
                         continue;
                     }
                 };
