@@ -147,7 +147,7 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 The engine's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
 Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
-Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request; the local measurement tool that once repeated that scene matrix retired with Herdr.
+Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request; the local measurement tool that once repeated that scene matrix is retired.
 The adapter declaration is a reviewed product decision, never changed by a measurement.
 The shared agent adapter declares bell eligibility separately from prompt intake, spawn refusal and session format; its contract requires a submission hook and either prompt context or a turn-end intake hook for every bell, and adding prompt intake alone never widens the bell targets.
 Claude Code's plan approval reads `blocked`; Codex's does not, and the session read guards it instead (next section).
@@ -520,7 +520,7 @@ Neither reaches the screen, and nothing changes on the sender's side.
 ### A menu the engine reads as a stop
 
 Codex's plan approval, "Implement this plan?", reads to the engine as an ordinary stop rather than `blocked`, and a bell's Enter there picks its first item, "Yes, implement this plan", so a letter would start a plan the operator never approved (measured 2026-10-07 on Herdr 0.9.3, three runs of three, with the menu read as `done`).
-What the engine reads depends on the screen rules of Codex's agent definition (`hide-agent-adapter/agents/codex.toml`), and the status guard no longer holds it: as the manifest Herdr 0.9.5 bundled (2026.10.11.1) did, they read a Codex title without the working spinner as a stop when no blocking or working rule matches the screen (`osc_title_idle`), and a Codex screen no rule matches reads as a stop too.
+What the engine reads depends on the screen rules of Codex's agent definition (`hide-agent-adapter/agents/codex.toml`), and the status guard no longer holds it: they read a Codex title without the working spinner as a stop when no blocking or working rule matches the screen (`osc_title_idle`), and a Codex screen no rule matches reads as a stop too.
 The manifest bundled with Herdr 0.9.3 (2026.09.23.1) read the menu `unknown`, which the status guard held (measured 2026-10-07 with Codex CLI 0.160.1 on an isolated server).
 Hide reads that wait from the Codex session file instead of the screen (PRD codex-plan-approval-hold).
 The label worker's session read, which already runs on each change of the pane's engine state, on its own thread and from where it last stopped, folds Codex's turn records into an agent-neutral turn tracker (`hide-session/src/turns.rs`): `task_started` with its `collaboration_mode_kind`, the `Plan` item a plan-mode turn proposes (or its `<proposed_plan>` reply), `task_complete`, `turn_aborted`, and each person's message.
@@ -1133,7 +1133,7 @@ A ledger with no wait writes no `identity_waits` field, and a build from before 
 
 ## Pane commands
 
-`hide pane read <pane> [--lines <n>]`, `hide agent read <agent> [--lines <n>]`, `hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]`, `hide pane open --beside [--focus] -- <command>` and `hide workspace purpose <text>` are an agent's reads of and input to the panes of its machine, and its checkout's purpose, where an agent once used Herdr's own commands (PRD engine-bundle-1 D-5, D-13).
+`hide pane read <pane> [--lines <n>]`, `hide agent read <agent> [--lines <n>]`, `hide pane send <pane> [<text>] [--key <name>]... [--enter] [--paste]`, `hide pane open --beside [--focus] -- <command>` and `hide workspace purpose <text>` are an agent's reads of and input to the panes of its machine, and its checkout's purpose (PRD engine-bundle-1 D-5, D-13).
 They need the running daemon and a pane-bound caller, like the letter commands; a caller outside a Hide pane is refused by the credential boundary, and a checkout-bound one with `pane_required`.
 The daemon admits the caller's pane and checkout on the core's owner thread (`Runtime::prepare_pane_command`), and the engine calls run on the caller's task, off the runtime lock, through the engine boundary (`hide_core::pane_command`); nothing they do is recorded in the ledger.
 

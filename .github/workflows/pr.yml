@@ -222,6 +222,7 @@ jobs:
           python3 scripts/check-agent-screen-rules.py
           python3 scripts/check-device-kits-single-source.py
           bash scripts/check-agent-folders.sh
+          python3 scripts/check-herdr-names.py
 
       # Reads the pull request's body, which no merge group carries, so a merge
       # group's `policy` leaves it out.

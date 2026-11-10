@@ -27,7 +27,7 @@ export function resizeStep(
 /**
  * The pane a divider's `resize_pane` names so the core moves that divider and
  * no other. The core moves the split on the named pane's edge toward the
- * direction (Herdr's pane resize), so a drag right or down names the pane just
+ * direction, so a drag right or down names the pane just
  * before the divider and a drag left or up the pane just after it; any pane
  * further in would name a split nested inside one side (issue 2346).
  */

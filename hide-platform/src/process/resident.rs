@@ -18,8 +18,7 @@
 //!   allow it or the child is found in it still, rather than started into
 //!   the job the starter's owner ends it with. A job that neither lets a
 //!   process leave nor ends its processes when it closes, as a CI runner's
-//!   is, keeps the child instead, as Herdr v0.9.5 keeps its server there
-//!   (`launch_server_daemon_command`): closing it ends nothing. With no
+//!   is, keeps the child instead: closing it ends nothing. With no
 //!   console; and with
 //!   only the handles it is lent, named on a handle list, so no other handle
 //!   of the starter's reaches it whatever other threads start meanwhile. A

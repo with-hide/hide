@@ -6,8 +6,8 @@
 //! shows it changes nothing, so a prediction can stay applied until its
 //! operation settles without counting twice once the engine's layout carries it.
 //!
-//! The rules follow what Herdr does (v0.9.1, measured on a private
-//! server): a split puts the new pane second at ratio 0.5 and focuses it; a
+//! The rules were measured under Herdr v0.9.1 on a private server:
+//! a split puts the new pane second at ratio 0.5 and focuses it; a
 //! close collapses the parent split into the sibling, focuses the sibling and
 //! ends a zoom on the closed pane; a zoom focuses its pane; a resize moves the
 //! split on the pane's edge toward its direction (the opposite edge at the

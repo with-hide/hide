@@ -463,8 +463,8 @@ pub(crate) fn read_past_writes<T: serde::de::DeserializeOwned>(
 }
 
 /// Whether an agent's status reads it at rest, ready for what is typed:
-/// `idle`, or `done`, a rest after work, as the engine's start wait reads both
-/// (as Herdr's did, v0.9.5). agy redrawing the resumed conversation
+/// `idle`, or `done`, a rest after work, as the engine's start wait reads both.
+/// agy redrawing the resumed conversation
 /// can read working for a moment as it starts, which leaves its rest `done`.
 fn at_rest(status: &str) -> bool {
     matches!(status, "idle" | "done")

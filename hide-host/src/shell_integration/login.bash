@@ -1,5 +1,4 @@
-# Hide's bash startup for a login shell, which is how Herdr started a pane's
-# shell on macOS. Hide starts bash with --init-file naming this file, which
+# Hide's bash startup for a login shell on macOS. Hide starts bash with --init-file naming this file, which
 # bash reads in place of its own startup files, so it reads them here in a
 # login shell's order: /etc/profile, then the first of ~/.bash_profile,
 # ~/.bash_login and ~/.profile. A shell reading an init file is not a login

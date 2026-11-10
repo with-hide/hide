@@ -1,5 +1,4 @@
-# Hide's bash startup for an interactive shell that is not a login shell,
-# which is how Herdr started a pane's shell on Linux. Hide starts bash with
+# Hide's bash startup for an interactive shell that is not a login shell. Hide starts bash with
 # --init-file naming this file, which bash reads in place of ~/.bashrc
 # (after the system's bashrc where bash was built to read one), so it reads
 # ~/.bashrc here. Then the shell marks its first prompt on the screen
