@@ -14,8 +14,9 @@ test("test browser startup preserves defaults and the Windows loopback fix", { t
     const disabled = args.filter((arg) => arg.startsWith("--disable-features="));
     // CDP returns both the runner's switch and our additive switch; Chromium
     // applies the last one. The helper's own output is one switch (unit test).
-    expect(disabled.length).toBeGreaterThan(0);
-    const features = disabled.at(-1)!.slice("--disable-features=".length).split(",");
+    const effective = disabled.at(-1);
+    expect(effective).toBeDefined();
+    const features = effective!.slice("--disable-features=".length).split(",");
     expect(features).toEqual(expect.arrayContaining(["PaintHolding", "Translate"]));
     if (process.platform === "win32") expect(features).toContain("TcpPortRandomizationWin");
   } finally {
