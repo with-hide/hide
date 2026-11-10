@@ -52,15 +52,20 @@ class Clock:
 
 
 class Answer:
-    """One HTTP answer, as `urlopen` returns it: a body read inside a `with` in
-    the pieces `fetch` asks for. Each piece takes `seconds` on the clock, and
-    the answer can raise the error a body still ends in partway through."""
+    """One HTTP answer, as `urlopen` returns it: a body read inside a `with`.
+    The server sends `arriving` bytes every `seconds`, so the clock shows what a
+    trickle does to a deadline. `read1` returns the bytes that have arrived, as
+    a real answer does; `read` waits to fill what it was asked for, so a body
+    taken through it checks the deadline once per chunk instead of per piece.
+    The answer can also raise the error a body still ends in partway through."""
 
-    def __init__(self, payload=b"", clock=None, seconds=0.0, raises=None):
+    def __init__(self, payload=b"", clock=None, seconds=0.0, raises=None, arriving=None):
         self.payload = payload
         self.clock = clock
         self.seconds = seconds
         self.raises = raises
+        self.arriving = arriving
+        self.pieces = 0
 
     def __enter__(self):
         return self
@@ -68,11 +73,28 @@ class Answer:
     def __exit__(self, *_):
         return False
 
+    def read1(self, size=-1):
+        if size is None or size < 0 or (self.arriving and self.arriving < size):
+            size = self.arriving or size
+        return self.take(size)
+
     def read(self, size=-1):
+        if size is None or size < 0:
+            return self.take(size)
+        piece = b""
+        while len(piece) < size:
+            more = self.take(size - len(piece))
+            if not more:
+                break
+            piece += more
+        return piece
+
+    def take(self, size):
         # The piece takes its time either way, and a body that ends partway
         # spends that time before it reports the failure.
         if self.clock is not None:
             self.clock.advance(self.seconds)
+        self.pieces += 1
         if self.raises is not None:
             error, self.raises = self.raises, None
             raise error
@@ -269,10 +291,13 @@ class Download(unittest.TestCase):
         self.assertEqual(clock.slept, [], "a 403 in the body asked the server again")
 
     def test_a_body_still_arriving_at_the_budget_fails_with_the_budget_as_the_reason(self):
-        # A server that keeps trickling bytes: each piece arrives in time and
-        # the request's own wait never expires, so only the deadline stops it.
-        piece = b"x" * install.DOWNLOAD_CHUNK_BYTES
-        trickle = Answer(piece * 40, seconds=install.DOWNLOAD_BUDGET_SECONDS / 10)
+        # A server that keeps trickling bytes: each piece arrives well inside
+        # the request's own wait, and there is far more than the budget at the
+        # rate it sends them, so only the deadline stops it. The body is a
+        # single chunk's worth read a byte at a time, which is what a `read`
+        # that waits to fill its chunk would hide.
+        trickle = Answer(b"x" * 4096, arriving=1,
+                         seconds=install.DOWNLOAD_BUDGET_SECONDS / 1024)
         with self.assertRaisesRegex(SystemExit, f"inside {install.DOWNLOAD_BUDGET_SECONDS} s"):
             self.fetch([trickle])
         # A transfer that finishes inside the budget does finish.

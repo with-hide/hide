@@ -189,12 +189,12 @@ def fetch(url):
     limit, a server fault, or a connection that dropped or timed out. The budget
     bounds the whole download, the waits between attempts included: no attempt
     starts without time left, one request waits no longer than that leaves, and
-    the body is checked against it as it arrives, so a server that keeps
-    trickling bytes cannot outlast it. A refusal the next ask would answer the
-    same way (403, 404, a certificate of another name, a URL nothing answers)
-    stops at once with its own cause. The step ends with the download's own
-    error; a file that arrives and does not match its pin is the caller's to
-    refuse, since no retry can repair it."""
+    the body is taken as it arrives with the deadline checked after every piece,
+    so a server that keeps trickling bytes cannot outlast it. A refusal the next
+    ask would answer the same way (403, 404, a certificate of another name, a URL
+    nothing answers) stops at once with its own cause. The step ends with the
+    download's own error; a file that arrives and does not match its pin is the
+    caller's to refuse, since no retry can repair it."""
     end = time.monotonic() + DOWNLOAD_BUDGET_SECONDS
     attempts = len(DOWNLOAD_RETRY_DELAYS) + 1
     for attempt in range(1, attempts + 1):
@@ -204,8 +204,11 @@ def fetch(url):
         try:
             with urllib.request.urlopen(url, timeout=min(DOWNLOAD_ATTEMPT_SECONDS, left)) as answer:
                 body = bytearray()
-                for chunk in iter(lambda: answer.read(DOWNLOAD_CHUNK_BYTES), b""):
-                    body += chunk
+                # `read1` returns the bytes that have arrived rather than
+                # waiting to fill the chunk, so the deadline is checked between
+                # the pieces a slow server sends one at a time.
+                while piece := answer.read1(DOWNLOAD_CHUNK_BYTES):
+                    body += piece
                     if time.monotonic() >= end:
                         raise SystemExit(f"{url} could not be downloaded inside "
                                          f"{DOWNLOAD_BUDGET_SECONDS} s: its body was still arriving")
