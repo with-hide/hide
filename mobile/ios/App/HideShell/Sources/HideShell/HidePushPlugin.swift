@@ -153,17 +153,20 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["room": target.room, "device_id": target.deviceId, "pane_id": target.paneId])
     }
 
-    /// A local notification for the demo mode: no token, no key, no network. It uses the same category as a real question,
-    /// so the Reply button is there; its action does nothing a real one would (`demo` in its user info).
+    /// A local notification for the demo mode: no token, no key, no network. It is worded and categorised by the same
+    /// `Notice` code as a real question (the agent's title, then the status word, the sentence and the project), so the
+    /// Reply button is there; its action does nothing a real one would (`demo` in its user info).
     @objc func demoSample(_ call: CAPPluginCall) {
         let center = center()
         let words = call.getObject("words") ?? [:]
         let send = { (granted: Bool) in
             guard granted else { self.fail(call, "denied"); return }
+            let text = { (key: String) in (words[key] as? String).map { String($0.prefix(200)) } ?? "" }
+            let notice = Notice(sampleTitle: text("title"), statusCode: text("status_code"), state: text("state"), detail: text("detail"), place: text("place"))
             let content = UNMutableNotificationContent()
-            content.title = (words["title"] as? String).map { String($0.prefix(200)) } ?? ""
-            content.body = (words["body"] as? String).map { String($0.prefix(400)) } ?? ""
-            content.categoryIdentifier = NoticeCategory.reply
+            content.title = notice.title
+            content.body = notice.body(words: .current)
+            content.categoryIdentifier = NoticeCategory.of(notice)
             content.userInfo = ["demo": true]
             let request = UNNotificationRequest(identifier: "hide.demo.sample", content: content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false))
             center.add(request) { error in

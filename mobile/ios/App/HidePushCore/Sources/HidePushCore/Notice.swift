@@ -20,6 +20,22 @@ public struct Notice: Equatable {
     /// The largest notice the app reads: hided's own plaintext bound is 2,897 bytes (`push::MAX_APNS_PLAINTEXT`).
     static let maxBytes = 4096
 
+    /// The notice of the demo's sample question: the shape a real one has, for a computer that does not exist, so the
+    /// title, the body and the category come from the same code (`body(words:)`, `NoticeCategory`) as a real notification's.
+    public init(sampleTitle title: String, statusCode: String, state: String, detail: String, place: String) {
+        self.title = title
+        self.state = state
+        self.statusCode = statusCode
+        self.detail = detail
+        self.place = place
+        self.tag = "demo"
+        self.deviceId = "demo"
+        self.paneId = "demo"
+        self.room = ""
+        self.askKind = "question"
+        self.askTurn = "0"
+    }
+
     public init?(json: Data) {
         guard json.count <= Self.maxBytes,
               let object = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any],

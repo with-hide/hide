@@ -101,9 +101,9 @@ describe("turning notifications on", () => {
     patch({ demo: true });
     await turnOnAppPush();
     expect(calls).toEqual(["HidePush.demoSample"]);
-    // The sample reads as a real one does: the group in the title, the first sample agent's question, as the list words it, in the body.
+    // The sample carries a real notice's fields for the first sample agent (title, status, question, project); the phone words the body.
     const { translate } = await import("../i18n/translator");
-    expect(words).toEqual({ title: translate("mobile.group.needs_you"), body: translate("mobile.demo.a1.ask") });
+    expect(words).toEqual({ title: translate("mobile.demo.a1.title"), status_code: "question", state: "needs_you", detail: translate("mobile.demo.a1.ask"), place: "demo · fix/review" });
     expect(sent).toEqual([]);
     expect(localStorage.getItem("hide.phone.app-push")).toBeNull();
     expect(useAppPush.getState().demo).toBe(true);
