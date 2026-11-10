@@ -24,7 +24,7 @@ The phone is not a screen mirror and no code runs on it. The computer runs Hide 
 The "To look at" tab can show a page that the user's own agent made on the user's own computer, drawn in a sandboxed frame with a content security policy. It is the user's own content from the user's own computer, not third-party software, and it does not change the app's features (2.5.2; 4.7 does not apply).
 
 THE STORE SCREENSHOTS
-Each screenshot is the app running in the iOS Simulator in demo mode, framed with a headline. The lock-screen screenshot shows the notification banner the app's own demo posts, captured from the Simulator; the lock screen's wallpaper, date and clock around it are composed, because the Simulator cannot be locked from a script.
+Each screenshot is the app running in the iOS Simulator in demo mode, framed with a headline. The notification screenshot shows the banner iOS draws for the app's own demo notification while the app is open.
 
 ENCRYPTION
 The app uses only standard encryption algorithms (Noise_NK with X25519, ChaCha20-Poly1305 and BLAKE2b for the connection; Ed25519 signatures; RFC 8291 Web Push encryption with P-256 and AES-128-GCM and HMAC-SHA-256 for notifications) for its own connection and notifications, so it qualifies for the exemption. This release is not distributed in France or the European Union.

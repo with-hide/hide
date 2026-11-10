@@ -50,7 +50,7 @@ describe('what is wrong with a shot list', () => {
     shots.canvas = { width: 1290, height: 2796 };
     delete shots.shots[1].text.ko;
     shots.shots[0].text.en.accent = 'nowhere';
-    shots.shots[2].text.en.headline = 'Reply to ChatGPT. Know the moment.';
+    shots.shots[2].text.en.headline = ['Reply to ChatGPT.', 'Know the moment.'];
     expect(shotProblems(shots)).toEqual(expect.arrayContaining([
       expect.stringContaining('1290x2796'),
       expect.stringContaining('conversation: ko has no headline'),
@@ -59,30 +59,34 @@ describe('what is wrong with a shot list', () => {
     ]));
   });
 
-  it('refuses a banner shot that does not say where its banner is', async () => {
+  it('refuses a headline that is not one or two written lines, and an accent that is not inside one of them', async () => {
     const shots = await base();
-    delete shots.shots[2].crop;
-    expect(shotProblems(shots)).toEqual([expect.stringContaining('names the banner')]);
+    shots.shots[0].text.en.headline = 'Answer your agents. Away from your desk.';
+    shots.shots[1].text.ko.headline = ['대화를 읽고 한', '줄로 답해요'];
+    shots.shots[2].text.en.headline = ['a', 'b', 'c'];
+    expect(shotProblems(shots)).toEqual([
+      expect.stringContaining('agents: en headline is one or two lines'),
+      expect.stringContaining('conversation: ko accent "한 줄"'),
+      expect.stringContaining('notification: en headline is one or two lines'),
+    ]);
   });
 });
 
 describe('the frame', () => {
-  const tokens = { field: '#B7C9CC', ink: '#0F1A1C', muted: '#3F5357', accent: '#B9FF66', wallpaper: '#E7EEF0', bezel: '#101112', inter: '/f/Inter.woff2', pretendard: '/f/Pretendard.woff2' };
+  const tokens = { field: '#B7C9CC', ink: '#0F1A1C', muted: '#3F5357', accent: '#B9FF66', bezel: '#101112', inter: '/f/Inter.woff2', pretendard: '/f/Pretendard.woff2' };
 
   it('marks the accent word and carries the headline and support line', async () => {
     const shots = await loadShots(real);
     const html = frameHtml({ shot: shots.shots[0], language: 'en', tokens, capturePath: '/raw/en-01-agents.png', canvas: shots.canvas });
-    expect(html).toContain('<mark>Answer</mark> your agents. Away from your desk.');
+    expect(html).toContain('<span class="line"><mark>Answer</mark> your agents.</span><span class="line">Away from your desk.</span>');
     expect(html).toContain('reply right there');
     expect(html).toContain('file:///raw/en-01-agents.png');
   });
 
-  it('draws the lock screen of a banner shot around the captured banner', async () => {
+  it('breaks the headline where shots.json breaks it, so an accent never sits on two lines', async () => {
     const shots = await loadShots(real);
-    const html = frameHtml({ shot: shots.shots[2], language: 'ko', tokens, capturePath: '/raw/ko-03-notification.png', canvas: shots.canvas });
-    expect(html).toContain('9:41');
-    expect(html).toContain('11월 9일 월요일');
-    expect(html).toContain('class="banner"');
+    const html = frameHtml({ shot: shots.shots[1], language: 'ko', tokens, capturePath: '/raw/ko-02-conversation.png', canvas: shots.canvas });
+    expect(html).toContain('<span class="line">대화를 읽고</span><span class="line"><mark>한 줄</mark>로 답해요</span>');
   });
 });
 

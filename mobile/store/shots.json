@@ -26,12 +26,18 @@
       "settleSeconds": 9,
       "text": {
         "en": {
-          "headline": "Answer your agents. Away from your desk.",
+          "headline": [
+            "Answer your agents.",
+            "Away from your desk."
+          ],
           "accent": "Answer",
           "support": "See who needs you and reply right there."
         },
         "ko": {
-          "headline": "자리를 비워도 에이전트에게 답하세요",
+          "headline": [
+            "자리를 비워도",
+            "에이전트에게 답하세요"
+          ],
           "accent": "답하세요",
           "support": "누가 내 답을 기다리는지 보고 바로 답해요."
         }
@@ -50,13 +56,18 @@
       "settleSeconds": 12,
       "text": {
         "en": {
-          "headline": "Read it. Reply in a line.",
+          "headline": [
+            "Read it. Reply in a line."
+          ],
           "accent": "Reply",
           "support": "The work keeps running on your computer.",
           "reply": "Yes, apply all 3."
         },
         "ko": {
-          "headline": "대화를 읽고 한 줄로 답해요",
+          "headline": [
+            "대화를 읽고",
+            "한 줄로 답해요"
+          ],
           "accent": "한 줄",
           "support": "일은 내 컴퓨터에서 계속돼요.",
           "reply": "네, 3건 모두 반영해 줘."
@@ -66,7 +77,7 @@
     {
       "id": "notification",
       "file": "03-notification",
-      "capture": "banner",
+      "capture": "notification",
       "steps": [
         "[data-phone-demo-entry]",
         "[data-phone-tab=\"settings\"]",
@@ -75,25 +86,20 @@
       "settleSeconds": 11,
       "text": {
         "en": {
-          "headline": "Know the moment it needs you.",
+          "headline": [
+            "Know the moment",
+            "it needs you."
+          ],
           "accent": "Know",
           "support": "Encrypted notifications. Reply right from the notification."
         },
         "ko": {
-          "headline": "내 차례가 되면 바로 알려 줘요",
+          "headline": [
+            "내 차례가 되면",
+            "바로 알려 줘요"
+          ],
           "accent": "바로",
           "support": "암호화된 알림이 오고, 알림에서 바로 답해요."
-        }
-      },
-      "crop": {
-        "x": 28,
-        "y": 178,
-        "width": 1152,
-        "height": 194,
-        "radius": 92,
-        "placeAt": {
-          "x": 27,
-          "y": 1480
         }
       }
     },
@@ -109,12 +115,16 @@
       "settleSeconds": 10,
       "text": {
         "en": {
-          "headline": "Missions at a glance.",
+          "headline": [
+            "Missions at a glance."
+          ],
           "accent": "glance",
           "support": "Steps, pull requests, and the one decision waiting on you."
         },
         "ko": {
-          "headline": "미션은 한눈에",
+          "headline": [
+            "미션은 한눈에"
+          ],
           "accent": "한눈에",
           "support": "단계와 PR, 내가 정할 일까지 보여 줘요."
         }
@@ -131,12 +141,17 @@
       "settleSeconds": 9,
       "text": {
         "en": {
-          "headline": "Check pull requests. Merge them.",
+          "headline": [
+            "Check pull requests.",
+            "Merge them."
+          ],
           "accent": "Merge",
           "support": "See checks and reviews, then merge from your phone."
         },
         "ko": {
-          "headline": "PR을 확인하고 머지해요",
+          "headline": [
+            "PR을 확인하고 머지해요"
+          ],
           "accent": "머지",
           "support": "검사와 리뷰 상태를 보고 폰에서 머지해요."
         }
@@ -155,12 +170,18 @@
       "settleSeconds": 12,
       "text": {
         "en": {
-          "headline": "See what your agent made.",
+          "headline": [
+            "See what your",
+            "agent made."
+          ],
           "accent": "made",
           "support": "Pages and images from your computer, right here."
         },
         "ko": {
-          "headline": "에이전트가 만든 화면을 바로 봐요",
+          "headline": [
+            "에이전트가 만든",
+            "화면을 바로 봐요"
+          ],
           "accent": "화면",
           "support": "내 컴퓨터의 페이지와 이미지를 여기서 열어요."
         }

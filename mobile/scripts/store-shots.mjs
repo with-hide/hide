@@ -6,8 +6,8 @@
 //      with no alpha channel that App Store Connect takes.
 //
 // The words and the steps are `mobile/store/shots.json`. The app's screen in a shot is the capture, never redrawn: the
-// frame and the headline are the only things this script makes. A lock-screen shot ("banner") puts the simulator's own
-// notification banner, cropped out of its capture, on a drawn lock screen: only the wallpaper and the clock are drawn.
+// frame and the headline are the only things this script makes. The notification shot is the same kind of capture as the
+// others: the app in the simulator, with the banner iOS itself drew over it.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -32,14 +32,14 @@ export function shotProblems(shots) {
   for (const shot of shots.shots) {
     if (files.has(shot.file)) problems.push(`${shot.file} is used by two shots`);
     files.add(shot.file);
-    if (!['screen', 'banner'].includes(shot.capture)) problems.push(`${shot.id}: capture is "${shot.capture}"`);
+    if (!['screen', 'notification'].includes(shot.capture)) problems.push(`${shot.id}: capture is "${shot.capture}"`);
     if (!shot.steps.length) problems.push(`${shot.id}: no steps`);
-    if (shot.capture === 'banner' && !['x', 'y', 'width', 'height', 'radius'].every((key) => Number.isInteger(shot.crop?.[key])) || (shot.capture === 'banner' && !shot.crop.placeAt)) problems.push(`${shot.id}: a banner shot names the banner's crop and where it sits`);
     for (const language of languages) {
       const text = shot.text[language];
       if (!text?.headline || !text.support || !text.accent) { problems.push(`${shot.id}: ${language} has no headline, accent and support`); continue; }
-      if (!text.headline.includes(text.accent)) problems.push(`${shot.id}: ${language} accent "${text.accent}" is not in the headline`);
-      for (const [field, value] of Object.entries(text)) {
+      if (!Array.isArray(text.headline) || text.headline.length < 1 || text.headline.length > 2 || text.headline.some((line) => typeof line !== 'string' || !line)) { problems.push(`${shot.id}: ${language} headline is one or two lines, written as a list`); continue; }
+      if (!text.headline.some((line) => line.includes(text.accent))) problems.push(`${shot.id}: ${language} accent "${text.accent}" is not inside one line of the headline`);
+      for (const [field, value] of Object.entries({ ...text, headline: text.headline.join(' ') })) {
         const names = thirdPartyNamesIn(value);
         if (names.length) problems.push(`${shot.id}: ${language} ${field} names ${names.join(', ')}`);
       }
@@ -148,7 +148,6 @@ export async function frameTokens(repo = REPO) {
     ink: tokens['--foreground'].hide.light,
     muted: tokens['--subtle-foreground'].hide.light,
     accent: tokens['--accent-choice-lime'].value,
-    wallpaper: tokens['--card'].hide.light,
     bezel: '#101112',
     inter: join(repo, 'web/src/assets/fonts/InterVariable.woff2'),
     pretendard: join(repo, 'web/src/assets/fonts/PretendardVariable.woff2'),
@@ -157,27 +156,18 @@ export async function frameTokens(repo = REPO) {
 
 const escapeHtml = (text) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
+/** The headline's lines are the ones shots.json wrote: the face's width never decides where a line ends, so an accent never splits. */
 function headlineHtml({ headline, accent }) {
-  const at = headline.indexOf(accent);
-  return `${escapeHtml(headline.slice(0, at))}<mark>${escapeHtml(accent)}</mark>${escapeHtml(headline.slice(at + accent.length))}`;
+  return headline.map((line) => {
+    const at = line.indexOf(accent);
+    const marked = at < 0 ? escapeHtml(line) : `${escapeHtml(line.slice(0, at))}<mark>${escapeHtml(accent)}</mark>${escapeHtml(line.slice(at + accent.length))}`;
+    return `<span class="line">${marked}</span>`;
+  }).join('');
 }
 
 // A frame is laid out in canvas pixels. The phone is the capture scaled to PHONE_WIDTH inside a bezel.
 const PHONE_WIDTH = 920;
 const BEZEL = 13;
-
-/** The lock screen a banner shot sits on: a flat night field, the clock and the date, and the banner's own pixels. */
-function lockScreenHtml(shot, language, bannerUrl, scale, canvas) {
-  const words = language === 'ko'
-    ? { date: '11월 9일 월요일' }
-    : { date: 'Monday, November 9' };
-  const crop = shot.crop;
-  return `<div class="lock">
-    <div class="date">${words.date}</div>
-    <div class="time">9:41</div>
-    <div class="banner" style="left:${crop.placeAt.x * scale}px;top:${crop.placeAt.y * scale}px;width:${crop.width * scale}px;height:${crop.height * scale}px;border-radius:${crop.radius * scale}px;background:url('${bannerUrl}') -${crop.x * scale}px -${crop.y * scale}px / ${canvas.width * scale}px auto no-repeat"></div>
-  </div>`;
-}
 
 /** The page the browser draws for one shot. `capturePath` is the raw simulator capture. */
 export function frameHtml({ shot, language, tokens, capturePath, canvas }) {
@@ -187,9 +177,7 @@ export function frameHtml({ shot, language, tokens, capturePath, canvas }) {
   const screenHeight = Math.round(canvas.height * scale);
   const radius = Math.round(186 * scale);
   const capture = fileUrl(capturePath);
-  const inner = shot.capture === 'banner'
-    ? lockScreenHtml(shot, language, capture, scale, canvas)
-    : `<img class="capture" src="${capture}">`;
+  const inner = `<img class="capture" src="${capture}">`;
   return `<!doctype html><html lang="${language}"><meta charset="utf-8"><style>
 @font-face { font-family: Inter; src: url("${fileUrl(tokens.inter)}"); font-weight: 100 900; }
 @font-face { font-family: Pretendard; src: url("${fileUrl(tokens.pretendard)}"); font-weight: 100 900; }
@@ -197,16 +185,13 @@ export function frameHtml({ shot, language, tokens, capturePath, canvas }) {
 html, body { width: ${canvas.width}px; height: ${canvas.height}px; background: ${tokens.field}; overflow: hidden; }
 body { font-family: Inter, Pretendard, system-ui, sans-serif; color: ${tokens.ink}; position: relative; }
 .words { position: absolute; left: 0; right: 0; top: 150px; padding: 0 90px; text-align: center; }
-h1 { font-size: 100px; line-height: 1.14; font-weight: 750; letter-spacing: -0.02em; text-wrap: balance; word-break: keep-all; }
+h1 .line { display: block; white-space: nowrap; }
+h1 { font-size: 100px; line-height: 1.14; font-weight: 750; letter-spacing: -0.02em; }
 h1 mark { background: ${tokens.accent}; color: ${tokens.ink}; padding: 0 0.16em; border-radius: 0.2em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 p { margin-top: 36px; font-size: 48px; line-height: 1.3; font-weight: 500; color: ${tokens.muted}; text-wrap: balance; word-break: keep-all; }
 .phone { position: absolute; left: ${(canvas.width - PHONE_WIDTH) / 2}px; top: ${canvas.height - screenHeight - BEZEL * 2 - 45}px; width: ${PHONE_WIDTH}px; height: ${screenHeight + BEZEL * 2}px; background: ${tokens.bezel}; border-radius: ${radius + BEZEL}px; padding: ${BEZEL}px; box-shadow: 0 30px 80px rgba(16, 17, 18, 0.28); }
 .screen { position: relative; width: ${screenWidth}px; height: ${screenHeight}px; border-radius: ${radius}px; overflow: hidden; background: #fff; }
 .capture { display: block; width: 100%; height: 100%; }
-.lock { position: absolute; inset: 0; background: ${tokens.wallpaper}; color: ${tokens.ink}; text-align: center; }
-.lock .date { position: absolute; top: ${380 * scale}px; left: 0; right: 0; font-size: ${54 * scale}px; font-weight: 600; opacity: .9; }
-.lock .time { position: absolute; top: ${440 * scale}px; left: 0; right: 0; font-size: ${290 * scale}px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
-.lock .banner { position: absolute; }
 </style><body>
 <div class="words"><h1>${headlineHtml(text)}</h1><p>${escapeHtml(text.support)}</p></div>
 <div class="phone"><div class="screen">${inner}</div></div>

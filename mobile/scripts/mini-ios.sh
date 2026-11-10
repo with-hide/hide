@@ -168,7 +168,7 @@ case "$command" in
     store-shots)
         # The raw captures of the App Store screenshots (mobile/scripts/store-shots.mjs composes them). Inputs in front of
         # this script on its standard input, as for `run`: HIDE_STORE_PLAN, one tab-separated line per language and shot
-        # (language, file, capture kind, seconds to wait, Apple language, Apple locale, the debug steps), HIDE_STORE_CLOCK
+        # (language, file, capture kind (`notification` asks iOS's notification question first), seconds to wait, Apple language, Apple locale, the debug steps), HIDE_STORE_CLOCK
         # (the page's clock) and HIDE_STORE_APPEARANCE. The app is built here, without the tests `build` runs.
         make_relay_framework
         build_app
@@ -184,7 +184,7 @@ case "$command" in
         # iOS's own question is asked once, in the language the simulator starts in: the first notification shot's steps ask it.
         set_system_language en en_US
         while IFS=$'\t' read -r lang file capture settle language locale steps; do
-            [[ "$capture" == banner ]] || continue
+            [[ "$capture" == notification ]] || continue
             HIDE_TAPS=$steps allow_notifications
             break
         done <<< "$HIDE_STORE_PLAN"
