@@ -574,8 +574,8 @@ The doorbell decides when; the input path submits once, off the runtime lock.
 | Answer | Meaning | What follows |
 | --- | --- | --- |
 | Sent, `typed` | the engine acknowledged submission | the agent's own record decides intake |
-| NotYet, `herdr_parameters`, `engine_refused` or `engine_unreachable` | nothing was typed: the request could not be put to the engine, the engine refused, or its machine could not be reached; a refusal is the engine's word that it wrote nothing (`EngineError::Refused`, the node's `HolderError::Refused`), whether the agent's (`agent_blocked`, `agent_not_ready`) or a node's (`pane_input_unavailable`, `pane_input_limit`, `pane_input_cancelled`, `node_busy`) | the doorbell may retry; a brief fails with `brief.prompt_refused` |
-| Lost, `herdr_format` or `herdr_call_failed` | an answer that never came or could not be read, so the submission may have arrived | never retry blindly; the agent's record decides, then the composer ([Letters while the agent works](#letters-while-the-agent-works)) |
+| NotYet, `engine_parameters`, `engine_refused` or `engine_unreachable` | nothing was typed: the request could not be put to the engine, the engine refused, or its machine could not be reached; a refusal is the engine's word that it wrote nothing (`EngineError::Refused`, the node's `HolderError::Refused`), whether the agent's (`agent_blocked`, `agent_not_ready`) or a node's (`pane_input_unavailable`, `pane_input_limit`, `pane_input_cancelled`, `node_busy`) | the doorbell may retry; a brief fails with `brief.prompt_refused` |
+| Lost, `engine_format` or `engine_call_failed` | an answer that never came or could not be read, so the submission may have arrived | never retry blindly; the agent's record decides, then the composer ([Letters while the agent works](#letters-while-the-agent-works)) |
 
 The durable reservation still saves `lost` before sending and records the outcome afterwards.
 A save that never lands therefore cannot make a possibly submitted input free to send again (engineering principle 11).

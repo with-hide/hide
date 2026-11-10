@@ -1750,7 +1750,7 @@ fn launch_agent(
             Launch::Unknown(AgentFailure::with_detail(code, message))
         }
         Err(StartError::Engine(EngineError::Refused { code, message })) => Launch::Failed(
-            AgentFailure::with_detail("agent_start.refused_by_herdr", format!("{code}: {message}")),
+            AgentFailure::with_detail("agent_start.refused_by_engine", format!("{code}: {message}")),
         ),
         Err(StartError::Engine(error)) => Launch::Unknown(AgentFailure::with_detail(
             "agent_start.unconfirmed",
@@ -5064,7 +5064,7 @@ mod tests {
         let TaskAgentOutcome::Failed(message) = outcome else {
             panic!("expected a failed start, got {outcome:?}");
         };
-        assert_eq!(message.reason, "agent_start.refused_by_herdr");
+        assert_eq!(message.reason, "agent_start.refused_by_engine");
         assert!(
             message
                 .detail

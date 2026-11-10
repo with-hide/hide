@@ -1446,9 +1446,9 @@ fn record(client: &Client, id: &str, observed: &Observation, rang: Rang) {
 /// A delivery call's failure as the code its hold records.
 fn call_failure(error: EngineError) -> &'static str {
     match error {
-        EngineError::Request(_) => "herdr_parameters",
-        EngineError::Answer(_) => "herdr_format",
-        _ => "herdr_call_failed",
+        EngineError::Request(_) => "engine_parameters",
+        EngineError::Answer(_) => "engine_format",
+        _ => "engine_call_failed",
     }
 }
 
@@ -3425,7 +3425,7 @@ mod tests {
                 assert_eq!(letter.state, State::Pending);
                 assert!(!letter.bell_sent);
                 let failure = letter.bell_failure.as_ref().expect("the failure is kept");
-                assert_eq!(failure.code, "herdr_call_failed");
+                assert_eq!(failure.code, "engine_call_failed");
                 assert!(failure.maybe_typed);
             }
             *bell.screen.lock().unwrap() = match shown {
@@ -3487,7 +3487,7 @@ mod tests {
     fn a_letter_whose_bells_are_spent_ends_undelivered_and_tells_its_sender_at_once() {
         for (error, reason) in [
             ("pane_input_unavailable", "engine_refused"),
-            ("timeout", "herdr_call_failed"),
+            ("timeout", "engine_call_failed"),
         ] {
             let bell = Bell::with_submission_error(json!({}), Some(error));
             {

@@ -1659,7 +1659,7 @@ fn a_local_spawn_runs_one_pass_on_this_machine_and_goes_on_once_the_hook_is_in()
     assert!(worker.join().unwrap(), "the spawn asked for a pass");
     // This fixture gives this machine no engine of its own, so the spawn,
     // past its hook, stops at the first step that asks for one.
-    assert_eq!(answer.expect_err("no local engine"), "herdr_unavailable");
+    assert_eq!(answer.expect_err("no local engine"), "engine_unavailable");
 }
 
 /// The same on this machine when the pass fails: a read that failed, then a

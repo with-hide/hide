@@ -3052,7 +3052,7 @@ pub(super) mod tests {
         );
         assert_eq!(
             failed.failure.as_deref(),
-            Some("herdr_unavailable"),
+            Some("engine_unavailable"),
             "the card keeps why"
         );
         let ledger = runtime.lock().unwrap().delivery_state().unwrap();

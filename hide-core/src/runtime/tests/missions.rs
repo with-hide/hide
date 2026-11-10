@@ -2896,7 +2896,7 @@ fn an_answer_the_engine_may_have_typed_is_typed_again_only_when_the_operator_sen
     runtime.mission_answer_sent(
         "mission-1",
         1,
-        Err(SendFailure::MaybeTyped("herdr_call_failed")),
+        Err(SendFailure::MaybeTyped("engine_call_failed")),
     );
     assert!(
         runtime.mission_answers_due().is_empty(),
@@ -2919,7 +2919,7 @@ fn an_answer_the_engine_may_have_typed_is_typed_again_only_when_the_operator_sen
     runtime.mission_answer_typing("mission-1", 1);
     runtime.mission_answer_sent("mission-1", 1, Ok(()));
     // A late second report for the same prompt changes nothing.
-    runtime.mission_answer_sent("mission-1", 1, Err(SendFailure::MaybeTyped("herdr_format")));
+    runtime.mission_answer_sent("mission-1", 1, Err(SendFailure::MaybeTyped("engine_format")));
     // Typed, the answer takes the decision away; the Conductor need not clear it.
     let mission = &runtime.missions.book.missions[0];
     assert_eq!(
@@ -2953,7 +2953,7 @@ fn an_answer_the_engine_may_have_typed_is_typed_again_only_when_the_operator_sen
     runtime.mission_answer_sent(
         "mission-1",
         2,
-        Err(SendFailure::NotTyped("herdr_parameters")),
+        Err(SendFailure::NotTyped("engine_parameters")),
     );
     let mission = &runtime.missions.book.missions[0];
     assert_eq!(
