@@ -7,7 +7,8 @@
 //      `hide`, and contracts/hide-cli.json; it fails on a command with no note and on a note for a gone command
 //      (cli-reference.mjs);
 //   3. the live parts the pages frame are built (web `build:docs-embed`), then the site (`astro build`),
-//      which puts them at /embed/ and writes Pagefind's search index.
+//      which puts them at /embed/ and writes Pagefind's search index. Between the two, check-still.mjs loads
+//      every part in Chromium and fails unless it is byte-identical 120 s apart under reduced motion.
 // Usage: check-all.mjs [--hide <binary>] [--checks-only]
 //   --hide         the second reader of the commands, a `hide` whose `--help` lists them (default: $HIDE_DOCS_BIN, then target/debug/hide)
 //   --checks-only  steps 1 and 2 only, for a quick loop; CI runs all three
@@ -48,6 +49,7 @@ writeFileSync(join(content, "reference/cli.md"), front + cli);
 
 if (!checksOnly) {
   run("build the live parts the pages frame", "bash", ["scripts/verify-web.sh", "web", "build:docs-embed"]);
+  run("every live part holds one still picture under reduced motion", "node", ["web/src/docs/check-still.mjs"]);
   run("build the site", "bash", ["scripts/verify-web.sh", "site", "build"]);
 }
 console.log("\ncheck-all: ok");

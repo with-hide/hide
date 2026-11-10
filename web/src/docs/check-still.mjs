@@ -5,7 +5,8 @@
 //
 //   pnpm --dir web build:docs-embed && node web/src/docs/check-still.mjs
 //
-// It needs the browser the web e2e lane installs (`bash scripts/verify-web.sh web playwright-install`).
+// It needs the browser the web e2e lane installs (`bash scripts/verify-web.sh web playwright-install`); without it
+// the script fails and says so. `scripts/docs/check-all.mjs` runs it after the embed build, and the docs lane installs it first.
 /* global console, URL */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -52,7 +53,10 @@ async function twoPictures(browser, part, theme, reducedMotion) {
   return { first: digest(first), second: digest(second), errors };
 }
 
-const browser = await chromium.launch();
+// A missing browser is a failure with its cure, never a skipped check (the docs lane installs it before check-all).
+const browser = await chromium.launch().catch((error) => {
+  throw new Error(`check-still needs Playwright's Chromium and could not start it: run \`bash scripts/verify-web.sh web playwright-install\` (${error.message.split("\n")[0]})`);
+});
 const failures = [];
 try {
   for (const part of PARTS) {
