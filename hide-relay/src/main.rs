@@ -1,8 +1,9 @@
 use hide_relay::{
     Relay,
+    apns::{load, unix_clock},
     config::{Config, HELP},
     event::Event,
-    limits::Limits,
+    limits::{Limits, PushLimits},
 };
 use std::io::Write;
 
@@ -23,39 +24,38 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         }
         Err(event) => {
-            log(Event {
-                event,
-                room: None,
-                size: None,
-                cap: None,
-            });
+            log(Event::new(event, None));
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let apns = match config
+        .apns
+        .as_ref()
+        .map(|apns| load(apns, PushLimits::default(), unix_clock()))
+        .transpose()
+    {
+        Ok(apns) => apns,
+        Err(name) => {
+            log(Event::new(name, None));
             return std::process::ExitCode::FAILURE;
         }
     };
     let Ok(listener) = tokio::net::TcpListener::bind(config.listen).await else {
-        log(Event {
-            event: "bind_failed",
-            room: None,
-            size: None,
-            cap: None,
-        });
+        log(Event::new("bind_failed", None));
         return std::process::ExitCode::FAILURE;
     };
-    let relay =
-        Relay::new(Limits::default(), config.trusted_proxy, log).expect("valid production limits");
-    log(Event {
-        event: "server_started",
-        room: None,
-        size: None,
-        cap: None,
-    });
+    let started = std::time::Instant::now();
+    let relay = Relay::with_push(
+        Limits::default(),
+        config.trusted_proxy,
+        log,
+        move || started.elapsed(),
+        apns,
+    )
+    .expect("valid production limits");
+    log(Event::new("server_started", None));
     if relay.serve(listener, shutdown()).await.is_err() {
-        log(Event {
-            event: "server_failed",
-            room: None,
-            size: None,
-            cap: None,
-        });
+        log(Event::new("server_failed", None));
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS

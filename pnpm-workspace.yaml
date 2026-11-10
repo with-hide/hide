@@ -1,6 +1,7 @@
 packages:
   - web
   - desktop
+  - mobile
   # The pane holder's screen tests draw its fragments on an xterm of their own.
   - hide-holder/tests/xterm
 

@@ -409,6 +409,10 @@ jobs:
           bash scripts/verify-web.sh desktop typecheck
           bash scripts/verify-web.sh desktop lint
           bash scripts/verify-web.sh desktop test
+      - name: iOS app host unit test
+        # The app bundle assembler: its digest and content-policy checks.
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bash scripts/verify-web.sh mobile test
 
   # What differs on Windows (issue #293), as a required lane: the whole
   # workspace compiles for Windows, hided's pane bootstrap and end-to-end

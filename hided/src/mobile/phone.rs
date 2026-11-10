@@ -34,7 +34,7 @@ use super::looks;
 use super::pane::{self, Input, PaneError};
 use super::projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use super::prs;
-use super::store::{Notifications, PushSubscription};
+use super::store::{ApnsRegistration, Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
 
 /// How often an open detail reads its pane again.
@@ -730,7 +730,7 @@ async fn run(
         "phone_id": phone_id,
         "name": record.as_ref().map(|phone| phone.name.clone()),
         "vapid_public_key": mobile.vapid_public_key(),
-        "notifications": match record.as_ref().map(|phone| (phone.notifications, phone.push.is_some())) {
+        "notifications": match record.as_ref().map(|phone| (phone.notifications, phone.reachable())) {
             Some((_, true)) => "on",
             Some((Notifications::Off, false)) => "off",
             _ => "unasked",
@@ -993,6 +993,35 @@ async fn handle(
                 auth: field("/keys/auth"),
             };
             let stored = mobile.set_subscription(phone_id, push);
+            Some(
+                json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
+            )
+        }
+        // The iOS app's notifications: Apple's device token and the key this
+        // computer encrypts each notice with, given only inside this
+        // encrypted session (`docs/RELAY_PROTOCOL.md`, The notification body).
+        "apns_registration" => {
+            let field = |name: &str| {
+                message
+                    .pointer(name)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            let environment = message
+                .get("environment")
+                .and_then(|value| serde_json::from_value(value.clone()).ok());
+            let stored = environment.is_some_and(|environment| {
+                mobile.set_apns(
+                    phone_id,
+                    ApnsRegistration {
+                        token: field("/token"),
+                        environment,
+                        p256dh: field("/key/p256dh"),
+                        auth: field("/key/auth"),
+                    },
+                )
+            });
             Some(
                 json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
             )

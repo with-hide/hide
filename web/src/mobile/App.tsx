@@ -27,6 +27,7 @@ import {
 } from "./protocol";
 import { closeStaleNotifications, enableNotifications, permission, pushSupported } from "./push";
 import { patch, usePhone } from "./store";
+import { appHost } from "./appHost";
 import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
@@ -107,6 +108,8 @@ function Guidance({ refused }: { refused: boolean }) {
 }
 
 function standalone(): boolean {
+  // The app is installed by being the app.
+  if (appHost()) return true;
   const iosStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
   return iosStandalone || window.matchMedia("(display-mode: standalone)").matches;
 }

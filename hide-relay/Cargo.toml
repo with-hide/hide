@@ -9,12 +9,18 @@ hide-relay-protocol = { path = "../hide-relay-protocol" }
 tokio = { version = "=1.53.2", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 futures-util = "=0.3.34"
-hyper = { version = "=1.12.0", features = ["http1", "server"] }
-hyper-util = { version = "=0.1.21", features = ["tokio"] }
+hyper = { version = "=1.12.0", features = ["http1", "http2", "client", "server"] }
+hyper-util = { version = "=0.1.21", features = ["client-legacy", "http2", "tokio"] }
+# APNs over HTTP/2. ring is the provider both legs use, so the tree keeps one
+# rustls (docs/BUILD.md, One feature set per dependency).
+hyper-rustls = { version = "=0.27.10", default-features = false, features = ["http2", "ring", "webpki-tokio"] }
 http-body-util = "=0.1.5"
+base64 = "=0.23.1"
+ring = "=0.17.14"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+tempfile = "=3.27.0"
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect"] }
