@@ -24,7 +24,7 @@
     "example": "hide contract --json"
   },
   "request send": {
-    "line": "Sends a letter from an agent's pane to another agent, which keeps the reply and retries the letter without sending it twice.",
+    "line": "Sends a letter from an agent's pane to another agent and keeps its reply; sending again with the same --intent retries that letter without delivering it twice, and a new letter needs a new --intent.",
     "example": "hide request send parent-name --kind progress --intent task-plan-1 --body 'Plan: core first, then web.'"
   },
   "request reply": {
@@ -32,7 +32,7 @@
     "example": "hide request reply letter-1 --intent task-answer-1 --body 'The check passed.'"
   },
   "request ack": {
-    "line": "Records that you received a letter, which is the receipt the sender waits for.",
+    "line": "Records, from the recipient's own pane, that it received a letter, which is the receipt the sender waits for.",
     "example": "hide request ack letter-1"
   },
   "request cancel": {
@@ -48,11 +48,11 @@
     "example": "hide inbox"
   },
   "watch start": {
-    "line": "Starts a watch on an agent, so you get a letter when that agent has been quiet for too long.",
+    "line": "Starts a watch on an agent, so you get a letter when that agent has been quiet for too long or has stopped at a question or a prompt; the watch ends when the agent exits, reports that it is finished, or you stop it.",
     "example": "hide watch start child-name"
   },
   "watch assign": {
-    "line": "Hands a watch to another observer, so that agent's quiet-time letters go to the new one.",
+    "line": "Hands a watch to another observer, so its quiet-time letters go to the new one; the current observer can hand it over, and an observer can take it for itself by naming itself with --approval and the watch's current --expected-generation.",
     "example": "hide watch assign watch-2 --observer agent-2"
   },
   "watch stop": {
@@ -79,15 +79,15 @@
     "example": "hide agent ask-human auth https://github.com/login"
   },
   "agent end": {
-    "line": "Ends an agent and closes its pane, keeping its conversation so the operator can resume it; with --keep-pane only the agent's registration ends.",
+    "line": "Ends an agent and closes its pane, keeping its conversation so the operator can resume it; with --keep-pane only the agent's registration ends, and to end yourself you need --keep-pane, since otherwise your own pane closes before the command gets its answer.",
     "example": "hide agent end agent-7"
   },
   "agent sleep": {
-    "line": "Puts a resting agent to sleep: its process ends, its conversation is kept, and a request or block letter wakes it again.",
+    "line": "Puts a child of yours (or yourself) to sleep, its process ending and its conversation kept, so a request or block letter wakes it again; it is refused while the agent works, waits for the operator or is on the operator's screen.",
     "example": "hide agent sleep agent-7"
   },
   "agent archive": {
-    "line": "Saves an agent's conversation and closes its panes, so the operator can resume it later from the archive.",
+    "line": "Saves an agent's conversation and closes its panes, so the operator can resume it later from the archive; a session that is working is refused, and only the operator confirms that, on Hide's screen.",
     "example": "hide agent archive agent-7"
   },
   "agent catalog": {
@@ -119,7 +119,7 @@
     "example": "hide agent profile reinstall claude work"
   },
   "agent spawn": {
-    "line": "Starts a new agent in a tab of its own, or beside your pane with --beside, and gives it a brief to start on.",
+    "line": "Starts a new agent in a tab of its own, or beside your pane with --beside (your own checkout only), and gives it a brief to start on; --machine starts it on a device, and only the machine that runs Hide may do that.",
     "example": "hide agent spawn --parent here --name review-1 --intent review-1 --kind claude --repo ~/projects/app --branch review-1 --brief 'Review the diff and report.'"
   },
   "ps": {
@@ -127,19 +127,19 @@
     "example": "hide ps --here"
   },
   "device list": {
-    "line": "Lists the devices connected to this Hide, with each one's state and whatever it is waiting on from you.",
+    "line": "Lists the devices connected to this Hide, with each one's state and whatever it is waiting on from you; run it on the machine that runs Hide, since a device is refused.",
     "example": "hide device list"
   },
   "device add": {
-    "line": "Registers a computer you reach over SSH as a device; its folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices.",
+    "line": "Registers a computer you reach over SSH, by its Host name in ~/.ssh/config, as a device; its folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
     "example": "hide device add mini --name 'Mac mini'"
   },
   "device remove": {
-    "line": "Forgets a device and takes Hide's helper off it when the operator had allowed it; its panes and agents keep running there.",
+    "line": "Forgets a device, and takes Hide's helper off it only if the helper is connected at that moment and no other registered device reaches the same account there; otherwise the helper stays and the reason goes to Hide's diagnostics. Its panes and agents keep running there.",
     "example": "hide device remove mini"
   },
   "device retry": {
-    "line": "Starts a new attempt to connect a device, which may ask the operator; with --wait it waits until the device connects, needs the operator, or the attempt fails.",
+    "line": "Starts a new attempt to connect a device, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt, and only the machine that runs Hide may ask. With --wait it waits until the device connects, needs the operator, the attempt fails or five minutes pass.",
     "example": "hide device retry mini --wait"
   },
   "mission help": {
@@ -239,11 +239,11 @@
     "example": "hide pane read w1:p2 --lines 20"
   },
   "pane send": {
-    "line": "Types text into a pane, or presses keys in it such as Escape or Enter.",
+    "line": "Types text into a pane, or presses keys in it such as Escape or Enter; it is refused while the pane's input box holds a draft that someone typed there, and it is input, not a letter, so nothing keeps a reply or retries it.",
     "example": "hide pane send w1:p2 --key esc"
   },
   "pane open": {
-    "line": "Opens a new pane beside your own pane and runs a command in it, without moving your keyboard focus.",
+    "line": "Opens a new pane beside your own pane, in your checkout, and runs a command in it, without moving your keyboard focus unless you add --focus.",
     "example": "hide pane open --beside -- npm run dev"
   },
   "agent read": {
@@ -259,15 +259,15 @@
     "example": "hide workspace info"
   },
   "file open": {
-    "line": "Shows a file to the operator in Hide's View, as a tab, until they look at it.",
+    "line": "Shows a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the file waits in your session's Files list instead of taking the screen.",
     "example": "hide file open docs/spec.md"
   },
   "diff open": {
-    "line": "Shows the changes to a file to the operator in Hide's View, as a tab, until they look at it.",
+    "line": "Shows the changes to a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, it waits in your session's Files list instead of taking the screen.",
     "example": "hide diff open src/lens.rs"
   },
   "browser open": {
-    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, so the operator can look at it.",
+    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, where it waits until the operator looks at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the tab waits behind what they see. Only an http(s) or blank page can be driven by the other browser commands.",
     "example": "hide browser open http://localhost:3000"
   },
   "browser connect": {
@@ -275,35 +275,35 @@
     "example": "hide browser connect"
   },
   "browser snapshot": {
-    "line": "Reads the page in a browser display as a list of its elements, each with a ref you can act on.",
+    "line": "Reads the page in one of your own checkout's browser displays as a list of its elements, each with a ref you can act on; it also works while the display is behind another tab of its area.",
     "example": "hide browser snapshot browser-3 --interactive"
   },
   "browser click": {
-    "line": "Clicks an element of the page, by its ref, by its visible text, or by a point.",
+    "line": "Clicks an element of the page, by its ref, by its visible text, or by a point, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser click browser-3 @5"
   },
   "browser fill": {
-    "line": "Fills a form field of the page with a value.",
+    "line": "Fills a form field of the page with a value, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser fill browser-3 @1 'a@b.c'"
   },
   "browser type": {
-    "line": "Types text into the page.",
+    "line": "Types text into the page, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser type browser-3 'hello'"
   },
   "browser press": {
-    "line": "Presses a key in the page, such as Enter, Tab or Escape.",
+    "line": "Presses a key in the page, such as Enter, Tab or Escape, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser press browser-3 Enter"
   },
   "browser hover": {
-    "line": "Moves the pointer over an element of the page, so a menu or tooltip can show.",
+    "line": "Moves the pointer over an element of the page, so a menu or tooltip can show, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser hover browser-3 @3"
   },
   "browser drag": {
-    "line": "Drags from one element or point of the page to another.",
+    "line": "Drags from one element or point of the page to another, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser drag browser-3 @2 @7"
   },
   "browser scroll": {
-    "line": "Scrolls the page up or down, or to an element.",
+    "line": "Scrolls the page up or down, or to an element, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser scroll browser-3 down"
   },
   "browser wait": {
@@ -311,7 +311,7 @@
     "example": "hide browser wait browser-3 --text 'Welcome'"
   },
   "browser screenshot": {
-    "line": "Saves a picture of the page, or of one element with --ref, to a file.",
+    "line": "Saves a picture of the page, or of one element with --ref, to a file, only while its View is the selected one of its area; behind another tab it fails with display_hidden.",
     "example": "hide browser screenshot browser-3 shot.png"
   },
   "browser eval": {
@@ -331,7 +331,7 @@
     "example": "hide browser help"
   },
   "view list": {
-    "line": "Lists the Views open on the operator's screen, with the ids that the other view and browser commands take.",
+    "line": "Lists the Views open in your checkout, with the ids that the other view and browser commands take.",
     "example": "hide view list"
   },
   "view status": {
@@ -339,15 +339,15 @@
     "example": "hide view status browser-3"
   },
   "view select": {
-    "line": "Brings a View to the front of its area.",
+    "line": "Brings a View to the front of its area when the operator is looking at your pane. If they are looking at another pane of the same checkout, the command succeeds but their selection stays as it was.",
     "example": "hide view select browser-3"
   },
   "view close": {
-    "line": "Closes a View, so it leaves the operator's screen.",
+    "line": "Closes a View, so it leaves the operator's screen; the last View of a document with an unsaved draft is refused until the operator saves or discards the draft in Hide.",
     "example": "hide view close browser-3"
   },
   "view split": {
-    "line": "Splits an area on one of its edges, so a View can sit beside the others.",
+    "line": "Moves a View to a new area on one edge of the area you name, so it sits beside the others; it is refused when the View is the only one in that area, or when the Workspace already has six areas.",
     "example": "hide view split browser-3 --area area-1 --edge right"
   },
   "view move": {
