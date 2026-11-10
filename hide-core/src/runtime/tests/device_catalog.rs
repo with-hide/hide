@@ -1808,8 +1808,8 @@ fn a_device_tab_moves_on_its_own_engine_and_a_file_tab_keeps_the_slot_it_was_dro
         unavailable_reason: None,
     });
     runtime.rebuild_tab_strips();
-    let t1 = format!("herdr:remote:{TARGET}:tab:t1");
-    let t2 = format!("herdr:remote:{TARGET}:tab:t2");
+    let t1 = format!("engine:remote:{TARGET}:tab:t1");
+    let t2 = format!("engine:remote:{TARGET}:tab:t2");
     let file = "file:file:device".to_owned();
     assert_eq!(
         device_strip(&runtime, &checkout_id),

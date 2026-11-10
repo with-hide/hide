@@ -16,7 +16,7 @@ export function AboutTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const daemon = useShellStore((s) => s.daemon);
   const connection = useShellStore((s) => s.connection);
-  const engine = useShellStore((s) => s.rest?.status?.herdr);
+  const engine = useShellStore((s) => s.rest?.status?.engine);
   const environment = useShellStore((s) => s.rest?.status?.environment);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const line = engineLine(engine, t);

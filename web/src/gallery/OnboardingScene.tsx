@@ -282,10 +282,10 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
 }
 
 /** This machine's engine connection and its Herdr save, as the core publishes them for the `import-*` states. */
-function sceneEngineStatus(state: OnboardingState): { herdr: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
+function sceneEngineStatus(state: OnboardingState): { engine: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
   const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
   switch (state) {
-    default: return { herdr: connected, herdr_import: sceneHerdrImport(state) };
+    default: return { engine: connected, herdr_import: sceneHerdrImport(state) };
   }
 }
 
@@ -365,7 +365,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
+    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, machine_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
 }
 
@@ -383,12 +383,12 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
       const payload = event.payload as Record<string, unknown>;
       if (event.kind === "first_run_draft") ui.first_run_choices = { ...ui.first_run_choices, ...payload };
       if (event.kind === "first_run_back" || event.kind === "first_run_advance") {
-        const steps = rest.status?.herdr_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
+        const steps = rest.status?.machine_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
         const index = steps.indexOf(String(payload.from));
         if (ui.first_run?.step === payload.from && index >= 0) ui.first_run = { version: 1, step: steps[index + (event.kind === "first_run_back" ? -1 : 1)] as NonNullable<typeof ui.first_run>["step"] };
       }
-      if (event.kind === "herdr_profile_connect") {
-        const row = rest.status?.herdr_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
+      if (event.kind === "machine_profile_connect") {
+        const row = rest.status?.machine_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
         if (row) row.connect_state = "connecting";
       }
       return { rest, revision: current.revision + 1 };

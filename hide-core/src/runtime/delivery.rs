@@ -2456,7 +2456,7 @@ impl Runtime {
     pub(crate) fn coordination_context(&self, device: &str) -> Result<CoordinationContext, String> {
         let on_node = self.node == device;
         let (connector, scope, machine) = if on_node {
-            let live = self.live.as_ref().ok_or("herdr_unavailable")?;
+            let live = self.live.as_ref().ok_or("engine_unavailable")?;
             (
                 live.engine.clone(),
                 live.socket_path

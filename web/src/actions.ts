@@ -1477,7 +1477,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
     },
     connectMachineProfile(profileId: string) {
-      dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
+      dispatch({ schema_version: 2, kind: "machine_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
     /** The Devices step went away: the sign-ins its own Connect started end, as a closed screen's do (B8). */
     withdrawFirstRunSignIns() {

@@ -59,6 +59,22 @@ fn brief_wait(answer_by: Instant) -> Duration {
     super::BRIEF_READY_WAIT.min(answer_by.saturating_duration_since(Instant::now()))
 }
 
+/// What is left of a spawn's answer time at `now`: the share its new shell
+/// gets to finish starting, which is nothing once the steps before the start
+/// (the checks, the worktree, the tab) have used all of it.
+fn left_of(answer_by: Instant, now: Instant) -> Duration {
+    answer_by.saturating_duration_since(now)
+}
+
+/// The wait a spawn's new shell gets to finish starting.
+fn shell_wait(answer_by: Instant) -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = TEST_SHELL_WAIT.with(std::cell::Cell::get) {
+        return wait;
+    }
+    left_of(answer_by, Instant::now())
+}
+
 /// How long a spawn has to answer its caller: [`super::SPAWN_ANSWER_WAIT`],
 /// or [`super::DEVICE_SPAWN_ANSWER_WAIT`] on a device.
 fn answer_wait(on_device: bool) -> Duration {
@@ -78,6 +94,16 @@ thread_local! {
     /// A spawn's answer wait on this test thread, so a test of a shell that
     /// never finishes starting does not wait out the real one.
     pub(crate) static TEST_ANSWER_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+thread_local! {
+    /// The wait a spawn's new shell gets on this test thread, fixed rather
+    /// than what a clock leaves of the answer time: how much of that the
+    /// steps before the start use depends on the machine (a Windows runner
+    /// can use all of 300 ms), so a test that reads the wait back cannot
+    /// take it from the clock. [`left_of`] is proved on its own.
+    pub(crate) static TEST_SHELL_WAIT: std::cell::Cell<Option<Duration>> =
         const { std::cell::Cell::new(None) };
 }
 /// Tests share `SPAWN` through the process, so those that spawn take turns
@@ -1684,7 +1710,7 @@ fn spawn(
                 &reserved.id,
                 pane,
                 shell,
-                answer_by.saturating_duration_since(Instant::now()),
+                shell_wait(answer_by),
                 name,
                 launch.clone(),
                 start_args,
@@ -2642,6 +2668,25 @@ mod tests {
             label
         ));
         assert!(!made_by_spawn("/r", "/r", [label].into_iter(), label));
+    }
+
+    /// A spawn's new shell gets what the steps before its start left of the
+    /// answer time, and nothing once they used it all: the instants are
+    /// built, so no clock decides it.
+    #[test]
+    fn a_spawns_shell_waits_for_what_its_earlier_steps_left_of_the_answer_time() {
+        let now = Instant::now();
+        let answer_by = now + Duration::from_millis(300);
+        assert_eq!(left_of(answer_by, now), Duration::from_millis(300));
+        assert_eq!(
+            left_of(answer_by, now + Duration::from_millis(100)),
+            Duration::from_millis(200)
+        );
+        assert_eq!(left_of(answer_by, answer_by), Duration::ZERO);
+        assert_eq!(
+            left_of(answer_by, answer_by + Duration::from_millis(1)),
+            Duration::ZERO
+        );
     }
 
     use super::*;

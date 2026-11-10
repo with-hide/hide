@@ -180,7 +180,7 @@ export function liveDescendantCounts(scope: AgentScope): Map<string, number> {
  * reconnects sooner, so there is no Retry.
  */
 function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
-  const engine = rest?.status?.herdr;
+  const engine = rest?.status?.engine;
   if (!engine?.state || engine.state === "connected") return { state: "ready" };
   if (engine.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
   // The state is worded here; the engine's own sentence, with its socket path, is the About tab's and the log's.
@@ -318,7 +318,7 @@ export function waitingForSavedWorkspace(rest: SnapshotRest | null): boolean {
   // The engine can connect before the asynchronous catalog and persisted View
   // arrive. The core retains a saved choice until its path facts settle;
   // absence during that restore must not choose Main permanently.
-  return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_ENGINE.has(rest.status?.herdr?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
+  return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_ENGINE.has(rest.status?.engine?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
 }
 
 /**
@@ -336,7 +336,7 @@ export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "wo
   if (waitingForSavedWorkspace(rest)) return null;
   if (hasFront) return rest.workspace_view?.resumed ? "workspace" : "main";
   if (!device) {
-    const state = rest.status?.herdr?.state;
+    const state = rest.status?.engine?.state;
     return state && SETTLED_ENGINE.has(state) ? "main" : null;
   }
   const status = rest.status?.remote?.find((row) => row.target_id === device.id);

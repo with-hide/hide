@@ -299,6 +299,8 @@ A piece that another open change is still building is marked as pending with the
    These synthetic native-format records prove session reading and continuation, while `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` exercise the integrations themselves.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
+   The screen-state setters in `fixture-agents.ts` first read whether the requested state already holds, including a question supplied by a prepared transcript, and send no input when it does.
+   Otherwise a wait can finish on the old state before the synthetic key's input report moves the keyboard, undoing the next tab selection (`close-subtree.spec.ts`, with-hide/hide-private#444).
   The native stand-ins write `terminal-ready-<pane>` only after configuring their terminal and drawing their first screen; `waitForAgentInput` waits for that mark before a command trigger or a session-report key.
   Before a start in an existing pane, `prepareAgentInput` removes the previous program's mark; `agentRunner` does this before Reopen, and `startAgentIn` before a typed start.
   The Reopen journey holds the resumed program's session reporter before terminal setup and proves the previous readiness cannot admit its hook command.
@@ -369,11 +371,15 @@ A piece that another open change is still building is marked as pending with the
 7. **Restart through `daemon.restart()`, and leave the old page first.**
    `daemon.restart()` in `web/e2e/hided-fixture.ts` stops `hided` and starts it again on the same state folder and port, as a real restart does, and takes an optional callback to edit the state folder before the start; `web/e2e/sidebar-pr-start.spec.ts` restarts three times in one test.
    It uses `hide stop` on every system and preserves the own engine's holders for adoption; only final fixture cleanup sweeps their process trees.
-   A navigation that only changes the hash does not remount the connection, so the old page keeps its old token and socket and races the new one.
+   It returns only after its own WebSocket reads the core's connected engine and, when a saved checkout is selected, its restored Workspace view.
+   `/health` alone proves only that the listener is back; this shared snapshot boundary keeps restart callers from acting on an unresolved saved selection.
+   A navigation that only changes the hash does not remount the page: its connection follows the new token (`followToken` in `web/src/ws.ts`), but the page it keeps has the old page's state and may already have been refused with the old token, so a test that reopens the product goes through a fresh page.
    Go through `about:blank` before opening the new origin and token, as `openSettings` in `web/e2e/interface-language.spec.ts` does, and keep that step in one helper per spec.
    Why: the old page and the new token reconnect at the same time and either can win.
    `hide-e2e/reopen-after-restart-through-blank` fails a `goto` of `#token=` after `restart()` in the same function; a helper defined elsewhere and called after the restart is not seen, so keep the step in the helper.
    A test whose subject is a surviving page reconnecting to the restarted daemon (`web/e2e/s3.spec.ts`, the two draft recovery tests) must not reload it, and says so in a line allow.
+   A restored editable draft needs an editable file: the View-tab draft test makes the parent folder unwritable to refuse atomic saves while keeping the file editable when the restarted node opens it.
+   Making that file itself read-only would correctly prevent the draft from being restored into it.
 8. **Put a system difference in one fixture helper.**
    See [Operating-system differences belong to one fixture helper](#operating-system-differences-belong-to-one-fixture-helper); native home variables, executable names, the tool path and the no-op opener live in `web/e2e/platform-fixture.ts`, not in a `process.platform` branch in a spec.
 9. **A retry is a label, not a fix.**
@@ -701,6 +707,8 @@ The ownership tests keep an admitted worker alive after its caller releases owne
 A test's fixture ends every holder its records name, and on Unix what each program's session left, by pid and start time, however the test ends; the holders a test starts with no record are ended by their own guard the same way.
 The programs a pane runs in these tests are the test binary itself in a role (`role.rs`), so nothing outside the build is started, and each test names the processes it checks by pid and start time while they run.
 The `script` role plays steps of bytes the test gives it, each when the test says, on a raw terminal, and records every byte it is sent, so a test sees exactly what reached the program.
+Step zero runs at once; `Script::go` releases only later steps.
+The clipboard tests draw a ready screen in step zero and release each copy only after the intended connection holds the pane, so the initial copy cannot race the attachment (with-hide/hide-private#705).
 
 The screen the holder sends is checked against an xterm, not against the holder: `screen.rs` draws the fragments on `@xterm/headless` (`tests/xterm/draw.mjs`, run by Node), on a fresh terminal and on one that drew something else first at another size, and compares the text, the cursor and its visibility, and each cell's colors, attributes and link with what the program's own bytes draw on a fresh one, with Unicode 11 widths, trailing spaces trimmed, reverse video applied and a default color named as the pane's own; drawing the fragments must answer nothing and leave no mouse mode on.
 It covers styles, wide and combined characters and links, the alternate screen and back, a redraw after lost fragments, and a resize and a takeover while the program holds its output.
