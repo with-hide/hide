@@ -9,28 +9,18 @@
 // the script fails and says so. `scripts/docs/check-all.mjs` runs it after the embed build, and the docs lane installs it first.
 /* global console, URL */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { createServer } from "node:http";
-import { createRequire } from "node:module";
-import { extname, join, normalize } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { launchChromium, serveDirectory } from "../../../scripts/docs/browser.mjs";
 import { NOW } from "./now.ts";
 import { PART_STATES, PARTS } from "./parts.ts";
 
 const web = fileURLToPath(new URL("../../", import.meta.url));
 const dist = join(web, "docs-embed-dist");
 if (!existsSync(join(dist, "docs-embed.html"))) throw new Error(`${dist} is missing: run \`pnpm --dir web build:docs-embed\` first`);
-const { chromium } = createRequire(join(web, "package.json"))("@playwright/test");
-
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".wasm": "application/wasm", ".json": "application/json" };
-const server = createServer((request, response) => {
-  const path = normalize(decodeURIComponent(new URL(request.url, "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
-  const file = join(dist, path === "/" ? "docs-embed.html" : path);
-  if (!file.startsWith(dist) || !existsSync(file)) return response.writeHead(404).end();
-  response.writeHead(200, { "content-type": TYPES[extname(file)] ?? "application/octet-stream" }).end(readFileSync(file));
-});
-await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const base = `http://127.0.0.1:${server.address().port}/docs-embed.html`;
+const { base: origin, close } = await serveDirectory(dist);
+const base = `${origin}/docs-embed.html`;
 
 const SPAN_MS = 120_000;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex").slice(0, 12);
@@ -53,10 +43,7 @@ async function twoPictures(browser, part, theme, reducedMotion) {
   return { first: digest(first), second: digest(second), errors };
 }
 
-// A missing browser is a failure with its cure, never a skipped check (the docs lane installs it before check-all).
-const browser = await chromium.launch().catch((error) => {
-  throw new Error(`check-still needs Playwright's Chromium and could not start it: run \`bash scripts/verify-web.sh web playwright-install\` (${error.message.split("\n")[0]})`);
-});
+const browser = await launchChromium("check-still");
 const failures = [];
 try {
   for (const part of PARTS) {
@@ -73,7 +60,7 @@ try {
   if (PARTS.length !== Object.keys(PART_STATES).length) failures.push("part list drifted");
 } finally {
   await browser.close();
-  server.close();
+  await close();
 }
 if (failures.length > 0) throw new Error(`Not still: ${failures.join("; ")}`);
 console.log(`all ${PARTS.length} parts are byte-identical ${SPAN_MS / 1000} s apart under reduced motion`);
