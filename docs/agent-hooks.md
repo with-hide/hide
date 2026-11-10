@@ -342,7 +342,9 @@ They live in the folder of the daemon whose state folder the hook asks (`hide_ag
 The choice is made by the folder and not by which variable named it: a daemon `hide connect` starts is handed its state folder through `HIDE_STATE_DIR`, and one naming the account's own moves nothing.
 A folder `XDG_STATE_HOME` chose counts as a move, and is judged from the resolved state folder, so a hook that lost Hide's environment and one that kept it agree.
 Hook, node, core and `doctor` all resolve it the same way, and the folder a daemon uses is the one its `hook-facts.json` first-run seed, its pane sweep and its diagnosis read (`route::records_in`, `route::records_root`).
-Records an older build wrote under `~/.hide/agent-hooks` while a daemon used another state folder are left where they are, since that daemon never read them.
+An older build wrote a moved daemon's records under the account's `~/.hide/agent-hooks`, since it had no other place; they stay there and nothing deletes them.
+The daemon reads none of them after the update and writes its own from its panes' next events, so what they held is read once more by no one: a pane's counts still come back from the state folder's `hook-facts.json`, its plan record is written again by its next letter pull or `hide task`, and a confirmation it owed ends at its deadline unsent as it would have anyway.
+The one reading that is lost is the turn the older build last recorded, so a restore after the update may not name a cut-off turn once.
 
 The guardrails policy (`guardrails.json`) and the folder-trust records are not among them: they hold what the operator chose for a machine, and stay at `~/.hide/agent-hooks/guardrails.json` (`guardrails::policy_path`) and each agent's own `-trust.json`.
 
