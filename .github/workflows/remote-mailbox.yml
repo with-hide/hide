@@ -165,7 +165,7 @@ jobs:
         # places in each account's helper and bin folders, and the fixture's
         # SSH keys. A flaky run is kept too: its first attempt's logs are the
         # evidence its issue needs (docs/TESTING.md, Flaky tests).
-        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-remote-mailbox-logs-${{ inputs.runner }}-attempt-${{ github.run_attempt }}
@@ -178,7 +178,7 @@ jobs:
             !agents/runs/rd-*/*/*/bin/**
           if-no-files-found: ignore
       - name: Summarize the stalled device connection
-        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           python3 - <<'PY'

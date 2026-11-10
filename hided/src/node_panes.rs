@@ -107,7 +107,7 @@ impl NodePanes {
         let link = link.clone();
         self.runtime.spawn_blocking(move || {
             let _permit = permit;
-            hide_core::diagnostic!(json!({"component":"hook_probe","kind":"proof.started","node":node,"request":request,"queued_ms":received.elapsed().as_millis()}));
+            hide_core::diagnostic!(json!({"component":"hook_probe","kind":"proof.started","node":node,"request":request,"request_id":hook.as_ref().map(|hook|&hook.request_id),"queued_ms":received.elapsed().as_millis(),"at_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|value|value.as_millis())}));
             let answer = match panes.state.get() {
                 Some(state) => match hook {
                     Some(hook)
