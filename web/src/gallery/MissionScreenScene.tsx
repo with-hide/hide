@@ -18,7 +18,7 @@ import { missionScreenMissions } from "./missionScreenSceneData";
 import { OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["table", "filtered", "detail", "closed-all", "empty", "loading", "failed", "offline"] as const;
+const STATES = ["table", "filtered", "detail", "closed-all", "empty", "loading", "failed", "offline", "held"] as const;
 type MissionScreenState = (typeof STATES)[number];
 
 /** The second project the missions spread over, so the table shows its chips. */
@@ -43,6 +43,12 @@ export function MissionScreenScene({ theme, scale, content, state, window }: Mis
     const other = projects.find((project) => project.id === OTHER)!;
     const device = state === "offline" ? OFFLINE_DEVICE : "local";
     const missions = missionScreenMissions(hide.id, hide.checkouts[0]!.path, other.id, other.checkouts[0]!.path, now).map((mission) => ({ ...mission, device_id: device, stale: state === "offline" }));
+    // `held`: the first running mission's Conductor holds back one node that has not started, which its row counts as a grey `⏸1`.
+    if (state === "held") {
+      const node = missions.find((mission) => mission.status === "running" && mission.nodes.some((one) => one.status === "planned"))?.nodes.find((one) => one.status === "planned");
+      if (!node) throw new Error("held scene needs a running mission with a planned node");
+      node.hold = { why: "아침에 실기기로 확인", until_unix_ms: now + 9 * 3_600_000 - 60_000 };
+    }
     scene.rest.missions = state === "empty" ? { items: [] } : state === "failed" ? { items: [], failed: "mission book: unreadable" } : { items: missions };
     if (state === "loading") delete scene.rest.missions;
     const place: MissionPlace = {
