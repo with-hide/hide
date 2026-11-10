@@ -28,6 +28,8 @@
 #
 # HIDE_IOS_BUILD_HOST     ssh name of the build machine (default: mini)
 # HIDE_IOS_SKIP_PHONE_BUILD=1   reuse web/phone-dist instead of building it (it needs the Rust wasm toolchain)
+# HIDE_IOS_SKIP_RELAY_BUILD=1   reuse mobile/ios/relay (the relay protocol library for the two iOS targets) instead of
+#                        building it (scripts/build-relay-ios.sh; it needs the rustup targets on this Mac, never the mini)
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -48,6 +50,9 @@ case "$command" in
         fi
         if [[ "${HIDE_IOS_SKIP_PHONE_BUILD:-}" != 1 ]]; then
             bash scripts/verify-web.sh web build:phone
+        fi
+        if [[ "${HIDE_IOS_SKIP_RELAY_BUILD:-}" != 1 ]]; then
+            bash scripts/build-relay-ios.sh
         fi
         node mobile/scripts/check-versions.mjs
         ssh "$host" bash -s -- guard "$slug" < mobile/scripts/mini-ios.sh

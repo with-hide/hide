@@ -24,6 +24,8 @@ bundle_id=me.grab.hide.ios
 # One folder (about 0.5 GB) and one simulator per branch built here: past this many other branches the build refuses
 # and says what to remove, because the machine runs other work and nothing prunes a branch it does not own.
 max_other_branches=4
+# The simulator build is arm64 only: the build machine is Apple silicon, and the relay library is built for the two arm64
+# targets (a device and a simulator), so an x86_64 simulator slice has nothing to link.
 # Ad-hoc signed, not unsigned: the simulator gives the Keychain only to an app that carries its entitlements, which an
 # unsigned build does not (the Keychain answers -34018). No account or certificate is involved; release signing is the release workflow's.
 signing=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES)
@@ -82,11 +84,22 @@ case "$command" in
         fi
         ;;
     build)
+        # The relay protocol library: the two static libraries built on the developer's Mac (the mini has no Rust) become
+        # the xcframework the HideShell package links. Made fresh every build, so it is never older than its source.
+        relay=$base/ios/relay
+        frameworks=$project/HideShell/Frameworks
+        [[ -f "$relay/source.json" ]] || { printf 'the relay library is missing: run scripts/build-relay-ios.sh on the developer Mac\n' >&2; exit 1; }
+        rm -rf "$frameworks/HideRelayC.xcframework"
+        mkdir -p "$frameworks"
+        xcodebuild -create-xcframework \
+            -library "$relay/aarch64-apple-ios/libhide_relay_ios.a" -headers "$relay/include" \
+            -library "$relay/aarch64-apple-ios-sim/libhide_relay_ios.a" -headers "$relay/include" \
+            -output "$frameworks/HideRelayC.xcframework"
         # `-clonedSourcePackagesDirPath` keeps the Swift packages inside the branch folder, so `clean` removes them too.
         xcodebuild -project "$project/App.xcodeproj" -scheme App -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
-            "${signing[@]}" build
+            ARCHS=arm64 "${signing[@]}" build
         ensure_device
         # The HideShell tests run in a real web view on the simulator: they are what proves the bridge refuses a frame.
         # Its own derived data: the app's build already holds a Capacitor framework the package's scheme must not meet.
