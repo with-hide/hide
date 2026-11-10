@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import UIKit
 import UserNotifications
 import HidePushCore
 
@@ -18,6 +19,7 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "forget", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "takeOpen", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "demoSample", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
     ]
 
     private let keychain: PushKeychain
@@ -164,6 +166,17 @@ open class HidePushPlugin: CAPPlugin, CAPBridgedPlugin {
             case .notDetermined: center.requestAuthorization(options: [.alert, .sound]) { granted, _ in send(granted) }
             case .denied: send(false)
             default: send(true)
+            }
+        }
+    }
+
+    /// This app's page in iOS Settings, where a refused permission is turned on again. It opens that page only: no address
+    /// comes from the caller.
+    @objc func openSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let url = URL(string: UIApplication.openSettingsURLString) else { self.fail(call, "settings_unavailable"); return }
+            UIApplication.shared.open(url) { opened in
+                if opened { call.resolve() } else { self.fail(call, "settings_unavailable") }
             }
         }
     }

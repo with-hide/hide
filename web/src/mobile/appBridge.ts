@@ -76,3 +76,56 @@ export function onLink(callback: () => void): () => void {
 export async function setAppearance(scheme: "light" | "dark" | "system"): Promise<void> {
   await bridge().nativePromise("HideApp", "appearance", { scheme });
 }
+
+/** What the computer needs to encrypt a notice for this phone; the private half never leaves the Keychain (`HidePush`). */
+export interface PushRegistration { token: string; environment: "sandbox" | "production"; p256dh: string; auth: string }
+export type PushPermission = "unknown" | "granted" | "denied";
+
+function registrationOf(answer: { found?: boolean; token?: unknown; environment?: unknown; p256dh?: unknown; auth?: unknown }): PushRegistration | null {
+  if (!answer.found) return null;
+  const { token, environment, p256dh, auth } = answer;
+  if (typeof token !== "string" || typeof p256dh !== "string" || typeof auth !== "string" || (environment !== "sandbox" && environment !== "production")) throw new Error("push_registration_invalid");
+  return { token, environment, p256dh, auth };
+}
+
+/** The app's notifications: allowed or not, one computer's key and registration, and the agent a tap named. There is no call that reads a private key or sends an action. */
+export const push = {
+  async state(): Promise<PushPermission> {
+    const answer = await bridge().nativePromise("HidePush", "state") as { permission?: unknown };
+    return answer.permission === "granted" || answer.permission === "denied" ? answer.permission : "unknown";
+  },
+  /** Asks the system for permission (only now, from the person's tap), registers with Apple and makes the computer's key. Rejects `denied`, `token_timeout`, `token_unavailable` or `keychain_failed`. */
+  async enable(room: string): Promise<PushRegistration> {
+    const registration = registrationOf(await bridge().nativePromise("HidePush", "enable", { room }) as never);
+    if (!registration) throw new Error("push_registration_missing");
+    return registration;
+  },
+  /** The registration to send again, or null when the system no longer allows notifications or this computer has no key. */
+  async registration(room: string): Promise<PushRegistration | null> {
+    return registrationOf(await bridge().nativePromise("HidePush", "registration", { room }) as never);
+  },
+  /** Deletes a computer's key: its notices open no more. */
+  async forget(room: string): Promise<void> {
+    await bridge().nativePromise("HidePush", "forget", { room });
+  },
+  /** The agent a tapped notification named, once. */
+  async takeOpen(): Promise<{ room: string; deviceId: string; paneId: string } | null> {
+    const answer = await bridge().nativePromise("HidePush", "takeOpen") as { room?: unknown; device_id?: unknown; pane_id?: unknown };
+    return typeof answer.room === "string" && typeof answer.device_id === "string" && typeof answer.pane_id === "string"
+      ? { room: answer.room, deviceId: answer.device_id, paneId: answer.pane_id } : null;
+  },
+  /** The demo's sample notification: a local one, with no token, key or network. */
+  async demoSample(words: { title: string; body: string }): Promise<void> {
+    await bridge().nativePromise("HidePush", "demoSample", { words });
+  },
+  /** iOS Settings for this app, where a refused permission is turned on again. */
+  async openSettings(): Promise<void> {
+    await bridge().nativePromise("HidePush", "openSettings");
+  },
+};
+
+/** Called when a tap named an agent; the event carries no target, `takeOpen` does. Returns the way to stop listening. */
+export function onPushOpen(callback: () => void): () => void {
+  const handle = bridge().addListener("HidePush", "open", callback);
+  return () => handle.remove();
+}

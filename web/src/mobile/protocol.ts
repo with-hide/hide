@@ -344,6 +344,8 @@ export type PhoneMessage =
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
   | { type: "push_permission"; state: "denied" | "default" }
+  /** The iOS app's notifications: Apple's token for this install and the key this computer encrypts each notice with. */
+  | { type: "apns_registration"; token: string; environment: "sandbox" | "production"; key: { p256dh: string; auth: string } }
   /** Asks whether hided still answers; the phone gives up the socket when nothing comes back. */
   | { type: "ping"; id: number };
 
