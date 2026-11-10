@@ -16,6 +16,8 @@ const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
 /** The banner's recommended choice, or, while the map is not open, the chip that opens it. */
 const ANSWER = `[data-mission-recommended], body:not(:has([data-mission-recommended])) ${CHIP}`;
+/** The banner's 답하기, which sends the marked choice; while the map is not open, the chip that opens it. */
+const SEND = `[data-mission-answer-send], body:not(:has([data-mission-answer-send])) ${CHIP}`;
 /** The sign-in screen's worker, the one that runs longest: the list holds it once the survey is done. */
 const SCREEN = "ui";
 /** The 보기 slot's ✕, which puts the mission's card away. */
@@ -25,7 +27,7 @@ export default chapter<MissionModel>({
   id: "mission",
   number: 3,
   next: "overview",
-  version: 17,
+  version: 18,
   world: MISSION_WORLD,
   quest: true,
   preview: "mission",
@@ -45,8 +47,10 @@ export default chapter<MissionModel>({
     { id: "running", target: CHIP, side: "right", wait: true, done: (model) => model.stage >= 5 },
     // The question lands in 내 차례; the row opens the Conductor.
     { id: "needsyou", quest: true, target: `[data-task-row="${CONDUCTOR}"]`, side: "right", gesture: { click: true }, done: (model) => model.looked || model.stage >= 6 },
-    // The map's banner takes the answer: a choice, or `직접 답하기…`; words said to the Conductor answer it too.
-    { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
+    // The map's banner takes the answer: a choice marked, then sent with 답하기 (PRD mission-human-gate B19), or `직접 답하기…`;
+    // words said to the Conductor answer it too.
+    { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, shown: '[data-mission-option][aria-checked="true"]', done: (model) => model.stage >= 6 },
+    { id: "send", target: SEND, side: "left", gesture: { click: true }, done: (model) => model.stage >= 6 },
     // What the answer changed runs to the end by itself: the workers finish and the Conductor reports.
     { id: "finishing", target: "[data-mission]", side: "left", wait: true, done: (model) => model.stage >= 9 },
     // The card's ⚙ opens Settings › Mission: the default scope and the worker candidates. Pointed at and read, never opened here.
