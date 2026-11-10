@@ -51,6 +51,11 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await page.keyboard.press("ArrowUp");
     await expect(sheet.locator('[data-settings-tab="shortcuts"]')).toBeFocused();
     await expect(sheet.locator("[data-settings-page-title]")).toHaveText("Shortcuts");
+
+    // hide-task is folded into hide-mission, so the Mission page's title stands alone: no `?` teaches mission against task.
+    await sheet.locator('[data-settings-tab="conductor"]').click();
+    await expect(sheet.locator("[data-settings-page-title]")).toHaveText("Mission");
+    await expect(sheet.locator("[data-kind-help]")).toHaveCount(0);
     await sheet.locator('[data-settings-tab="general"]').click();
 
     // General keeps Appearance; the usage switch has its own Privacy page.

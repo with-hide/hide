@@ -26,7 +26,6 @@
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { AgentMark } from "../AgentMark";
 import { createActions } from "../actions";
-import { KindHelpButton } from "../components/kind-help-dialog";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
@@ -414,7 +413,6 @@ function SettingsPageTitle() {
   return (
     <div className="mb-lg flex min-w-0 items-center gap-sm">
       <h2 className="truncate text-headline font-semibold">{t("settings.tabs.conductor")}</h2>
-      <KindHelpButton from="mission" />
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { cn } from "../lib/utils";
 // What kind of work a page shows: a mission's agents work side by side, a
 // task's one agent works down its own steps. The kind is a word with its
 // mark in a colour that is no state's (`--kind-mission`, `--kind-task`), in
-// the head of a mission's page, a plan's page and Settings › Mission; the
+// the head of a mission's page and a plan's page; the
 // `?` beside it, which opens the window telling the two apart, is
 // `KindHelpButton` (`kind-help-dialog.tsx`).
 
