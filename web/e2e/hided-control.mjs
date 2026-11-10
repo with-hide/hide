@@ -18,7 +18,6 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
   // The daemon accepts its own origin only; Node's WebSocket takes undici's headers.
   const ws = new globalThis.WebSocket(`${origin.replace(/^http/, "ws")}/ws`, { headers: { origin } });
   let rest = null;
-  let lastTaskKey = "";
   let closed = null;
   // Each `path_refused` frame the daemon answered, oldest first.
   const refusals = [];
@@ -52,14 +51,6 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
       if (frame.type === "snapshot" && frame.payload?.rest) rest = frame.payload.rest;
       else if (frame.type === "delta" && frame.payload?.rest && rest) rest = { ...rest, ...frame.payload.rest };
       else return;
-      if (process.env.HIDE_E2E_SCREENSHOT_DIR) {
-        const op = rest.task_operation;
-        const key = op ? `${op.id}/${op.request_id}/${op.phase}/${op.agent_phase}` : "none";
-        if (key !== lastTaskKey) {
-          lastTaskKey = key;
-          fs.appendFileSync(path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "task-trace.log"), `${Date.now()} ${origin} ${frame.type} ${key} err=${rest.status?.last_error?.kind}/${rest.status?.last_error?.request_id}\n`);
-        }
-      }
       resolve();
       settle();
     };
@@ -68,9 +59,6 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
     refusals,
     send: (kind, payload) => {
       if (closed) throw closed;
-      if (process.env.HIDE_E2E_SCREENSHOT_DIR && kind === "agent_start_in_checkout") {
-        fs.appendFileSync(path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "task-trace.log"), `${Date.now()} ${origin} SEND ${payload.request_id} seen=${rest?.task_operation ? `${rest.task_operation.id}/${rest.task_operation.request_id}/${rest.task_operation.phase}/${rest.task_operation.agent_phase}` : "none"}\n`);
-      }
       ws.send(JSON.stringify({ schema_version: 2, kind, payload }));
     },
     until: (read, what, wait = ms) => new Promise((resolve, reject) => {
