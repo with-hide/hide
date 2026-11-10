@@ -30,6 +30,8 @@ describe.skipIf(process.platform !== 'darwin')('the release command on the build
       copyFileSync(join(mobile, file), target);
     }
     put(join(base(), 'release-inputs/bundle-manifest.json'), '{"schema":1,"files":{}}');
+    put(join(base(), 'ios/App/App/App.entitlements'), '<plist/>');
+    stub('codesign', 'exit 0');
     put(keyPath(), `-----BEGIN PRIVATE KEY-----\n${SECRET_LINE}\n-----END PRIVATE KEY-----\n`);
     put(join(home, '.config/hide-ios/release.env'), `HIDE_IOS_ASC_KEY_ID=${KEY_ID}\nHIDE_IOS_ASC_ISSUER_ID=${ISSUER}\nHIDE_IOS_ASC_KEY_PATH=${keyPath()}\n`);
     stub('df', 'echo "Filesystem 1G-blocks Used Available Capacity iused ifree %iused Mounted"; echo "/dev/x 500 100 400 20% 1 1 1% /"');
