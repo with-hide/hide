@@ -4,6 +4,8 @@
 // the guide line follows the pointer, the panes do not, and a release whose
 // ratio change falls outside the core's accepted range sends nothing.
 
+import type { LayoutNode } from "./snapshot";
+
 export type ResizeDirection = "left" | "right" | "up" | "down";
 
 /** The core's `resize_pane` accepts `0.001..=0.5`; a smaller move is not worth a round trip. */
@@ -20,4 +22,18 @@ export function resizeStep(
   if (amount < MIN_AMOUNT || amount > MAX_AMOUNT || !Number.isFinite(amount)) return null;
   const direction: ResizeDirection = vertical ? (delta > 0 ? "right" : "left") : delta > 0 ? "down" : "up";
   return { direction, amount };
+}
+
+/**
+ * The pane a divider's `resize_pane` names so the core moves that divider and
+ * no other. The core moves the split on the named pane's edge toward the
+ * direction (Herdr's pane resize), so a drag right or down names the pane just
+ * before the divider and a drag left or up the pane just after it; any pane
+ * further in would name a split nested inside one side (issue 2346).
+ */
+export function dividerPaneId(split: Extract<LayoutNode, { type: "split" }>, direction: ResizeDirection): string {
+  const towardSecond = direction === "right" || direction === "down";
+  let node = towardSecond ? split.first : split.second;
+  while (node.type === "split") node = towardSecond ? node.second : node.first;
+  return node.pane_id;
 }
