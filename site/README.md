@@ -12,11 +12,19 @@ Serving this directory locally does not publish it or configure the domain.
 
 ## Preview and checks
 
-From the repository root, run the focused download-policy tests:
+From the repository root, run the focused download-policy tests and the
+checks on the privacy and support pages:
 
 ```sh
-node --test site/tests/downloads.test.mjs
+node --test site/tests/downloads.test.mjs site/tests/legal.test.mjs
 ```
+
+`privacy.html` and `support.html` are the two pages the App Store listing points at
+as its privacy policy URL and support URL. Each carries an English and a Korean body
+in one file, linked from the footer and from each other's header, and each states
+only what the shipped code does: [`privacy.html`](privacy.html) is the authority for
+what the desktop app, this site, the relay, the phone app and Hide AI send, and a
+change to any of those changes this page in the same release.
 
 Use Node.js 22.7 or later, which recognizes the browser ES module in `downloads.js` without a package manifest.
 For a local preview, choose a free loopback port and serve only this directory:
