@@ -134,6 +134,11 @@ jobs:
       lanes: ${{ steps.plan.outputs.lanes }}
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
+      # The tests this pull request adds or changes, for the `repeat` lane:
+      # the web specs (a JSON list of paths) and the Rust test modules (a JSON
+      # list of `{package, module, path}`), both empty when it changes none.
+      repeat-web: ${{ steps.plan.outputs.repeat-web }}
+      repeat-rust: ${{ steps.plan.outputs.repeat-rust }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
       # nightly and a pull request that changes a macOS path
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
@@ -822,6 +827,23 @@ jobs:
     with:
       runner: ubuntu-24.04-arm
 
+  # Every test the pull request adds or changes, run many times with no retry
+  # (`repeat.yml`, docs/TESTING.md, "Flaky tests"): a new test that fails one
+  # run in ten passes its own pull request nine times in ten, and a failed run
+  # here fails `verify`. The plan names the tests (`scripts/ci-repeat.py`); on
+  # Linux, the web specs through `web-e2e.yml` and the Rust modules under
+  # nextest. A hand run of `repeat.yml` is the way to another system.
+  repeat:
+    name: repeat changed tests
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'repeat')
+    uses: ./.github/workflows/repeat.yml
+    permissions:
+      contents: read
+    with:
+      web: ${{ needs.plan.outputs.repeat-web }}
+      rust: ${{ needs.plan.outputs.repeat-rust }}
+
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
   # change to what differs by system.
   os-contract:
@@ -1084,7 +1106,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, desktop-e2e, package, merge-rust, merge-web]
+    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1093,6 +1115,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/ci-plan.py
+            scripts/ci-repeat.py
             scripts/ci-flaky-report.py
           sparse-checkout-cone-mode: false
       - name: Every planned lane succeeded and every other lane was skipped
