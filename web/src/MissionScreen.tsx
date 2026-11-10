@@ -348,13 +348,10 @@ function TableRow({ entry, connected, project, actions }: { entry: MissionEntry;
  * opens the mission as the row does (`onOpen`).
  */
 function GateCount({ mission, onOpen }: { mission: Mission; onOpen?: () => void }) {
-  const { t } = useInterfaceTranslation();
   const ahead = gatesAhead(mission).length;
   if (ahead === 0) return null;
   return (
-    <Hint label={t("mission.gate.planTitle", { count: ahead })}>
-      <span className={cn("flex shrink-0", onOpen && "pointer-events-auto")} onClick={onOpen}><GateAheadCount count={ahead} /></span>
-    </Hint>
+    <span className={cn("flex shrink-0", onOpen && "pointer-events-auto")} onClick={onOpen}><GateAheadCount count={ahead} /></span>
   );
 }
 

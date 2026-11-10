@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionGate, MissionNodeBrief, MissionQuestion, PrCard, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;

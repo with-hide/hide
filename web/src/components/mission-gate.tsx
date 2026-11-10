@@ -7,6 +7,7 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import type { MissionGate } from "../snapshot";
 import { Button } from "./ui/button";
+import { Hint } from "./ui/tooltip";
 
 /**
  * What the operator will look at, as a strip of the card itself, up to two
@@ -32,7 +33,7 @@ export function GateStrip({ gate, className }: { gate: Pick<MissionGate, "state"
 /**
  * Where the operator will look, while the plan waits for their approval
  * (D-08, B1): `내가 볼 곳 N`, then one row each with the node, what to look at
- * and when, which is once the node's work is done and before it finishes
+ * and when, which is once the node's other finish lines all pass
  * (D-10). The operator turns a place on or off by saying so to the Conductor,
  * whose replan redraws the list; it is never the operator's turn (B9). With
  * `onSelect` the node is a button that picks it on the map.
@@ -75,9 +76,11 @@ export function GateAheadCount({ count, className }: { count: number; className?
   const { t } = useInterfaceTranslation();
   if (count === 0) return null;
   return (
-    <span className={cn("flex shrink-0 items-center gap-xxs text-caption text-muted-foreground", className)} role="img" aria-label={t("mission.gate.planTitle", { count })} data-mission-row-gates={count}>
-      <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-      <span className="font-mono tabular-nums">{count}</span>
-    </span>
+    <Hint label={t("mission.gate.planTitle", { count })}>
+      <span className={cn("flex shrink-0 items-center gap-xxs text-caption text-muted-foreground", className)} role="img" aria-label={t("mission.gate.planTitle", { count })} data-mission-row-gates={count}>
+        <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+        <span className="font-mono tabular-nums">{count}</span>
+      </span>
+    </Hint>
   );
 }
