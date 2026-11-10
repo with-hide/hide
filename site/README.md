@@ -101,7 +101,7 @@ The workflow and feature descriptions follow [UI_BEHAVIOR.md](../docs/UI_BEHAVIO
 Supported platforms, signing limitations, prerequisites and installation links follow [INSTALL.md](../docs/INSTALL.md).
 The site has its own small CSS scale and brand palette; it does not consume or replace the product's generated UI tokens.
 `assets/owls/` holds the owl character's poses, generated with the approved mark as the style reference, keyed to transparency and traced to SVG; [BRAND.md](../docs/BRAND.md#the-owl-character) owns what the character may and may not do, the header shows the blinking app icon and the favicon stays the unchanged `hide-mark.png`.
-`assets/og.png` is the link preview card (1200x630 PNG, since some preview readers do not take WebP): the hero headline over the `hero-dark` shot, with the `owl-agents` owl cropped to its head and rising over the window's top edge, so a new hero shot or headline means rendering the card again.
+`assets/og-ade.png` is the link preview card (1200x630 PNG, since some preview readers do not take WebP): the hero headline over the `hero-dark` shot, with the `owl-agents` owl cropped to its head and rising over the window's top edge, so a new hero shot or headline means rendering the card again under a new file name, since `/assets` is cached for a day and link previews cache the old address.
 The page is dark by default, on the Owl Field palette: the mark's blue-gray field taken down to night, lime as the one primary accent and the field color as the secondary on kickers, numbers and markers.
 It follows `prefers-color-scheme` for a light variant that keeps the same primary and secondary.
 
