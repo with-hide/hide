@@ -14,7 +14,7 @@
 //! never in the agent: `allow_always` is never chosen. A new conversation, a
 //! restart or the process's end closes a waiting card as a refusal.
 
-mod jobs;
+pub(super) mod jobs;
 mod worker;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

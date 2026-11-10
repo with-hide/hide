@@ -10547,6 +10547,44 @@ fn a_held_node_raises_no_stall_cannot_start_and_ends_by_itself() {
     assert!(refused.contains("mission_node_started"), "{refused}");
 }
 
+/// Desk's mission card marks the operator's turn and a delay as every
+/// mission chip does: a decision while the mission is open, its delay, and
+/// nothing of either once it closed.
+#[test]
+fn a_desk_mission_card_says_the_operators_turn_and_the_delay() {
+    use crate::model::DeskMissionTurn;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let card = |runtime: &Runtime| {
+        crate::runtime::desk::jobs::desk_job_mission(&runtime.mission_view_of("mission-1").unwrap())
+    };
+    assert_eq!((card(&runtime).turn, card(&runtime).delay), (None, None));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 30}),
+    )
+    .unwrap();
+    assert_eq!(
+        (card(&runtime).turn, card(&runtime).delay),
+        (Some(DeskMissionTurn::Decision), Some("disk".to_owned()))
+    );
+}
+
 /// A hold, on a node or the whole mission, set and lifted between two
 /// judgments still counts the stall again from then: the clock that stood
 /// before it is not reused.

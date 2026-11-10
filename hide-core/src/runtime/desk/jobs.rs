@@ -1153,14 +1153,34 @@ fn desk_card_from_pane(
 }
 
 /// The mission a job conducts, as its card's `미션 k/n` chip (B34).
-fn desk_job_mission(
+pub(crate) fn desk_job_mission(
     mission: &crate::runtime::missions::MissionView,
 ) -> crate::model::DeskJobMission {
-    use crate::missions::{MissionStatus, NodeStatus};
+    use crate::missions::{AttentionTo, MissionStatus, NodeStatus};
+    use crate::model::DeskMissionTurn;
     let counted = mission
         .nodes
         .iter()
         .filter(|node| node.status != NodeStatus::Dropped);
+    let open = matches!(
+        mission.status,
+        MissionStatus::Planning | MissionStatus::Running | MissionStatus::MergeWait
+    );
+    // The operator's turn while the mission is open, as the sidebar's chip
+    // reads it: its decision, else a node raised to the operator.
+    let raised = mission.nodes.iter().any(|node| {
+        node.status != NodeStatus::Dropped
+            && node
+                .attention
+                .as_ref()
+                .is_some_and(|attention| attention.to == AttentionTo::Operator)
+    });
+    let turn = match (open, mission.decision.is_some(), raised) {
+        (false, _, _) => None,
+        (true, true, _) => Some(DeskMissionTurn::Decision),
+        (true, false, true) => Some(DeskMissionTurn::Attention),
+        (true, false, false) => None,
+    };
     crate::model::DeskJobMission {
         id: mission.id.clone(),
         title: mission.title.clone(),
@@ -1170,13 +1190,8 @@ fn desk_job_mission(
             .filter(|node| node.status == NodeStatus::Done)
             .count(),
         total: counted.count(),
-        // A decision waits on the operator while the mission is open, as the
-        // sidebar's chip reads it.
-        deciding: mission.decision.is_some()
-            && matches!(
-                mission.status,
-                MissionStatus::Planning | MissionStatus::Running | MissionStatus::MergeWait
-            ),
+        turn,
+        delay: mission.delay.clone().filter(|_| open),
     }
 }
 
