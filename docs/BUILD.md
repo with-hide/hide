@@ -690,7 +690,7 @@ Xcode does not run on every Mac this repository is built on, so the app builds o
 It runs, on this machine:
 
 1. `bash scripts/verify-web.sh web build:phone`, the same phone build the hosted site uses (`HIDE_IOS_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`, for a run after only Swift changed);
-2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`;
+2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`, and a plugin list (`BridgeGate.appPlugins`) that differs from the plugins the package defines;
 3. `mobile/scripts/assemble.mjs`, which fills `mobile/www/` (ignored): the loader and the current protocol's bundle from step 1, and every older `p/<n>/` bundle that `mobile/retained-bundles.json` pins, then `protocols.json` as their union and no `sw.js`.
    The build trusts the pin and nothing the server says about itself: each pinned file is read from `https://app.withhide.dev` and must match its pinned size and SHA-256, so a file that differs, a pinned file or protocol the site no longer serves, a protocol the site serves that the pin lacks, or a page whose content policy is not the phone site's stops the build with the file named; the app never ships fewer bundles than the pin lists without someone changing the pin.
    The protocol this source speaks is never pinned: it comes from step 1;
@@ -699,19 +699,23 @@ It runs, on this machine:
    A failing test fails the command.
 
 `bash mobile/scripts/build-ios.sh run` installs the built app in a simulator of its own on the mini (`hide-ios-<branch>`, created if missing), launches it, waits `HIDE_IOS_SETTLE` seconds (default 15) and captures the screen.
-With `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build); the link goes to the mini in a private file, never in an argument, and the file is removed on every way out.
+With `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build); the link travels on the standard input of the script, in front of it, so it is in no argument and in no file on the mini, and there is nothing to remove.
+A pairing code lives five minutes and only while a Mobile page of that Hide stays open, so the page that showed it (or a client that sent `mobile_observe`) must still be connected when the simulator launches.
+`HIDE_IOS_TAPS='<css selector>;;<css selector>'` presses those on the page, in order, once each is there (`[data-phone-host]` the saved computer, `[data-phone-tab="settings"]`, `[data-phone-setting="language"]`, `[data-phone-add]`, `[data-phone-scan]`), `HIDE_IOS_APPEARANCE=light|dark` sets the simulator's appearance, `HIDE_IOS_HOME=1` captures the home screen with the icon, and `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on its launch screen (it starts and waits for a debugger that never comes) and captures that.
+The taps, like the link, are read by the debug build only.
 `HIDE_IOS_CAPTURE=<file.png>` copies the capture back; otherwise it is `~/hide-ios-build/<branch>/shots/run.png` on the mini.
 `bash mobile/scripts/build-ios.sh clean` deletes that simulator and the branch's whole folder there.
 
-Everything a command starts it ends: the simulator it created is shut down and deleted, one it found off is shut down again, and the pairing link file is removed, on every exit including a failure (a trap in `mini-ios.sh`).
-`HIDE_IOS_KEEP_SIMULATOR=1` leaves the simulator booted for a check by hand, and `clean` removes it afterwards.
+Everything a command starts it ends: the simulator it created is shut down and deleted, and one it found off is shut down again, on every exit including a failure (a trap in `mini-ios.sh`).
+`HIDE_IOS_KEEP_SIMULATOR=1` leaves the simulator booted for a check by hand and marks it; the next command of the branch that does not ask to keep it ends that simulator too, so `clean` is not the only way it goes.
+The Swift tests of a `build` run on the branch's simulator and clear the pairing Keychain items they test, so a pairing kept for a check does not survive a later `build`: pair again after it.
 The mini runs other work, and nothing prunes a branch it does not own, so each branch's state is one folder of about 0.5 GB (`~/hide-ios-build/<branch>/`) plus one simulator; once 4 other branches hold a folder there, the build refuses before it copies anything and prints the folders.
 Run `bash mobile/scripts/build-ios.sh clean` from those branches, or `rm -rf` a folder it names after `xcrun simctl delete` of its `hide-ios-<branch>` simulator, then retry.
 The build prints the machine's free disk when it ends.
 
 `bash scripts/verify-web.sh mobile test` runs the node tests of `mobile/` (the assembler against a pin that differs or a protocol that is missing, the pin generator, and the Capacitor version check, which also refuses a plugin package or product the app links without the fixed plugin list changing), which `pr.yml`'s checks lane runs.
 The Swift tests need Xcode, so only the build command above runs them today; wiring them into CI is the release workflow's work.
-The app is built unsigned for the simulator; signing, TestFlight and the release lane belong to the release workflow, not this command.
+The simulator build is signed ad hoc (`CODE_SIGN_IDENTITY=-`, no account or certificate), not left unsigned, because the simulator gives the Keychain only to an app that carries its entitlements and answers -34018 to an unsigned one; real signing, TestFlight and the release lane belong to the release workflow, not this command.
 
 ### Retained bundles and the pin
 
