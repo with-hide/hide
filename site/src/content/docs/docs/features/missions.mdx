@@ -11,7 +11,7 @@ From there a lead agent, the Conductor, plans with you in the same conversation.
 
 A mission is not a task. A task is one agent finishing its steps in turn (see [Tasks and status](/docs/features/tasks-status/)). A mission is a Conductor sending work to several workers at once.
 
-To start one yourself, type `/hide-mission` in Claude Code or `$hide-mission` in Codex, from any agent terminal. The mission then shows up in the **Missions** screen.
+To start one yourself, type `/hide-mission` or `$hide-mission` in an agent terminal, whichever form your agent takes for a skill. The mission then shows up in the **Missions** screen.
 
 ## How to read it
 
@@ -37,7 +37,7 @@ Each node is one piece of the work.
 
 A node that waits on you has a thick border, a dot on its corner and `Your turn`. A node that waits on the Conductor is not your turn: it reads as in progress with `Conductor` and the reason.
 
-A worker that looks stuck (its review failed twice in a row, or it has not pushed for 90 minutes) gets a `⚠` on its card, and the Conductor is told. You are not.
+A worker that looks stuck gets a `⚠` on its card, and only the Conductor is told. You are not. Only a worker whose next move is its own can look stuck: one that waits on CI, a review, a merge or a person gets no warning.
 
 ### What reaches you
 
@@ -55,7 +55,7 @@ Pressing a mission opens its map. Anywhere else, such as the chip on a Conductor
 
 ## Settings
 
-Settings > Mission holds the defaults for new missions. A change applies from the next mission; a running mission keeps its own.
+Settings > Mission holds the defaults for new missions. A change applies from the next mission, and a running mission keeps its own, except the cleanup switch below.
 
 | Setting | What it does |
 | --- | --- |
@@ -64,8 +64,6 @@ Settings > Mission holds the defaults for new missions. A change applies from th
 | **Clean up a worktree once merged** | On by default. Removes the worktree and build cache of a branch whose pull request merged, unless it still holds files being changed or is in use. The branch is kept. This switch applies to every mission at once. |
 | **Worker candidates** | The agents the Conductor may choose workers from, up to 16, each with its model, effort and purpose. Left empty, the Conductor chooses among the agents installed on this machine. |
 | **Verification strength** | `Fast`, `Normal` (default) or `Thorough`: how much checking a mission does and how often it re-reviews. The Conductor proposes a strength in its plan and changes it when you say so. |
-
-The Conductor prefers a checker of a different kind of agent than the node's worker when the candidates include one.
 
 ## Commands and keys
 

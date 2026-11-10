@@ -28,7 +28,9 @@ Rows are grouped by whose move is next.
 
 Unread is separate from Needs You on purpose. A result to read means "look when you have a moment". A question means "act now".
 
-A blocked agent, and an agent whose own question or plan is waiting, stays in Needs You until you answer, whether or not you have looked at it. A plain question or approval you have read but not answered moves to Seen, and the Tasks list still lists it under Needs You, drawn dimmed, so you can answer it. A finished result leaves Unread once its pane has had your keyboard focus, or a phone has opened it.
+A screen that is really waiting for input stays in Needs You until you answer, whether or not you have looked at it: a blocked prompt the agent's program shows, a question or plan the agent's program itself is waiting on, or a question Hide put on the row (a plan review, a mission decision). The prompt is still waiting, so the row leaves when it is answered, not when it is read.
+
+A plain question written at the end of a turn is different: once you read it without answering, it moves to Seen, and the Tasks list still lists it under Needs You, drawn dimmed, so you can answer it. A Blocked that Hide AI judged from the agent's text is the same: once you read it, it is Seen. A finished result leaves Unread once its pane has had your keyboard focus, or a phone has opened it.
 
 A helper that an agent started (a delegated row) shows only in Working or Seen. Its questions go to its parent first. Some causes, such as a blocked prompt, rise to the agent at the top of the team, and that row then stands in Needs You.
 
@@ -72,7 +74,7 @@ An agent can put up the steps of its own task with `hide task`. hide draws them 
 | --- | --- | --- |
 | Settings > Notifications | **Notify me when an agent needs me** | A desktop notice when a row enters Needs You. Desktop app only. |
 | Settings > Notifications | **Notify me when an agent finishes** | A desktop notice when a result is ready to read. Desktop app only. |
-| Settings > Notifications | **Push to phone** | `Off`, `Only when the app is closed` or `Always`. See [Mobile](/docs/features/mobile/). |
+| Settings > Notifications | **Push to phone** | `Off`, `Only when the app is closed` or `Always`. |
 | View menu (eye button) | **Request and progress line** | `One line` (default), `Two lines` or `Off`. Shapes the second row of every agent pane. An ask is never hidden by this setting. |
 | View menu (eye button) | **Agent logo** | `Show beside each row` or `Hide`. In the desktop app, hold `⌥` (`Alt` on Windows and Linux) to peek while it is hidden. |
 

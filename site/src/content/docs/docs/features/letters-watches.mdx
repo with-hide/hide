@@ -7,7 +7,7 @@ description: How agents talk to each other through letters Hide keeps, and how a
 
 You ask an agent to fix a bug and have the fix checked. It starts a helper in its own pane. The helper works, then sends its parent a letter: "Fix is ready, PR #12." If the helper goes quiet for twenty minutes, the parent gets a warning instead. Neither agent has to keep looking at the other's terminal.
 
-A **letter** is a message from one agent to another that Hide stores and delivers. It has an answer, a receipt and a retry that never sends the same letter twice. A **watch** is a parent's standing interest in one helper: Hide warns the parent when the helper stops making progress.
+A **letter** is a message from one agent to another that Hide stores and delivers. It has an answer, a receipt and a safe retry: sending again with the same intent returns the same letter while Hide still keeps it, not a second one. A **watch** is a parent's standing interest in one helper: Hide warns the parent when the helper stops making progress.
 
 You do not write letters. Agents do, with `hide` commands. You see their effects on rows, in the turn card and in a small pill on a pane.
 
@@ -31,11 +31,11 @@ An answer wait ends when the recipient replies, the sender cancels, either agent
 - **At rest.** Hide types one line into the agent's prompt: the owl `🦉`, the writer's name, the kind and the letter's first line, for example `🦉 label-end-fix report: label end fix opened PR #881`. The agent's hook then hands over the whole letter. Agents that Hide cannot type into take the letter on their next prompt.
 - **While it works.** A letter waits five minutes of unbroken work, then goes at the agent's next tool call or turn gap. A letter sent with `--now` skips the wait.
 - **Forced.** `--force` types the letter into the agent's input now, even while it works. Hide first reads the input: if someone is typing there, the send is refused with `composer_not_empty`.
-- **Asleep.** A `request` or `block` wakes a sleeping agent and resumes its conversation, at most four wakes at a time. A `report` or `progress` waits for the next wake. The time a letter waits does not run while the recipient sleeps.
+- **Asleep.** A `request` or `block` wakes a sleeping agent and resumes its conversation, at most four wakes at a time. A `report` or `progress` waits for the next wake. The time a letter waits does not run while the recipient sleeps, with one exception: a `request` or `block` whose bell already rang, or whose one wake had begun before the sleep, wakes no one, and its hour keeps running through the sleep.
 
 Hide never types over your own words. If you have text in an agent's prompt, the letter waits and a pill with an envelope appears in the pane header (with a count when two or more letters wait). Press **Deliver now** to release the hold: the letter goes in as soon as the prompt reads empty. The press never clears or submits your text.
 
-A letter that cannot be delivered ends as `undelivered` after its wake fails or its three bells are spent, or after 60 minutes of the recipient's machine being reachable. Hide's own letter then tells the sender whom, in which pane and why.
+A letter that cannot be delivered ends as `undelivered` after its wake fails, after its three bells are spent with none taken, or after 60 minutes of the recipient's machine being reachable. Hide's own letter then tells the sender whom, in which pane and why.
 
 The turn card of an agent lists the agents it worked with since your request, with the letters between them and a mark for what the last letter said.
 
@@ -46,7 +46,7 @@ The turn card of an agent lists the agents it worked with since your request, wi
 | Letter body | 16 KiB |
 | Open letters | 1024 |
 | Letters kept, finished ones included | 5000 |
-| Same `--intent` returns the same letter | for one day after it finishes |
+| Same `--intent` returns the same letter | while the letter is kept: at most one day after it finishes, and sooner when the 5000 limit drops it |
 | Delivery deadline | 60 minutes of the recipient's machine being reachable |
 | Answer wait of a `request` or `block` | 24 hours |
 | Watches | 32 |
@@ -102,7 +102,7 @@ Quoted from the rows named below in `docs/INSTALL.md`, "What each system support
   - OpenCode and omp: macOS "supported mid-turn"; Windows and Linux "supported on the next prompt ... tool-result delivery is implemented and fixture-tested but unverified in a real mid-turn session".
   - Pi and Antigravity: every system "supported on the next prompt"; mid-turn delivery is unverified.
   - Grok: every system "supported at rest ... mid-turn `PreToolUse` delivery and picker safety are not measured by this journey".
-- **A letter held on a possible draft goes in once the composer reads empty.** macOS: "supported for Claude Code and Codex, the agents a bell rings ... narrow panes and the light theme are unverified".
+- **A letter held on a possible draft goes in once the composer reads empty.** macOS: "supported for Claude Code and Codex, the agents a bell rings ... narrow panes and the light theme are unverified". Windows: "unverified ... no composer of a real agent has been read on Windows"; it closes when the agent journey's composer cell passes on the Windows lane. Linux: "unverified: the same"; it closes when that cell passes on the Linux lane.
 - **`hide pane read`, `hide pane send`, `hide pane open --beside` and `hide request send --force`.** Windows: "supported ... with the keys and the paste unmeasured live on Windows; `--paste` is refused `paste_unsupported` for Grok". Linux: "supported ... with the keys and the paste unmeasured live on Linux".
 
 The contract for letters and watches is `docs/delivery.md`, Commands and caller identity and Persistence, clocks and limits. The design of task identity and delegated escalation is owned by `docs/task-identity.md` in with-hide/hide-private.

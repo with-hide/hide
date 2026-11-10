@@ -1,7 +1,7 @@
 ---
 title: Run a mission
 description: Give one goal to a lead agent that splits it across several agents and several pull requests, and only come back for decisions.
-features: [tasks-status]
+features: [tasks-status, missions]
 ---
 
 **Use when** one goal needs planning first, several pull requests, or another agent to check the work, and you want to say it once.
@@ -45,5 +45,6 @@ Come back to me only for decisions.
 
 ## Read more
 
+- [Missions](/docs/features/missions/) explains the map, the Missions screen and the settings.
 - [Tasks and status](/docs/features/tasks-status/) explains the rows and marks the map reuses.
 - Previous guide: [Answer only what needs you](/docs/guides/answer-only-what-needs-you/).
