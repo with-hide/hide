@@ -28,7 +28,7 @@ from agent_live_check.runtime import clean_env
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_program, launcher, tool_path
 
-from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service, profiles
+from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, hook_records, memory, opencode_service, profiles
 from .controller import Controller
 from .contract import load_contract
 from .failure import FailureLogs, drop_on_pass
@@ -771,13 +771,16 @@ def main(argv=None):
             except Exception as error:
                 agent["opencode_service"] = {"port": port, "left": [f"stop failed: {error}"]}
         if runtime:
-            # Why a hook or plugin handed a prompt no letter or Memory: each cause the
-            # helper met (`cli`, `deadline`, ...) and when it last did. HOME is the
-            # private home only in CI mode; locally it stays the operator's.
-            causes = runtime.home / ".hide/agent-hooks/delivery-diagnostics.json"
-            if (not local or fake) and causes.is_file() and not causes.is_symlink():
-                with open(causes, "rb") as stream:
-                    write_private(run / "delivery-diagnostics.json", stream.read(64 * 1024))
+            # The hooks' records, read where the candidate keeps them beside its
+            # own state folder (`hook_records.folder`), in local mode too: HOME
+            # is the operator's here, and reading that home's records would read
+            # the operator's own Hide rather than the one measured.
+            records = hook_records.folder(runtime)
+            for name in ("delivery-diagnostics.json", "last-report-failure.json"):
+                source = records / name
+                if source.is_file() and not source.is_symlink():
+                    with open(source, "rb") as stream:
+                        write_private(run / f"hook-{name}", stream.read(64 * 1024))
         if local and not fake:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
