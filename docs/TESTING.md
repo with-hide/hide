@@ -689,6 +689,8 @@ The ownership tests keep an admitted worker alive after its caller releases owne
 A test's fixture ends every holder its records name, and on Unix what each program's session left, by pid and start time, however the test ends; the holders a test starts with no record are ended by their own guard the same way.
 The programs a pane runs in these tests are the test binary itself in a role (`role.rs`), so nothing outside the build is started, and each test names the processes it checks by pid and start time while they run.
 The `script` role plays steps of bytes the test gives it, each when the test says, on a raw terminal, and records every byte it is sent, so a test sees exactly what reached the program.
+Step zero runs at once; `Script::go` releases only later steps.
+The clipboard tests draw a ready screen in step zero and release each copy only after the intended connection holds the pane, so the initial copy cannot race the attachment (with-hide/hide-private#705).
 
 The screen the holder sends is checked against an xterm, not against the holder: `screen.rs` draws the fragments on `@xterm/headless` (`tests/xterm/draw.mjs`, run by Node), on a fresh terminal and on one that drew something else first at another size, and compares the text, the cursor and its visibility, and each cell's colors, attributes and link with what the program's own bytes draw on a fresh one, with Unicode 11 widths, trailing spaces trimmed, reverse video applied and a default color named as the pane's own; drawing the fragments must answer nothing and leave no mouse mode on.
 It covers styles, wide and combined characters and links, the alternate screen and back, a redraw after lost fragments, and a resize and a takeover while the program holds its output.

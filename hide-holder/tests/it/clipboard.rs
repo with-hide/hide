@@ -25,6 +25,7 @@ fn a_programs_copy_reaches_the_holding_connection_once() {
     let script = Script::new(
         &home,
         vec![
+            b"ready\r\n".to_vec(),
             copy("first copy", "copied-1"),
             copy("second copy", "copied-2"),
         ],
@@ -33,7 +34,11 @@ fn a_programs_copy_reaches_the_holding_connection_once() {
     let mut first = holder.open_accepting(ACCEPTS.to_vec());
     assert!(first.welcome.sends.contains(&Capability::Clipboard));
 
-    script.go(0);
+    // Step zero runs at once. Hold the copy at step one until this
+    // connection is holding the pane and has drawn the ready screen.
+    first.wait_for_drawn("ready");
+    assert!(first.clipboards.is_empty());
+    script.go(1);
     first.wait_for_drawn("copied-1");
     wait_until("the copy to arrive", || {
         first.drain();
@@ -52,7 +57,7 @@ fn a_programs_copy_reaches_the_holding_connection_once() {
     first.wait_closed();
     assert!(second.clipboards.is_empty(), "{:?}", second.clipboards);
 
-    script.go(1);
+    script.go(2);
     second.wait_for_drawn("copied-2");
     wait_until("the second copy to arrive", || {
         second.drain();
@@ -70,16 +75,21 @@ fn a_node_that_does_not_accept_copies_is_sent_none_and_keeps_its_pane() {
     let home = Home::new();
     let script = Script::new(
         &home,
-        vec![copy("unsent", "copied-1"), b"after\r\n".to_vec()],
+        vec![
+            b"ready\r\n".to_vec(),
+            copy("unsent", "copied-1"),
+            b"after\r\n".to_vec(),
+        ],
     );
     let holder = script.start(&home);
     let mut connection = holder.open();
     assert!(!connection.welcome.sends.contains(&Capability::Clipboard));
 
-    script.go(0);
+    connection.wait_for_drawn("ready");
+    script.go(1);
     connection.wait_for_drawn("copied-1");
     holder.wait_logged("holder.clipboard_dropped", 1, &mut connection);
-    script.go(1);
+    script.go(2);
     connection.wait_for_drawn("after");
     assert!(connection.closed.is_none(), "{:?}", connection.closed);
     assert!(connection.clipboards.is_empty());
