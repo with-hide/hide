@@ -691,19 +691,42 @@ It runs, on this machine:
 
 1. `bash scripts/verify-web.sh web build:phone`, the same phone build the hosted site uses (`HIDE_IOS_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`, for a run after only Swift changed);
 2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`;
-3. `mobile/scripts/assemble.mjs`, which fills `mobile/www/` (ignored): the loader and the current protocol's bundle from step 1, and every older `p/<n>/` bundle the production phone site still serves, each file read from `https://app.withhide.dev` and held to the size and SHA-256 that site's `phone-site.json` records (a file that differs, a missing file, or a page whose content policy is not the phone site's stops the build), then `protocols.json` as their union and no `sw.js`;
+3. `mobile/scripts/assemble.mjs`, which fills `mobile/www/` (ignored): the loader and the current protocol's bundle from step 1, and every older `p/<n>/` bundle that `mobile/retained-bundles.json` pins, then `protocols.json` as their union and no `sw.js`.
+   The build trusts the pin and nothing the server says about itself: each pinned file is read from `https://app.withhide.dev` and must match its pinned size and SHA-256, so a file that differs, a pinned file or protocol the site no longer serves, a protocol the site serves that the pin lacks, or a page whose content policy is not the phone site's stops the build with the file named; the app never ships fewer bundles than the pin lists without someone changing the pin.
+   The protocol this source speaks is never pinned: it comes from step 1;
 4. `cap sync ios`, which copies that folder into the Xcode project;
-5. an `rsync` of `mobile/ios/` to `~/hide-ios-build/<branch>/ios/` on the machine named by `HIDE_IOS_BUILD_HOST` (default `mini`), where `mobile/scripts/mini-ios.sh` is piped over `ssh` to run `xcodebuild` for the simulator with derived data and the Swift packages inside that folder, then the `HideShell` unit tests on an iOS Simulator.
+5. an `rsync` of `mobile/ios/` to `~/hide-ios-build/<branch>/ios/` on the machine named by `HIDE_IOS_BUILD_HOST` (default `mini`), where `mobile/scripts/mini-ios.sh` is piped over `ssh` to run `xcodebuild` for the simulator with derived data and the Swift packages inside that folder, then two test runs on an iOS Simulator: the `HideShell` package's tests, and the `AppTests` target hosted in the app, whose test drives the app's own `ShellViewController` and proves a call from a sandboxed or same-origin frame never reaches a plugin while the main frame's does (delete the line that installs `BridgeGate` and it fails).
+   A failing test fails the command.
 
-`bash mobile/scripts/build-ios.sh run` installs the built app in a simulator of its own on the mini (`hide-ios-<branch>`, created if missing) and launches it; with `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build).
-`bash mobile/scripts/build-ios.sh clean` deletes that simulator and the build state there; the branch folder itself stays.
-`bash scripts/verify-web.sh mobile test` runs the assembler's unit test (a retained file that differs from the site's inventory, or a page whose content policy is weaker, stops it), which `pr.yml`'s checks lane runs.
-A simulator capture is `xcrun simctl io <device> screenshot <file>` on the mini.
+`bash mobile/scripts/build-ios.sh run` installs the built app in a simulator of its own on the mini (`hide-ios-<branch>`, created if missing), launches it, waits `HIDE_IOS_SETTLE` seconds (default 15) and captures the screen.
+With `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build); the link goes to the mini in a private file, never in an argument, and the file is removed on every way out.
+`HIDE_IOS_CAPTURE=<file.png>` copies the capture back; otherwise it is `~/hide-ios-build/<branch>/shots/run.png` on the mini.
+`bash mobile/scripts/build-ios.sh clean` deletes that simulator and the branch's whole folder there.
+
+Everything a command starts it ends: the simulator it created is shut down and deleted, one it found off is shut down again, and the pairing link file is removed, on every exit including a failure (a trap in `mini-ios.sh`).
+`HIDE_IOS_KEEP_SIMULATOR=1` leaves the simulator booted for a check by hand, and `clean` removes it afterwards.
+The mini runs other work, and nothing prunes a branch it does not own, so each branch's state is one folder of about 0.5 GB (`~/hide-ios-build/<branch>/`) plus one simulator; once 4 other branches hold a folder there, the build refuses before it copies anything and prints the folders.
+Run `bash mobile/scripts/build-ios.sh clean` from those branches, or `rm -rf` a folder it names after `xcrun simctl delete` of its `hide-ios-<branch>` simulator, then retry.
+The build prints the machine's free disk when it ends.
+
+`bash scripts/verify-web.sh mobile test` runs the node tests of `mobile/` (the assembler against a pin that differs or a protocol that is missing, the pin generator, and the Capacitor version check, which also refuses a plugin package or product the app links without the fixed plugin list changing), which `pr.yml`'s checks lane runs.
+The Swift tests need Xcode, so only the build command above runs them today; wiring them into CI is the release workflow's work.
 The app is built unsigned for the simulator; signing, TestFlight and the release lane belong to the release workflow, not this command.
+
+### Retained bundles and the pin
+
+An older phone protocol's bundle stays in the app so a desktop that still speaks it keeps working.
+`mobile/retained-bundles.json` is the one place that says which: for each retained protocol, every file's path, size and SHA-256.
+A human reads its diff in the pull request that changes it; nothing else decides what the app carries.
+
+To change it, run `pnpm --dir mobile pin` from a checkout with network access.
+It reads `https://app.withhide.dev` (`phone-site.json` and then each file of each protocol older than this source's), requires the downloaded bytes to agree with the site's own inventory, and rewrites the file with one line per file.
+Open the diff and check that only what you meant moved: a protocol added when a new one was released and the previous one was retired from the site's `current`, a file whose hash changed only when you rebuilt a retained bundle on purpose, and no line removed unless a protocol is being dropped from the app.
+Commit it on its own, so its review is only that.
 
 The bundles in the app are chosen when the app is built, and the app never fetches code when it runs.
 A desktop that speaks a newer phone protocol than any bundle inside the app makes the loader show its version screen worded for the app ("Update the Hide app"), and only a new app release clears it.
-So a protocol bump and an app release take this order: raise `PHONE_PROTOCOL` and release the desktop, whose candidate uploads the new `p/<n>/` to the hosted site; build the app from that main (the assembler picks the new bundle up from source and the older ones from the site); submit it and wait for approval; and only then ship the desktop that speaks the new protocol to users, because until the app is approved an iOS phone stays on the version screen.
+So a protocol bump and an app release take this order: raise `PHONE_PROTOCOL` and release the desktop, whose candidate uploads the new `p/<n>/` to the hosted site; build the app from that main (the assembler picks the new bundle up from source, and the previous protocol is pinned in a pull request of its own with `pnpm --dir mobile pin` before the app is built); submit it and wait for approval; and only then ship the desktop that speaks the new protocol to users, because until the app is approved an iOS phone stays on the version screen.
 Raising a protocol number for an addition is not needed ([ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion)), which keeps this order for the rare change an older side would misread.
 
 ## Mobile relay server
