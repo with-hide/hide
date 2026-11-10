@@ -3,7 +3,7 @@
 // available (crbug.com/572515601, microsoft/playwright#43605).
 const { createRequire } = require("node:module");
 
-/** Preserve the existing feature list, including defaults installed by Electron's test loader. */
+/** Preserve the effective feature list supplied by the test launcher. */
 function disabledTestFeatures(current, platform = process.platform) {
   if (platform !== "win32") return current;
   return [...new Set([...current.split(",").filter(Boolean), "TcpPortRandomizationWin"])].join(",");

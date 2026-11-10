@@ -18,7 +18,7 @@ test("Unix test launches retain their supplied arguments", () => {
   expect(testBrowserArgs(args, "linux")).toEqual(args);
 });
 
-test("the Electron preload extends the features its loader installed without duplicating them", () => {
+test("the Electron preload extends the launcher's features without duplicating them", () => {
   expect(disabledTestFeatures("PaintHolding,TcpPortRandomizationWin,FixtureFeature", "win32")).toBe("PaintHolding,TcpPortRandomizationWin,FixtureFeature");
   expect(disabledTestFeatures("PaintHolding,FixtureFeature", "win32")).toBe("PaintHolding,FixtureFeature,TcpPortRandomizationWin");
   expect(disabledTestFeatures("PaintHolding", "darwin")).toBe("PaintHolding");

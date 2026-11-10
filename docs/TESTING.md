@@ -355,7 +355,7 @@ A piece that another open change is still building is marked as pending with the
    Assert terminal content through the probe, never through DOM text, because the DOM renderer puts terminal text in the page.
    The desktop suite is not covered: Electron has its own GPU path.
    Do not raise a timeout to cover the stall.
-   Chromium test launches pass their arguments through `web/e2e/browser-launch.cjs::testBrowserArgs`, including these WebGL opt-ins; Electron's test preload uses the same module's `disabledTestFeatures` after its loader installs the defaults and before app readiness.
+   Chromium test launches pass their arguments through `web/e2e/browser-launch.cjs::testBrowserArgs`, including these WebGL opt-ins; Electron's test preload uses the same module's `disabledTestFeatures` to extend the effective launch flags before app readiness.
    On Windows it disables `TcpPortRandomizationWin`, following upstream [Playwright #43605](https://github.com/microsoft/playwright/pull/43605): randomized port allocation can fail a loopback document, script or stylesheet request with `ERR_NO_BUFFER_SPACE` even while ports and memory remain available.
    It merges the installed browser's entire disabled-feature list and the caller's features into one switch, because Chromium keeps only the last switch; a change to that internal upstream module fails test startup explicitly.
    This applies only to test launches, never the product app's default launch; it changes no wait, timeout or retry.
