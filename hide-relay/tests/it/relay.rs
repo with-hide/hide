@@ -784,7 +784,10 @@ async fn control_size_and_unexpected_or_replayed_proof_have_specific_refusals() 
         },
     )
     .await;
-    assert_eq!(control(&mut device).await, ServerMessage::Registered);
+    assert_eq!(
+        control(&mut device).await,
+        ServerMessage::Registered { push: false }
+    );
     send(
         &mut device,
         ClientMessage::Proof {

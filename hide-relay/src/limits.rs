@@ -21,6 +21,68 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 // This also covers a session write followed by its final close write.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(16);
 
+/// Push relay budgets (`docs/RELAY_PROTOCOL.md`, Push relay). Each room and
+/// the whole relay are capped, and every request that reaches the cap check is
+/// counted, a refused one included, so a room cannot spend the relay's CPU
+/// without a ceiling of its own.
+pub const PUSHES_PER_ROOM_PER_MINUTE: usize = 20;
+pub const PUSHES_PER_ROOM_PER_DAY: usize = 1_000;
+pub const PUSHES_PER_SECOND: usize = 50;
+pub const PUSH_MINUTE: Duration = Duration::from_secs(60);
+/// Streams one HTTP/2 connection may carry at once.
+pub const MAX_CONCURRENT_PUSHES: usize = 32;
+pub const PUSH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// One shared provider token, replaced well inside Apple's 20-60 minute
+/// window for one that a client keeps (TooManyProviderTokenUpdates).
+pub const PROVIDER_TOKEN_LIFETIME: Duration = Duration::from_secs(50 * 60);
+/// The moment a shared token is replaced, so a request in flight never
+/// carries one Apple is about to refuse: Apple's floor is 20 minutes, and
+/// this is under the lifetime above.
+pub const PROVIDER_TOKEN_REFRESH: Duration = Duration::from_secs(45 * 60);
+
+/// A push budget set lower than production for a test; an embedding may
+/// lower these, never remove or raise them.
+#[derive(Clone, Copy)]
+pub struct PushLimits {
+    pub per_room_per_minute: usize,
+    pub per_room_per_day: usize,
+    pub per_second: usize,
+    pub concurrent: usize,
+    pub request_timeout: Duration,
+}
+impl Default for PushLimits {
+    fn default() -> Self {
+        Self {
+            per_room_per_minute: PUSHES_PER_ROOM_PER_MINUTE,
+            per_room_per_day: PUSHES_PER_ROOM_PER_DAY,
+            per_second: PUSHES_PER_SECOND,
+            concurrent: MAX_CONCURRENT_PUSHES,
+            request_timeout: PUSH_REQUEST_TIMEOUT,
+        }
+    }
+}
+impl PushLimits {
+    pub(crate) fn valid(self) -> bool {
+        self.per_room_per_minute > 0
+            && self.per_room_per_minute <= PUSHES_PER_ROOM_PER_MINUTE
+            && self.per_room_per_day > 0
+            && self.per_room_per_day <= PUSHES_PER_ROOM_PER_DAY
+            && self.per_second > 0
+            && self.per_second <= PUSHES_PER_SECOND
+            && self.concurrent > 0
+            && self.concurrent <= MAX_CONCURRENT_PUSHES
+            && !self.request_timeout.is_zero()
+            && self.request_timeout <= PUSH_REQUEST_TIMEOUT
+    }
+}
+
+/// Every push budget at once: the wire's, and the document's.
+#[derive(Clone, Copy, Default)]
+pub struct Budgets {
+    pub relay: Limits,
+    pub push: PushLimits,
+}
+
 /// An embedding may lower the production budgets, never remove or raise them.
 #[derive(Clone, Copy)]
 pub struct Limits {

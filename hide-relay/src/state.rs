@@ -89,25 +89,77 @@ struct Rate {
     count: usize,
 }
 
+/// A room's push spending, for the caps `docs/RELAY_PROTOCOL.md` documents.
+#[derive(Default)]
+struct PushUsage {
+    minute: Option<Rate>,
+    day: Option<Rate>,
+}
+impl PushUsage {
+    /// Counts one request, refused ones included, and answers whether the
+    /// room is still inside both caps. `None` means over a cap, with its name.
+    fn spend(&mut self, now: Duration, limits: PushLimits) -> Result<(), &'static str> {
+        let minute = self.minute.get_or_insert(Rate {
+            started: now,
+            count: 0,
+        });
+        if now.saturating_sub(minute.started) >= PUSH_MINUTE {
+            *minute = Rate {
+                started: now,
+                count: 0,
+            };
+        }
+        if minute.count >= limits.per_room_per_minute {
+            return Err("pushes_per_room_per_minute");
+        }
+        let day = self.day.get_or_insert(Rate {
+            started: now,
+            count: 0,
+        });
+        if now.saturating_sub(day.started) >= DAY {
+            *day = Rate {
+                started: now,
+                count: 0,
+            };
+        }
+        if day.count >= limits.per_room_per_day {
+            return Err("pushes_per_room_per_day");
+        }
+        minute.count += 1;
+        day.count += 1;
+        Ok(())
+    }
+}
+
 pub(crate) struct State {
     stopping: bool,
     limits: Limits,
+    push: PushLimits,
+    /// Whether this relay has Apple's key, and so forwards push requests.
+    push_enabled: bool,
     next_socket: u64,
     peers: HashMap<u64, Peer>,
     rooms: HashMap<String, Room>,
     usage: HashMap<String, Usage>,
     rates: HashMap<IpAddr, Rate>,
+    /// Every room's push spending, and the relay's own per-second count.
+    pushes: HashMap<String, PushUsage>,
+    push_second: Option<Rate>,
 }
 impl State {
-    pub fn new(limits: Limits) -> Self {
+    pub fn new(limits: Limits, push: PushLimits, push_enabled: bool) -> Self {
         Self {
             stopping: false,
             limits,
+            push,
+            push_enabled,
             next_socket: 0,
             peers: HashMap::new(),
             rooms: HashMap::new(),
             usage: HashMap::new(),
             rates: HashMap::new(),
+            pushes: HashMap::new(),
+            push_second: None,
         }
     }
 
@@ -194,7 +246,12 @@ impl State {
                 phones: HashMap::new(),
             },
         );
-        self.control(id, ServerMessage::Registered)
+        self.control(
+            id,
+            ServerMessage::Registered {
+                push: self.push_enabled,
+            },
+        )
     }
 
     pub fn join(&mut self, id: u64, room: String) -> Result<(), Rejection> {
@@ -304,6 +361,51 @@ impl State {
                 )
                 .map(|()| Vec::new()),
         }
+    }
+
+    /// Counts one push request against the room's and the relay's caps.
+    /// Every request that gets here is counted, a malformed one included, so a
+    /// room cannot spend the relay without a ceiling (`PushUsage::spend`).
+    /// `Err` names the cap, and is a `rate_limited` result rather than a
+    /// closed socket.
+    pub fn push_cap(&mut self, room: &str, now: Duration) -> Result<(), &'static str> {
+        let second = self.push_second.get_or_insert(Rate {
+            started: now,
+            count: 0,
+        });
+        if now.saturating_sub(second.started) >= Duration::from_secs(1) {
+            *second = Rate {
+                started: now,
+                count: 0,
+            };
+        }
+        if second.count >= self.push.per_second {
+            // The relay's own cap is counted first and not spent by a refusal,
+            // so one noisy room cannot hold the whole relay at its ceiling.
+            return Err("pushes_per_second");
+        }
+        let room_usage = self.pushes.entry(room.to_owned()).or_default();
+        room_usage.spend(now, self.push)?;
+        second.count += 1;
+        Ok(())
+    }
+
+    /// The room a peer belongs to, for a message the peer is about to answer.
+    pub fn room_of(&self, id: u64) -> Option<String> {
+        self.room(id)
+    }
+
+    pub fn set_push_limits(&mut self, push: PushLimits) {
+        self.push = push;
+    }
+
+    /// Whether the peer is a room's device socket, which alone may ask for a
+    /// push. A phone socket keeps its existing closed refusal.
+    pub fn is_device(&self, id: u64) -> bool {
+        matches!(
+            self.peers.get(&id).map(|peer| &peer.role),
+            Some(Role::Device(_))
+        )
     }
 
     pub fn close_phone(&mut self, id: u64, connection: u32) -> Result<Vec<Event>, Rejection> {
@@ -425,6 +527,8 @@ impl State {
         self.rooms.clear();
         self.usage.clear();
         self.rates.clear();
+        self.pushes.clear();
+        self.push_second = None;
         peers
             .into_values()
             .map(|peer| {
