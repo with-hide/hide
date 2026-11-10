@@ -50,7 +50,7 @@ impl<T: Serialize> Serialize for Retained<T> {
 }
 
 /// A section field's key on the wire: its name, or the `as` name a field
-/// renamed since keeps, so the wire an older shell reads stays the same.
+/// renamed since keeps, so the section keeps the key it had on the wire.
 macro_rules! wire_key {
     ($field:ident) => {
         stringify!($field)

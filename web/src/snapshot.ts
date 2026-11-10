@@ -2065,7 +2065,6 @@ export type Device = {
   ssh_alias: string | null;
   /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
   wsl_distro?: string | null;
-  /** The engine socket the registration names on the device; null reads its default server. */
   agent_count: number;
   test: { state: string; checked_at_unix_ms: number | null; stages: DeviceTestStage[] } | null;
   host?: DeviceHost;
@@ -2376,7 +2375,6 @@ export type DeviceCatalog = {
 
 export type EngineStatus = {
   state?: string;
-  socket_path?: string | null;
   message?: string | null;
   expected_protocol?: number | null;
   received_protocol?: number | null;
