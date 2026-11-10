@@ -43,8 +43,23 @@ test("@platform session records by goal flow, ended work and search render in bo
     const child = delegated!;
     const root = await taskRow(page, pane, FIRST_GOAL);
     const tasks = page.locator("[data-task-lens]");
+    // TEMPORARY DIAGNOSTIC: what the row does after taskRow returns.
+    await page.evaluate((id) => {
+      const w = window as any; w.__rowLog = []; const ids = new WeakMap<Element, number>(); let n = 0; const t0 = performance.now();
+      const snap = (why: string) => { const row = document.querySelector(`[data-task-row="${id}"]`); const o: any = { at: Math.round(performance.now() - t0), why };
+        if (row) { if (!ids.has(row)) ids.set(row, ++n); o.node = ids.get(row); o.state = row.getAttribute("data-task-state"); o.band = row.closest("[data-task-band-list]")?.getAttribute("data-task-band-list") ?? null; o.fold = row.closest("[data-task-fold]")?.getAttribute("data-task-fold") ?? null; o.top = Math.round(row.getBoundingClientRect().top); } else o.gone = true;
+        const last = w.__rowLog.at(-1); if (!last || JSON.stringify({ ...last, at: 0, why: "" }) !== JSON.stringify({ ...o, at: 0, why: "" })) w.__rowLog.push(o); };
+      snap("start"); new MutationObserver(() => snap("mutation")).observe(document.body, { subtree: true, childList: true, attributes: true });
+      w.__rowMark = (why: string) => { w.__rowLog.push({ at: Math.round(performance.now() - t0), why }); };
+    }, pane);
+    const dumpRow = async (why: string) => console.log("ROWLOG " + why + " " + JSON.stringify(await page.evaluate(() => (window as any).__rowLog)));
+    await page.evaluate(() => (window as any).__rowMark("hover"));
     await root.hover();
-    await page.locator(`[data-task-record="${pane}"]`).click();
+    try { await page.locator(`[data-task-record="${pane}"]`).click({ timeout: 15_000 }); } catch (error) { await dumpRow("FAILED"); throw error; }
+    await page.evaluate(() => (window as any).__rowMark("clicked"));
+    await dumpRow("OK");
+    // Also at the end of the test: transitions after the click.
+    (globalThis as any).__dumpEnd = dumpRow;
     // The record opens in the lane's 보기 slot (PRD sidebar-task-lens B15).
     const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
     await expect(record.locator("[data-record-flow]")).toHaveCount(1, { timeout: 45_000 });
@@ -130,6 +145,7 @@ test("@platform session records by goal flow, ended work and search render in bo
       await page.keyboard.press("Escape");
       await captureElectronWindow(app, `record-ended-${theme}`, { ...fixtureIdentity, theme, tools: await page.locator("[data-lane-frame]").boundingBox() });
     }
+    await (globalThis as any).__dumpEnd?.("END");
   } catch (error) { failures.push(error); }
   await finishNative(failures, [["close the app", () => app?.close()], ["stop the stack", () => stack.stop()]]);
 });
