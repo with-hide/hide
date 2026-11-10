@@ -1253,6 +1253,7 @@ impl Run for Fixture {
             self.root.join("cleanup-confirmed"),
             "all owned process trees ended\n",
         )?;
+        fs::copy(self.root.join("hided.log"), self.root.with_extension("probe.jsonl"))?;
         Ok(())
     }
 

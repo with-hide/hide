@@ -1178,6 +1178,9 @@ fn answer_bootstrap(
     if let Some(request) = &parsed
         && let Some(hook) = &request.hook
     {
+        let probe_started = Instant::now();
+        let mark = |stage: &str| hide_core::diagnostic!(json!({"component":"hook_probe","kind":"local.stage","request_id":hook.request_id,"stage":stage,"elapsed_ms":probe_started.elapsed().as_millis(),"at_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|value|value.as_millis())}));
+        mark("accepted");
         let result = (|| {
             if line.len() > hide_node_link::panes::HOOK_REQUEST_LIMIT {
                 return Err("invalid_request");
@@ -1186,6 +1189,7 @@ fn answer_bootstrap(
                 return Err("invalid_request");
             }
             let (attestation, _) = attest_bootstrap(peer, request, engine, core, own_install())?;
+            mark("attested");
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1193,8 +1197,10 @@ fn answer_bootstrap(
             };
             let (path, issued_new, token) =
                 registry.issue_with_token(&attestation, &request.nonce, port, holder)?;
+            mark("issued");
             let token = crate::hook_request::Token(registry, token, issued_new);
             let cap = registry.validate(&token.1, engine, core, None)?;
+            mark("validated");
             if let Some(named) = hook.token.as_deref()
                 && registry.get(named).is_some()
             {
@@ -1213,6 +1219,7 @@ fn answer_bootstrap(
                 _ => None,
             };
             let mut answer = crate::hook_request::answer(core, &cap, hook, executor, desktop);
+            mark("answer_end");
             install::stamp(&mut answer, own_install());
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");
@@ -1242,6 +1249,7 @@ fn answer_bootstrap(
         {
             token.keep();
         }
+        mark("written");
         return;
     }
     let result = read
