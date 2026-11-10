@@ -40,12 +40,15 @@ fn apns(config: &hide_relay::config::ApnsConfig) -> Result<Apns, &'static str> {
         config.team_id.clone(),
         config.topic.clone(),
     )?;
-    let started = std::time::Instant::now();
-    let clock: hide_relay::apns::Clock = std::sync::Arc::new(move || started.elapsed());
     // No stand-in means Apple's own hosts, chosen per request from the
     // environment the phone named.
     let endpoint = config.endpoint.clone().unwrap_or_default();
-    Apns::new(key, endpoint, PushLimits::default(), clock)
+    Apns::new(
+        key,
+        endpoint,
+        PushLimits::default(),
+        hide_relay::apns::unix_clock(),
+    )
 }
 
 #[tokio::main]

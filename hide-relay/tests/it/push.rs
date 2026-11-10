@@ -2,6 +2,7 @@ use super::support::*;
 use hide_relay::limits::{MAX_CONCURRENT_PUSHES, PushLimits};
 use hide_relay_protocol::admission::{DeviceHello, DeviceKey, PushOutcome, Refusal, ServerMessage};
 use hyper::StatusCode;
+use std::sync::atomic::Ordering;
 
 /// The device token a test relay forwards, and the one Apple sees.
 const TOKEN: &str = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
@@ -157,48 +158,122 @@ async fn apple_s_answers_land_on_the_documented_outcome() {
     }
 }
 
+const MINUTE: u64 = 60_000;
+
+#[tokio::test]
+async fn one_provider_token_serves_every_push_until_it_is_fifty_minutes_old() {
+    let apple = Apple::start().await;
+    let key = TestKey::new();
+    let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    register_push(&mut device, &DeviceKey::from_seed(&[82; 32])).await;
+    let issued = fixture.unix.load(Ordering::SeqCst) / 1000;
+    for (id, advance) in [(1, 0), (2, 49 * MINUTE), (3, MINUTE)] {
+        fixture.unix.fetch_add(advance, Ordering::SeqCst);
+        let message = push_message(id, TOKEN, "collapse", &payload());
+        assert_eq!(
+            answer_push(&mut device, &message, id).await,
+            PushOutcome::Delivered
+        );
+    }
+    let requests = apple.wait_for(3).await;
+    let tokens: Vec<&str> = requests
+        .iter()
+        .map(|request| request.header("authorization").unwrap())
+        .collect();
+    // Apple reads `iat` as Unix time; the first token carries the clock's.
+    let (_, claims) = key.verify(tokens[0]);
+    assert_eq!(claims["iat"], issued);
+    assert_eq!(tokens[0], tokens[1], "reused at 49 minutes");
+    assert_ne!(tokens[1], tokens[2], "replaced at 50 minutes");
+    let (_, claims) = key.verify(tokens[2]);
+    assert_eq!(claims["iat"], issued + 50 * 60);
+    fixture.stop().await;
+}
+
 #[tokio::test]
 async fn an_expired_provider_token_is_signed_once_more_and_the_request_sent_once_more() {
-    // The one retry: Apple refuses the first token, the relay signs a new one
-    // and sends the same request again.
+    // The one retry: Apple refuses a token 21 minutes old, the relay signs a
+    // new one and sends the same request again.
     let apple = Apple::start().await;
-    apple.answer_next(StatusCode::FORBIDDEN, "ExpiredProviderToken");
     let key = TestKey::new();
     let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
     let mut device = fixture.socket("192.0.2.1").await;
     register_push(&mut device, &DeviceKey::from_seed(&[74; 32])).await;
-    let outcome = answer_push(
-        &mut device,
-        &push_message(1, TOKEN, "collapse", &payload()),
-        1,
-    )
-    .await;
-    assert_eq!(outcome, PushOutcome::Delivered);
-    let requests = apple.wait_for(2).await;
-    assert_eq!(requests.len(), 2, "one retry, no more");
-    let first = requests[0].header("authorization").unwrap();
-    let second = requests[1].header("authorization").unwrap();
-    assert_ne!(first, second, "the retry carries a newly signed token");
-    key.verify(second);
+    let first = push_message(1, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &first, 1).await,
+        PushOutcome::Delivered
+    );
+    fixture.unix.fetch_add(21 * MINUTE, Ordering::SeqCst);
+    apple.answer_next(StatusCode::FORBIDDEN, "ExpiredProviderToken");
+    let second = push_message(2, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &second, 2).await,
+        PushOutcome::Delivered
+    );
+    let requests = apple.wait_for(3).await;
+    assert_eq!(requests.len(), 3, "one retry, no more");
+    let refused = requests[1].header("authorization").unwrap();
+    let retried = requests[2].header("authorization").unwrap();
+    assert_eq!(requests[0].header("authorization").unwrap(), refused);
+    assert_ne!(refused, retried, "the retry carries a newly signed token");
+    key.verify(retried);
     fixture.stop().await;
 
     // A refusal that survives the retry is `unavailable`, still with only the
     // one retry.
     let apple = Apple::start().await;
-    apple.answer(StatusCode::FORBIDDEN, "ExpiredProviderToken");
     let key = TestKey::new();
     let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
     let mut device = fixture.socket("192.0.2.1").await;
     register_push(&mut device, &DeviceKey::from_seed(&[75; 32])).await;
-    let outcome = answer_push(
-        &mut device,
-        &push_message(1, TOKEN, "collapse", &payload()),
-        1,
-    )
-    .await;
-    assert_eq!(outcome, PushOutcome::Unavailable);
+    let first = push_message(1, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &first, 1).await,
+        PushOutcome::Delivered
+    );
+    fixture.unix.fetch_add(21 * MINUTE, Ordering::SeqCst);
+    apple.answer(StatusCode::FORBIDDEN, "ExpiredProviderToken");
+    let second = push_message(2, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &second, 2).await,
+        PushOutcome::Unavailable
+    );
+    assert_eq!(apple.wait_for(3).await.len(), 3, "one retry, no more");
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn a_token_younger_than_twenty_minutes_is_not_replaced_when_apple_calls_it_expired() {
+    // Apple refuses providers that replace their token more often than every
+    // 20 minutes, so a young token earns no retry.
+    let apple = Apple::start().await;
+    apple.answer(StatusCode::FORBIDDEN, "ExpiredProviderToken");
+    let key = TestKey::new();
+    let mut fixture = Fixture::pushing(PushLimits::default(), &apple, &key).await;
+    let mut device = fixture.socket("192.0.2.1").await;
+    register_push(&mut device, &DeviceKey::from_seed(&[83; 32])).await;
+    // The first send issues the token and Apple refuses it at once.
+    let message = push_message(1, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &message, 1).await,
+        PushOutcome::Unavailable
+    );
+    assert_eq!(apple.wait_for(1).await.len(), 1);
+    // At 19 minutes the same token is still too young to replace.
+    fixture.unix.fetch_add(19 * MINUTE, Ordering::SeqCst);
+    let message = push_message(2, TOKEN, "collapse", &payload());
+    assert_eq!(
+        answer_push(&mut device, &message, 2).await,
+        PushOutcome::Unavailable
+    );
     let requests = apple.wait_for(2).await;
-    assert_eq!(requests.len(), 2, "one retry, no more");
+    assert_eq!(requests.len(), 2, "no retry with a young token");
+    assert_eq!(
+        requests[0].header("authorization"),
+        requests[1].header("authorization")
+    );
     fixture.stop().await;
 }
 

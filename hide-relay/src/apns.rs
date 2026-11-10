@@ -2,7 +2,7 @@
 //! reusable HTTP/2 connection, and a fixed body built around the ciphertext
 //! hided sent. Nothing here is persisted: no token, no payload, no JWT
 //! (`docs/RELAY_PROTOCOL.md`, Push relay).
-use crate::limits::{PROVIDER_TOKEN_LIFETIME, PROVIDER_TOKEN_REFRESH, PushLimits};
+use crate::limits::{PROVIDER_TOKEN_MIN_AGE, PROVIDER_TOKEN_REFRESH, PushLimits};
 use hide_relay_protocol::admission::{PushEnvironment, PushOutcome, PushRequest};
 use http_body_util::{BodyExt, Full};
 use hyper::{Method, Request, StatusCode, body::Bytes, header::HeaderValue};
@@ -98,9 +98,19 @@ fn identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-' || byte == b'_'
 }
 
-/// A clock the relay supplies, so a test moves the provider token's schedule
-/// without waiting out 45 minutes.
+/// The time since the Unix epoch, which the relay supplies: Apple reads the
+/// provider token's `iat` and the notification's expiry against it, and a
+/// test moves the token's schedule with it instead of waiting out an hour.
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+/// The system's Unix time, the clock production runs on.
+pub fn unix_clock() -> Clock {
+    Arc::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+    })
+}
 
 pub struct Apns {
     key: ProviderKey,
@@ -108,7 +118,7 @@ pub struct Apns {
     endpoint: String,
     /// One token for every request, replaced on one schedule rather than
     /// minted per request (`PROVIDER_TOKEN_REFRESH`).
-    token: Mutex<SharedToken>,
+    token: Mutex<Option<SharedToken>>,
     concurrent: Arc<Semaphore>,
     timeout: Duration,
     clock: Clock,
@@ -117,7 +127,6 @@ pub struct Apns {
 struct SharedToken {
     value: String,
     issued: Duration,
-    replaced: Duration,
 }
 
 /// What one send produced, before the relay turns it into a result.
@@ -160,16 +169,11 @@ impl Apns {
             .http2_keep_alive_timeout(Duration::from_secs(20))
             .timer(hyper_util::rt::TokioTimer::new());
         let client = builder.build(connector);
-        let now = clock();
         Ok(Self {
             key,
             client,
             endpoint,
-            token: Mutex::new(SharedToken {
-                value: String::new(),
-                issued: now,
-                replaced: now,
-            }),
+            token: Mutex::new(None),
             concurrent: Arc::new(Semaphore::new(limits.concurrent)),
             timeout: limits.request_timeout,
             clock,
@@ -181,36 +185,44 @@ impl Apns {
         self.concurrent.clone().try_acquire_owned().ok()
     }
 
-    /// The provider token now, replaced only on the shared schedule. `iat`
-    /// comes from the uptime clock a test can move.
+    /// The provider token now: the shared one, replaced once it is
+    /// `PROVIDER_TOKEN_REFRESH` old.
     fn token(&self) -> Result<String, &'static str> {
         let now = (self.clock)();
         let mut shared = self.token.lock().unwrap_or_else(|error| error.into_inner());
-        if shared.value.is_empty()
-            || now.saturating_sub(shared.replaced) >= PROVIDER_TOKEN_REFRESH
-            || now.saturating_sub(shared.issued) >= PROVIDER_TOKEN_LIFETIME
-        {
-            shared.value = self.key.token(now.as_secs())?;
-            shared.issued = now;
-            shared.replaced = now;
+        match shared.as_ref() {
+            Some(token) if now.saturating_sub(token.issued) < PROVIDER_TOKEN_REFRESH => {
+                Ok(token.value.clone())
+            }
+            _ => self.issue(&mut shared, now),
         }
-        Ok(shared.value.clone())
     }
 
-    /// Replaces the shared token because Apple refused it, and only when the
-    /// refused one is still the shared one (another send may have already
-    /// replaced it).
-    fn renew_token(&self, refused: &str) -> Result<String, &'static str> {
+    /// A new token because Apple called `refused` expired, or `None` when the
+    /// shared one is younger than Apple lets a provider replace it
+    /// (TooManyProviderTokenUpdates). A token another send already replaced
+    /// is used as it is.
+    fn renew_token(&self, refused: &str) -> Result<Option<String>, &'static str> {
         let now = (self.clock)();
         let mut shared = self.token.lock().unwrap_or_else(|error| error.into_inner());
-        if shared.value == refused {
-            shared.value = self.key.token(now.as_secs())?;
-            shared.issued = now;
-            // A refusal is not the scheduled replacement, so the schedule
-            // waits a full interval from now before replacing it again.
-            shared.replaced = now;
+        match shared.as_ref() {
+            Some(token) if token.value != refused => Ok(Some(token.value.clone())),
+            Some(token) if now.saturating_sub(token.issued) < PROVIDER_TOKEN_MIN_AGE => Ok(None),
+            _ => self.issue(&mut shared, now).map(Some),
         }
-        Ok(shared.value.clone())
+    }
+
+    fn issue(
+        &self,
+        shared: &mut Option<SharedToken>,
+        now: Duration,
+    ) -> Result<String, &'static str> {
+        let value = self.key.token(now.as_secs())?;
+        *shared = Some(SharedToken {
+            value: value.clone(),
+            issued: now,
+        });
+        Ok(value)
     }
 
     /// The JSON body: a fixed envelope around the base64url ciphertext.
@@ -271,9 +283,16 @@ impl Apns {
         };
         if first.reason == "expired_token" {
             // The only retry in the relay: a token Apple expired is signed
-            // once more and the same request is sent once more.
+            // once more and the same request is sent once more, unless the
+            // token is too young to replace.
             let renewed = match self.renew_token(&token) {
-                Ok(renewed) => renewed,
+                Ok(Some(renewed)) => renewed,
+                Ok(None) => {
+                    return Sent {
+                        outcome: PushOutcome::Unavailable,
+                        reason: "expired_token_too_soon",
+                    };
+                }
                 Err(reason) => {
                     return Sent {
                         outcome: PushOutcome::Unavailable,
@@ -307,7 +326,7 @@ impl Apns {
             .header("apns-collapse-id", request.collapse.as_str())
             .header(
                 "apns-expiration",
-                (unix_now().saturating_add(EXPIRATION.as_secs())).to_string(),
+                ((self.clock)() + EXPIRATION).as_secs().to_string(),
             )
             .header("content-type", "application/json");
         let authorization = format!("bearer {token}");
@@ -318,26 +337,22 @@ impl Apns {
         let request = builder
             .body(Full::new(Bytes::copy_from_slice(body)))
             .map_err(|_| "apns_request_invalid")?;
-        let answer = tokio::time::timeout(self.timeout, self.client.request(request)).await;
-        let Ok(Ok(response)) = answer else {
+        // The answer and its body share the one deadline, so a stalled
+        // stream never holds a slot past it.
+        let answer = tokio::time::timeout(self.timeout, async {
+            let response = self.client.request(request).await.ok()?;
+            let status = response.status();
+            // Read the body only to let the connection reuse its stream;
+            // the reason is Apple's `reason` field, never free text.
+            let body = response.into_body().collect().await.ok()?.to_bytes();
+            Some((status, apple_reason(&body)))
+        })
+        .await;
+        let Ok(Some((status, reason))) = answer else {
             return Err("apns_unreachable");
-        };
-        let status = response.status();
-        // Read the body only to let the connection reuse its stream; the
-        // reason is Apple's `reason` field, never free text.
-        let reason = match response.into_body().collect().await {
-            Ok(body) => apple_reason(&body.to_bytes()),
-            Err(_) => "",
         };
         Ok(classify(status, reason))
     }
-}
-
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or(0)
 }
 
 /// Apple's reason string, from its small JSON body, and only ever one of the
@@ -393,7 +408,7 @@ mod tests {
             environment: PushEnvironment::Sandbox,
             token: "ab".repeat(32),
             collapse: "collapse".into(),
-            payload: "A".repeat(4000),
+            payload: "A".repeat(hide_relay_protocol::admission::MAX_CIPHERTEXT.div_ceil(3) * 4),
         };
         let body = Apns::body(&request).unwrap();
         assert_eq!(
@@ -404,12 +419,14 @@ mod tests {
             )
             .into_bytes()
         );
+        // The largest ciphertext the wire admits fits Apple's limit, and the
+        // relay's own check still refuses a body past it.
         assert!(body.len() <= MAX_BODY);
         let too_large = PushRequest {
-            payload: "A".repeat(4000),
+            payload: "A".repeat(MAX_BODY),
             ..request
         };
-        assert!(Apns::body(&too_large).is_ok());
+        assert_eq!(Apns::body(&too_large), Err("apns_body_too_large"));
     }
 
     #[test]

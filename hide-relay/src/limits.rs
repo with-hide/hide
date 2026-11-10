@@ -32,13 +32,12 @@ pub const PUSH_MINUTE: Duration = Duration::from_secs(60);
 /// Streams one HTTP/2 connection may carry at once.
 pub const MAX_CONCURRENT_PUSHES: usize = 32;
 pub const PUSH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// One shared provider token, replaced well inside Apple's 20-60 minute
-/// window for one that a client keeps (TooManyProviderTokenUpdates).
-pub const PROVIDER_TOKEN_LIFETIME: Duration = Duration::from_secs(50 * 60);
-/// The moment a shared token is replaced, so a request in flight never
-/// carries one Apple is about to refuse: Apple's floor is 20 minutes, and
-/// this is under the lifetime above.
-pub const PROVIDER_TOKEN_REFRESH: Duration = Duration::from_secs(45 * 60);
+/// One shared provider token, replaced at this age: inside Apple's hour, and
+/// past its 20-minute floor (TooManyProviderTokenUpdates).
+pub const PROVIDER_TOKEN_REFRESH: Duration = Duration::from_secs(50 * 60);
+/// The youngest token the relay replaces when Apple calls it expired; a
+/// younger one is answered `unavailable` instead of re-signed.
+pub const PROVIDER_TOKEN_MIN_AGE: Duration = Duration::from_secs(20 * 60);
 
 /// A push budget set lower than production for a test; an embedding may
 /// lower these, never remove or raise them.
@@ -74,13 +73,6 @@ impl PushLimits {
             && !self.request_timeout.is_zero()
             && self.request_timeout <= PUSH_REQUEST_TIMEOUT
     }
-}
-
-/// Every push budget at once: the wire's, and the document's.
-#[derive(Clone, Copy, Default)]
-pub struct Budgets {
-    pub relay: Limits,
-    pub push: PushLimits,
 }
 
 /// An embedding may lower the production budgets, never remove or raise them.

@@ -229,6 +229,9 @@ impl State {
         self.usage.retain(|room, usage| {
             self.rooms.contains_key(room) || now.saturating_sub(usage.started) < DAY
         });
+        // A room's push spending lives no longer than its byte record, so
+        // both are bounded by `room_records`.
+        self.pushes.retain(|room, _| self.usage.contains_key(room));
         if !self.usage.contains_key(&hello.room) && self.usage.len() >= self.limits.room_records {
             return Err(Rejection::cap(Refusal::ConnectionLimit, "room_records"));
         }
