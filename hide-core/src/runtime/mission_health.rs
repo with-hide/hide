@@ -749,6 +749,8 @@ impl Runtime {
                     mission.updated_at_unix_ms = now;
                     changed = true;
                 }
+                // Its letter, if still waiting, goes with it.
+                prune_attention_wakes(mission);
             }
             let mission = &self.missions.book.missions[index];
             let operator_waits: Vec<bool> = mission
