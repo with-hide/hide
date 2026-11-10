@@ -287,12 +287,13 @@ test("hosted push registers and removes only the device scope while keeping the 
     PushManager.prototype.subscribe = async () => ({ toJSON: () => ({ endpoint: "https://push.example/subscription", keys: { p256dh: "public", auth: "secret" } }) }) as PushSubscription;
   });
   await pair(page, relay);
+  // Notifications and the paired computers live in the Settings tab.
+  await page.locator('[data-phone-tab="settings"]').click();
   await page.getByRole("button", { name: "Turn on notifications", exact: true }).click();
   await expect(page.locator('[data-phone-notifications="enable"]')).toHaveCount(0);
   await expect.poll(() => relay.received.filter((frame) => frame.type === "push_subscription").length).toBe(1);
   const scopes = () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((worker) => new URL(worker.scope).pathname).sort());
   await expect.poll(scopes).toEqual(["/", `/push/${relay.pairing.room}/`]);
-  await page.getByRole("button", { name: relay.pairing.name, exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).click();
   await page.getByRole("button", { name: "Remove device", exact: true }).last().click();
   await expect(page).toHaveURL(relay.origin + "/");
@@ -308,6 +309,7 @@ for (const permission of ["denied", "unsupported"]) {
       else Object.defineProperty(Notification, "permission", { configurable: true, get: () => "denied" });
     }, permission);
     await pair(page, relay);
+    await page.locator('[data-phone-tab="settings"]').click();
     await expect(page.locator(`[data-phone-notifications="${permission === "denied" ? "denied" : "install_first"}"]`)).toBeVisible();
   });
 }
