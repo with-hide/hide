@@ -40,7 +40,7 @@ pub use reinforcement::words_digest;
 pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
 pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
-const SCHEMA_VERSION: i64 = 25;
+const SCHEMA_VERSION: i64 = 26;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -4561,6 +4561,14 @@ COMMIT;"#,
                 "component": "memory_store", "kind": "migration.planned_cards", "cards": marked,
             }));
         }
+        version = 25;
+    }
+    // Version 26 indexes a receipt's cards by card, so a card's deliveries
+    // (the list's per-card count, the promotion checks, a card's delete) are
+    // found without reading every receipt the store keeps (issue 2345). Only
+    // an index is added, so there is nothing a backup would restore.
+    if version == 25 {
+        migrate_version_twenty_five(connection)?;
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -4627,7 +4635,7 @@ fn migrate_version_twenty_four(connection: &Connection) -> Result<usize, MemoryE
                 connection.execute_batch("PRAGMA user_version=25;")?;
                 Ok(marked)
             }
-            SCHEMA_VERSION => Ok(0),
+            25..=SCHEMA_VERSION => Ok(0),
             found => Err(MemoryError::WrongSchema {
                 found,
                 expected: SCHEMA_VERSION,
@@ -4644,6 +4652,34 @@ fn migrate_version_twenty_four(connection: &Connection) -> Result<usize, MemoryE
             Err(error)
         }
     }
+}
+
+/// Indexes `injection_receipt_items` by card, unless another opener did
+/// while this one waited for the write lock. An index already there, as in a
+/// store first made at a later version, is kept.
+fn migrate_version_twenty_five(connection: &Connection) -> Result<(), MemoryError> {
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<(), MemoryError> {
+        let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match actual {
+            25 => Ok(connection.execute_batch(
+                "CREATE INDEX IF NOT EXISTS injection_receipt_items_item ON injection_receipt_items(item_id,receipt_id); PRAGMA user_version=26;",
+            )?),
+            SCHEMA_VERSION => Ok(()),
+            found => Err(MemoryError::WrongSchema {
+                found,
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT")?,
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 fn add_branch_decision(connection: &Connection) -> Result<(), MemoryError> {
@@ -5382,6 +5418,7 @@ CREATE TABLE injection_receipts(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REF
 CREATE INDEX injection_receipts_session ON injection_receipts(runtime,session_id,project_id);
 CREATE INDEX memory_sources_session ON memory_sources(provider,session_id);
 CREATE TABLE injection_receipt_items(receipt_id TEXT NOT NULL REFERENCES injection_receipts(id) ON DELETE CASCADE,item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,PRIMARY KEY(receipt_id,item_id));
+CREATE INDEX injection_receipt_items_item ON injection_receipt_items(item_id,receipt_id);
 CREATE TABLE analysis_calls(day INTEGER PRIMARY KEY,calls INTEGER NOT NULL,checks INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE card_promotions(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,state TEXT NOT NULL CHECK(state IN('dismissed','running','pr_open','merged','closed_unmerged','failed','outdated','building','unbuilt','kept','ready')),revision INTEGER NOT NULL,attempt INTEGER NOT NULL,agent_id TEXT,branch TEXT,pr_number INTEGER,target_path TEXT,started_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,failure TEXT,repository TEXT,building_branch TEXT);
 CREATE TABLE card_comparisons(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,data TEXT NOT NULL);
@@ -11405,6 +11442,66 @@ PRAGMA user_version=14;"#,
                 .lifecycle,
             MemoryLifecycle::Active,
             "the plan card stays for the agents that build it later"
+        );
+    }
+
+    #[test]
+    fn a_version_twenty_five_store_counts_each_cards_deliveries_from_its_own_receipts() {
+        let (temp, mut store, project) = store();
+        let path = temp.path().join("memory.sqlite3");
+        store
+            .apply_candidates(
+                &batch(&project, "b1", "h1"),
+                &[
+                    candidate("Keep receipt provenance", CandidateRelation::New),
+                    candidate("Run nextest before a merge", CandidateRelation::New),
+                ],
+            )
+            .unwrap();
+        for (runtime, session, turn, key, at) in [
+            ("codex", "session-1", "event:1", "m1@1", 1_000),
+            ("claude", "session-2", "event:2", "m1@1", 2_000),
+            ("codex", "session-1", "event:3", "m2@1", 3_000),
+        ] {
+            store
+                .record_receipt(&project, runtime, session, turn, key, at)
+                .unwrap();
+        }
+        store
+            .connection
+            .execute_batch("DROP INDEX injection_receipt_items_item; PRAGMA user_version=25;")
+            .unwrap();
+        drop(store);
+
+        let store = MemoryStore::open(&path).unwrap();
+        let mut counts: Vec<(u64, usize)> = store
+            .list_memories(&project)
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.number, item.provided_session_count))
+            .collect();
+        counts.sort_unstable();
+        assert_eq!(counts, [(1, 2), (2, 1)]);
+        // The list asks once per card; reading every receipt for each one
+        // took 18 s on a Project of 700 cards and 76k receipt rows.
+        let plan: Vec<String> = store
+            .connection
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {ITEM_SELECT} WHERE i.project_id=?1 AND i.lifecycle='active' ORDER BY i.updated_at_ms DESC,i.id"
+            ))
+            .unwrap()
+            .query_map([&project], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step
+                .starts_with("SEARCH rii USING COVERING INDEX injection_receipt_items_item")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN rii")),
+            "{plan:#?}"
         );
     }
 
