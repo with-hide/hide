@@ -253,6 +253,23 @@ function openLoaded(target: string, expected: Record<string, unknown> = { ok: tr
   });
 }
 
+/**
+ * A page opened from the operator's pane and then waited for as the state it
+ * is in, not through the CLI's `--wait`: that wait gives up after its own
+ * 10 seconds whatever the page is doing, and the first page of a new profile on
+ * a Windows runner has taken longer (with-hide/hide-private#135, #171), which
+ * says nothing about the width a test of the lane is about. The test's own
+ * limit bounds this wait, and the dump says where the load stood if it ends it.
+ */
+async function openUntilLoaded(target: string): Promise<void> {
+  expect(await openFromCli(target)).toMatchObject({ ok: true });
+  await dumpOnFailure("first page load", loadSides, async () => {
+    await expect
+      .poll(async () => (await views()).some((view) => view.url === target) && (await inPage<string>(target, "document.readyState")) === "complete", { timeout: 120_000 })
+      .toBe(true);
+  });
+}
+
 /** Waits until the view showing `url` covers its display's slot as the shell lays it out now. */
 async function expectOnSlot(page: Page, url: string, displayId: string): Promise<void> {
   await expect
@@ -1250,7 +1267,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
 
   // A page opened from the operator's pane comes in front and the lane
   // widens to 900, so the site draws its desktop layout (B1).
-  await openLoaded(site);
+  await openUntilLoaded(site);
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
   await expect.poll(() => storedLaneWidth()).toBe(900);
   // Only the documents widen; the width Memory and the other panel tools share is left as it was.
@@ -1302,7 +1319,7 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   // What Agent Views keeps beside the documents and the tool column (B2).
   const room = async () => body - 8 - ((await tool.count()) ? Math.round((await tool.boundingBox())!.width) + 8 : 0) - 480;
 
-  await openLoaded(`${origin}/site.html`);
+  await openUntilLoaded(`${origin}/site.html`);
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
 
@@ -1402,7 +1419,7 @@ test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, 
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const site = `${origin}/site.html`;
-  await openLoaded(site);
+  await openUntilLoaded(site);
   const displayId = await displayIdOf(page, "Site");
   const toolbar = page.locator(`[data-browser-display="${displayId}"]`);
   const button = toolbar.locator("[data-browser-device-button]");
