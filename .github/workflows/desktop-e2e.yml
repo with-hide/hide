@@ -153,6 +153,7 @@ jobs:
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
+          args+=(--repeat-each 10 --retries 0)
           if [ "${SHARD#*/}" -gt 1 ]; then
             # Dealt and checked as in web-e2e.yml. `--no-deps`: Playwright runs
             # a project's dependencies whole, so a shard holding one

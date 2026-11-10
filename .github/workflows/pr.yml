@@ -958,7 +958,8 @@ jobs:
       # step cap. Two plan about 504 s each, under half the cap, for one more
       # job of about 4.5 minutes of setup on the five macOS runners; a third
       # would hold three of the five for the same suite (docs/TESTING.md).
-      shards: 2
+      shards: 1
+      grep: "project-settings\\.spec|agent-handoff\\.spec"
 
   # The Electron app on Windows: the desktop tests tagged `@platform` (what
   # the host does differently there: `hide connect` starting hided, the
