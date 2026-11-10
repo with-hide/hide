@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchedProfileName, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
-import type { AgentRow, Device, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
+import { heldLettersText, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { forgetCatalogs } from "./agentPicker";
+import type { AgentRow, BackgroundAi, Device, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, PullRequest, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -94,34 +95,55 @@ describe("the numbers and words", () => {
 
   it("names what runs from the pane's launch alone, and the plan's words marked planned before a launch (B29)", () => {
     const words = { auto: "auto", defaultModel: "default model" };
-    const plan = { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: false };
+    const plan = { model: "gpt-6-astra", effort: "high", effort_auto: false };
     const launch = (launch_model: string | null, launch_effort: string | null) => ({ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model, launch_effort });
     // Before Hide recorded a launch: the plan's words, marked planned; `auto` for an effort the Conductor chooses; never the agent.
-    expect(runWords(null, plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
-    expect(runWords(null, { agent: "claude", model: "opus", effort_auto: true }, words)).toEqual({ words: "opus·auto", planned: true });
-    expect(runWords(null, { agent: "opencode" }, words)).toBeNull();
+    expect(runWords(null, plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true, profile: null });
+    expect(runWords(null, { model: "opus", effort_auto: true }, words)).toEqual({ words: "opus·auto", planned: true, profile: null });
+    expect(runWords(null, {}, words)).toBeNull();
     expect(runWords(null, null, words)).toBeNull();
     // A launch speaks alone: its effort over a different planned one, its model over the plan's.
-    expect(runWords(launch("gpt-6-sol", "low"), plan, words)).toEqual({ words: "gpt-6-sol·low", planned: false });
+    expect(runWords(launch("gpt-6-sol", "low"), plan, words)).toEqual({ words: "gpt-6-sol·low", planned: false, profile: null });
     // A launch that set no effort shows none, and one that set no model ran the CLI's default; the plan fills neither.
-    expect(runWords(launch("gpt-6-sol", null), plan, words)).toEqual({ words: "gpt-6-sol", planned: false });
-    expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false });
+    expect(runWords(launch("gpt-6-sol", null), plan, words)).toEqual({ words: "gpt-6-sol", planned: false, profile: null });
+    expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false, profile: null });
     // A session with neither value carries no proven launch: the plan's words stay marked planned.
-    expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
+    expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true, profile: null });
   });
 
-  it("names the profile a worker started with before its model, by its name now, and the built-in default as before (agent-profiles-phase2 B1, B12, B23)", () => {
+  it("names the item a worker started with or is planned as, its profile before its model, and the built-in default as before (agent-profiles-phase2 B1, B12, B23)", () => {
     const words = { auto: "auto", defaultModel: "default model" };
     const launch = (profile: string | null, launch_model: string | null) => ({ launch_model, launch_effort: null, profile });
-    expect(runWords(launch("work", "opus"), null, words)).toEqual({ words: "work · opus", planned: false });
-    expect(runWords(launch("work", null), { agent: "claude", model: "opus" }, words)).toEqual({ words: "work · default model", planned: false });
-    expect(runWords(launch(null, "opus"), null, words)).toEqual({ words: "opus", planned: false });
-    const devices = [{ id: "mac", kind: "local", kit: { profiles: { state: "listed", version: 2, profiles: [{ id: "p-work", kind: "claude-code", name: "company" }], defaults: {} } } }] as unknown as Device[];
-    const started = { agent_id: "agent-2", agent: "claude", profile: { id: "p-work", name: "work" } };
-    expect(launchedProfileName(devices, "mac", started)).toBe("company");
-    expect(launchedProfileName(devices, "mac", { ...started, profile: { id: "p-gone", name: "old" } })).toBe("old");
-    expect(launchedProfileName(devices, "mini", started)).toBe("work");
-    expect(launchedProfileName(devices, "mac", { agent_id: "agent-2", agent: "claude" })).toBeNull();
+    expect(runWords(launch("work", "opus"), null, words)).toEqual({ words: "work · opus", planned: false, profile: "work" });
+    expect(runWords(launch("work", null), { model: "opus" }, words)).toEqual({ words: "work · default model", planned: false, profile: "work" });
+    expect(runWords(launch(null, "opus"), null, words)).toEqual({ words: "opus", planned: false, profile: null });
+    // A planned item reads as a launched one does, marked planned.
+    expect(runWords(null, { model: "deepseek-v4", effort: "high", profileName: "gateway" }, words)).toEqual({ words: "gateway · deepseek-v4·high", planned: true, profile: "gateway" });
+    expect(runWords(null, { profileName: "gateway" }, words)).toEqual({ words: "gateway", planned: true, profile: "gateway" });
+  });
+
+  it("reads an item's profile by its name now and its models by the names its own list shows, else as passed (agent-profiles-phase2 B12, B23)", () => {
+    forgetCatalogs();
+    const devices = [
+      { id: "mac", kind: "local", kit: { profiles: { state: "listed", version: 2, profiles: [{ id: "p-gw", kind: "claude-code", name: "gateway", version: 3 }], defaults: {} } } },
+      { id: "mini", kind: "remote", kit: { profiles: { state: "listed", version: 1, profiles: [{ id: "p-gw", kind: "claude-code", name: "gateway", version: 3 }], defaults: {} } } },
+    ] as unknown as Device[];
+    const ai = { providers: [{ agent: "claude-code", state: "ready", models: ["opus", "sonnet"], model_labels: { opus: "Opus" }, profile_models: [{ profile: "p-gw", version: 3, models: ["opus"], model_labels: { opus: "deepseek-v4-flash" }, models_fixed: false, models_unavailable_reason: null }] }] } as unknown as BackgroundAi;
+    const names = (machine: string, profile: { id?: string; name?: string } | null, lists: BackgroundAi | undefined = ai) => {
+      const item = itemNames(devices, lists, machine, "claude", profile, "없는 프로필");
+      return [item.profile, item.model("opus"), item.model("sonnet")];
+    };
+    // The built-in default names no profile and its models by the agent's own list.
+    expect(names("mac", null)).toEqual([null, "Opus", "sonnet"]);
+    // A profile by its id or by its name reads by its name now and its own list's names.
+    expect(names("mac", { id: "p-gw", name: "old" })).toEqual(["gateway", "deepseek-v4-flash", "sonnet"]);
+    expect(names("mac", { name: "gateway" })).toEqual(["gateway", "deepseek-v4-flash", "sonnet"]);
+    // A launch whose profile is gone keeps the name it started with; a planned one says it is gone; neither reads another list.
+    expect(names("mac", { id: "p-old", name: "old" })).toEqual(["old", "opus", "sonnet"]);
+    expect(names("mac", { id: "p-old" })).toEqual(["없는 프로필", "opus", "sonnet"]);
+    // Another machine's lists are not read here, and no list read yet leaves each model as passed.
+    expect(names("mini", { id: "p-gw" })).toEqual(["gateway", "opus", "sonnet"]);
+    expect(names("mac", { id: "p-gw" }, { providers: [{ agent: "claude-code", state: "ready", models: ["opus"] }] } as unknown as BackgroundAi)).toEqual(["gateway", "opus", "sonnet"]);
   });
 
   it("finds a pane's launch on its machine, else on the mission's", () => {

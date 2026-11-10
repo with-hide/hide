@@ -1542,8 +1542,8 @@ export type MissionEventsSnapshot = { mission: string | null; events: MissionEve
 /** The brief of the node whose folded box the operator opened (`mission_brief`): one node at a time, `text` null when the node holds none. */
 export type MissionBriefSnapshot = { mission: string | null; node: string | null; text: string | null };
 
-/** The agent a node or a candidate names, with its model and effort. */
-export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
+/** The agent item a node's plan or a checker names, with its model and effort: `profile` is a profile's id on the mission's machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08). */
+export type MissionWorker = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; effort_auto?: boolean };
 
 /** The agent item, model and effort Hide started a node's worker with (`missions::NodeLaunch`): `profile` is the profile it started with, by its id on the worker's machine and its name then; none for the built-in default. */
 export type MissionNodeLaunch = { agent_id: string; agent: string; profile?: { id: string; name: string } | null; model?: string | null; effort?: string | null };

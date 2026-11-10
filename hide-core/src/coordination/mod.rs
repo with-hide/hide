@@ -61,6 +61,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "card_not_processed"
             | "mission_cap_reached"
             | "mission_candidate_refused"
+            | "mission_profile_unknown"
             | "mission_conducted"
             | "mission_criteria_missing"
             | "mission_criteria_too_many"

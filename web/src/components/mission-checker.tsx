@@ -73,7 +73,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
   const [open, setOpen] = useState(false);
   const state = checkerState(checker);
   const status = useCheckerStatus(kind, checker);
-  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
+  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker, checker.worker.agent);
   const device = useMissionDeviceName(checker.machine);
   const { row, session } = useCheckerWays(checker);
   const name = agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent;
@@ -88,7 +88,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
       </Hint>
       <PopoverContent align="start" className="flex flex-col gap-sm text-caption" data-checker-popover={checker.worker.agent}>
         <div className="flex min-w-0 items-center gap-xs text-body">
-          <AgentMark kind={checker.worker.agent} />
+          <AgentMark kind={checker.worker.agent} profile={run?.profile} />
           <span className="shrink-0 font-semibold">{name}</span>
           {run ? <RunText run={run} className="min-w-0 flex-1 text-caption text-muted-foreground" /> : <span className="flex-1" />}
         </div>

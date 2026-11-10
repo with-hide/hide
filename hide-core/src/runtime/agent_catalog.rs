@@ -226,15 +226,7 @@ impl Runtime {
                 (Some(provider), Some(profile)) => Models::of_profile(provider, profile),
             }
         };
-        // The model the agent runs with when asked for none, as Hide AI
-        // measured it (the snapshot's `model` before any read or choice), so
-        // a plan can name one while the list is unread; null for an agent
-        // whose own CLI keeps that default.
-        let cli_default_model = takes_model
-            .then(|| hide_ai::ProviderId::for_agent(adapter.id))
-            .flatten()
-            .map(|provider| provider.default_model())
-            .filter(|model| !model.is_empty());
+        let cli_default_model = crate::missions::cli_default_model(adapter.id);
         let (signed_in, weekly) = match item.profile {
             None => (
                 provider.map(|provider| provider.state != "needs_login"),
@@ -310,6 +302,40 @@ impl Runtime {
                     .profile_weekly_reading(adapter.engine_kind, &other.id, now_s)
             })
             .map(|(used, resets_s)| (used, Some(resets_s.saturating_mul(1000))))
+    }
+
+    /// The name the agent shows for `model` in the list of its item
+    /// `profile` on `machine`, as the catalog offers that list: the
+    /// profile's own at its version now, else its agent's when the profile's
+    /// read failed. None while the list is unread, on another machine than
+    /// the core's own (whose lists Hide AI does not read), and for a model
+    /// the list does not name otherwise, which is then shown as it is.
+    pub(crate) fn model_label(
+        &self,
+        machine: &str,
+        agent: &str,
+        profile: &hide_agent_adapter::ProfileId,
+        model: &str,
+    ) -> Option<String> {
+        if machine != self.node.as_str() {
+            return None;
+        }
+        let adapter = hide_agent_adapter::adapter(agent)?;
+        let provider = self.catalog_provider(adapter.id)?;
+        let labels = if profile.is_default() {
+            &provider.model_labels
+        } else {
+            let listed = self
+                .machine_profiles(machine)?
+                .profiles
+                .iter()
+                .find(|row| row.kind == adapter.id && row.id == profile.0)?;
+            match read_for(provider, listed)? {
+                own if !own.models.is_empty() => &own.model_labels,
+                _ => &provider.model_labels,
+            }
+        };
+        labels.get(model).filter(|label| *label != model).cloned()
     }
 
     /// What `machine`'s kit last reported of the agent `id` (its switch and

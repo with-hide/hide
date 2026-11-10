@@ -39,8 +39,8 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const row = useMemo(() => agentsByPane(allAgents(local, remote)).get(mission.conductor.pane_id) ?? null, [local, remote, mission.conductor.pane_id]);
   const state = conductorState(mission, row);
-  // Only the launch Hide proved for the Conductor's pane names its model; the plan names none for it.
-  const run = useRunWords(mission, mission.conductor.pane_id, mission.device_id, null);
+  // Only the launch Hide proved for the Conductor's pane names its model, by the name its item's list shows; the plan names none for it.
+  const run = useRunWords(mission, mission.conductor.pane_id, mission.device_id, null, mission.conductor.agent_kind);
   if (!state) return null;
   const frame = OWNER_ROW;
   if (state === "gone") {
@@ -56,7 +56,7 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
   const terminal = t("mission.toTerminal");
   return (
     <div className={frame} data-mission-conductor={state}>
-      <AgentMark kind={mission.conductor.agent_kind} />
+      <AgentMark kind={mission.conductor.agent_kind} profile={row?.profile} />
       <span className="shrink-0 font-semibold">{t("mission.conductor")}</span>
       <span className="flex min-w-0 flex-1 items-center gap-xs text-caption text-muted-foreground">
         {run ? <RunText run={run} className="min-w-0 shrink" /> : null}

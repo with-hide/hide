@@ -1,6 +1,6 @@
 import { ChevronRightIcon, GitBranchIcon } from "lucide-react";
 import type { TFunction } from "i18next";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
 import { DeviceChip } from "./components/device-chip";
 import { formatElapsed } from "./components/elapsed";
@@ -9,7 +9,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, launchedProfileName, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, itemNames, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type ItemNames, type NodeLook, type NodeResult, type RunProfile } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { machineName, windowDeviceId } from "./screenMachine";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
@@ -114,13 +114,13 @@ const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed
 export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind: "review" | "verify"; checker: MissionChecker }) {
   const { t } = useInterfaceTranslation();
   const state = checkerState(checker);
-  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
+  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker, checker.worker.agent);
   const device = useMissionDeviceName(checker.machine);
   const status = state === "pass" || state === "fail" ? t(`mission.checker.${state}`) : t(`mission.checker.${state}.${kind}`);
   return (
     <span className="flex min-w-0 flex-col gap-xxs" data-node-checker={checker.worker.agent} data-checker-state={state}>
       <span className="flex min-w-0 items-center gap-xs">
-        <AgentMark kind={checker.worker.agent} />
+        <AgentMark kind={checker.worker.agent} profile={run?.profile} />
         {run ? <RunText run={run} className="flex-1" /> : <span className="flex-1" />}
         <span className={cn("shrink-0", CHECKER_TONE[state])}>
           {state === "pass" ? "✓ " : state === "fail" ? "✕ " : ""}
@@ -132,43 +132,69 @@ export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind:
   );
 }
 
-/** What runs in a pane: its words, the mark a plan's words carry, and the two as one line for a hover or a name. */
-export type RunLabel = { text: string; words: string; mark: string | null; from: "launch" | "plan" };
+/** What runs in a pane: its words, the mark a plan's words carry, the two as one line for a hover or a name, and the profile's name of the item that speaks. */
+export type RunLabel = { text: string; words: string; mark: string | null; from: "launch" | "plan"; profile: string | null };
+
+/** How a run's item reads on `machine` (`itemNames`): from the machine's profile list and the model lists the snapshot holds while a screen reads them. */
+export function useItemNames(machine: string | null | undefined, agent: string | null | undefined, profile: RunProfile | null): ItemNames {
+  const { t } = useInterfaceTranslation();
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const ai = useShellStore((s) => s.rest?.status?.background_ai);
+  const id = profile?.id ?? null;
+  const name = profile?.name ?? null;
+  return useMemo(() => itemNames(devices, ai, machine, agent, { id, name }, t("agentProfiles.itemGone")), [devices, ai, machine, agent, id, name, t]);
+}
+
+/** A planned worker's words as its item reads: its profile's name and its model's shown name. */
+function plannedRun(plan: MissionWorker | null | undefined, names: ItemNames) {
+  return plan ? { ...plan, model: plan.model ? names.model(plan.model) : null, profileName: names.profile } : null;
+}
 
 /**
  * What runs in a pane as Hide launched it, else what the plan asked marked
- * planned (B29); `from` says which, for a reader that tells them apart.
+ * planned (B29); `from` says which, for a reader that tells them apart. The
+ * launch names the profile the pane's agent runs with and its model by the
+ * name that item's list shows; the plan names its own item the same way.
  */
-export function useRunWords(mission: Mission, paneId: string | null | undefined, machine: string | null | undefined, plan: MissionWorker | null | undefined): RunLabel | null {
+export function useRunWords(mission: Mission, paneId: string | null | undefined, machine: string | null | undefined, plan: MissionWorker | null | undefined, agent: string | null | undefined): RunLabel | null {
   const { t } = useInterfaceTranslation();
-  const launch = useShellStore((s) => launchSession(s.rest, mission, paneId, machine));
-  return runLabel(runWords(launch, plan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
+  const session = useShellStore((s) => launchSession(s.rest, mission, paneId, machine));
+  const runs = useShellStore((s) => (paneId ? agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId)?.profile ?? null : null));
+  const ran = useItemNames(machine ?? mission.device_id, agent, runs ? { name: runs } : null);
+  const planned = useItemNames(mission.device_id, plan?.agent, plan?.profile ? { id: plan.profile } : null);
+  // Neither value is no proof of a launch, so a profile alone does not make one speak.
+  const proven = session && (session.launch_model || session.launch_effort);
+  const launch = proven ? { launch_model: session.launch_model ? ran.model(session.launch_model) : null, launch_effort: session.launch_effort, profile: ran.profile } : null;
+  return runLabel(runWords(launch, plannedRun(plan, planned), { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
 }
 
 function runLabel(run: ReturnType<typeof runWords>, t: TFunction<"translation">): RunLabel | null {
   if (!run) return null;
   return run.planned
-    ? { text: t("mission.planned", { words: run.words }), words: run.words, mark: t("mission.plannedMark"), from: "plan" }
-    : { text: run.words, words: run.words, mark: null, from: "launch" };
+    ? { text: t("mission.planned", { words: run.words }), words: run.words, mark: t("mission.plannedMark"), from: "plan", profile: run.profile }
+    : { text: run.words, words: run.words, mark: null, from: "launch", profile: run.profile };
 }
 
 /**
  * A node's worker as its card and its panel's head draw it (operator,
- * 2026-11-01): the agent, model and effort the core kept on the node for its
- * current worker (`launched`, proven by that worker's own conversation, so
- * it outlives the pane and is never another session's); without it, the
+ * 2026-11-01): the agent item, model and effort the core kept on the node for
+ * its current worker (`launched`, proven by that worker's own conversation,
+ * so it outlives the pane and is never another session's); without it, the
  * plan's, marked planned, while the node has not finished; otherwise
- * nothing, so finished work never shows the plan as what ran.
+ * nothing, so finished work never shows the plan as what ran. Either names
+ * its profile and its model by the name that item's list shows (PRD
+ * agent-profiles-phase2 B12).
  */
-export function useNodeRun(node: MissionNode): { run: RunLabel; agent: string | null; profile: string | null } | null {
+export function useNodeRun(mission: Mission, node: MissionNode): { run: RunLabel; agent: string | null } | null {
   const { t } = useInterfaceTranslation();
   const launched = node.launched ?? null;
-  const profile = useShellStore((s) => launchedProfileName(s.rest?.navigator?.devices, node.machine, launched));
+  const ran = useItemNames(node.machine ?? mission.device_id, launched?.agent, launched?.profile ?? null);
+  const plan = useItemNames(mission.device_id, node.worker?.agent, node.worker?.profile ? { id: node.worker.profile } : null);
   const planned = node.status !== "done" && node.status !== "dropped";
-  const launch = launched ? { launch_model: launched.model ?? null, launch_effort: launched.effort ?? null, profile } : null;
-  const run = runLabel(runWords(launch, planned ? node.worker : null, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
+  const launch = launched ? { launch_model: launched.model ? ran.model(launched.model) : null, launch_effort: launched.effort ?? null, profile: ran.profile } : null;
+  const run = runLabel(runWords(launch, planned ? plannedRun(node.worker, plan) : null, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") }), t);
   if (!run) return null;
-  return run.from === "launch" ? { run, agent: launched!.agent, profile } : { run, agent: node.worker?.agent ?? null, profile: null };
+  return { run, agent: run.from === "launch" ? launched!.agent : (node.worker?.agent ?? null) };
 }
 
 /** A run's words, which truncate, before its planned mark, which never does, so a planned model never reads as launched. */

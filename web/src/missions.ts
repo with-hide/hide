@@ -6,14 +6,15 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
+import { catalogFor, modelLabel, PROVIDER_KINDS, takesModel, type ProviderKind } from "./agentPicker";
+import { agentAdapter } from "./agentAdapters";
 import { listedProfiles } from "./agentProfiles";
 import { agentsByPane } from "./paneAgents";
 import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodeLaunch, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWork, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -100,8 +101,8 @@ export function launchSession(rest: SnapshotRest | null | undefined, mission: Mi
 
 type LaunchSession = NonNullable<SnapshotRest["overview_graph"]>["sessions"][number];
 
-/** What runs in a pane or what the plan asked, and which of the two it is. */
-export type RunWords = { words: string; planned: boolean };
+/** What runs in a pane or what the plan asked, which of the two it is, and the profile's name of the one that speaks (null for the built-in default). */
+export type RunWords = { words: string; planned: boolean; profile: string | null };
 
 /**
  * A worker or a checker as the panel and a checker strip name it (B29),
@@ -113,29 +114,45 @@ export type RunWords = { words: string; planned: boolean };
  * model and effort are shown marked as planned (`자동` for an effort the
  * Conductor will choose), or nothing.
  */
-export function runWords(launch: (Pick<LaunchSession, "launch_model" | "launch_effort"> & { profile?: string | null }) | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
+export function runWords(launch: (Pick<LaunchSession, "launch_model" | "launch_effort"> & { profile?: string | null }) | null, plan: (Pick<MissionWorker, "model" | "effort" | "effort_auto"> & { profileName?: string | null }) | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
   if (launch && (launch.profile || launch.launch_model || launch.launch_effort)) {
     // A profile's name leads, so the item reads before its model (PRD agent-profiles-phase2 B12); the built-in default names none.
     const choice = [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·");
-    return { words: launch.profile ? `${launch.profile} · ${choice}` : choice, planned: false };
+    return { words: launch.profile ? `${launch.profile} · ${choice}` : choice, planned: false, profile: launch.profile ?? null };
   }
   if (!plan) return null;
   const effort = plan.effort ?? (plan.effort_auto ? words.auto : null);
   const planned = [plan.model, effort].filter(Boolean).join("·");
-  return planned ? { words: planned, planned: true } : null;
+  // The planned item reads as a launched one does, its profile's name first (PRD agent-profiles-phase2 B12).
+  const shown = plan.profileName ? [plan.profileName, planned].filter(Boolean).join(" · ") : planned;
+  return shown ? { words: shown, planned: true, profile: plan.profileName ?? null } : null;
 }
 
+/** A run's profile as its record names it: by id (a node's plan or launch, with the name it started with), or by name alone (a pane's row). */
+export type RunProfile = { id?: string | null; name?: string | null };
+
+/** How a run's item reads: its profile's name, null for the built-in default, and each model by the name its agent shows. */
+export type ItemNames = { profile: string | null; model: (model: string) => string };
+
 /**
- * The name of the profile a node's worker started with, as the operator
- * reads it now (PRD agent-profiles-phase2 B12, B23): its machine's profile of
- * that id while the machine lists it, so a rename shows, else the name it
- * started with; null for the built-in default.
+ * How a run's item reads on `machine` (PRD agent-profiles-phase2 B12, B23):
+ * its profile by the name the machine lists for it now, so a rename shows,
+ * else the name it started with, else `gone` (a planned profile the machine
+ * no longer lists); none for the built-in default. Each model reads by the
+ * name the item's own list shows (`catalogFor`, the list Settings and the
+ * start panel show), and as passed while that list is not read, where it
+ * does not name the model, for a profile the machine no longer lists, and on
+ * another machine than this one, whose lists Hide AI does not read.
  */
-export function launchedProfileName(devices: readonly Device[] | undefined, machine: string | null, launch: MissionNodeLaunch | null | undefined): string | null {
-  const profile = launch?.profile;
-  if (!profile) return null;
-  const listed = listedProfiles(devices?.find((device) => device.id === machine));
-  return listed?.profiles.find((row) => row.id === profile.id)?.name ?? profile.name;
+export function itemNames(devices: readonly Device[] | undefined, ai: BackgroundAi | undefined, machine: string | null | undefined, agent: string | null | undefined, profile: RunProfile | null, gone: string): ItemNames {
+  const adapter = agent ? agentAdapter(agent) : undefined;
+  const device = devices?.find((row) => row.id === machine);
+  const named = profile?.id || profile?.name ? profile : null;
+  const listed = named ? listedProfiles(device)?.profiles.find((row) => (named.id ? row.id === named.id : row.kind === adapter?.id && row.name === named.name)) ?? null : null;
+  const kind = adapter?.can_start ? (adapter.herdr_kind as ProviderKind) : null;
+  const local = device !== undefined && device.kind !== "remote";
+  const catalog = local && kind && takesModel(kind) && (!named || listed) ? catalogFor(ai, kind, listed ? { id: listed.id, version: listed.version } : null) : null;
+  return { profile: named ? (listed?.name ?? named.name ?? gone) : null, model: (model) => modelLabel(catalog, model) };
 }
 
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */

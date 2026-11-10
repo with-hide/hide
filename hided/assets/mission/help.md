@@ -79,7 +79,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
      "criteria": ["the lens keeps its filter after a reload", "a test fails without the fix"],
      "steps": ["Choose where the filter is kept", "Keep it in the core", "Restore it on the screen after a reload", "A test that fails without the fix, then the PR"],
      "checks": [{"as": "review", "by": [{"agent": "claude", "model": "opus", "effort": "high"}]}],
-     "worker": {"agent": "codex", "model": "gpt-6-astra", "effort": "medium"}},
+     "worker": {"agent": "codex", "profile": "work", "model": "gpt-6-astra", "effort": "medium"}},
     {"key": "together", "title": "check together", "kind": "verify", "depends_on": ["fix-1487"],
      "criteria": ["both screens load with the new API"]}
   ]
@@ -116,8 +116,11 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.
   Send no effort to an agent that takes none (`hide agent catalog` lists `efforts`).
   If no candidate can run, say so in the plan.
-  Start each worker with `--profile` set to its candidate's `profile`, `default` included: a spawn without `--profile` runs with your own profile when the worker is your kind of agent, else the project's choice, and Hide judges the profile the worker would actually start with.
-  Hide refuses a worker that is none of the candidates (`mission_candidate_refused`, naming the item it would have started): another agent or another profile of it, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
+  A worker or checker of another profile than its agent's built-in default names it as `profile`, its candidate's `profile` value (`hide agent catalog` lists them); leaving it out, or `default`, is the built-in default, and the map shows each worker as that item with its model's name on that item.
+  Hide refuses a plan whose node not yet started names a profile the machine does not have for that agent (`mission_profile_unknown`), or has a worker or checker that is none of the candidates (`mission_candidate_refused`, naming the node and the item); a model a candidate keeps as the CLI's default is planned as the catalog's `cli_default_model`.
+  A node's worker spawned without `--profile` starts as its plan names it, the built-in default included, rather than with your own profile; a checker, and any other spawn, without `--profile` runs with your own profile when it is your kind of agent, else the project's choice, so start each with `--profile` set to its candidate's `profile`, `default` included.
+  A node that started keeps the profiles it was planned with, so a profile renamed or removed since does not refuse your replan, and the same spawn command asked again answers the same worker.
+  A `--profile` or `--model` other than the plan's is followed, and Hide judges the item the worker would actually start with: it refuses a worker that is none of the candidates (`mission_candidate_refused`, naming the item it would have started): another agent or another profile of it, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
 - Every node other than an outside one gets `steps`: three to five short lines of how its work goes, each something it delivers or checks (the core change, the screen, the tests, the pull request), in the operator's language, never the node's title restated and never research (at most 8 steps, each one line of at most 80 characters, otherwise `mission_steps_invalid` names the node).
   They show on the node's card as one bar cell per step and in its panel as a list before anyone has started, so the operator reads how each node will be worked when they read the plan.
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.

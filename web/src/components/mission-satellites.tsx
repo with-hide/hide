@@ -48,7 +48,7 @@ export function Satellites({ mission, lines, dimmed, onSelect, actions }: { miss
 function Satellite({ mission, line, onSelect, actions }: { mission: Mission; line: SatelliteLine; onSelect: () => void; actions: Actions }) {
   const { checker, kind } = line;
   const state = checkerState(checker);
-  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
+  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker, checker.worker.agent);
   const status = useCheckerStatus(kind, checker);
   const device = useMissionDeviceName(checker.machine);
   const label = [agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent, run?.text, device, status].filter(Boolean).join(" · ");
@@ -62,7 +62,7 @@ function Satellite({ mission, line, onSelect, actions }: { mission: Mission; lin
         data-node-satellite={checker.worker.agent}
         data-checker-state={state}
       >
-        <AgentMark kind={checker.worker.agent} className="size-(--size-agent-mark)!" />
+        <AgentMark kind={checker.worker.agent} profile={run?.profile} className="size-(--size-agent-mark)!" />
         {state === "pass" || state === "fail" ? (
           <span aria-hidden="true" className={cn("absolute -right-xs -bottom-xs flex size-(--size-agent-mark) items-center justify-center rounded-full text-status-foreground ring-2 ring-background", state === "pass" ? "bg-mission-done" : "bg-mission-failed")}>
             {state === "pass" ? <CheckIcon strokeWidth={3} className="size-full p-px" /> : <XIcon strokeWidth={3} className="size-full p-px" />}
