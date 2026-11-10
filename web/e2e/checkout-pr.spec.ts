@@ -101,10 +101,12 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     daemon = await startHided(engine, "checkout-pr", undefined, { PATH: `${fakeGh(engine.root, url)}${path.delimiter}${engine.fixturePath}` });
     const sent = countSent(page);
     // The core lists a linked worktree once a client shows its repository.
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workspaceAt(engine, daemon, repo, "메인 체크아웃 정리");
     await workspaceAt(engine, daemon, worktree, "PR 카드 구현", true);
-    // Setup focuses each new agent. Open the page only after setup, with no
-    // resumed Workspace, so the external-open assertion starts on Main.
+    // Setup focuses each new agent. Leave that connection, then open as a
+    // first run so the external-open assertion starts on Main deterministically.
+    await page.goto("about:blank");
     daemon = await asFirstRun(daemon);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
