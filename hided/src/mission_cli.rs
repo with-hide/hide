@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission gate <node> [--mission <id>] (--pass | --fix) --said <the operator's words>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id> [--handover <token>]\nhide mission show [<node>] [--mission <id>] [--json]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -96,6 +96,7 @@ pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
     ),
     ("skip", &["--mission", "--reason", "--decision"], &[]),
     ("defect", &["--mission", "--found-by", "--line"], &[]),
+    ("gate", &["--mission", "--said"], &["--pass", "--fix"]),
     (
         "decide",
         &[
@@ -430,6 +431,30 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 node: key(node)?,
                 found_by: key(values.get("--found-by").ok_or("--found-by is required")?)?,
                 line: values.get("--line").ok_or("--line is required")?.clone(),
+            }
+        }
+        "gate" => {
+            let (positional, values, set) = flags(args, "gate")?;
+            let [node] = positional.as_slice() else {
+                return Err(USAGE.to_owned());
+            };
+            let pass = match (
+                set.iter().any(|flag| flag == "--pass"),
+                set.iter().any(|flag| flag == "--fix"),
+            ) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => return Err("give --pass or --fix".to_owned()),
+            };
+            MissionCommand::Gate {
+                mission: mission_of(&values)?,
+                node: key(node)?,
+                pass,
+                // Blank words are the core's own refusal, with its way on.
+                said: values
+                    .get("--said")
+                    .ok_or("--said is required: quote the operator's own words")?
+                    .clone(),
             }
         }
         "decide" => {

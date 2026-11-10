@@ -17,6 +17,7 @@ hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base
 hide mission record <node> <line> (--pass | --fail) --evidence <text> [--summary <text>] [--commit <sha>] [--rerun]
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
+hide mission gate <node> (--pass | --fix) --said <the operator's words>
 hide mission start
 hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] [--show <view-id|path>]... | --clear)
 hide mission delay (--line <text> | --clear)
@@ -79,6 +80,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
      "criteria": ["the lens keeps its filter after a reload", "a test fails without the fix"],
      "steps": ["Choose where the filter is kept", "Keep it in the core", "Restore it on the screen after a reload", "A test that fails without the fix, then the PR"],
      "checks": [{"as": "review", "by": [{"agent": "claude", "model": "opus", "effort": "high"}]}],
+     "gate": "the task lens after a reload",
      "worker": {"agent": "codex", "profile": "work", "model": "gpt-6-astra", "effort": "medium"}},
     {"key": "together", "title": "check together", "kind": "verify", "depends_on": ["fix-1487"],
      "criteria": ["both screens load with the new API"]}
@@ -108,6 +110,12 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A checker's answer is for the head it reviewed, which it names with `--commit <sha>` (`git rev-parse HEAD` in the worktree it read); a node with a pull request refuses an answer without one (`mission_commit_required`), since Hide would otherwise put the review on whatever head the pull request has when it is recorded.
   When answers stand on different heads, the newest answer's head decides, so a review of the next head replaces the failure of the head before; a checker bound after the line passed opens it again until it answers.
   Which nodes get one, and how many, follows the mission's verification strength (below).
+- A `gate` is a place the operator looks before the node is done: one short line of what to look at, at most 80 characters and one per node (`mission_gate_too_long`, `mission_gate_too_many`, `mission_gate_invalid`, each naming the node).
+  Hide adds it as the node's `human` line, which only the operator's answer passes; it asks once the node's other lines are met (below).
+  Propose one only for what a person must see with their own eyes (a screen) or a large step that cannot be undone; never for the merge, which the mission's scope already decides, and never for routine work.
+  When the operator says where they want to check ("여기는 내가 확인하고 싶어"), put a gate on those nodes, and take one away the same way; a later plan that leaves `gate` out keeps it, and `"gate": null` takes it away.
+  A gate you change or take away while it asks takes its question off the map with it, and the next gate asks.
+  A done node keeps the gate it has (`mission_gate_node_done`), an outside node has none, and a mission Hide exempts from finish lines takes none (`mission_gate_exempt`).
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.
   Merge from the bottom of a stack up, or as the repository's own rules say.
@@ -127,6 +135,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
 - Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
+  Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - The plan shows on your pane's mission chip; nothing opens in the operator's lane, so tell them the plan is up in the conversation.
 
@@ -232,6 +241,12 @@ Every worker's brief, change or verify, says in its first line what the node is,
   Ask the same way in conversation, for example: `1) fix it in this PR: it ships in 1.2.0, the merge waits about an hour` / `2) a separate issue: merge now, users meet it for a while` / `recommend 1` with its reason in one line.
   The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it; that answer has already taken the decision off the map, so there is nothing to clear.
   Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.
+- A gate asks by itself: once its node's other lines are met, Hide puts its question on the map as your decision (`<what to look at> 확인하고 알려 주세요`, with `계속 진행` and `고칠 점 있음`, naming the node), with the Views you and the node's worker opened.
+  While a question of yours holds the decision, the gate waits for it; your next `decide --line` replaces the gate's question and the gate asks again once the decision is free, and `decide --clear` cannot take it off (`mission_gate_operator_only`).
+  `계속 진행` passes it and the node may finish; `고칠 점 있음` or the operator's own words keep it open and go to the node's worker as a defect line, the node works again, and the gate asks anew once that line is met. Either way Hide tells you in a letter, and nothing passes the gate on its own.
+  When the operator answers in your conversation instead ("ㄱㄱ", "고쳐서 다시"), relay it with their words quoted: `hide mission gate <node> --pass --said "ㄱㄱ"` or `--fix --said "<their words>"`; it settles the gate exactly as the card does, and records that the answer came from your pane.
+  Without their words it is refused (`mission_gate_words_missing`), and so is a gate not asking yet (`mission_gate_not_open`), so never relay your own judgment.
+  A check you meet by chance while the mission runs stays an ordinary `decide`, with no gate behind it.
 - An upstream node that was dropped holds everything after it; the map shows it blocked. Replan before anything after it starts.
   To give a node up, drop it with its reason in `--change`, or ask the operator with `hide mission decide --node`.
 
@@ -276,6 +291,7 @@ The two thresholds are fixed: two failed reviews in a row and 90 minutes with no
   Write the reason as one short line in the operator's language: the map shows it under the line as the skip's verdict.
   The `check` and `ci` lines are the operator's to skip (`mission_criteria_protected`): ask with `hide mission decide --line <question> --node <key>`, and once they answered, skip with `--decision <key>`, the question's `key` in `hide mission show --json`; the line then reads `⤳ operator 결정`.
   A line that would change the goal or the scope is asked the same way, never skipped on your own.
+  The `human` line of a gate is never skipped, recorded or answered by you (`mission_gate_operator_only`): only the operator's answer, on the map, on the phone or relayed with `hide mission gate`, passes it.
 - A failed `ci` or `check` line is rerun once, by the worker, on the same commit and only for what failed (`gh run rerun <run-id> --failed` for CI, the failed part of the check command with `--rerun`).
   A pass then reads `✓ 재실행 1회`; a failure after the rerun, however many runs follow, sends the node back to working, Hide reads no more runs on that commit, and a new commit gives one rerun again.
   When the worker shows the failure is not its change (the same failure on main), raise a decision naming the node; if the operator says to skip, skip it with `--decision`.
@@ -347,3 +363,4 @@ A worker or checker of a mission records its own lines from its own pane; the Co
 - A worker attaches its own node's pull request, branch and one line itself: `hide mission node <its node> --pr <n> | --no-pr`, `--branch <name>` and `--line <text>`.
   Anything else on a node (its status, stack base, agents, checkers and verdicts), and any other node, is refused as the Conductor's (`mission_not_conductor`).
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.
+- A node's `human` line is the operator's look at your work, and only their answer passes it; when they ask for a fix, Hide sends you their words as a new line of your node, and you fix it and record that line like your own.

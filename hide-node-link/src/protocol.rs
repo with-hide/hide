@@ -414,7 +414,10 @@ use crate::error::HostError;
 /// helper on 93 would ignore the field and answer the agent's default
 /// account in its place, so it is not admitted, and the helper this build
 /// carries is installed on the next connect.
-pub const PROTOCOL_VERSION: u32 = 94;
+/// 95: `HerdrStop` is gone. Hide no longer stops an earlier Hide's Herdr on a
+/// device; the import only reads its save (`HerdrSave`). A helper on 94
+/// would still offer the call, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 95;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -889,17 +892,9 @@ pub enum Call {
     OwedConfirmations {
         pane: String,
     },
-    /// The node account's Herdr save and who runs the server on its default
-    /// socket (`crate::herdr_save::Found`), only read (PRD
-    /// engine-bundle-4-herdr-removal D-10).
+    /// The node account's Herdr save and whether a server runs on its default
+    /// socket (`crate::herdr_save::Found`), only read.
     HerdrSave,
-    /// Stops Hide's Herdr on the node account's default socket, the server
-    /// `pid` that started at `started` as `HerdrSave` found it, confirmed
-    /// gone by both; answers `null` once it is gone (D-6, D-10).
-    HerdrStop {
-        pid: u32,
-        started: u64,
-    },
     /// Replaces the project guardrails' policy file under the node's home
     /// with `policy`, the projects of this machine with a protection on
     /// (`hide_agent_hooks::guardrails::write_policy`); answers `null` once
@@ -1478,7 +1473,6 @@ impl Call {
             | Self::HookDiagnosis
             | Self::OwedConfirmations { .. }
             | Self::HerdrSave
-            | Self::HerdrStop { .. }
             | Self::GuardrailPolicy { .. }
             | Self::WorktreesRegistered { .. }
             | Self::IgnoredRepository { .. }

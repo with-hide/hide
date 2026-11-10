@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use hide_agent_hooks::AgentRuntime;
 use hide_agent_hooks::codex_trust::{
-    HookEntry, Limits, TrustFailureKind, TrustOutcome, trust_own_hooks, trust_own_hooks_within,
+    Limits, TrustFailureKind, TrustOutcome, trust_own_hooks, trust_own_hooks_within,
 };
 use hide_platform::programs::{self, Program};
 use serde_json::{Value, json};
@@ -74,16 +74,10 @@ impl Fixture {
     }
 
     fn trust(&self) -> TrustOutcome {
-        self.trust_herdr(&[])
-    }
-
-    /// The check with the entries the kit recorded Herdr writing.
-    fn trust_herdr(&self, herdr: &[HookEntry]) -> TrustOutcome {
         trust_own_hooks(
             &self.codex,
             self.home.path(),
             crate::hook_target(Path::new(HELPER)),
-            herdr,
             &self.stop,
         )
     }
@@ -93,7 +87,6 @@ impl Fixture {
             &self.codex,
             self.home.path(),
             crate::hook_target(Path::new(HELPER)),
-            &[],
             &self.stop,
             limits,
         )
@@ -381,7 +374,6 @@ fn what_codex_does_not_do_is_a_failure_with_its_cause() {
         ),
         fixture.home.path(),
         crate::hook_target(Path::new(HELPER)),
-        &[],
         &fixture.stop,
     );
     assert_eq!(failed(missing), TrustFailureKind::CouldNotStart);
@@ -523,139 +515,5 @@ fn a_warning_about_another_tools_hook_does_not_fail_the_check() {
         TrustOutcome::Trusted {
             recorded: own_hook_count()
         }
-    );
-}
-
-const HERDR_SCRIPT: &str = "herdr-agent-state.sh";
-
-/// The entry Herdr's `integration install codex` writes into `hooks.json`
-/// (observed on Herdr 0.9.1), one group of its own on `SessionStart`.
-fn herdr_command(fixture: &Fixture) -> String {
-    format!(
-        "bash '{}' session",
-        fixture.codex_home().join(HERDR_SCRIPT).display()
-    )
-}
-
-fn herdr_group(command: &str) -> Value {
-    json!({"hooks": [{"command": command, "timeout": 10, "type": "command"}]})
-}
-
-fn add_herdr(fixture: &Fixture, command: &str) {
-    fixture.edit_hooks(|document| {
-        document["hooks"]["SessionStart"]
-            .as_array_mut()
-            .unwrap()
-            .push(herdr_group(command));
-    });
-}
-
-fn herdr_entry(command: &str) -> HookEntry {
-    HookEntry {
-        event: "SessionStart".to_owned(),
-        matcher: None,
-        handler_type: "command".to_owned(),
-        command: command.to_owned(),
-    }
-}
-
-#[test]
-fn an_entry_the_kit_recorded_herdr_writing_is_trusted_with_hides_own_in_one_write() {
-    let fixture = Fixture::new();
-    fixture.install();
-    let command = herdr_command(&fixture);
-    add_herdr(&fixture, &command);
-
-    assert_eq!(
-        fixture.trust_herdr(&[herdr_entry(&command)]),
-        TrustOutcome::Trusted {
-            recorded: own_hook_count() + 1
-        }
-    );
-    assert_eq!(fixture.calls("config/batchWrite"), 1);
-    assert_eq!(fixture.held().len(), own_hook_count() + 1);
-    // Herdr's group follows Hide's `SessionStart` group in the file.
-    assert!(
-        fixture
-            .held()
-            .contains_key(&fixture.key("session_start", 1))
-    );
-
-    // A repeat asks for no write.
-    assert_eq!(
-        fixture.trust_herdr(&[herdr_entry(&command)]),
-        TrustOutcome::Trusted { recorded: 0 }
-    );
-    assert_eq!(fixture.calls("config/batchWrite"), 1);
-}
-
-#[test]
-fn herdrs_entry_the_kit_did_not_record_stays_for_the_review_screen() {
-    // An integration the operator installed first: the kit recorded nothing.
-    let fixture = Fixture::new();
-    fixture.install();
-    let command = herdr_command(&fixture);
-    add_herdr(&fixture, &command);
-
-    assert_eq!(
-        fixture.trust(),
-        TrustOutcome::Trusted {
-            recorded: own_hook_count()
-        }
-    );
-    assert_eq!(fixture.held().len(), own_hook_count());
-    assert!(
-        !fixture
-            .held()
-            .contains_key(&fixture.key("session_start", 1))
-    );
-}
-
-#[test]
-fn a_look_alike_of_herdrs_command_is_left_for_the_review_screen_beside_the_real_one() {
-    let fixture = Fixture::new();
-    fixture.install();
-    let command = herdr_command(&fixture);
-    add_herdr(&fixture, &command);
-    // Same script name, another folder, and the same folder with another word.
-    add_herdr(
-        &fixture,
-        &format!("bash '/tmp/evil/{HERDR_SCRIPT}' session"),
-    );
-    add_herdr(&fixture, &command.replace("session", "session && true"));
-
-    assert_eq!(
-        fixture.trust_herdr(&[herdr_entry(&command)]),
-        TrustOutcome::Trusted {
-            recorded: own_hook_count() + 1
-        }
-    );
-    let held = fixture.held();
-    assert!(held.contains_key(&fixture.key("session_start", 1)));
-    assert!(!held.contains_key(&fixture.key("session_start", 2)));
-    assert!(!held.contains_key(&fixture.key("session_start", 3)));
-}
-
-#[test]
-fn a_herdr_that_changed_its_command_is_trusted_again_once_the_new_one_is_recorded() {
-    let fixture = Fixture::new();
-    fixture.install();
-    let old = herdr_command(&fixture);
-    add_herdr(&fixture, &old);
-    fixture.trust_herdr(&[herdr_entry(&old)]);
-
-    let new = format!("{old} --v2");
-    fixture.edit_hooks(|document| {
-        document["hooks"]["SessionStart"][1] = herdr_group(&new);
-    });
-    // The old record no longer matches the file: nothing is trusted blind.
-    assert_eq!(
-        fixture.trust_herdr(&[herdr_entry(&old)]),
-        TrustOutcome::Trusted { recorded: 0 }
-    );
-    // The kit re-records what Herdr wrote, and the same check trusts it.
-    assert_eq!(
-        fixture.trust_herdr(&[herdr_entry(&new)]),
-        TrustOutcome::Trusted { recorded: 1 }
     );
 }

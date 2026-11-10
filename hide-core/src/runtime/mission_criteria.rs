@@ -548,6 +548,8 @@ impl Runtime {
                 }
             }
             CriterionKind::Ci => return Err("mission_criterion_not_yours".into()),
+            // Only the operator's answer passes a gate (PRD mission-human-gate D-12).
+            CriterionKind::Human => return Err("mission_gate_operator_only".into()),
             CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect => {
                 let recorder = if worker {
                     by(Role::Worker, row.agent_id.clone())
@@ -654,6 +656,14 @@ impl Runtime {
             .position(|line| line.key == key)
             .ok_or("mission_criterion_unknown")?;
         let line = &mission.nodes[index].criteria[at];
+        // A gate is the operator's to pass, on no decision of the
+        // Conductor's (PRD mission-human-gate D-12, B8).
+        if line.kind == CriterionKind::Human {
+            return Err(crate::coordination::refusal(
+                "mission_gate_operator_only",
+                &format!("{node}: {key}"),
+            ));
+        }
         let answered = |key: u64| {
             mission
                 .decided

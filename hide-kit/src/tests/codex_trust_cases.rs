@@ -79,7 +79,6 @@ fn a_route_move_refreshes_both_installed_hooks_and_codex_trust_once() {
             fixture.target.codex.as_ref().unwrap(),
             fixture.home(),
             old,
-            &[],
             &fixture.target.stop
         ),
         hide_agent_hooks::codex_trust::TrustOutcome::Trusted { .. }
@@ -328,7 +327,7 @@ fn hide_quitting_during_the_check_says_nothing_of_the_part_and_keeps_what_was_re
     .unwrap();
     // A failure the last pass found.
     mode(&fixture, "refuse_write");
-    let remembered = crate::codex_trust::ensure(&fixture.target, &[]);
+    let remembered = crate::codex_trust::ensure(&fixture.target);
     assert!(remembered.is_some());
 
     mode(&fixture, "hang");
@@ -336,6 +335,6 @@ fn hide_quitting_during_the_check_says_nothing_of_the_part_and_keeps_what_was_re
         .target
         .stop
         .store(true, std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(crate::codex_trust::ensure(&fixture.target, &[]), None);
+    assert_eq!(crate::codex_trust::ensure(&fixture.target), None);
     assert_eq!(crate::codex_trust::remembered(&fixture.target), remembered);
 }

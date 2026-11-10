@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::Runtime;
+use super::missions::AnswerHold;
 use crate::delivery::Actor;
 use crate::mission_events::{AnswerSource, EventKind, History, MissionEvent};
 use crate::missions::{
@@ -50,6 +51,9 @@ pub(crate) struct AnswerWork {
     pub conductor: Actor,
     pub at_unix_ms: u64,
     pub line: String,
+    /// The operator pressed `지금 보내기` for it: it is judged as a forced
+    /// letter is, and typed once the composer reads empty.
+    pub forced: bool,
 }
 
 /// Why the doorbell could not confirm what it types, a letter's bell or a
@@ -163,8 +167,8 @@ impl AnswerWork {
     pub(crate) fn patience(&self) -> crate::delivery::doorbell::Patience {
         crate::delivery::doorbell::Patience {
             arrived_at_unix_ms: self.at_unix_ms,
-            now: false,
-            forced: false,
+            now: self.forced,
+            forced: self.forced,
         }
     }
 }
@@ -296,6 +300,19 @@ impl Runtime {
         if line.is_none() && shown.is_some_and(|(_, show)| !show.is_empty()) {
             return Err("mission_question_without_line".into());
         }
+        // A gate's decision is the operator's to answer (PRD
+        // mission-human-gate D-12): the Conductor's clear would read as their
+        // answer, so it is refused; a question of its own takes the decision,
+        // and the gate asks again once it is free.
+        let gate = crate::missions::gate_asked(mission).map(|node| node.key.clone());
+        if line.is_none()
+            && let Some(node) = &gate
+        {
+            return Err(crate::coordination::refusal(
+                "mission_gate_operator_only",
+                node,
+            ));
+        }
         let current = mission.question.as_ref();
         let same = mission.decision == line
             && current.is_some_and(|question| {
@@ -375,6 +392,16 @@ impl Runtime {
         }
         let cleared_after_answer = line.is_none() && mission.decision.is_some();
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        if let Some(line) = gate
+            .and_then(|key| target.nodes.iter_mut().find(|node| node.key == key))
+            .and_then(|node| {
+                node.criteria
+                    .iter_mut()
+                    .find(|line| line.kind == crate::mission_criteria::CriterionKind::Human)
+            })
+        {
+            line.asked = None;
+        }
         // Clearing a decision is the Conductor saying the operator answered
         // it (PRD mission-map-git-criteria B12).
         if cleared_after_answer {
@@ -414,6 +441,7 @@ impl Runtime {
     /// Conductor has since changed its question, when no Conductor or no
     /// device is there to read it; the same question answered again keeps
     /// the first answer.
+    #[cfg(test)]
     pub(super) fn answer_mission(
         &mut self,
         id: &str,
@@ -421,6 +449,25 @@ impl Runtime {
         option: Option<u8>,
         text: Option<String>,
         resend: bool,
+    ) -> Result<bool, String> {
+        self.answer_mission_from(
+            id,
+            key,
+            (option, text, resend),
+            crate::mission_criteria::GateVia::Card,
+        )
+    }
+
+    /// `answer_mission` from the card or, with `via` the phone, from a
+    /// phone: a gate's decision goes to the one entry that settles a gate
+    /// (`settle_gate`, PRD mission-human-gate D-21), with no Conductor
+    /// needed to read it; every other decision's answer as before.
+    pub(super) fn answer_mission_from(
+        &mut self,
+        id: &str,
+        key: u64,
+        (option, text, resend): (Option<u8>, Option<String>, bool),
+        via: crate::mission_criteria::GateVia,
     ) -> Result<bool, String> {
         let now = super::memory::now_ms();
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
@@ -430,6 +477,15 @@ impl Runtime {
         let current = mission.question.as_ref().map_or(0, |question| question.key);
         if current != key {
             return Err("mission_decision_changed".into());
+        }
+        if let Some(node) = crate::missions::gate_asked(mission).map(|node| node.key.clone()) {
+            if resend {
+                return Ok(false);
+            }
+            if self.mission_stale(mission) {
+                return Err("mission_device_disconnected".into());
+            }
+            return self.answer_gate(id, &node, (option, text), via);
         }
         let answered = mission.answer.as_ref().filter(|answer| answer.key == key);
         // Sending again is the operator's own choice for an answer typed
@@ -505,9 +561,51 @@ impl Runtime {
         Ok(true)
     }
 
+    /// The operator's `지금 보내기` for the answer it gave: the doorbell
+    /// judges it as a forced letter from its next pass, typing it past the
+    /// Conductor's work, the quiet period and a draft that reads empty, and
+    /// never over text on its screen. Only an answer the doorbell holds can
+    /// be pressed, and a second press finds it forced; whether anything
+    /// changed.
+    pub(super) fn mission_answer_now(&mut self, id: &str, key: u64) -> bool {
+        let waiting = self.missions.book.get(id).is_some_and(|mission| {
+            mission.status.open()
+                && mission
+                    .answer
+                    .as_ref()
+                    .is_some_and(|answer| answer.key == key && !answer.unconfirmed)
+        }) && self.missions.answers_held.contains_key(id)
+            && !self.missions.answers_typing.contains(id);
+        if !waiting || self.missions.answers_forced.insert(id.to_owned(), key) == Some(key) {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.answer_now_refused",
+                "mission": id, "key": key, "reason": if waiting { "already_forced" } else { "not_waiting" },
+            }));
+            return false;
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.answer_now",
+            "mission": id, "key": key,
+        }));
+        self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        self.announce_missions();
+        true
+    }
+
+    /// A forced answer whose composer did not read empty goes back to
+    /// waiting as an ordinary one, as a forced letter does (`defer`), so the
+    /// doorbell does not read the screen again every few seconds.
+    pub(crate) fn mission_answer_unforced(&mut self, id: &str) {
+        if self.missions.answers_forced.remove(id).is_some() {
+            self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+            self.announce_missions();
+        }
+    }
+
     /// The banner's answer as one event: a refusal the operator can act on
     /// stays beside the question as its reason; one whose question changed
     /// draws the new question instead, and goes only to the log.
+    #[cfg(test)]
     pub(super) fn mission_answer_event(
         &mut self,
         mission: &str,
@@ -516,7 +614,23 @@ impl Runtime {
         text: Option<String>,
         resend: bool,
     ) -> bool {
-        match self.answer_mission(mission, key, option, text, resend) {
+        self.mission_answer_event_from(
+            mission,
+            key,
+            (option, text, resend),
+            crate::mission_criteria::GateVia::Card,
+        )
+    }
+
+    /// `mission_answer_event` from the card, or from a phone.
+    pub(super) fn mission_answer_event_from(
+        &mut self,
+        mission: &str,
+        key: u64,
+        (option, text, resend): (Option<u8>, Option<String>, bool),
+        via: crate::mission_criteria::GateVia,
+    ) -> bool {
+        match self.answer_mission_from(mission, key, (option, text, resend), via) {
             Ok(changed) => changed,
             Err(code) => {
                 crate::diagnostic!(json!({
@@ -635,6 +749,7 @@ impl Runtime {
                 key: answer.key,
                 conductor: mission.conductor.actor.clone(),
                 at_unix_ms: answer.at_unix_ms,
+                forced: self.missions.answers_forced.get(&mission.id) == Some(&answer.key),
                 line: answer_line(
                     mission.decision.as_deref().unwrap_or_default(),
                     &answer.text,
@@ -645,6 +760,10 @@ impl Runtime {
         // Only the missions still waiting on an absent Conductor keep the
         // time it went, so the map stays bounded by the open answers.
         self.missions.answer_absent_since = absent.into_iter().collect();
+        self.missions.answers_forced.retain(|id, key| {
+            due.iter()
+                .any(|work| &work.mission == id && &work.key == key)
+        });
         for (id, text, asked) in gone {
             if let Some(mission) = self.missions.book.get_mut(&id) {
                 mission.answer = None;
@@ -710,7 +829,7 @@ impl Runtime {
 
     /// The doorbell held an answer: the banner shows it waits for the
     /// Conductor's turn (B28).
-    pub(crate) fn mission_answer_held(&mut self, mission: &str) -> bool {
+    pub(crate) fn mission_answer_held(&mut self, mission: &str, hold: AnswerHold) -> bool {
         let waiting = self.missions.book.get(mission).is_some_and(|mission| {
             mission.status.open()
                 && mission
@@ -718,7 +837,7 @@ impl Runtime {
                     .as_ref()
                     .is_some_and(|answer| !answer.unconfirmed)
         });
-        if !waiting || !self.missions.answers_held.insert(mission.to_owned()) {
+        if !waiting || self.missions.answers_held.insert(mission.to_owned(), hold) == Some(hold) {
             return false;
         }
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);

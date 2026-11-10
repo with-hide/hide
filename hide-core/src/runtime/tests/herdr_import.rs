@@ -63,49 +63,6 @@ fn act(runtime: &mut Runtime, action: &str) -> bool {
     ))
 }
 
-/// B2, B3: while Hide's own Herdr runs, the move is a question with what it
-/// moves, and once asked for it shows moving until this core stops.
-#[test]
-fn a_running_hide_herdr_is_asked_about_and_its_move_shows_until_the_core_starts_again() {
-    let mut runtime = installed();
-    runtime.ingest_herdr_save(offered(Server::Hide, None));
-    assert_eq!(
-        shown(&runtime),
-        serde_json::json!({
-            "kind": "move", "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
-            "waiting": 0, "herdr_running": true, "failure": null, "reason": null, "refused": [],
-        })
-    );
-    assert!(act(&mut runtime, "move"));
-    assert_eq!(shown(&runtime)["stage"], "moving");
-    assert!(!runtime.ingest_herdr_take(Take::Move, Taken::Restarting));
-    assert_eq!(shown(&runtime)["stage"], "moving");
-    // A second press while it moves is the same one.
-    assert!(!act(&mut runtime, "move"));
-}
-
-/// B4: a Herdr that could not be stopped moves nothing, says so, and the
-/// move can be asked for again.
-#[test]
-fn a_herdr_that_could_not_be_stopped_says_so_and_offers_the_move_again() {
-    let mut runtime = installed();
-    runtime.ingest_herdr_save(offered(Server::Hide, None));
-    assert!(act(&mut runtime, "move"));
-    runtime.ingest_herdr_take(Take::Move, Taken::NotStopped);
-    assert_eq!(shown(&runtime)["stage"], "offered");
-    runtime.ingest_herdr_save(offered(Server::Hide, Some(Outcome::NotStopped)));
-    let failed = shown(&runtime);
-    assert_eq!(
-        (&failed["stage"], &failed["failure"]),
-        (
-            &serde_json::json!("failed"),
-            &serde_json::json!("not_stopped")
-        )
-    );
-    assert!(act(&mut runtime, "move"));
-    assert_eq!(shown(&runtime)["stage"], "moving");
-}
-
 /// B15, B16: a save no Hide Herdr runs is offered to import, read only, and
 /// a move that would stop a Herdr is refused for it.
 #[test]
@@ -244,40 +201,40 @@ fn a_cut_agent_is_told_once_it_shows_and_given_up_on_when_it_never_does() {
     assert!(runtime.transition_letters_owed().is_empty());
 }
 
-/// B18: a device's save is offered under its own name, beside this
-/// machine's, moved by its own mover, and goes with its link.
+/// D-10, B18: a device's save is offered under its name, imported only with
+/// its link, and this machine's offer is never the device's.
 #[test]
 fn a_device_s_save_is_offered_under_its_name_and_goes_with_its_link() {
     let mut runtime = installed();
     assert!(runtime.install_device_herdr_import(
         "d1",
         Arc::new(StandIn),
-        offered(Server::Hide, None)
+        offered(Server::Other, None)
     ));
     let status = &serde_json::to_value(runtime.snapshot()).unwrap()["status"];
     assert_eq!(status["herdr_import"], serde_json::Value::Null);
     assert_eq!(
         status["herdr_import_devices"],
         serde_json::json!([{
-            "kind": "move", "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
+            "kind": "import", "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
             "waiting": 0, "herdr_running": true, "failure": null, "reason": null, "refused": [],
             "device": "d1",
         }])
     );
-    // This machine offers nothing, so its move is not the device's.
-    assert!(!act(&mut runtime, "move"));
-    let device_move = event(
+    // This machine offers nothing, so its import is not the device's.
+    assert!(!act(&mut runtime, "import"));
+    let device_import = event(
         "herdr_import",
-        serde_json::json!({"action": "move", "device": "d1"}),
+        serde_json::json!({"action": "import", "device": "d1"}),
     );
-    assert!(runtime.dispatch_json(&device_move));
+    assert!(runtime.dispatch_json(&device_import));
     let devices = |runtime: &Runtime| {
         serde_json::to_value(runtime.snapshot()).unwrap()["status"]["herdr_import_devices"].clone()
     };
     assert_eq!(devices(&runtime)[0]["stage"], "moving");
-    runtime.ingest_device_herdr_take("d1", Take::Move, Taken::NotStopped);
-    assert_eq!(devices(&runtime)[0]["stage"], "offered");
+    runtime.ingest_device_herdr_take("d1", Take::Import, Taken::Restarting);
+    assert_eq!(devices(&runtime)[0]["stage"], "moving");
     assert!(runtime.retire_device_herdr_import("d1"));
     assert_eq!(devices(&runtime), serde_json::json!([]));
-    assert!(!runtime.dispatch_json(&device_move));
+    assert!(!runtime.dispatch_json(&device_import));
 }

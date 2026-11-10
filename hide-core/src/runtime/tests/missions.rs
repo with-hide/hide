@@ -13,6 +13,7 @@ use crate::model::{
     PullRequestSnapshot, ReviewDecision,
 };
 use crate::runtime::delivery::tests::{authority, fixture};
+use crate::runtime::missions::AnswerHold;
 use crate::sidebar::SessionSnapshotPayload;
 use serde_json::{Value, json};
 
@@ -2645,7 +2646,7 @@ fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
     let due = runtime.mission_answers_due();
     assert_eq!(due.len(), 1);
     assert!(due[0].line.contains("Which base?") && due[0].line.ends_with("#1503"));
-    runtime.mission_answer_held("mission-1");
+    runtime.mission_answer_held("mission-1", AnswerHold::Other);
     runtime.refresh_missions();
     assert_eq!(
         runtime.snapshot.missions.items[0]
@@ -2673,6 +2674,63 @@ fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
         runtime.missions.events["mission-1"].events[2].source,
         Some(crate::mission_events::AnswerSource::Banner)
     );
+}
+
+/// A held answer shows what it waits for, and `지금 보내기` forces it once: the
+/// doorbell then judges it as a forced letter, and only an answer the
+/// doorbell holds can be pressed.
+#[test]
+fn a_held_answer_shows_its_reason_and_is_forced_once() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    let now = |runtime: &mut Runtime| runtime.mission_answer_now("mission-1", 1);
+    assert!(!now(&mut runtime), "nothing to press before an answer");
+    assert!(runtime.mission_answer_event("mission-1", 1, Some(2), None, false));
+    assert!(!now(&mut runtime), "an answer the doorbell has not held");
+    assert!(!runtime.mission_answers_due()[0].forced);
+    assert!(runtime.mission_answer_held("mission-1", AnswerHold::Working));
+    assert!(
+        !runtime.mission_answer_held("mission-1", AnswerHold::Working),
+        "the same reason changes nothing"
+    );
+    assert!(runtime.mission_answer_held("mission-1", AnswerHold::Typing));
+    runtime.refresh_missions();
+    let hold = |runtime: &Runtime| {
+        runtime.snapshot.missions.items[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .hold
+    };
+    assert_eq!(hold(&runtime), Some(AnswerHold::Typing));
+    assert!(
+        !runtime.mission_answer_now("mission-1", 9),
+        "another question"
+    );
+    assert!(now(&mut runtime));
+    assert!(!now(&mut runtime), "a second press finds it forced");
+    runtime.refresh_missions();
+    assert_eq!(hold(&runtime), Some(AnswerHold::Forced));
+    assert!(runtime.mission_answers_due()[0].forced);
+    // Text in the input sends it back to its reason, as a forced letter goes
+    // back to an ordinary one.
+    runtime.mission_answer_unforced("mission-1");
+    runtime.refresh_missions();
+    assert_eq!(hold(&runtime), Some(AnswerHold::Typing));
+    assert!(!runtime.mission_answers_due()[0].forced);
+    // A typed answer leaves nothing forced behind.
+    assert!(now(&mut runtime));
+    runtime.mission_answer_typing("mission-1", 1);
+    runtime.mission_answer_sent("mission-1", 1, Ok(()));
+    assert!(runtime.mission_answers_due().is_empty());
+    assert!(runtime.missions.answers_forced.is_empty());
 }
 
 /// An answer held on a Conductor's session Hide cannot read says why on the
@@ -2708,7 +2766,7 @@ fn an_answer_held_on_an_unreadable_conductor_session_says_why() {
         runtime.refresh_missions();
         runtime.snapshot.missions.items[0].answer_failed
     };
-    runtime.mission_answer_held("mission-1");
+    runtime.mission_answer_held("mission-1", AnswerHold::Other);
     assert_eq!(
         observe(&mut runtime, true),
         Some(AnswerFailure::SessionUnreadable)
@@ -2817,7 +2875,7 @@ fn closing_a_mission_ends_its_decision_and_records_an_answer_never_typed() {
     )
     .unwrap();
     assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
-    runtime.mission_answer_held("mission-1");
+    runtime.mission_answer_held("mission-1", AnswerHold::Other);
     command(
         &mut runtime,
         "sender",
@@ -9778,4 +9836,504 @@ fn a_device_workers_view_is_linked_by_that_devices_own_view_id() {
         })
         .collect();
     assert_eq!(listed, [(DEVICE.to_owned(), DEVICE_ROOT.to_owned(), page)]);
+}
+
+/// `criteria_plan` with the operator's look on the fix node (PRD
+/// mission-human-gate D-01).
+fn gated_plan() -> Value {
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][0]["gate"] = json!("the parser on a v1 file");
+    plan
+}
+
+/// A running mission whose fix node has a gate and every other line met,
+/// evaluated once, so its gate asks the operator.
+fn reached_gate(runtime: &mut Runtime) -> u64 {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(runtime, "sender", gated_plan()).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+    checkout_at(runtime, HEAD);
+    // Not reached while its other lines are open: nothing to relay yet.
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(
+                runtime,
+                "sender",
+                json!({"op": "gate", "node": "fix", "pass": true, "said": "ㄱㄱ"}),
+            )
+            .unwrap_err()
+        )
+        .0,
+        "mission_gate_not_open"
+    );
+    met_fix(runtime);
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .question
+        .as_ref()
+        .expect("a reached gate asks the operator")
+        .key
+}
+
+/// PRD mission-human-gate D-02, D-04, D-10, D-12, B4-B6, B8: a node whose
+/// other lines are met is not done while its gate is open, the core asks
+/// the operator with the two fixed choices, the Conductor neither skips,
+/// records nor clears it, and the card's `계속 진행` passes it with where it
+/// came from and the words, after which the node may be done and the
+/// Conductor is told. The node without a gate finishes as before.
+#[test]
+fn a_gated_node_is_done_only_after_the_operator_passes_its_gate() {
+    use crate::mission_criteria::GateVia;
+    use crate::missions::WakeEvent;
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let key = reached_gate(&mut runtime);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let question = mission.question.as_ref().unwrap();
+    assert_eq!(
+        (
+            mission.decision.as_deref(),
+            question.node.as_deref(),
+            question.options.as_slice()
+        ),
+        (
+            Some("Check the parser on a v1 file and tell me"),
+            Some("fix"),
+            ["Go on".to_owned(), "Something to fix".to_owned()].as_slice()
+        )
+    );
+    let gate = node_view(&runtime, "fix").gate.unwrap();
+    assert_eq!((gate.state, gate.ask), (GateState::Open, Some(key)));
+    assert_eq!(
+        gate.long_wait_at_unix_ms,
+        gate.since_unix_ms
+            .map(|since| since + crate::runtime::mission_gates::LONG_WAIT_MS)
+    );
+    assert_eq!(
+        node_view(&runtime, "fix").waiting_on,
+        Some(crate::missions::WaitingOn::Decision)
+    );
+
+    let refusal = |runtime: &mut Runtime, value: Value| {
+        crate::coordination::split_refusal(&command(runtime, "sender", value).unwrap_err())
+            .0
+            .to_owned()
+    };
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            json!({"op": "node", "node": "fix", "patch": {"status": "done"}})
+        ),
+        "mission_criteria_unmet"
+    );
+    assert_eq!(
+        refusal(
+            &mut runtime,
+            json!({"op": "skip", "node": "fix", "line": "human", "reason": "looks fine", "decision": key})
+        ),
+        "mission_gate_operator_only"
+    );
+    assert_eq!(
+        refusal(&mut runtime, json!({"op": "decide", "line": null})),
+        "mission_gate_operator_only"
+    );
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(
+                &mut runtime,
+                "recipient",
+                record_of("fix", "human", json!({}))
+            )
+            .unwrap_err()
+        )
+        .0,
+        "mission_gate_operator_only"
+    );
+
+    // The node without a gate finishes on its line as before.
+    command(&mut runtime, "sender", json!({"op": "node", "node": "docs", "patch": {"status": "working", "agent_id": "agent-2"}})).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(node_view(&runtime, "docs").status, NodeStatus::Done);
+    assert!(node_view(&runtime, "docs").gate.is_none());
+
+    assert!(runtime.mission_answer_event("mission-1", key, Some(1), None, false));
+    let gate = node_view(&runtime, "fix").gate.unwrap();
+    assert_eq!(
+        (gate.state, gate.via, gate.said.as_deref()),
+        (GateState::Passed, Some(GateVia::Card), Some("Go on"))
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.decision.is_none() && mission.question.is_none());
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::GatePassed && wake.to.is_none())
+    );
+    assert!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "fix", "patch": {"status": "done"}})
+        )
+        .unwrap()
+        .1
+    );
+}
+
+/// PRD mission-human-gate D-11, B7, B21: an answer that is not `계속 진행`,
+/// here written on the phone, leaves the gate open and sends its words to
+/// the node's worker as a defect with where they came from; the node works
+/// again and its gate asks anew once that line is met.
+#[test]
+fn a_fix_answer_goes_back_to_the_worker_and_the_gate_asks_again() {
+    use crate::mission_criteria::{CriterionKind, GateVia, Role};
+    use crate::missions::WakeEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let key = reached_gate(&mut runtime);
+    assert!(runtime.mission_answer_event_from(
+        "mission-1",
+        key,
+        (
+            None,
+            Some("the error banner overlaps the map".into()),
+            false
+        ),
+        GateVia::Phone,
+    ));
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.question.is_none());
+    let fix = mission.node("fix").unwrap();
+    let defect = fix.criteria.last().unwrap();
+    assert_eq!(
+        (
+            defect.kind,
+            defect.text.as_deref(),
+            defect.found_by.as_deref(),
+            defect.via,
+            defect.by.as_ref().map(|by| by.role)
+        ),
+        (
+            CriterionKind::Defect,
+            Some("the error banner overlaps the map"),
+            None,
+            Some(GateVia::Phone),
+            Some(Role::Operator)
+        )
+    );
+    assert_eq!((fix.status, fix.reopened), (NodeStatus::Working, 1));
+    let human = crate::mission_criteria::gate(&fix.criteria).unwrap();
+    assert_eq!((human.state, human.asked), (CriterionState::Open, None));
+    let fixes: Vec<Option<&str>> = mission
+        .wakes
+        .iter()
+        .filter(|wake| wake.event == WakeEvent::GateFix)
+        .map(|wake| wake.to.as_deref())
+        .collect();
+    assert_eq!(fixes, [None, Some("agent-2")]);
+    let letter = crate::runtime::missions::wake_body(
+        mission,
+        mission.wakes.iter().find(|wake| wake.to.is_some()).unwrap(),
+    );
+    assert!(letter.contains("the error banner overlaps the map") && letter.contains(&defect.key));
+    let line = defect.key.clone();
+
+    // Not reached while the defect is open, asked again once it is met.
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .question
+            .is_none()
+    );
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", &line, json!({})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let again = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert!(again > key);
+}
+
+/// PRD mission-human-gate D-12, D-21, B8, B21: the Conductor relays the
+/// operator's answer from its pane only with their words quoted; the pass
+/// is recorded as given in the pane, and the same relay again changes
+/// nothing.
+#[test]
+fn the_conductor_relays_a_gate_only_with_the_operators_words() {
+    use crate::mission_criteria::GateVia;
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reached_gate(&mut runtime);
+    let relay = |said: &str| json!({"op": "gate", "node": "fix", "pass": true, "said": said});
+    assert_eq!(
+        command(&mut runtime, "sender", relay("  ")).unwrap_err(),
+        "mission_gate_words_missing"
+    );
+    assert_eq!(
+        command(&mut runtime, "recipient", relay("ㄱㄱ")).unwrap_err(),
+        "mission_none"
+    );
+    let (shown, changed) = command(&mut runtime, "sender", relay("ㄱㄱ")).unwrap();
+    assert!(changed);
+    assert_eq!(shown["mission"]["nodes"][0]["gate"]["via"], "pane");
+    let gate = node_view(&runtime, "fix").gate.unwrap();
+    assert_eq!(
+        (gate.state, gate.via, gate.said.as_deref()),
+        (GateState::Passed, Some(GateVia::Pane), Some("ㄱㄱ"))
+    );
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .decision
+            .is_none()
+    );
+    assert!(!command(&mut runtime, "sender", relay("ㄱㄱ")).unwrap().1);
+}
+
+/// PRD mission-human-gate D-22, D-23, B11, B23: with no Conductor a gate
+/// that waits is the mission's own raise to the operator, which offers no
+/// way past it but the card, and a Conductor coming back takes it off,
+/// since the decision on its row says it; a cancelled mission's gate asks
+/// nothing.
+#[test]
+fn a_gate_with_no_conductor_is_raised_to_the_operator_until_one_comes_back() {
+    use crate::missions::{AttentionReason, MissionEnd};
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reached_gate(&mut runtime);
+    let present = runtime.delivery_observations.remove("sender").unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    let view = node_view(&runtime, "fix");
+    let attention = view.attention.as_ref().expect("raised to the operator");
+    assert_eq!(attention.reason, AttentionReason::HumanGate);
+    assert_eq!(attention.to, crate::missions::AttentionTo::Operator);
+    assert!(attention.choices.is_empty());
+    assert_eq!(view.gate.unwrap().state, GateState::Open);
+
+    runtime
+        .delivery_observations
+        .insert("sender".into(), present);
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert!(node_view(&runtime, "fix").attention.is_none());
+
+    runtime
+        .close_mission("mission-1", MissionEnd::Cancelled, None, "operator", 5)
+        .unwrap();
+    let view = node_view(&runtime, "fix");
+    assert_eq!(view.gate.unwrap().state, GateState::Ahead);
+    assert!(view.attention.is_none_or(|attention| !attention.item));
+}
+
+/// `criteria_plan` with a gate on both nodes, `fix`'s and `docs`'s as given
+/// (`null` takes it away).
+fn two_gates(fix: Value, docs: Value) -> Value {
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][0]["gate"] = fix;
+    plan["plan"]["nodes"][1]["gate"] = docs;
+    plan
+}
+
+/// The look the mission's open decision asks about, and its node.
+fn asked_gate(runtime: &Runtime) -> Option<(String, Option<String>)> {
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    mission
+        .question
+        .as_ref()
+        .zip(mission.decision.clone())
+        .map(|(question, line)| (line, question.node.clone()))
+}
+
+/// PRD mission-human-gate D-15, B14, B24 (review F1): a replan that changes
+/// or takes away the gate whose question stands takes that question with
+/// it, so the gate waiting behind it asks, and the changed gate asks with
+/// its new words; a question of the Conductor's own stays through a replan
+/// of a gate.
+#[test]
+fn a_replan_of_an_asked_gate_takes_its_question_and_the_next_gate_asks() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(json!("the parser on a v1 file"), json!("the guide page")),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    met_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({})),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some((
+            "Check the parser on a v1 file and tell me".into(),
+            Some("fix".into())
+        ))
+    );
+
+    // Taken away: its question goes, and the gate behind it asks.
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(Value::Null, json!("the guide page")),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(mission.question.is_none() && mission.decision.is_none());
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some((
+            "Check the guide page and tell me".into(),
+            Some("docs".into())
+        ))
+    );
+
+    // Changed: it asks again with its new words.
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(Value::Null, json!("the guide's first page")),
+    )
+    .unwrap();
+    assert!(asked_gate(&runtime).is_none());
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some((
+            "Check the guide's first page and tell me".into(),
+            Some("docs".into())
+        ))
+    );
+
+    // The Conductor's own question stays through a replan of the gate.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which name should the guide use?"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        two_gates(Value::Null, json!("the guide's last page")),
+    )
+    .unwrap();
+    runtime.drive_mission_health(crate::runtime::unix_milliseconds());
+    assert_eq!(
+        asked_gate(&runtime),
+        Some(("Which name should the guide use?".into(), None))
+    );
+}
+
+/// PRD mission-human-gate D-21, mission-node-simple D-15 (review F2): the
+/// operator's `끝으로` on a raise goes past the node's open lines and passes
+/// its gate through the gate's one entry, as their answer from the card
+/// with its words, and the Conductor is told the gate passed.
+#[test]
+fn the_operators_done_passes_a_gate_through_its_one_entry() {
+    use crate::mission_criteria::{CriterionState, GateVia};
+    use crate::missions::WakeEvent;
+    use crate::runtime::mission_gates::GateState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", gated_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    runtime.drive_mission_health(now);
+    assert!(node_view(&runtime, "fix").attention.is_some());
+
+    operator_chose(&mut runtime, "fix", "done");
+    let fix = node_view(&runtime, "fix");
+    assert_eq!(fix.status, NodeStatus::Done);
+    let gate = fix.gate.unwrap();
+    assert_eq!(
+        (gate.state, gate.via, gate.said.as_deref()),
+        (GateState::Passed, Some(GateVia::Card), Some("운영자 판단"))
+    );
+    assert!(
+        fix.criteria
+            .iter()
+            .filter(|line| line.key != "human")
+            .all(|line| line.state != CriterionState::Open)
+    );
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert!(
+        mission
+            .wakes
+            .iter()
+            .any(|wake| wake.event == WakeEvent::GatePassed && wake.node == "fix")
+    );
 }

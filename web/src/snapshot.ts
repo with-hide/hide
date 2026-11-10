@@ -1399,7 +1399,7 @@ export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 export type MissionBlocked = "upstream_dropped";
 
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
-export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused"] as const;
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1435,7 +1435,7 @@ export type MissionLanding =
   | { state: "unread"; action: MissionLandingAction };
 
 /** A finish line's kind (`mission_criterion_kind`, PRD mission-map-git-criteria D-09-D-11, D-21). */
-export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect";
+export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect" | "human";
 /** A finish line's state as it stands now (`mission_criterion_state`); a check passed on an older commit reads open (B7). */
 export type MissionCriterionState = "open" | "pass" | "fail" | "skipped";
 /** Who recorded a line (`mission_recorded_role`, D-23). */
@@ -1469,8 +1469,27 @@ export type MissionCriterion = {
   checkers?: MissionChecker[];
   /** Of the checkers that decide the line, how many passed, as the core counts them; absent while one or none decides (`Tally`). */
   tally?: { passed: number; total: number };
-  /** The node whose work found a defect. */
+  /** The node whose work found a defect; absent on a defect the operator's answer to the node's gate wrote. */
   found_by?: string;
+  /** Where the operator answered from, on a passed gate (`human`) and on the defect their answer to it wrote (`mission_gate_via`, PRD mission-human-gate D-21). */
+  via?: MissionGateVia;
+  /** On a gate: the key of the decision that asks it now. */
+  asked?: number;
+};
+
+/** Where the operator's answer to a gate came from (`mission_gate_via`). */
+export type MissionGateVia = "card" | "phone" | "pane";
+/** Where a node's gate stands, derived by the core (`mission_gate_state`, PRD mission-human-gate D-09). */
+export type MissionGateState = "ahead" | "open" | "passed";
+/** The place the operator looks before a node is done (`GateView`): what to look at, the decision that asks it (`ask`, its question's key), since when it waits, when it has waited long (`오래 기다림`, compared with the clock), and once passed where the answer came from and the words. */
+export type MissionGate = {
+  state: MissionGateState;
+  look: string;
+  ask: number | null;
+  since_unix_ms: number | null;
+  long_wait_at_unix_ms: number | null;
+  via: MissionGateVia | null;
+  said: string | null;
 };
 
 /** What an external node watches (`External`). */
@@ -1517,7 +1536,9 @@ export type DecisionReopen = { request_id: string; refused?: boolean };
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
 export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
-export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
+/** What a waiting answer waits for (`mission_answer_hold`, `AnswerHold`): the Conductor works, the operator's own typing is in its input, the quiet period just after either, a menu of its own waits, another wait that ends on its own, or `지금 보내기` was pressed. */
+export type MissionAnswerHold = "working" | "typing" | "recent" | "approval" | "other" | "forced";
+export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState; /** Absent from an older core and from the phone's relay. */ hold?: MissionAnswerHold };
 /** Why the last answer did not reach the Conductor, or why one still waits (`session_unreadable`) (`mission_answer_failure`, B28, B39). */
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed" | "session_unreadable";
 
@@ -1632,6 +1653,8 @@ export type MissionNode = {
   waiting_on?: MissionWaitingOn | null;
   /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
   work?: MissionNodeWork | null;
+  /** The node's gate (PRD mission-human-gate); absent for a node without one. */
+  gate?: MissionGate;
 };
 
 /** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, or with no worker. */
@@ -2364,13 +2387,13 @@ export type EngineStatus = {
 };
 
 /**
- * What this machine's Herdr save offers to move into Hide's own engine, and what the last move came to (PRD
- * engine-bundle-4-herdr-removal D-6 to D-8). `move` while Hide's own Herdr runs, which moving stops (the question);
- * `import` for any other save, read only; `result` when only the last move's left-out workspaces wait to be read.
- * `herdr_running` says a Herdr runs on with the save's conversations open, so an import opens them as shells.
+ * What this machine's Herdr save offers to import into Hide's own engine, and what the last import came to (PRD
+ * engine-bundle-4-herdr-removal D-7, D-8). `import` for a save, read only; `result` when only the last import's
+ * left-out workspaces wait to be read. `herdr_running` says a Herdr runs on with the save's conversations open, so an
+ * import opens them as shells.
  */
 export type HerdrImport = {
-  kind: "move" | "import" | "result";
+  kind: "import" | "result";
   stage: "offered" | "moving" | "failed" | "moved";
   workspaces: number;
   tabs: number;
@@ -2378,7 +2401,7 @@ export type HerdrImport = {
   /** Conversations an earlier import left open in their Herdr, which an import resumes now that it is closed (B15). */
   waiting: number;
   herdr_running: boolean;
-  failure: "not_stopped" | "unreadable" | null;
+  failure: "unreadable" | null;
   reason: string | null;
   refused: { label: string; reason: string }[];
   /** The device whose save this is; absent for this machine's (B18). */

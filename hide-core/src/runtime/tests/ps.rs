@@ -327,6 +327,7 @@ fn mission(
             warnings: Vec::new(),
             waiting_on: None,
             work: None,
+            gate: None,
         }],
         merge_order: Vec::new(),
         landing_order: Vec::new(),

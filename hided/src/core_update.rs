@@ -195,24 +195,6 @@ fn update_with<S: Starter>(
         }
         Err(reason) => {
             log(&args.intent, "update.failed", json!({"reason": reason}));
-            // Once this machine's Herdr session moved into the new build's
-            // engine, no path starts the previous build on this state folder
-            // again: its Herdr would restore what moved (PRD
-            // engine-bundle-4-herdr-removal D-13, D-27).
-            let engine_dir = hide_kit::layout::engine_dir(&args.state_dir);
-            if hide_core::herdr_import::committed(&engine_dir) {
-                log(
-                    &args.intent,
-                    "rollback.refused",
-                    json!({"reason": "herdr_moved"}),
-                );
-                // The new build is the one the account starts, so the
-                // retry starts it again (B40).
-                adopt(&new, &previous.version);
-                return Err(format!(
-                    "the update failed ({reason}); this machine's Herdr session moved into the new build, so the previous build is not started again"
-                ));
-            }
             let pid = starter
                 .replace(&args.state_dir, &args.previous)
                 .map_err(|again| {
@@ -332,43 +314,6 @@ mod tests {
             "{outcome:?}"
         );
         assert_eq!(*starts.started.borrow(), [new, args.previous.clone()]);
-    }
-
-    // D-13, D-27, B40: once the move is committed, a new build that takes
-    // no links never gives way to the previous build: the update answers
-    // why, the account's build is the new one, and a retry starts it again.
-    #[test]
-    fn an_update_that_fails_after_the_move_never_starts_the_previous_build_and_a_retry_starts_the_new_one()
-     {
-        let root = tempfile::tempdir().unwrap();
-        let (args, new) = install(root.path());
-        hide_core::herdr_import::commit(&hide_kit::layout::engine_dir(&args.state_dir)).unwrap();
-        let starts = Starts::default();
-        starts.failing.borrow_mut().push(new.clone());
-        let refused = update_with(&args, &new, || Ok(&starts)).unwrap_err();
-        assert!(
-            refused.contains("the core took no links within 30 s"),
-            "{refused}"
-        );
-        assert!(refused.contains("not started again"), "{refused}");
-        assert_eq!(*starts.started.borrow(), std::slice::from_ref(&new));
-        let hide = format!("hide{}", std::env::consts::EXE_SUFFIX);
-        let current = root.path().join("builds").join(hide_kit::CURRENT);
-        assert_eq!(
-            std::fs::read(current.join(hide)).unwrap(),
-            b"bbbbbbbbbbbbbbbb"
-        );
-
-        starts.failing.borrow_mut().clear();
-        let retried = update_with(&args, &new, || Ok(&starts)).unwrap();
-        assert_eq!(
-            retried,
-            Outcome::Updated {
-                pid: 7,
-                program: new.clone(),
-            }
-        );
-        assert_eq!(*starts.started.borrow(), [new.clone(), new]);
     }
 
     /// The node reads only an outcome: a line of any other shape is named

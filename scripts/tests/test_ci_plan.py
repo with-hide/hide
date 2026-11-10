@@ -29,7 +29,7 @@ FULL = [
 ALL = [
     "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
     "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox",
-    "remote-mailbox-arm", "desktop-e2e", "package",
+    "remote-mailbox-arm", "repeat", "desktop-e2e", "package",
 ]
 # A full plan with a package input.
 PACKAGED = FULL + ["package"]
@@ -155,9 +155,9 @@ class Selection(unittest.TestCase):
 
     def test_a_platform_spec_keeps_its_platform_lanes_on_linux_and_windows(self):
         lanes = set(plan("web/e2e/s3.spec.ts")["lanes"])
-        self.assertEqual(lanes, {"policy", "checks", "web-e2e", "windows-e2e"})
+        self.assertEqual(lanes, {"policy", "checks", "web-e2e", "windows-e2e", "repeat"})
         lanes = set(plan("web/e2e/new-tab.spec.ts")["lanes"])
-        self.assertEqual(lanes, {"policy", "checks", "web-e2e"})
+        self.assertEqual(lanes, {"policy", "checks", "web-e2e", "repeat"})
 
     def test_the_remote_mailbox_lane_follows_the_crates_it_builds_and_tests(self):
         # It builds hided, hide, the agent hooks and the host helper and runs
@@ -907,6 +907,9 @@ def runner_jobs(block):
         return max(len(json.loads(found)) for found in re.findall(r"'(\[[^']*\])'", systems))
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
+    if "uses: ./.github/workflows/repeat.yml" in block:
+        # The count, the web specs' run and the Rust modules' run.
+        return 3
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
@@ -1054,7 +1057,11 @@ class Workflows(unittest.TestCase):
         # The remote mailbox lane's Linux arm64 leg adds one, planned only
         # for the device link's crates, its device test and the device kit
         # contract (with-hide/hide-private#501).
-        self.assertLessEqual(most, 51, "a run starts more jobs than the suites and native SDK contracts need")
+        # The repeat lane's three jobs (the count, the web specs and the Rust
+        # modules, each only for the tests the pull request changes) raise it
+        # from 51 to 54: a changed test is the one input the other lanes do not
+        # run many times.
+        self.assertLessEqual(most, 54, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

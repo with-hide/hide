@@ -1467,7 +1467,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * last move's result. One press is one event; a second press while a move runs is the same move. `device` names a
      * device's save (B18); absent, it is this machine's.
      */
-    herdrImport(action: "move" | "import" | "look" | "continue", device?: string) {
+    herdrImport(action: "import" | "look" | "continue", device?: string) {
       dispatch({ schema_version: 2, kind: "herdr_import", payload: device === undefined ? { action } : { action, device } });
     },
     saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
@@ -2046,7 +2046,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * as the operator's own input, refuses it once the question with `key`
      * changed, and keeps the first answer to the same question.
      */
-    answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true }) {
+    answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true } | { now: true }) {
       dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
     },
 

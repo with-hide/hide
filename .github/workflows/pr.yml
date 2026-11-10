@@ -134,6 +134,11 @@ jobs:
       lanes: ${{ steps.plan.outputs.lanes }}
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
+      # The tests this pull request adds or changes, for the `repeat` lane:
+      # the web specs (a JSON list of paths) and the Rust test modules (a JSON
+      # list of `{package, module, path}`), both empty when it changes none.
+      repeat-web: ${{ steps.plan.outputs.repeat-web }}
+      repeat-rust: ${{ steps.plan.outputs.repeat-rust }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
       # nightly and a pull request that changes a macOS path
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
@@ -212,6 +217,7 @@ jobs:
           bash scripts/check-no-workstation-identity.sh
           bash scripts/check-worktree-removal-boundary.sh
           python3 scripts/check-core-touches-no-machine.py
+          python3 scripts/check-timed-waits.py --base HEAD^1
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
           python3 scripts/check-device-kits-single-source.py
@@ -486,14 +492,12 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
-      - name: A device's Herdr copy a server runs is kept, and its kit follows the device's home
-        # The kit judges a copy's use by the files a process holds in it on
-        # Windows, never by the image paths it could read, and finds its home
-        # in USERPROFILE, never in the HOME OpenSSH sets beside it
-        # (hide-host/src/kit.rs).
+      - name: Every kit location follows the home the platform names
+        # The kit finds its home in USERPROFILE, never in the HOME OpenSSH sets
+        # beside it (hide-host/src/kit.rs).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & (test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does) | test(=kit::tests::every_kit_location_follows_the_home_the_platform_names))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=kit::tests::every_kit_location_follows_the_home_the_platform_names)'
       - name: Each agent's account folders, from its definition's [account]
         # `resolve`'s contract (hide-agent-adapter/tests/it/account.rs): a
         # folder is absolute only in Windows' forms, variable names compare
@@ -823,6 +827,23 @@ jobs:
     with:
       runner: ubuntu-24.04-arm
 
+  # Every test the pull request adds or changes, run many times with no retry
+  # (`repeat.yml`, docs/TESTING.md, "Flaky tests"): a new test that fails one
+  # run in ten passes its own pull request nine times in ten, and a failed run
+  # here fails `verify`. The plan names the tests (`scripts/ci-repeat.py`); on
+  # Linux, the web specs through `web-e2e.yml` and the Rust modules under
+  # nextest. A hand run of `repeat.yml` is the way to another system.
+  repeat:
+    name: repeat changed tests
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'repeat')
+    uses: ./.github/workflows/repeat.yml
+    permissions:
+      contents: read
+    with:
+      web: ${{ needs.plan.outputs.repeat-web }}
+      rust: ${{ needs.plan.outputs.repeat-rust }}
+
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
   # change to what differs by system.
   os-contract:
@@ -1085,7 +1106,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, desktop-e2e, package, merge-rust, merge-web]
+    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1094,6 +1115,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/ci-plan.py
+            scripts/ci-repeat.py
             scripts/ci-flaky-report.py
           sparse-checkout-cone-mode: false
       - name: Every planned lane succeeded and every other lane was skipped

@@ -135,6 +135,28 @@ pub struct AnswerView {
     pub text: String,
     pub option: Option<u8>,
     pub state: AnswerState,
+    /// What the answer waits for while it is `waiting`, so the banner says it
+    /// and offers `지금 보내기` where pressing could help.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<AnswerHold>,
+}
+
+/// Why a waiting answer is not typed yet, in the words the operator can act
+/// on: the Conductor works, the operator's own typing is in its input, the
+/// quiet period after either, or a menu of its own waits; every other wait ends on its own and has no word.
+/// `Forced` is the press of `지금 보내기`, until the doorbell types it or
+/// finds text in the input and gives the earlier reason back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerHold {
+    Working,
+    Typing,
+    /// The quiet period after the Conductor's last work or input: the input is
+    /// empty, but a press may not be wanted yet, so it says what happened.
+    Recent,
+    Approval,
+    Other,
+    Forced,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -244,6 +266,10 @@ pub struct NodeView {
     /// for a node not in progress, an outside one, or one whose worker's
     /// row Hide cannot see.
     pub work: Option<NodeWork>,
+    /// The place the operator looks before the node is done, and where it
+    /// stands (PRD mission-human-gate D-09); absent for a node without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<super::mission_gates::GateView>,
 }
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
@@ -334,11 +360,19 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             {
                 return Some(WaitingOn::Worker);
             }
+            // A gate waits after every other line, on the operator.
             let open = view
                 .criteria
                 .iter()
-                .find(|line| !matches!(line.state, CriterionState::Pass | CriterionState::Skipped));
+                .filter(|line| line.kind != CriterionKind::Human)
+                .find(|line| !matches!(line.state, CriterionState::Pass | CriterionState::Skipped))
+                .or_else(|| {
+                    view.criteria.iter().find(|line| {
+                        line.kind == CriterionKind::Human && line.state != CriterionState::Pass
+                    })
+                });
             Some(match open.map(|line| line.kind) {
+                Some(CriterionKind::Human) => WaitingOn::Decision,
                 Some(CriterionKind::Review) => WaitingOn::Review,
                 Some(CriterionKind::Verify) => WaitingOn::Verify,
                 Some(CriterionKind::Ci) => WaitingOn::Ci,
@@ -508,7 +542,12 @@ pub(crate) struct MissionRuntime {
     /// The answers the doorbell tried and held, by mission: shown as
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
-    pub(crate) answers_held: std::collections::HashSet<String>,
+    pub(crate) answers_held: HashMap<String, AnswerHold>,
+    /// The answers the operator pressed `지금 보내기` for, by mission and the
+    /// question's key: the doorbell types them past the Conductor's work, the
+    /// quiet period and a draft it reads empty. Memory only, and only the
+    /// missions whose answer still waits are kept (`mission_answers_due`).
+    pub(crate) answers_forced: HashMap<String, u64>,
     /// The answers whose `agent.prompt` the doorbell has asked and not yet
     /// heard back from, by mission: shown as sending. Memory only; the book
     /// already holds them as unconfirmed, so a stop in between never types
@@ -786,6 +825,34 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             mission.title,
             mission.decision.as_deref().unwrap_or("-")
         ),
+        WakeEvent::GatePassed => {
+            let line = node.and_then(|node| crate::mission_criteria::gate(&node.criteria));
+            format!(
+                "The operator passed the gate on node {} of mission {} \"{}\" ({}): \"{}\".\nGo on with the node as its lines say, and start the nodes that waited on it.",
+                wake.node,
+                mission.id,
+                mission.title,
+                line.and_then(|line| line.via)
+                    .map_or("-", crate::mission_criteria::GateVia::as_str),
+                line.and_then(|line| line.evidence.as_deref())
+                    .unwrap_or("-"),
+            )
+        }
+        WakeEvent::GateFix => {
+            let (defect, words) = node
+                .and_then(super::mission_gates::operator_defect)
+                .unwrap_or(("-", "-"));
+            match &wake.to {
+                Some(_) => format!(
+                    "The operator looked at your node {} of mission {} \"{}\" and asked for a fix: \"{words}\".\nIt is line {defect} of your node: fix it, record it with `hide mission record {} {defect} --pass --evidence <what shows it>`, and report to your Conductor as before.",
+                    wake.node, mission.id, mission.title, wake.node
+                ),
+                None => format!(
+                    "The operator answered the gate on node {} of mission {} \"{}\" with a fix: \"{words}\".\nHide added it as line {defect}, set the node to work and sent the words to its worker; the gate asks again once its lines are met. Read `hide mission show {} --mission {}`, and brief a worker if the node has none.",
+                    wake.node, mission.id, mission.title, wake.node, mission.id
+                ),
+            }
+        }
         WakeEvent::Attention => {
             let (what, act) = attention_words(wake.reason, &pr);
             news(format!("Node {} needs you to look: {what}", wake.node), act)
@@ -893,6 +960,10 @@ fn attention_words(
         Some(Reason::CloseRefused) => (
             "Hide could not close the mission with every node finished".to_owned(),
             "check the node's lines and close the mission",
+        ),
+        Some(Reason::HumanGate) => (
+            "its gate waits on the operator".to_owned(),
+            "nothing: the operator answers on the decision card",
         ),
         Some(Reason::ConductorFailed) | None => (
             "the operator is asked to look".to_owned(),
@@ -1841,6 +1912,12 @@ impl Runtime {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 self.add_mission_defect(&actor, &id, &node, (found_by, line), now)
             }
+            MissionCommand::Gate {
+                mission,
+                node,
+                pass,
+                said,
+            } => self.relay_gate(&actor, mission.as_deref(), &node, (pass, said), now),
             MissionCommand::Take { mission, handover } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
                 if target.status == MissionStatus::Cancelled {
@@ -3574,6 +3651,7 @@ impl Runtime {
                     warnings: node.warnings.clone(),
                     waiting_on: None,
                     work: None,
+                    gate: self.gate_view(mission, node),
                 };
                 view.waiting_on = waiting_on(mission, &view);
                 let activity = record.and_then(|record| self.worker_activity(record));
@@ -3644,11 +3722,20 @@ impl Runtime {
                     AnswerState::Sending
                 } else if answer.unconfirmed {
                     AnswerState::Unconfirmed
-                } else if self.missions.answers_held.contains(&mission.id) {
+                } else if self.missions.answers_held.contains_key(&mission.id) {
                     AnswerState::Waiting
                 } else {
                     AnswerState::Sending
                 },
+                hold: (!answer.unconfirmed && !self.missions.answers_typing.contains(&mission.id))
+                    .then(|| {
+                        if self.missions.answers_forced.get(&mission.id) == Some(&answer.key) {
+                            Some(AnswerHold::Forced)
+                        } else {
+                            self.missions.answers_held.get(&mission.id).copied()
+                        }
+                    })
+                    .flatten(),
             }),
             // A reason holds only while its cause does: a Conductor that took
             // the mission over, or a device back, can be answered again (B39).
@@ -3666,7 +3753,7 @@ impl Runtime {
                     // An answer the doorbell holds on a session it cannot
                     // read says so, for as long as the read refuses.
                     (mission.answer.is_some()
-                        && self.missions.answers_held.contains(&mission.id)
+                        && self.missions.answers_held.contains_key(&mission.id)
                         && self.delivery_unreadable(&mission.conductor.actor).is_some())
                     .then_some(AnswerFailure::SessionUnreadable)
                 }),

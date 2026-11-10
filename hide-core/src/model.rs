@@ -4970,6 +4970,10 @@ pub struct UiStateSnapshot {
     /// Content-free product statistics, shared by every window of this core.
     #[serde(default = "default_panel_visible")]
     pub product_analytics_enabled: bool,
+    /// The UTC day each surface last sent `hide_active`. Persisted, never on
+    /// the wire.
+    #[serde(skip)]
+    pub product_active_days: crate::product_analytics::ActiveDays,
     /// Done notifications are independent of Needs You; a fresh install
     /// leaves them off. Persistence migrates the former shared switch.
     #[serde(default)]
@@ -5904,6 +5908,7 @@ impl Default for UiStateSnapshot {
             first_run_choices: FirstRunChoices::default(),
             desktop_notifications: false,
             product_analytics_enabled: true,
+            product_active_days: Default::default(),
             desktop_notifications_done: false,
             screen_intros_seen: BTreeSet::new(),
             sidebar_width: default_sidebar_width(),
@@ -7417,7 +7422,7 @@ pub struct StatusSnapshot {
     pub tab_rename: Option<TabRenameSnapshot>,
     #[serde(rename = "herdr")]
     pub engine: ProviderStatusSnapshot,
-    /// What this machine's Herdr save offers to move into the core's own
+    /// What this machine's Herdr save offers to import into the core's own
     /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
     /// nothing to show.
     pub herdr_import: Option<HerdrImportSnapshot>,
@@ -7949,19 +7954,18 @@ pub struct ProviderStatusSnapshot {
     pub message: Option<String>,
 }
 
-/// What this machine's Herdr save offers to move into the core's own engine,
-/// and what the last move came to (PRD engine-bundle-4-herdr-removal D-6 to
-/// D-8, B2 to B5, B11, B14 to B17).
+/// What this machine's Herdr save offers to import into the core's own engine,
+/// and what the last import came to (PRD engine-bundle-4-herdr-removal D-7,
+/// D-8, B11, B14 to B17).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrImportSnapshot {
-    /// `move` while Hide's own Herdr runs, which moving stops (the question,
-    /// D-6); `import` for any other save, read only (D-8); `result` when
-    /// nothing is left to offer and the last move's result waits to be read.
+    /// `import` for a save, read only (D-8); `result` when nothing is left to
+    /// offer and the last import's result waits to be read.
     pub kind: String,
-    /// `offered`, `moving` while the move is asked for and the core starts
+    /// `offered`, `moving` while the import is asked for and the core starts
     /// again with it, `failed`, or `moved` for a `result`.
     pub stage: String,
-    /// What moving offers: workspaces, tabs and agents not moved yet.
+    /// What importing offers: workspaces, tabs and agents not imported yet.
     pub workspaces: usize,
     pub tabs: usize,
     pub agents: usize,
@@ -7971,12 +7975,11 @@ pub struct HerdrImportSnapshot {
     /// A Herdr runs on with the save's conversations open, so an import
     /// opens their panes as shells (B15).
     pub herdr_running: bool,
-    /// `not_stopped` (Hide's Herdr could not be stopped, B4) or `unreadable`
-    /// (the save could not be read, B11) while `stage` is `failed`.
+    /// `unreadable` (the save could not be read, B11) while `stage` is `failed`.
     pub failure: Option<String>,
     /// Why the save could not be read, in one line.
     pub reason: Option<String>,
-    /// The workspaces the last move left out, with why (B11).
+    /// The workspaces the last import left out, with why (B11).
     pub refused: Vec<HerdrImportRefusedSnapshot>,
     /// The device whose save this is; absent for this machine's (B18).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -10139,6 +10142,7 @@ mod wire_enum_tests {
                 CriterionKind::Review,
                 CriterionKind::Verify,
                 CriterionKind::Defect,
+                CriterionKind::Human,
             ];
             for variant in criterion_kinds {
                 match variant {
@@ -10147,11 +10151,30 @@ mod wire_enum_tests {
                     | CriterionKind::Ci
                     | CriterionKind::Review
                     | CriterionKind::Verify
-                    | CriterionKind::Defect => {}
+                    | CriterionKind::Defect
+                    | CriterionKind::Human => {}
                 }
             }
             assert_wire(&contract, "mission_criterion_kind", &criterion_kinds);
             checked.insert("mission_criterion_kind");
+            use crate::mission_criteria::GateVia;
+            let vias = [GateVia::Card, GateVia::Phone, GateVia::Pane];
+            for variant in vias {
+                match variant {
+                    GateVia::Card | GateVia::Phone | GateVia::Pane => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_via", &vias);
+            checked.insert("mission_gate_via");
+            use crate::runtime::mission_gates::GateState;
+            let gate_states = [GateState::Ahead, GateState::Open, GateState::Passed];
+            for variant in gate_states {
+                match variant {
+                    GateState::Ahead | GateState::Open | GateState::Passed => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_state", &gate_states);
+            checked.insert("mission_gate_state");
             let criterion_states = [
                 CriterionState::Open,
                 CriterionState::Pass,
@@ -10207,6 +10230,27 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_state", &states);
             checked.insert("mission_answer_state");
+            use crate::runtime::missions::AnswerHold;
+            let holds = [
+                AnswerHold::Working,
+                AnswerHold::Typing,
+                AnswerHold::Recent,
+                AnswerHold::Approval,
+                AnswerHold::Other,
+                AnswerHold::Forced,
+            ];
+            for variant in holds {
+                match variant {
+                    AnswerHold::Working
+                    | AnswerHold::Typing
+                    | AnswerHold::Recent
+                    | AnswerHold::Approval
+                    | AnswerHold::Other
+                    | AnswerHold::Forced => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_hold", &holds);
+            checked.insert("mission_answer_hold");
             use crate::mission_events::{AnswerSource, EventKind};
             let kinds = [
                 EventKind::Planned,
@@ -10267,6 +10311,7 @@ mod wire_enum_tests {
                 AttentionReason::ConductorFailed,
                 AttentionReason::WakeRefused,
                 AttentionReason::CloseRefused,
+                AttentionReason::HumanGate,
             ];
             for variant in reasons {
                 match variant {
@@ -10276,7 +10321,8 @@ mod wire_enum_tests {
                     | AttentionReason::UnplannedPr
                     | AttentionReason::ConductorFailed
                     | AttentionReason::WakeRefused
-                    | AttentionReason::CloseRefused => {}
+                    | AttentionReason::CloseRefused
+                    | AttentionReason::HumanGate => {}
                 }
             }
             assert_wire(&contract, "mission_attention_reason", &reasons);

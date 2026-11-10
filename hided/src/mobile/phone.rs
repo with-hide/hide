@@ -839,6 +839,12 @@ async fn handle(
     projection: &Arc<Projection>,
 ) -> Option<Value> {
     let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
+    if operator_action(kind) {
+        mobile
+            .config
+            .core
+            .note_operator_active(hide_core::product_analytics::ActiveSurface::Phone);
+    }
     match kind {
         "open" => {
             let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
@@ -1051,6 +1057,26 @@ async fn handle(
             )
         }
     }
+}
+
+/// A message the operator sends by acting on the phone: a reply or a key, an
+/// answer, a wake, a merge, a start. Opening, reading, scrolling, a ping and
+/// a notification registration are not: the app sends those on its own when
+/// it opens or reconnects.
+fn operator_action(kind: &str) -> bool {
+    matches!(
+        kind,
+        "input"
+            | "wake_agent"
+            | "human_turn_done"
+            | "answer_mission"
+            | "ask_mission_material"
+            | "reopen_mission_view"
+            | "merge_pr"
+            | "delegate_pr"
+            | "wake_sleeping_session"
+            | "start_agent"
+    )
 }
 
 /// The answer to a `look_*` request that cannot go on: its state says why.
@@ -1275,6 +1301,13 @@ fn mission_answer_event(
     .into_bytes())
 }
 
+/// `event`, a `mission_answer`, marked as sent from a phone.
+fn from_phone(event: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    let mut event: Value = serde_json::from_slice(&event).map_err(|_| "invalid_request")?;
+    event["payload"]["phone"] = Value::Bool(true);
+    Ok(event.to_string().into_bytes())
+}
+
 /// The operator's answer to the decision a mission waits on, from a phone.
 /// One claim per request id, taken and settled on one blocking thread, so a
 /// repeat of the same press, on this socket or another, reaches the Conductor
@@ -1292,7 +1325,9 @@ async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -
             "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
         })
     };
-    let bytes = match mission_answer_event(message, &mobile.missions()) {
+    // The core keeps where a gate's answer came from (PRD mission-human-gate
+    // D-21): this event is the banner's, sent from a phone.
+    let bytes = match mission_answer_event(message, &mobile.missions()).and_then(from_phone) {
         Ok(bytes) => bytes,
         Err(reason) => {
             refusal_logged(

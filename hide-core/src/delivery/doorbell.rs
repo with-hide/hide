@@ -22,7 +22,6 @@ use super::Actor;
 use super::ledger::{BELLS, Ledger, Letter, State};
 use super::worker::{Client, Effect, Rang, now};
 
-const QUIET_MS: u64 = 30_000;
 /// How long a recipient works on without a rest, counted from the later of
 /// the letter's arrival and the start of its work, before the letter is
 /// delivered to it mid-turn (PRD letters-to-busy-agents D-04). A letter sent
@@ -111,6 +110,20 @@ pub(crate) enum Hold {
 }
 
 impl Hold {
+    /// What an operator reads of a held answer (`AnswerHold`): the holds a
+    /// press of `지금 보내기` can lift, and a menu the Conductor itself waits
+    /// at; the rest end on their own.
+    fn answer_hold(self) -> crate::runtime::missions::AnswerHold {
+        use crate::runtime::missions::AnswerHold;
+        match self {
+            Self::Working => AnswerHold::Working,
+            Self::Draft | Self::ComposerUnread => AnswerHold::Typing,
+            Self::Quiet => AnswerHold::Recent,
+            Self::Blocked | Self::AwaitingOperator => AnswerHold::Approval,
+            _ => AnswerHold::Other,
+        }
+    }
+
     fn code(self) -> &'static str {
         match self {
             Self::Kind => "kind_not_belled",
@@ -244,8 +257,8 @@ pub(crate) fn judge(observation: &Observation, patience: Patience, now: u64) -> 
     if observation.unsent_draft() {
         return Err(Hold::Draft);
     }
-    if now.saturating_sub(observation.last_input_at_unix_ms) < QUIET_MS
-        || now.saturating_sub(projected.changed_at(observation)) < QUIET_MS
+    if now.saturating_sub(observation.last_input_at_unix_ms) < super::INPUT_QUIET_MS
+        || now.saturating_sub(projected.changed_at(observation)) < super::INPUT_QUIET_MS
     {
         return Err(Hold::Quiet);
     }
@@ -373,6 +386,10 @@ struct Tried {
     delay: u64,
     /// The bell failed rather than was refused.
     failed: bool,
+    /// The try was a mission answer pressed with `지금 보내기`: the press is
+    /// never held back by an ordinary try's backoff, and once tried it, and the
+    /// answer it falls back to when the input holds text, wait like any other.
+    forced: bool,
 }
 
 /// A pane's last bell: the episode it was typed in and the letter it rang
@@ -786,6 +803,7 @@ impl Doorbell {
                             retry_at: now.saturating_add(delay),
                             delay,
                             failed: false,
+                            forced: false,
                         },
                     );
                 }
@@ -828,6 +846,7 @@ impl Doorbell {
                             retry_at,
                             delay,
                             failed: true,
+                            forced: false,
                         },
                     );
                 }
@@ -894,11 +913,9 @@ impl Doorbell {
                 continue;
             };
             let episode = Episode::from(&observed);
-            if self
-                .answer_tried
-                .get(&work.mission)
-                .is_some_and(|last| last.episode == episode && now < last.retry_at)
-            {
+            if self.answer_tried.get(&work.mission).is_some_and(|last| {
+                last.episode == episode && now < last.retry_at && !(work.forced && !last.forced)
+            }) {
                 continue;
             }
             *count += 1;
@@ -911,6 +928,12 @@ impl Doorbell {
                     }
                 }
                 Ok(Outcome::Held(reason)) => {
+                    if work.forced
+                        && reason == Hold::ComposerUnread
+                        && let Ok(mut guard) = owner.lock()
+                    {
+                        guard.mission_answer_unforced(&work.mission);
+                    }
                     self.answer_hold(owner, &work, reason);
                     self.answer_tried.insert(
                         work.mission.clone(),
@@ -919,6 +942,7 @@ impl Doorbell {
                             retry_at: now.saturating_add(RETRY_FIRST_MS),
                             delay: RETRY_FIRST_MS,
                             failed: false,
+                            forced: work.forced,
                         },
                     );
                 }
@@ -1044,7 +1068,7 @@ impl Doorbell {
                 "mission":work.mission,"pane_id":work.conductor.pane_id,"reason":reason.code()}));
         }
         if let Ok(mut guard) = owner.lock() {
-            guard.mission_answer_held(&work.mission);
+            guard.mission_answer_held(&work.mission, reason.answer_hold());
         }
     }
 
@@ -1802,7 +1826,9 @@ fn type_answer(
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(unclear) = clear_to_type(engine, observed, false).map_err(SendFailure::NotTyped)? {
+    if let Err(unclear) =
+        clear_to_type(engine, observed, work.forced).map_err(SendFailure::NotTyped)?
+    {
         return Ok(Outcome::Held(unclear.hold()));
     }
     {
@@ -4589,6 +4615,24 @@ mod tests {
         assert_eq!(bell.attempts(), 1);
     }
 
+    /// What an answer says it waits for: the quiet period after work is not
+    /// "something is typed", so the banner never claims text the input lacks.
+    #[test]
+    fn an_answers_hold_names_what_the_operator_can_see_or_lift() {
+        use crate::runtime::missions::AnswerHold;
+        for (hold, shown) in [
+            (Hold::Working, AnswerHold::Working),
+            (Hold::Draft, AnswerHold::Typing),
+            (Hold::ComposerUnread, AnswerHold::Typing),
+            (Hold::Quiet, AnswerHold::Recent),
+            (Hold::Blocked, AnswerHold::Approval),
+            (Hold::AwaitingOperator, AnswerHold::Approval),
+            (Hold::NotReady, AnswerHold::Other),
+        ] {
+            assert_eq!(hold.answer_hold(), shown, "{hold:?}");
+        }
+    }
+
     /// A Bell whose only pending input is the operator's answer to a
     /// mission its recipient conducts: the fixture's letter is taken in.
     fn conductor_with_answer() -> Bell {
@@ -4716,7 +4760,7 @@ mod tests {
         );
         assert_eq!(bell.reads(), 1);
         // A key in the quiet period is no rest yet.
-        key(start - 10_000);
+        key(start - 5_000);
         pass_logged(&bell, &mut doorbell, start + 2_000);
         assert_eq!(bell.reads(), 1);
         // Once it rests, the new draft is read: now the operator erased it.

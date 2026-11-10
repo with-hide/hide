@@ -67,10 +67,17 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   It does not see a hand-written `new Promise((resolve) => setTimeout(resolve, ms))`, which is the same mistake and is not allowed.
   Clippy refuses `std::thread::sleep` in Rust (see [Writing a Rust test](#writing-a-rust-test)).
   Wait for the state the next step needs: a diagnostic `kind` with its subject ID, a snapshot field, an engine answer, the bytes in a pane's input log.
+- No new timed wait enters a test unannounced: `scripts/check-timed-waits.py` (the `policy` lane, `python3 scripts/check-timed-waits.py` locally) counts a `timeout:` override in `web/e2e` and `desktop/e2e`, and a `thread::sleep` or `tokio::time::sleep` in Rust test code, per file against `scripts/timed-waits-baseline.json`.
+  A file with more of them than its baseline fails, and a file the baseline does not list may have none.
+  The baseline holds counts and never line numbers, so moving a line, or a change that removes waits, cannot fail it; after removing waits, `python3 scripts/check-timed-waits.py --lower` brings the numbers down, and nothing raises them: CI runs the check with `--base HEAD^1` and fails a baseline number higher than the base commit's for that file (0 for a file it does not list, the old file's number for one `git` shows renamed, whose key you move by hand).
+  A sleep imported by name (`use tokio::time::sleep;` then `sleep(d)`, also as an alias or through a glob) is counted at its calls within the import's brace scope.
+  Blocks inherit their enclosing scope, modules inherit through `use super::*`, and a local function with the same name shadows an inherited timer; an import in another scope never turns an unrelated function's calls into waits.
+  A wait that waits for a named state ends its line with `// wait-ok: <the state it waits for>` (a long first start on a cold runner, the next poll of a pid file); the reason is read in review, and an annotated wait is not counted.
+  The check does not see a wait spelled another way (a hand-written `setTimeout` promise, `Atomics.wait`), which is the same mistake and is not allowed either.
 - Wait for the readiness the next step actually depends on.
   A healthy HTTP answer is not a subscribed socket, a delivered first snapshot, or a terminal that accepts input.
 - A row the snapshot shows is not a state the core has acted on.
-  A pane is drawn before the engine confirms its split, so `splitPane` returns once the tab's geometry line is empty (`tabGeometrySettled`), or a close sent next starts beside the split and is never answered (with-hide/hide-private#537).
+  A pane is drawn before the engine confirms its split or close, so `splitPane` and `closePane` return once the tab's geometry line is empty (`tabGeometrySettled`), or an operation sent next starts beside it and is never answered (with-hide/hide-private#537).
   An agent's row names its session before a session pass has laid the delivery observation that lets the pane call `hide agent spawn`, so the family fixture polls the read-only `hide agent show here`, which resolves its caller the same way, before the parent spawns its child (#130).
 - A poll only observes (`hide-e2e/no-action-in-poll` in the e2e lint).
   A click, focus, creation or resend is one explicit action outside the poll; an action repeated inside `toPass` or `expect.poll` turns one intent into several and can satisfy the assertion with the wrong one.
@@ -205,6 +212,7 @@ When the behavior depends on the order of two events, the test fixes that order;
   A claim about a real agent session needs the real CLI inside an otherwise isolated fixture: a shim on the pane's `PATH` that runs the CLI under the operator's `HOME`, while the server keeps its private one.
 - A fixture makes agent labels the way the product does, through the core and not through tokens: `labelAgentPane` in `web/e2e/fixture-agents.ts` gives a pane a new Claude session and writes a synthetic transcript (`writeFixtureTranscript` in `web/e2e/pane-fixture.ts`) the core's label worker reads, and the fixture `claude` shim acts as the provider that answers the analysis with the label the spec asked for.
   The same session is read again only when the agent's state changes: a spec that needs a different label either gives the pane a new session, or, for a pane declared as another's child, appends a turn to its own session (`continueFixtureTranscript`) and changes its state, because a relationship holds only for the sessions it was written for.
+  A stopped agent that stops again at a permission prompt ran in between, so the core ends the line of the turn it had read and never analyses that turn again (`docs/ARCHITECTURE.md`, Status): a spec that needs a blocked agent's line writes the request as a turn of its own after the first label has landed (`askPermission` in `web/e2e/session-work-fixture.ts`), or the line is lost whenever the analysis lands before the core sees the block (with-hide/hide-private#515).
   A spec drives status through the screen the engine's rules read, with `setAgentState` and `finishUnseenTurn` (which needs `elsewhereTab`, so the turn ends unseen): the stand-in draws the title and prompt a real Claude Code draws, because nothing else produces working, blocked or done.
   No spec writes a label, status or lineage pane token; a child is made the way an agent makes one, through `hide agent spawn --parent here` run from inside its parent's pane (`spawnChild`).
   `desktop/e2e/session-labels.spec.ts` is the reference for the session boundary.
@@ -291,6 +299,8 @@ A piece that another open change is still building is marked as pending with the
    These synthetic native-format records prove session reading and continuation, while `pi-omp-extension.spec.ts` and `opencode-plugin.spec.ts` exercise the integrations themselves.
    The web and desktop native-caller fixtures share `web/e2e/spawn-provider.ts`; the compiled stand-in writes its own bounded config through `--write-config`, also used by the Python journey, so none of those callers repeats its line format.
    A synthetic trigger sent as a `key` event is operator input and moves keyboard focus: `agent-pane.ts` and `runInPaneKeepingFocus` hold the command behind a file gate until `restoreFocusAfterInput` observes that input and restores the prior focus, before the command runs as the agent.
+   The screen-state setters in `fixture-agents.ts` first read whether the requested state already holds, including a question supplied by a prepared transcript, and send no input when it does.
+   Otherwise a wait can finish on the old state before the synthetic key's input report moves the keyboard, undoing the next tab selection (`close-subtree.spec.ts`, with-hide/hide-private#444).
   The native stand-ins write `terminal-ready-<pane>` only after configuring their terminal and drawing their first screen; `waitForAgentInput` waits for that mark before a command trigger or a session-report key.
   Before a start in an existing pane, `prepareAgentInput` removes the previous program's mark; `agentRunner` does this before Reopen, and `startAgentIn` before a typed start.
   The Reopen journey holds the resumed program's session reporter before terminal setup and proves the previous readiness cannot admit its hook command.
@@ -323,6 +333,9 @@ A piece that another open change is still building is marked as pending with the
    - A diagnostic `kind`, read from the snapshot frames the page receives (`observeDiagnostics` in the same file; `recordWire` in `web/e2e/s7.spec.ts`).
      Wait for `pane.focus.followed`, not for "a moment after the click".
    - What the fixture can read from the real systems: the bytes in a pane's input log, an engine answer, a file the core wrote.
+   - What the daemon published or logged, through `web/e2e/daemon-actions.ts`: `withControl(daemon, (control) => control.until(read, what, ms))` waits for a snapshot field and returns it (`tabsOf`, `corePaneFocus` and `agentIn` are the reads), and `untilLogged(daemon, match, count, what)` waits for the core's own structured log (`loggedCount` counts it) to hold `count` records with the fields of `match`.
+     The log is the signal for a decision whose outcome is that nothing happens: the daemon logs `push.skipped` with its `reason` for a notice it does not push, so `pushSkippedByMode` in `web/e2e/mobile.spec.ts` takes `loggedCount` before the action, waits for one more record, and then asserts the push list, instead of sleeping three seconds and hoping a push would have arrived by then.
+     Take the count before the action and wait for it to grow; a count taken after can already include the record you wait for.
    When there is nothing to wait for, `web/e2e/wait.ts` has the only sleeps a spec may use, one per reason:
    - `animationsFinished(page)` for the colour transitions before a capture; it waits for the page's finite animations, not for a time.
    - `quietFor(page, ms, why)` for a window in which something must not happen (nothing is sent, the row does not move); `why` states the claim.
@@ -358,11 +371,15 @@ A piece that another open change is still building is marked as pending with the
 7. **Restart through `daemon.restart()`, and leave the old page first.**
    `daemon.restart()` in `web/e2e/hided-fixture.ts` stops `hided` and starts it again on the same state folder and port, as a real restart does, and takes an optional callback to edit the state folder before the start; `web/e2e/sidebar-pr-start.spec.ts` restarts three times in one test.
    It uses `hide stop` on every system and preserves the own engine's holders for adoption; only final fixture cleanup sweeps their process trees.
-   A navigation that only changes the hash does not remount the connection, so the old page keeps its old token and socket and races the new one.
+   It returns only after its own WebSocket reads the core's connected engine and, when a saved checkout is selected, its restored Workspace view.
+   `/health` alone proves only that the listener is back; this shared snapshot boundary keeps restart callers from acting on an unresolved saved selection.
+   A navigation that only changes the hash does not remount the page: its connection follows the new token (`followToken` in `web/src/ws.ts`), but the page it keeps has the old page's state and may already have been refused with the old token, so a test that reopens the product goes through a fresh page.
    Go through `about:blank` before opening the new origin and token, as `openSettings` in `web/e2e/interface-language.spec.ts` does, and keep that step in one helper per spec.
    Why: the old page and the new token reconnect at the same time and either can win.
    `hide-e2e/reopen-after-restart-through-blank` fails a `goto` of `#token=` after `restart()` in the same function; a helper defined elsewhere and called after the restart is not seen, so keep the step in the helper.
    A test whose subject is a surviving page reconnecting to the restarted daemon (`web/e2e/s3.spec.ts`, the two draft recovery tests) must not reload it, and says so in a line allow.
+   A restored editable draft needs an editable file: the View-tab draft test makes the parent folder unwritable to refuse atomic saves while keeping the file editable when the restarted node opens it.
+   Making that file itself read-only would correctly prevent the draft from being restored into it.
 8. **Put a system difference in one fixture helper.**
    See [Operating-system differences belong to one fixture helper](#operating-system-differences-belong-to-one-fixture-helper); native home variables, executable names, the tool path and the no-op opener live in `web/e2e/platform-fixture.ts`, not in a `process.platform` branch in a spec.
 9. **A retry is a label, not a fix.**
@@ -514,6 +531,7 @@ The table names the lanes a path reaches; on a pull request the macOS jobs among
 | The phone page: `web/mobile.html`, `web/public/m` | `checks` and `web-e2e`; hided serves it at `/m/`, and the app never loads it |
 | Web code the desktop host imports or drives through native input (the host bridge, the shortcut registry, keys and keyboard, store, snapshot and socket, terminals, focus and area cycling, `App.tsx`, `main.tsx`; `SHARED_WEB` in the script) | also `windows-e2e` and `windows-desktop` |
 | A `web/e2e` spec | `checks` and `web-e2e`; a spec tagged `@platform` also runs `windows-e2e` (the whole suite runs on Linux, so the Linux leg of `@platform` is `web-e2e`) |
+| A `web/e2e/*.spec.ts` added or modified, or a module of a crate's `tests/it` binary added or modified (not its `support` folder or `main.rs`) | also `repeat`: those tests run many times with no retry ([The repeat lane](#the-repeat-lane)) |
 | `desktop/src` outside registered unit tests, `desktop/static`, a `desktop/e2e` spec | `checks` and `desktop-e2e`, the only macOS lane (two shard jobs) a change outside the two crates and the package inputs below asks for, and `windows-desktop` (the desktop `@platform` tests on Windows) for `desktop/src`, `desktop/static` and a spec tagged `@platform`; `desktop/src/main` also runs `windows-check`, where the main process's unit suite runs on Windows |
 | A Rust crate | `rust` over the crate and every crate that depends on it (from `cargo metadata`), `windows-check`, which compiles every crate for Windows, the Linux `web-e2e` when the crate reaches `hided`, which the web suite drives, or `hide-holder`, which its own-engine job runs beside hided unlinked (the holder's crates and `vendor/portable-pty`), and `remote-mailbox` when the crate reaches `hide-core`, `hided`, `hide-agent-hooks` or `hide-host`; not the macOS `desktop-e2e`, which main's push run and the nightly run for it ([Where the macOS runners went](#where-the-macos-runners-went)) |
 | `hide-core`, `hided`, `hide-platform`, `hide-host`, `hide-kit`, `hide-agent-hooks` | also `os-contract` (its Linux and Windows legs), `windows-e2e` and `windows-desktop`; no macOS lane but `package` for the package inputs among them |
@@ -525,7 +543,7 @@ The table names the lanes a path reaches; on a pull request the macOS jobs among
 | What goes into a package (`PACKAGE_PATHS` in the script): `desktop/scripts`, `desktop/package.json`, `desktop/resources`, `verify-cargo.sh`, `verify-web.sh`, `toolchain-env.sh`, `hided/build.rs`, which embeds the web shell, `hided/src/cli.rs`, `hide-kit` and `hide-agent-hooks` | also `package`: `package.yml`'s Windows and Linux packages, the two Linux device helper builds, and the macOS archive with the packaged app's own specs |
 | The paths `POLICY_ONLY` names, which no lane reads: `agents/`, `site/`, `.gitignore` files, the root `LICENSE` and `NOTICE`, the PR template and `dependabot.yml`, the contribution intake (the issue and discussion forms and `APPROVED_CONTRIBUTORS`), `scripts/tests/`, the policy `check-*` scripts, the design, release and measurement scripts, the pre-merge check and the merge order with the helpers they share, the design contract's token generator and checks (`gen-tokens.mjs`, `check-design-contract.mjs` and the checks it runs, which `design-contract.yml` runs on every pull request), and Markdown below a folder no rule claims | `policy` alone |
 | The paths `NAMED_LANES` names, whose readers are a known set: a `web/e2e` file that is not a spec (the `desktop` suites on macOS and Windows import it, and `desktop/e2e` unit tests run in `windows-check`), a `desktop/e2e` file that is not a spec, the Playwright, eslint and vitest configurations, `web/vite.config.ts` (every lane that builds the shell or runs its unit suite), `web/scripts` and `desktop/scripts` | the lanes that read it, listed in the script and its test; known packaging helpers run `checks` and `package`, without unrelated desktop, OMP or OS contracts |
-| Any `.github/workflows/` or `.github/actions/` change, or `scripts/ci-plan.py` | every lane, including `package` and `agent-clis`; a CI definition must exercise all its decisions |
+| Any `.github/workflows/` or `.github/actions/` change, or `scripts/ci-plan.py` | every lane, including `package`, `agent-clis` and `repeat` (which runs the tests the pull request changes, none when it changes no test); a CI definition must exercise all its decisions |
 | `scripts/` the lanes call (`verify-*.sh`, `ci-flaky-report.py`, ...), any contract `READERS` does not name, any `package.json`, lockfile, the workspace `Cargo.toml`, a type change, and any path no row above names | every lane but `package`, which only the package inputs add |
 
 The macOS choices below are data in `MACOS_LANE_INPUTS`, rather than additional job conditions; on a pull request they apply only when it changes a macOS path.
@@ -689,6 +707,8 @@ The ownership tests keep an admitted worker alive after its caller releases owne
 A test's fixture ends every holder its records name, and on Unix what each program's session left, by pid and start time, however the test ends; the holders a test starts with no record are ended by their own guard the same way.
 The programs a pane runs in these tests are the test binary itself in a role (`role.rs`), so nothing outside the build is started, and each test names the processes it checks by pid and start time while they run.
 The `script` role plays steps of bytes the test gives it, each when the test says, on a raw terminal, and records every byte it is sent, so a test sees exactly what reached the program.
+Step zero runs at once; `Script::go` releases only later steps.
+The clipboard tests draw a ready screen in step zero and release each copy only after the intended connection holds the pane, so the initial copy cannot race the attachment (with-hide/hide-private#705).
 
 The screen the holder sends is checked against an xterm, not against the holder: `screen.rs` draws the fragments on `@xterm/headless` (`tests/xterm/draw.mjs`, run by Node), on a fresh terminal and on one that drew something else first at another size, and compares the text, the cursor and its visibility, and each cell's colors, attributes and link with what the program's own bytes draw on a fresh one, with Unicode 11 widths, trailing spaces trimmed, reverse video applied and a default color named as the pane's own; drawing the fragments must answer nothing and leave no mouse mode on.
 It covers styles, wide and combined characters and links, the alternate screen and back, a redraw after lost fragments, and a resize and a takeover while the program holds its output.
@@ -775,7 +795,7 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 51 jobs.
+A run that plans every lane a pull request can plan starts at most 54 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
@@ -792,6 +812,7 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, and a Windows core dialing the runner's OpenSSH Server and an sshd in that distribution over Windows' own `ssh.exe`, planned only for the crates those links cross (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), the node command and the two tests ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` (Linux x64, Linux ARM64) | 2 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS; its ARM64 leg is planned only for the device link, its device test and the device kit contract |
+| `repeat changed tests` | 3 | the count of the changed tests, their web specs through `web-e2e.yml` and their Rust modules under nextest; each of the last two starts only for a pull request that changes such a test, so the three are the most one start ([The repeat lane](#the-repeat-lane)) |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
@@ -911,7 +932,7 @@ A lane whose run has no key, such as a fork's, files nothing and still passes.
   Artifact downloads use the existing `gh` credentials, need gh 2.97 or newer, stop at the byte cap and a 45-second deadline, and reap the child process on every exit.
   Unsupported provenance, ambiguity, API refusal or a resource cap stops history filing with a warning and summary rather than guessing from partial evidence; a history notice cannot turn a failed lane green or block a passing lane.
   Local reporter regressions use fixture reports and mocked APIs, never live test issues or comments.
-- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0` so one failure fails the job), and a green job is the evidence.
+- A fix is shown by repetition in a CI job, not on a machine under load: `gh workflow run repeat.yml` repeats a named web spec or Rust test module on Linux, macOS or Windows ([The repeat lane](#the-repeat-lane)), and `gh workflow run remote-mailbox.yml --ref <branch> -f repeat=10` runs the remote mailbox lane's tests ten times in one Linux job (nextest's `--stress-count`, with `--retries 0` so one failure fails the job), and a green job is the evidence.
 - At the deadline a flaky test is fixed or deleted.
   Whoever knows the cause opens the fix or the deletion; if nobody does, the issue goes to the operator.
   The deadline is not a timer that moves the test somewhere quieter, and a later flake on an issue past its deadline says so in its comment.
@@ -939,6 +960,42 @@ A flaky test is isolated by its issue, never by leaving a required lane:
 - Rust has no quarantine either: a flaky Rust test is retried, filed and fixed or deleted, and the policy is zero `ignore`.
   An `ignore` that names an external binary, such as `remote_delivery`, is an opt-in run with its own step and says what it needs; it is not a quarantine.
 
+### The repeat lane
+
+A new test that fails one run in ten passes its own pull request nine times in ten, so retrying a failure cannot keep it out.
+The `repeat` lane (`repeat.yml`, called from `pr.yml`) runs the tests a pull request adds or changes many times with no retry, and one failed run fails the lane and so `verify`.
+Nothing is handed to the nightly.
+
+- **What counts as a changed test is a file, not a test.**
+  A web `e2e/*.spec.ts` added or modified runs whole, and so does a module of a crate's `tests/it` binary added or modified (`foo.rs`, `foo/mod.rs` or `foo/bar.rs`, picked by nextest's `test(/^foo::/)`, children included).
+  A changed line says nothing reliable about which test it reaches (a helper, a hook, a fixture at the top of the file, a loop that declares tests), and reading the TypeScript to tell is more machinery than the lane earns.
+  A change to `tests/it/support` or `tests/it/main.rs`, or a module that lists no test (a helper file such as `stand_ins.rs`, even beside modules that do list tests), selects the crate's whole `it` binary, since what a helper reaches is not knowable from the diff; a deleted file and a desktop spec are not selected; the desktop suite needs the macOS runner, and [Where the macOS runners went](#where-the-macos-runners-went) owns who gets one.
+  `scripts/ci-repeat.py` selects them, `scripts/ci-plan.py` plans the lane from its answer, and `scripts/tests/test_ci_repeat.py` holds both.
+- **The budget is 200 test runs for the whole pull request.**
+  N is the number of tests that will run, not the number of files: Playwright's own `--list` counts the web tests (so a loop that declares tests counts as many as it runs) and `cargo nextest list` counts the Rust tests the module's filterset matches (an `#[ignore]` test and a helper file count none).
+  The count job builds the changed crates' tests once to list them, and the Rust job builds them again on its own runner.
+  Each test runs `clamp(floor(200 / N), 3, 10)` times: 5 tests run 10 times (50 runs), 20 run 10 (200), 50 run 4 (200), 100 run 3 (300, the floor of 3 wins), and one spec of 12 tests runs 12 x 10 = 120 times.
+  Fewer than three repeats shows too little, so a pull request that changes more than 66 tests runs over 200.
+  The job summary says how many tests were counted and the repeat chosen.
+- **Web specs** run through `web-e2e.yml` with `specs` and `repeat` (one shard that builds in place, the same fixtures and runner setup as the suite) as `playwright test --retries=0 --repeat-each=<repeat> <spec>$...`; it files no flaky issue, because a retry is what classifies a test as flaky and this run has none.
+  **Rust modules** run under nextest on the `rust` lane's caches with `--profile ci --retries 0 --stress-count <repeat>`.
+  A module whose tests are all `#[ignore]` (the remote mailbox lane's, which has its own `repeat` input below) runs none and warns.
+- **Both run on Linux in a pull request.**
+  A fix is shown on the system that failed with a hand run, with no temporary commit:
+
+  ```sh
+  # web specs, N times, on linux (default), macos or windows
+  gh workflow run repeat.yml --ref <branch> -f runner=windows -f web='s3.spec.ts' -f repeat=10
+  # some tests of a spec, by Playwright's --grep
+  gh workflow run repeat.yml --ref <branch> -f web='s3.spec.ts' -f grep='explorer' -f repeat=20
+  # Rust modules of a crate's tests/it binary, as package:module
+  gh workflow run repeat.yml --ref <branch> -f runner=macos -f rust='hided:handshake hide-core:seat' -f repeat=10
+  ```
+
+  `repeat` is 1 to 100, a name that is no spec or module fails before anything runs, and a green run is the evidence.
+  The macOS runner is the scarce one (operator decision 2026-11-01), so ask for it only when macOS is what failed.
+  The step cap for a web repeat is 120 minutes: 200 runs of a 30-second test take 100, and a longer spec takes the budget's worth of its own time.
+
 ### Nightly failures
 
 The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one writer of `nightly-failure` issues, so the run's cap, the comments and the closing never race between lanes; a lane only writes its annotations.
@@ -964,7 +1021,10 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - [ ] The test asserts a result a caller observes, and the pull request names a plausible bug it would catch.
 - [ ] The expected answer comes from a requirement or contract outside the implementation; a changed expectation names that source.
 - [ ] It sits at the cheapest layer that can observe the result; an e2e spec covers a flow that crosses a boundary.
+- [ ] An e2e spec names the user flow it protects and why a unit or core test cannot observe it; without both, the spec belongs at a lower layer.
+- [ ] The pull request's `Tests` section shows the repeat result for each new or changed test (the tests, the number of runs, a link to the repeat job), and every run passed.
 - [ ] No fixed waits; every wait names the state it waits for, and polls only observe.
+- [ ] No new `sleep`, fixed delay or `timeout:` override appears without the state it waits for, and the `Tests` section's `Waits` line lists each one ([Wait for state, not time](#wait-for-state-not-time)).
 - [ ] Nothing slow runs while the test holds a request the product will time out, and polls in that window set `intervals`.
 - [ ] An order the result depends on is fixed by a gate at a real boundary, with the barrier asserted before release.
 - [ ] The fixture copies the whole isolation environment, owns every process it starts on every exit path, and reports cleanup failures without replacing the original error.

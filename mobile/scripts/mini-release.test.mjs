@@ -12,21 +12,27 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 const mobile = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const script = join(mobile, 'scripts/mini-release.sh');
 const KEY_ID = 'ABCDE12345';
-const ISSUER = '11111111-2222-3333-4444-555555555555';
+const ISSUER = 'abcdef11-2222-3333-4444-555555555555';
 const SECRET_LINE = 'c2VjcmV0LWtleS1ib2R5LW5vdC1mb3ItbG9ncw';
 const COMMIT = 'a'.repeat(40);
 const DELIVERY = '12345678-1234-1234-1234-123456789abc';
 const TOKEN = 'eyJhbGciOiJFUzI1NiIsImtpZCI6IkFCQ0RFMTIzNDUifQ.eyJpc3MiOiJ4In0.c2lnbmF0dXJl';
 const real = (name) => spawnSync('/bin/sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const until = async (what, check, ms = 20000) => {
+// A signal only ever goes to a pid that parsed as a real one: 0 or a negative number would reach this process's group.
+const realPid = (pid) => { if (!Number.isInteger(pid) || pid <= 1) throw new Error(`not a process id: ${pid}`); return pid; };
+const alive = (pid) => { try { process.kill(realPid(pid), 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
+// It polls on a timer: a loop on setImmediate keeps a core busy, which on a loaded machine starves the very processes it
+// waits for, and the test runner's own messages with them.
+const until = async (what, check, ms = 60000) => {
   for (const start = Date.now(); !check(); ) {
     if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((done) => setImmediate(done));
+    await new Promise((done) => setTimeout(done, 25));
   }
 };
 
-describe('the release command on the build machine', { timeout: 30000 }, () => {
+// Each case runs the whole script, which starts tens of processes; under a loaded machine (fifteen of these files at
+// once take 30 s a case) the bound is the load's, not the case's.
+describe('the release command on the build machine', { timeout: 120000 }, () => {
   let home;
   let bin;
   let accountTmp;
@@ -58,7 +64,7 @@ describe('the release command on the build machine', { timeout: 30000 }, () => {
 
     // The macOS commands the script asks questions of.
     stub('stat', 'f=${@: -1}; case "$*" in *%Lp*) cat "$f.mode" 2>/dev/null || echo 600;; *%u*) id -u;; esac');
-    stub('df', 'echo "Filesystem 1G-blocks Used Available Capacity iused ifree %iused Mounted"; echo "/dev/x 500 100 400 20% 1 1 1% /"');
+    stub('df', 'echo "Filesystem 1G-blocks Used Available Capacity iused ifree %iused Mounted"; echo "/dev/x 500 100 ${STUB_FREE_GB:-400} 20% 1 1 1% /"');
     stub('getconf', `[ "$1" = DARWIN_USER_TEMP_DIR ] && echo "${accountTmp}/"`);
     // sed and grep record their arguments, which is what `ps` would show of them.
     for (const name of ['sed', 'grep']) stub(name, `printf '%s\\n' "$*" >> "${home}/argv.log"; exec ${real(name)} "$@"`);
@@ -66,14 +72,19 @@ describe('the release command on the build machine', { timeout: 30000 }, () => {
     // says, as the real one does, and records the home and temporary folder it was given.
     stub('xcodebuild', `
 printf 'xcodebuild %s\\n' "$*"
+# A helper that outlives the step in a process group of its own, as a tool's daemon would. It names itself only once it
+# has left the step's group, and the step waits for that, so a loaded machine cannot end the step while it is still in it.
+if [ "$1" = archive ] && [ -n "$STUB_LEAVES_DAEMON" ]; then
+  perl -e 'setpgrp(0, 0); open(my $f, ">", "$ARGV[0].tmp") or die; print $f "$$\\n"; close $f; rename("$ARGV[0].tmp", $ARGV[0]) or die; exec "sleep", "300"' "${home}/daemon" > /dev/null 2>&1 &
+  n=0; while [ ! -e "${home}/daemon" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done; fi
 case "$*" in *-exportArchive*)
   printf '%s %s %s\\n' "$CFFIXED_USER_HOME" "$TMPDIR" "$([ -d "$CFFIXED_USER_HOME/Library/Caches" ] && echo caches-ready)" > "${home}/export-env"
-  echo "authenticating with ${TOKEN} as ${KEY_ID}"
+  echo "authenticating with ${TOKEN} as ${KEY_ID} for ${ISSUER.toUpperCase()}"
   for logs in ${appleTmp}App_x.xcdistributionlogs ${appleTmp}XcodeDistPipeline.~~~x; do mkdir -p "$logs" && echo "${KEY_ID} ${ISSUER} ${TOKEN}" > "$logs/log"; done
   # Every copy of the key's body that exists while the export runs, where the script writes: the build folders and the
   # account temporary folder.
   ${real('grep')} -rlF "${SECRET_LINE}" "${home}/hide-ios-build" "${accountTmp}" > "${home}/key-copies" 2> /dev/null || true
-  [ -n "$STUB_EXPORT_HOLDS" ] && { bash -c 'sleep 300 & echo $! > "${home}/grandchild"; wait' & while [ ! -e "${home}/go" ]; do sleep 0.05; done; }
+  [ -n "$STUB_EXPORT_HOLDS" ] && { bash -c 'sleep 300 & echo $! > "${home}/grandchild.tmp" && mv "${home}/grandchild.tmp" "${home}/grandchild"; wait' & n=0; while [ -d "${home}" ] && [ ! -e "${home}/go" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done; }
   [ -n "$STUB_EXPORT_FAILS" ] && exit 65;;
 esac
 while [ $# -gt 0 ]; do
@@ -90,21 +101,38 @@ exit 0`);
     stub('xcrun', `
 mkdir -p "$CFFIXED_USER_HOME/Library/Logs/ContentDelivery" && echo "${KEY_ID}" > "$CFFIXED_USER_HOME/Library/Logs/ContentDelivery/altool.txt"
 case "$*" in
-  *--upload-app*) [ -n "$STUB_UPLOAD_HANGS" ] && { bash -c 'sleep 300 & echo $! > "${home}/grandchild"; wait' & sleep 60; exit 0; }
+  *--upload-app*) [ -n "$STUB_UPLOAD_HANGS" ] && { bash -c 'sleep 300 & echo $! > "${home}/grandchild.tmp" && mv "${home}/grandchild.tmp" "${home}/grandchild"; wait' & sleep 60; exit 0; }
                   printf 'UPLOAD SUCCEEDED with no errors\\nDelivery UUID: ${DELIVERY}\\n';;
   *--validate-app*) echo "No errors validating archive";;
-  *--build-status*) echo "BUILD-STATUS: VALID";;
+  *--build-status*) [ -n "$STUB_STATUS_FAILS" ] && { echo "Unable to reach the service"; exit 1; }; echo "BUILD-STATUS: VALID";;
 esac
 exit 0`);
   });
-  afterEach(() => {
-    for (const file of ['grandchild']) if (existsSync(join(home, file))) try { process.kill(Number(readFileSync(join(home, file), 'utf8')), 'SIGKILL'); } catch { /* already gone */ }
+  // Every run a test started in the background, so a test that fails before it ends one still ends it here.
+  let started = [];
+  afterEach(async () => {
+    for (const { child, seen } of started) {
+      if (seen.exit !== null) continue;
+      child.kill('SIGTERM'); // the script's own TERM handling ends its step's process group and cleans up
+      await until('a background run to end after TERM', () => seen.exit !== null, 15000).catch(() => child.kill('SIGKILL'));
+    }
+    started = [];
+    for (const file of ['grandchild', 'daemon']) {
+      const text = existsSync(join(home, file)) ? readFileSync(join(home, file), 'utf8').trim() : '';
+      if (/^[0-9]+$/.test(text) && Number(text) > 1) try { process.kill(Number(text), 'SIGKILL'); } catch { /* already gone */ }
+    }
     rmSync(home, { recursive: true, force: true });
   });
+  // The pid a stand-in wrote (atomically, by a rename), once it is there.
+  const pidIn = async (file) => {
+    let text = '';
+    await until(`${file} to hold a pid`, () => { text = existsSync(join(home, file)) ? readFileSync(join(home, file), 'utf8').trim() : ''; return /^[0-9]+$/.test(text); });
+    return realPid(Number(text));
+  };
 
   const env = (extra = {}) => ({ PATH: `${bin}:/usr/bin:/bin`, HOME: home, TMPDIR: accountTmp, ...extra });
   const args = (slug = 'branch', build = '20261110120000', again = '0') => ['release', slug, '1.2.5', build, COMMIT, again];
-  const run = (extra = {}, argv = args()) => spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: env(extra), timeout: 60000 });
+  const run = (extra = {}, argv = args()) => spawnSync('bash', [script, ...argv], { encoding: 'utf8', env: env(extra), timeout: 100000 });
   // A run that keeps going in the background; `out` grows as it prints.
   const start = (extra = {}, argv = args()) => {
     const child = spawn('bash', [script, ...argv], { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -112,6 +140,7 @@ exit 0`);
     child.stdout.on('data', (chunk) => { seen.out += chunk; });
     child.stderr.on('data', (chunk) => { seen.out += chunk; });
     child.once('exit', (code, signal) => { seen.exit = { code, signal }; });
+    started.push({ child, seen });
     return { child, seen };
   };
   const everything = (r) => r.stdout + r.stderr;
@@ -176,7 +205,7 @@ exit 0`);
       const result = run({ STUB_EXPORT_FAILS: '1' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release stopped at "export and sign"');
-      for (const secret of [KEY_ID, ISSUER, keyPath(), SECRET_LINE, TOKEN]) {
+      for (const secret of [KEY_ID, ISSUER, ISSUER.toUpperCase(), keyPath(), SECRET_LINE, TOKEN]) {
         expect(everything(result), secret).not.toContain(secret);
         expect(log(), secret).not.toContain(secret);
       }
@@ -247,13 +276,22 @@ exit 0`);
     });
 
     it('ends an upload that outlives its time bound with everything it started, and the record says it started', async () => {
-      const result = run({ STUB_UPLOAD_HANGS: '1', HIDE_IOS_TEST_STEP_LIMIT: '2' });
+      const result = run({ STUB_UPLOAD_HANGS: '1', HIDE_IOS_TEST_UPLOAD_LIMIT: '2' });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('release stopped at "upload": it did not finish in 2 seconds');
       expect(result.stderr).toContain('may have gone without its delivery id');
       expect(records().at(-1)).toMatch(/ - started branch$/);
-      const grandchild = Number(readFileSync(join(home, 'grandchild'), 'utf8'));
+      const grandchild = await pidIn('grandchild');
       await until('the upload\'s grandchild to end', () => !alive(grandchild), 5000);
+      leftNothing();
+    });
+
+    it('starts with 5 GB free and refuses below that, before it builds anything', () => {
+      expect(run({ STUB_FREE_GB: '5', HIDE_IOS_NO_UPLOAD: '1' }).status).toBe(0);
+      const low = run({ STUB_FREE_GB: '4', HIDE_IOS_NO_UPLOAD: '1' });
+      expect(low.status).toBe(1);
+      expect(low.stderr).toContain('4 GB free and a release build needs at least 5 GB');
+      expect(low.stdout).not.toContain('== archive');
       leftNothing();
     });
 
@@ -273,6 +311,14 @@ exit 0`);
       leftNothing();
     });
 
+    it('fails a state read whose altool call failed, instead of reporting success with no answer', () => {
+      const result = run({ STUB_STATUS_FAILS: '1' }, ['status', 'branch', DELIVERY]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('Unable to reach the service');
+      expect(result.stderr).toContain('altool --build-status failed (status 1)');
+      expect(readdirSync(base()).filter((name) => name.startsWith('status'))).toEqual([]);
+    });
+
     it('reads a build\'s state without touching a running release, and leaves no scratch folder', () => {
       put(join(base(), 'release/App.xcarchive/keep'), 'x');
       const result = run({}, ['status', 'branch', DELIVERY]);
@@ -287,7 +333,7 @@ exit 0`);
   describe('every way out', () => {
     it('cleans up when its standard output closes mid-run, as a dropped ssh connection does', async () => {
       const { child, seen } = start({ STUB_EXPORT_HOLDS: '1' });
-      await until('the export to start', () => existsSync(join(home, 'grandchild')));
+      await pidIn('grandchild'); // the export has started
       child.stdout.destroy();
       child.stderr.destroy();
       writeFileSync(join(home, 'go'), '');
@@ -298,8 +344,7 @@ exit 0`);
 
     it('ends the export and everything it started on TERM, and cleans up', async () => {
       const { child, seen } = start({ STUB_EXPORT_HOLDS: '1' });
-      await until('the export to start', () => existsSync(join(home, 'grandchild')));
-      const grandchild = Number(readFileSync(join(home, 'grandchild'), 'utf8'));
+      const grandchild = await pidIn('grandchild');
       child.kill('SIGTERM');
       await until('the run to end', () => seen.exit !== null);
       expect(seen.exit).toEqual({ code: 143, signal: null });
@@ -312,7 +357,7 @@ exit 0`);
     it('holds the machine against a release of another branch while one runs, and lets it go when that one ends', async () => {
       branch('other');
       const { child, seen } = start({ STUB_EXPORT_HOLDS: '1', HIDE_IOS_NO_UPLOAD: '1' });
-      await until('the export to start', () => existsSync(join(home, 'grandchild')));
+      await pidIn('grandchild'); // the export has started
       const refused = run({ HIDE_IOS_NO_UPLOAD: '1' }, args('other'));
       expect(refused.status).toBe(1);
       expect(refused.stderr).toContain(`another release is running on this machine (pid ${child.pid}, started `);
@@ -325,6 +370,28 @@ exit 0`);
       await until('the first run to end', () => seen.exit !== null);
       expect(seen.exit).toEqual({ code: 0, signal: null });
       expect(run({ HIDE_IOS_NO_UPLOAD: '1' }, args('other')).status).toBe(0);
+    });
+
+    it('lets the lock go with the run even when a tool leaves a helper of its own running', async () => {
+      const result = run({ STUB_LEAVES_DAEMON: '1', HIDE_IOS_NO_UPLOAD: '1' });
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+      expect(alive(await pidIn('daemon'))).toBe(true); // it escaped the step's group, as a real daemon can
+      leftNothing(); // and still holds no descriptor of the lock
+    });
+
+    it('names a lock it cannot take or read, and never reads that as a running release', () => {
+      stub('perl', 'exit 2');
+      mkdirSync(dirname(lockFile()), { recursive: true });
+      writeFileSync(lockFile(), '');
+      const release = run({ HIDE_IOS_NO_UPLOAD: '1' });
+      expect(release.status).toBe(1);
+      expect(release.stderr).toContain('could not be taken (perl status 2)');
+      expect(release.stderr).not.toContain('another release is running');
+      const busy = spawnSync('bash', [script, 'busy', 'branch', 'machine'], { encoding: 'utf8', env: env() });
+      expect(busy.status).toBe(1);
+      expect(busy.stderr).toContain('could not be read (perl status 2)');
+      expect(busy.stderr).not.toContain('a release is running');
     });
 
     it('does not believe a lock whose text names a live process the kernel does not hold the lock for', () => {

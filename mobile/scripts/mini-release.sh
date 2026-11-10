@@ -35,15 +35,17 @@ project=$base/ios/App
 packages=$base/SourcePackages
 registry=$inputs/release-env.json
 expect=$inputs/release-expect.json
-min_free_gb=15
+# A whole run used about 1 GB of the disk (24 GB to 23 GB free on 2026-11-10: the branch folder's 0.66 GB of build state
+# and the release work folder); the floor is a few times that, only so a run cannot fill the disk under the machine's
+# other work. A run that runs out of space anyway fails at the step that ran out.
+min_free_gb=5
 # Machine-wide, because what they guard is: the account's temporary folder, the disk floor, the Apple account and the
 # build numbers. Neither is ever deleted (deleting a lock file others may open would let two runs hold two locks).
 lock=$root/.release.lock
 records=$root/uploads.log
 
-# Seconds each long step may take (the whole run took about 6 minutes on 2026-11-10); a test sets the one cap itself.
-limit_archive=${HIDE_IOS_TEST_STEP_LIMIT:-1200} limit_export=${HIDE_IOS_TEST_STEP_LIMIT:-900}
-limit_validate=${HIDE_IOS_TEST_STEP_LIMIT:-900} limit_upload=${HIDE_IOS_TEST_STEP_LIMIT:-1800}
+# Seconds each long step may take (the whole run took about 6 minutes on 2026-11-10); a test shortens the upload's alone.
+limit_archive=1200 limit_export=900 limit_validate=900 limit_upload=${HIDE_IOS_TEST_UPLOAD_LIMIT:-1800}
 
 current_step=start
 step() { current_step=$1; printf '\n== %s\n' "$1"; }
@@ -58,15 +60,27 @@ trap 'printf "release stopped during \"%s\"\n" "$current_step" >&2 2> /dev/null 
 # Every step run_step starts gets 9>&-, so no tool that outlives the run keeps the lock; the short commands between steps
 # end before the shell does.
 
+# Status 75 is "another holds it", and only that: any other failure (no perl, no Fcntl, a file that will not open) is
+# named as what it is, never read as a running release.
 lock_holder() { cat "$lock" 2> /dev/null || true; }
-lock_is_held() { [[ -f "$lock" ]] && ! perl -MFcntl=:flock -e 'open(my $f, "<", $ARGV[0]) or exit 0; flock($f, LOCK_EX | LOCK_NB) or exit 1' "$lock"; }
+lock_is_held() {
+    local status=0
+    [[ -f "$lock" ]] || return 1
+    perl -MFcntl=:flock -e 'open(my $f, "<", $ARGV[0]) or die "open: $!\n"; flock($f, LOCK_EX | LOCK_NB) or exit 75' -- "$lock" || status=$?
+    (( status == 0 )) && return 1
+    (( status == 75 )) && return 0
+    die "the release lock $lock could not be read (perl status $status)"
+}
 take_lock() {
+    local status=0
     mkdir -p "$root"
     exec 9<> "$lock"
-    if ! perl -MFcntl=:flock -e 'open(my $f, "+<&=", 9) or die "lock: $!\n"; flock($f, LOCK_EX | LOCK_NB) or exit 75;
+    perl -MFcntl=:flock -e 'open(my $f, "+<&=", 9) or die "lock: $!\n"; flock($f, LOCK_EX | LOCK_NB) or exit 75;
             truncate($f, 0); seek($f, 0, 0); print $f "pid $ARGV[0], started $ARGV[1], branch $ARGV[2]\n"' -- \
-            "$$" "$(ps -o lstart= -p $$ | sed 's/^ *//')" "$slug"; then
+            "$$" "$(ps -o lstart= -p $$ | sed 's/^ *//')" "$slug" || status=$?
+    if (( status != 0 )); then
         exec 9>&-
+        (( status == 75 )) || die "the release lock $lock could not be taken (perl status $status)"
         die "another release is running on this machine ($(lock_holder)); one release runs at a time"
     fi
     owns_lock=1
@@ -138,13 +152,14 @@ secret_values() { printf '%s\n' "$HIDE_IOS_ASC_KEY_PATH" "$HIDE_IOS_ASC_KEY_ID" 
 # A token (a JWT: base64url JSON, so it starts with eyJ) and a PEM private key, whatever key they belong to.
 token_shape='eyJ[A-Za-z0-9_-]{10,}\.'
 pem_shape='-----BEGIN [A-Z ]*PRIVATE KEY-----'
-# Replaces every value with the name of its key and a whole token with its shape. The sed program comes from a pipe.
+# Replaces every value, in any letter case, with the name of its key and a whole token with its shape. The sed program
+# comes from a pipe.
 redact() {
     sed -f <(
         escape() { printf '%s' "$1" | sed 's/[][\.*^$|/&]/\\&/g'; }
-        printf 's|%s|<HIDE_IOS_ASC_KEY_PATH>|g\n' "$(escape "$HIDE_IOS_ASC_KEY_PATH")"
-        printf 's|%s|<HIDE_IOS_ASC_KEY_ID>|g\n' "$(escape "$HIDE_IOS_ASC_KEY_ID")"
-        printf 's|%s|<HIDE_IOS_ASC_ISSUER_ID>|g\n' "$(escape "$HIDE_IOS_ASC_ISSUER_ID")"
+        printf 's|%s|<HIDE_IOS_ASC_KEY_PATH>|gI\n' "$(escape "$HIDE_IOS_ASC_KEY_PATH")"
+        printf 's|%s|<HIDE_IOS_ASC_KEY_ID>|gI\n' "$(escape "$HIDE_IOS_ASC_KEY_ID")"
+        printf 's|%s|<HIDE_IOS_ASC_ISSUER_ID>|gI\n' "$(escape "$HIDE_IOS_ASC_ISSUER_ID")"
     ) | sed -E 's/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/<token>/g'
 }
 # The search behind the redaction: any of the three values, anything shaped like a token (a part of one included), or a
@@ -152,7 +167,7 @@ redact() {
 # body is read by Apple's tools from the file, and nothing else reads it.
 log_is_clean() {
     [[ -f "$log" && "$secrets_loaded" == 1 ]] || return 0
-    ! grep -qF -f <(secret_values) "$log" && ! grep -qE -e "$token_shape" -e "$pem_shape" "$log"
+    ! grep -qiF -f <(secret_values) "$log" && ! grep -qE -e "$token_shape" -e "$pem_shape" "$log"
 }
 
 # ---- steps ---------------------------------------------------------------------------------------------------------
@@ -223,7 +238,8 @@ logged() {
 #   a status scratch     $base/status.<pid> (owns_work in `status`): the private home and temporary folder of one altool call
 # What stays is not the run's: release.log (redacted and searched), the machine's uploads.log, the empty lock file, and
 # what Apple's frameworks leave in the account's temporary folder under names any program uses (CFNetworkDownload_*,
-# cms~~~*), which hold neither the key's ids nor a token and are not deleted by name (docs/BUILD.md, The release build).
+# cms~~~*, and the export's own ResultBundle_* beside the one it is given), which hold neither the key's ids nor a
+# token and are not deleted by name (docs/BUILD.md, The release build).
 owns_lock=0 owns_work=0 finished=0 upload_started=0 upload_ended=0
 work= log= account_tmp=
 remove_apple_logs() {
@@ -289,10 +305,13 @@ if [[ "$mode" == status ]]; then
     log=$work/status.log
     : > "$log"
     with_private_home
+    answer=0
     run_step 300 "${apple[@]}" xcrun altool --build-status --delivery-id "$delivery" --api-key "$HIDE_IOS_ASC_KEY_ID" \
-        --api-issuer "$HIDE_IOS_ASC_ISSUER_ID" --p8-file-path "$HIDE_IOS_ASC_KEY_PATH" || true
+        --api-issuer "$HIDE_IOS_ASC_ISSUER_ID" --p8-file-path "$HIDE_IOS_ASC_KEY_PATH" || answer=$?
     log_is_clean || die "the answer held a secret value and is not shown; this is a bug in the redaction"
     cat "$log"
+    (( answer == 124 )) && die "altool did not answer in 300 seconds"
+    (( answer == 0 )) || die "altool --build-status failed (status $answer)"
     finished=1
     exit 0
 fi
@@ -324,7 +343,7 @@ if [[ -s "$records" && "$again" != 1 ]]; then
 fi
 
 free_gb=$(df -g / | awk 'NR==2 {print $4}')
-(( free_gb >= min_free_gb )) || die "this machine has ${free_gb} GB free and a release build needs it to stay above $min_free_gb GB"
+(( free_gb >= min_free_gb )) || die "this machine has ${free_gb} GB free and a release build needs at least $min_free_gb GB"
 
 load_secrets
 team=$(jq -r .teamId "$expect")
