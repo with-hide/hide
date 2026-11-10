@@ -375,12 +375,28 @@ logged "$limit_archive" "archive" xcodebuild archive -project "$project/App.xcod
     MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build"
 
 # An archive made with signing off carries none of the project's entitlements, and the export only keeps what the archive
-# holds, so the entitlements file the project names is put into the archived app first (an ad hoc signature, which the
-# export replaces with the distribution one; no certificate or keychain is involved).
-entitlements=$project/App/App.entitlements
-[[ -f "$entitlements" ]] || die "the project's App.entitlements is missing"
+# holds, so each entitlements file the project names is put into its archived bundle first (an ad hoc signature, which
+# the export replaces with the distribution one; no certificate or keychain is involved). The files name build settings
+# (`$(AppIdentifierPrefix)`, `$(PRODUCT_BUNDLE_IDENTIFIER)`, `$(APS_ENVIRONMENT)`) that only a signing build resolves, so
+# they are resolved here to what the Release configuration gives them; one left unresolved would be exported as text,
+# and the signed app would name a keychain group that is no group of its own.
 archived=$work/App.xcarchive/Products/Applications/App.app
-logged 120 "embed entitlements" codesign --force --sign - --entitlements "$entitlements" --timestamp=none "$archived"
+mkdir -p "$work/entitlements"
+embed_entitlements() { # <bundle> <the project's entitlements file> <bundle id>
+    local bundle=$1 source=$2 id=$3 resolved
+    [[ -f "$source" ]] || die "the project's ${source##*/} is missing"
+    resolved=$work/entitlements/${source##*/}
+    sed -e "s/\$(AppIdentifierPrefix)/$team./g" -e "s/\$(PRODUCT_BUNDLE_IDENTIFIER)/$id/g" \
+        -e 's/\$(APS_ENVIRONMENT)/production/g' "$source" > "$resolved"
+    if grep -qF '$(' "$resolved"; then die "${source##*/} names a build setting the release does not resolve"; fi
+    logged 120 "embed entitlements: ${bundle##*/}" codesign --force --sign - --entitlements "$resolved" --timestamp=none "$bundle"
+}
+# An extension before the app that holds it: signing the app seals the extension's signature.
+while IFS=$'\t' read -r name id; do
+    [[ -n "$name" ]] || continue
+    embed_entitlements "$archived/PlugIns/$name" "$project/${name%.appex}/${name%.appex}.entitlements" "$id"
+done < <(jq -r '.appExtensions[]? | [.name, .bundleId] | @tsv' "$expect")
+embed_entitlements "$archived" "$project/App/App.entitlements" "$(jq -r .bundleId "$expect")"
 
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
