@@ -49,3 +49,4 @@ __pycache__/
 /site/src/generated/
 /web/docs-embed-dist/
 /site/src/content/docs/docs/reference/cli.md
+/site/src/content/docs/docs/reference/shortcuts.md

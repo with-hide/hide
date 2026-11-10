@@ -6,6 +6,8 @@
 //      "Used in guides" list from the guides' `features:` headers;
 //   2. the CLI reference is generated from the help of the one `hide` named below and contracts/hide-cli.json, and fails
 //      on a command with no note and on a note for a gone command (cli-reference.mjs);
+//   2b. the Keyboard shortcuts page is generated from web/src/shortcuts.ts, imported as it stands, and fails when a
+//      command of the registry has no row or lacks its keys on a system (shortcuts-reference.mjs);
 //   3. the live parts the pages frame are built (web `build:docs-embed`), then the site (`astro build`),
 //      which puts them at /embed/ and writes Pagefind's search index.
 // Usage: check-all.mjs (--hide <binary> | HIDE_BIN=<binary>) [--ci] [--checks-only]
@@ -14,7 +16,7 @@
 //                      and passes its path here.
 //   --ci               (or CI=true) a missing binary is a hard failure before anything is generated; there is no default
 //                      and no fallback to an installed hide or the PATH.
-//   --checks-only      steps 0 to 2 only, for a quick loop; CI runs all of them
+//   --checks-only      steps 0 to 2b only, for a quick loop; CI runs all of them
 // Locally, without --ci, the default is target/debug/hide, and an installed app's hide is accepted but is a limited
 // check: it may be older than this commit, and CI is the gate.
 import { spawnSync } from "node:child_process";
@@ -51,11 +53,15 @@ function run(title, command, commandArgs, options = {}) {
 
 run("the CLI reference reader finds every command of the real usage strings", "node", ["--test", "scripts/docs/*.test.mjs"]);
 mkdirSync(generated, { recursive: true });
+mkdirSync(join(content, "reference"), { recursive: true });
 run("guides and features hold each other", "node", ["scripts/docs/check-features.mjs", content, "--write", join(generated, "used-in.json")]);
 
 const cli = run("CLI reference from hide --help", "node", ["scripts/docs/cli-reference.mjs", hide, join(root, "contracts/hide-cli.json"), join(root, "site/src/data/cli-notes.json")], { capture: true });
 const front = ["---", "title: CLI", "description: Every hide command, with one line and an example each.", "sidebar:", "  order: 1", "---", "", ""].join("\n");
 writeFileSync(join(content, "reference/cli.md"), front + cli);
+
+const shortcuts = run("Keyboard shortcuts page from web/src/shortcuts.ts", "node", ["scripts/docs/shortcuts-reference.mjs"], { capture: true });
+writeFileSync(join(content, "reference/shortcuts.md"), shortcuts);
 
 if (!checksOnly) {
   run("build the live parts the pages frame", "bash", ["scripts/verify-web.sh", "web", "build:docs-embed"]);
