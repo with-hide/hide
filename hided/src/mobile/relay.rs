@@ -1,19 +1,21 @@
 //! One outbound relay socket, owned by Mobile. The relay routes opaque frames;
 //! phone admission and every encrypted application frame stay in phone.rs.
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::{
     Error,
-    admission::{ClientMessage, DeviceHello, DeviceKey, Refusal, ServerMessage},
+    admission::{
+        ClientMessage, DeviceHello, DeviceKey, PushOutcome, PushRequest, Refusal, ServerMessage,
+    },
     frame::{Frame, MAX_FRAME},
     noise::{NoiseKeypair, Session},
     qr::PairingQr,
 };
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::{
@@ -241,6 +243,138 @@ pub(super) enum Output {
     Closed { connection: u32 },
 }
 
+/// Push requests waiting for the socket loop to send them. A blocking
+/// caller that finds it full is answered at once rather than queued.
+const PUSH_QUEUE: usize = 8;
+/// Requests sent and not yet answered. The relay answers each within its own
+/// deadline and one retry, so a full table means it stopped answering.
+const MAX_PENDING_PUSH: usize = 32;
+/// How long a caller waits for the relay's answer: two of the relay's
+/// ten-second Apple deadlines (the one retry) and a margin.
+pub const PUSH_ANSWER_WAIT: Duration = Duration::from_secs(30);
+
+/// One request the link carries to the relay, and where its answer goes.
+struct PushJob {
+    request: PushRequest,
+    answer: std::sync::mpsc::SyncSender<PushAnswer>,
+}
+
+/// What a running link offers the rest of Mobile: a push request to the
+/// relay, when the relay said it forwards them. A relay that does not know
+/// the `push` field of `registered` sends `{"type":"registered"}`, which reads
+/// as false, so hided never sends a message an older relay would close the
+/// link on (`docs/RELAY_PROTOCOL.md`, Push relay).
+#[derive(Clone)]
+pub struct Link {
+    jobs: mpsc::Sender<PushJob>,
+    next_id: Arc<AtomicU32>,
+    push: bool,
+}
+
+impl Link {
+    /// Sends one push request and waits for the relay's result. Blocking:
+    /// every caller is a blocking thread, where Web Push sends already run.
+    /// `Err` is why no result came, as the diagnostic names it.
+    pub fn push(&self, mut request: PushRequest) -> Result<PushOutcome, &'static str> {
+        if !self.push {
+            return Err("relay_without_push");
+        }
+        request.id = self.next_id();
+        let (answer, result) = std::sync::mpsc::sync_channel(1);
+        self.jobs
+            .try_send(PushJob { request, answer })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => "push_queue_full",
+                mpsc::error::TrySendError::Closed(_) => "relay_link_ended",
+            })?;
+        result
+            .recv_timeout(PUSH_ANSWER_WAIT)
+            .map_err(|error| match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => "relay_no_answer",
+                std::sync::mpsc::RecvTimeoutError::Disconnected => "relay_link_ended",
+            })?
+    }
+
+    /// A request id this link has not used lately; 0 is not a request id
+    /// (`admission::PushRequest`).
+    fn next_id(&self) -> u32 {
+        loop {
+            let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+            if id != 0 {
+                return id;
+            }
+        }
+    }
+}
+
+/// The push requests sent and not yet answered, owned by the socket loop.
+#[derive(Default)]
+struct PendingPushes {
+    sent: HashMap<u32, (std::time::Instant, std::sync::mpsc::SyncSender<PushAnswer>)>,
+}
+
+type PushAnswer = Result<PushOutcome, &'static str>;
+
+impl PendingPushes {
+    /// The text to send for `job`, or `None` when the job was answered here
+    /// instead: a full table (the relay stopped answering) or a request that
+    /// cannot be encoded. Either is that request's failure alone; the link
+    /// and its phones are untouched.
+    fn send(&mut self, job: PushJob, now: std::time::Instant) -> Option<String> {
+        // A caller stops waiting after PUSH_ANSWER_WAIT; its entry goes then,
+        // so the table holds only answers still awaited.
+        self.sent
+            .retain(|_, (sent, _)| now.saturating_duration_since(*sent) < PUSH_ANSWER_WAIT);
+        if self.sent.len() >= MAX_PENDING_PUSH {
+            let _ = job.answer.send(Err("relay_not_answering"));
+            return None;
+        }
+        let id = job.request.id;
+        let Ok(text) = ClientMessage::Push(job.request).encode() else {
+            let _ = job.answer.send(Err("push_request_invalid"));
+            return None;
+        };
+        self.sent.insert(id, (now, job.answer));
+        Some(text)
+    }
+
+    /// Hands the relay's answer to its caller; an id this link never sent,
+    /// or one already answered, is not this relay's answer.
+    fn answer(&mut self, id: u32, outcome: PushOutcome) {
+        if let Some((_, answer)) = self.sent.remove(&id) {
+            let _ = answer.send(Ok(outcome));
+        }
+    }
+}
+
+/// Holds the link Mobile hands out while its socket loop runs, and takes it
+/// back on every way out of the loop: an end, an error or a cancellation.
+struct Published<'a> {
+    mobile: &'a Mobile,
+    link: Link,
+}
+
+impl<'a> Published<'a> {
+    fn new(mobile: &'a Mobile, link: Link) -> Self {
+        mobile.lock().relay_link = Some(link.clone());
+        Self { mobile, link }
+    }
+}
+
+impl Drop for Published<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.mobile.lock();
+        // A newer link may already stand in its place; only this one goes.
+        if inner
+            .relay_link
+            .as_ref()
+            .is_some_and(|held| held.jobs.same_channel(&self.link.jobs))
+        {
+            inner.relay_link = None;
+        }
+    }
+}
+
 struct Peer {
     inbound: mpsc::Sender<Vec<u8>>,
     task: AbortHandle,
@@ -269,7 +403,7 @@ async fn connect(
     .await
     .map_err(|_| LinkError::Closed)??;
     let hello = DeviceHello::new(&keys.device.public_key(), PHONE_PROTOCOL)?;
-    tokio::time::timeout(DEADLINE, async {
+    let push = tokio::time::timeout(DEADLINE, async {
         socket
             .send(Message::Text(
                 ClientMessage::Device {
@@ -297,7 +431,10 @@ async fn connect(
             return Err(LinkError::Closed);
         };
         match ServerMessage::decode(&text)? {
-            ServerMessage::Registered => Ok(()),
+            // `push` reads as false from a relay that does not know the
+            // field, so an older relay is served every phone frame and no
+            // push request (`docs/RELAY_PROTOCOL.md`, Push relay, deploying).
+            ServerMessage::Registered { push } => Ok(push),
             ServerMessage::Refused { reason } => Err(LinkError::Refused(reason)),
             _ => Err(LinkError::Closed),
         }
@@ -306,6 +443,15 @@ async fn connect(
     .map_err(|_| LinkError::Closed)??;
     mobile.relay_state(State::Connected);
     let (outgoing, mut output) = mpsc::channel::<Output>(OUTBOUND_QUEUE);
+    let (jobs, mut pushed) = mpsc::channel::<PushJob>(PUSH_QUEUE);
+    let link = Link {
+        jobs,
+        next_id: Arc::new(AtomicU32::new(1)),
+        push,
+    };
+    // The link is handed out only while this loop runs.
+    let _published = Published::new(mobile, link);
+    let mut pending = PendingPushes::default();
     let mut peers: HashMap<u32, Peer> = HashMap::new();
     let mut ping = tokio::time::interval(Duration::from_secs(20));
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -332,6 +478,12 @@ async fn connect(
                             if let Some(peer) = peers.remove(&connection) { peer.task.abort(); }
                             None
                         }
+                        // Answers an id this link sent; one it never sent, or
+                        // an id already answered, is not this relay's answer.
+                        ServerMessage::PushResult(result) => {
+                            pending.answer(result.id, result.result);
+                            None
+                        }
                         ServerMessage::Refused { reason } => return Err(LinkError::Refused(reason)),
                         _ => return Err(LinkError::Closed),
                     },
@@ -353,6 +505,9 @@ async fn connect(
                 Output::Frame { connection, bytes } if peers.contains_key(&connection) => Some(Message::Binary(bytes.into())),
                 Output::Closed { connection } if peers.remove(&connection).is_some() => Some(Message::Text(ClientMessage::Close { connection }.encode()?.into())),
                 _ => None,
+            },
+            Some(job) = pushed.recv() => {
+                pending.send(job, std::time::Instant::now()).map(|text| Message::Text(text.into()))
             },
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
                 let _ = result;
@@ -427,4 +582,82 @@ async fn serve(
     // before the routing close. Completion of a task is not a send barrier.
     let _ = outbound.send(Output::Closed { connection }).await;
     connection
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hide_relay_protocol::admission::PushEnvironment;
+
+    fn request(id: u32) -> PushRequest {
+        PushRequest {
+            id,
+            environment: PushEnvironment::Sandbox,
+            token: "ab".repeat(32),
+            collapse: "collapse".into(),
+            payload: URL_SAFE_NO_PAD.encode([7_u8; 64]),
+        }
+    }
+
+    fn job(id: u32) -> (PushJob, std::sync::mpsc::Receiver<PushAnswer>) {
+        let (answer, result) = std::sync::mpsc::sync_channel(1);
+        (
+            PushJob {
+                request: request(id),
+                answer,
+            },
+            result,
+        )
+    }
+
+    /// A caller is answered at once, never left waiting, when the link cannot
+    /// carry its request: an older relay, a full queue, an ended link.
+    #[test]
+    fn a_push_the_link_cannot_carry_is_answered_at_once() {
+        let (jobs, mut queued) = mpsc::channel(1);
+        let link = |push| Link {
+            jobs: jobs.clone(),
+            next_id: Arc::new(AtomicU32::new(1)),
+            push,
+        };
+        assert_eq!(link(false).push(request(0)), Err("relay_without_push"));
+        let (waiting, _answer) = job(1);
+        jobs.try_send(waiting).ok().unwrap();
+        assert_eq!(link(true).push(request(0)), Err("push_queue_full"));
+        queued.close();
+        let _ = queued.try_recv();
+        assert_eq!(link(true).push(request(0)), Err("relay_link_ended"));
+    }
+
+    /// The table of unanswered requests is capped; an entry goes once its
+    /// caller stopped waiting; an answer reaches only its own caller; a request
+    /// that cannot be encoded fails alone.
+    #[test]
+    fn unanswered_requests_are_bounded_and_answers_reach_their_caller() {
+        let mut pending = PendingPushes::default();
+        let start = std::time::Instant::now();
+        let mut callers = Vec::new();
+        for id in 1..=MAX_PENDING_PUSH as u32 {
+            let (job, result) = job(id);
+            assert!(pending.send(job, start).is_some());
+            callers.push(result);
+        }
+        let (over, refused) = job(99);
+        assert_eq!(pending.send(over, start), None);
+        assert_eq!(refused.try_recv(), Ok(Err("relay_not_answering")));
+        pending.answer(1, PushOutcome::Delivered);
+        pending.answer(1, PushOutcome::TokenGone);
+        pending.answer(500, PushOutcome::Delivered);
+        assert_eq!(callers[0].try_recv(), Ok(Ok(PushOutcome::Delivered)));
+        assert!(callers[0].try_recv().is_err(), "one answer per request");
+        assert!(callers[1].try_recv().is_err());
+        // Past the wait the old entries are gone and a new request is sent.
+        let (late, _) = job(100);
+        assert!(pending.send(late, start + PUSH_ANSWER_WAIT).is_some());
+        assert_eq!(pending.sent.len(), 1);
+        // A request the wire refuses to encode is that request's failure.
+        let (broken, result) = job(0);
+        assert_eq!(pending.send(broken, start + PUSH_ANSWER_WAIT), None);
+        assert_eq!(result.try_recv(), Ok(Err("push_request_invalid")));
+    }
 }

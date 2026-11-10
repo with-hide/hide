@@ -35,6 +35,27 @@ try {
   const joined = { type: 'joined' as const, connection: 7, phone_protocol: 1 };
   assert.deepEqual(decodeServer(encodeServer(joined)), joined);
   assert.throws(() => decodeClient('{"type":"close","connection":0}'));
+  // The push vocabulary is the same on both sides of the browser ABI.
+  const push = {
+    type: 'push_request' as const,
+    id: 3,
+    environment: 'sandbox' as const,
+    token: 'ab'.repeat(32),
+    collapse: 'opaque-collapse',
+    payload: Buffer.alloc(3000, 7).toString('base64url'),
+  };
+  assert.deepEqual(decodeClient(encodeClient(push)), push);
+  // A malformed field and an extra field are refused on the way in.
+  assert.throws(() => encodeClient({ ...push, token: 'zz' }));
+  assert.throws(() => decodeClient(JSON.stringify({ ...push, extra: 1 })));
+  assert.deepEqual(
+    decodeServer(encodeServer({ type: 'registered', push: true })),
+    { type: 'registered', push: true },
+  );
+  assert.deepEqual(
+    decodeServer(encodeServer({ type: 'push_result', id: 3, result: 'token_gone' })),
+    { type: 'push_result', id: 3, result: 'token_gone' },
+  );
   phone = NoiseSession.initiator(Buffer.from(qr.noise_key, 'base64url'), 7);
   const exchange = async (bytes: Uint8Array): Promise<Buffer> => {
     peer.stdin.write(`${Buffer.from(bytes).toString('base64url')}\n`);

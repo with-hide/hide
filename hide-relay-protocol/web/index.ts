@@ -9,20 +9,31 @@ export interface DeviceHello {
   device_key: string;
   phone_protocol: number;
 }
+export type PushEnvironment = 'sandbox' | 'production';
+export type PushOutcome = 'delivered' | 'token_gone' | 'rate_limited' | 'unavailable' | 'failed';
+export interface PushRequest {
+  id: number;
+  environment: PushEnvironment;
+  token: string;
+  collapse: string;
+  payload: string;
+}
 export type ClientMessage =
   | { type: 'device'; hello: DeviceHello }
   | { type: 'proof'; signature: string }
   | { type: 'phone'; version: 1; room: string }
-  | { type: 'close'; connection: number };
+  | { type: 'close'; connection: number }
+  | ({ type: 'push_request' } & PushRequest);
 export type Refusal = 'invalid_message' | 'invalid_proof' | 'unsupported_version' |
   'device_offline' | 'room_occupied' | 'connection_limit' | 'room_limit' |
   'rate_limit' | 'frame_limit' | 'daily_limit' | 'timeout';
 export type ServerMessage =
   | { type: 'challenge'; challenge: { nonce: string } }
-  | { type: 'registered' }
+  | { type: 'registered'; push?: boolean }
   | { type: 'joined'; connection: number; phone_protocol: number }
   | { type: 'peer_joined' | 'peer_left'; connection: number }
-  | { type: 'refused'; reason: Refusal };
+  | { type: 'refused'; reason: Refusal }
+  | { type: 'push_result'; id: number; result: PushOutcome };
 export interface PairingQr {
   v: 2;
   name: string;

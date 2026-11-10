@@ -41,11 +41,12 @@ use tokio::sync::{Notify, watch};
 use crate::core::CoreHandle;
 use hide_core::delivery::worker::{HumanNotice, HumanNoticeKind};
 use hide_core::engine::EngineHandle;
+use hide_relay_protocol::admission::PushOutcome;
 use phones::{PairRefusal, Phones};
 use projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
 use store::{
-    Method, MobileSettings, Notifications, PhoneOrigin, PhoneRecord, PushMode, PushSubscription,
-    ServeRecord,
+    ApnsRegistration, Method, MobileSettings, Notifications, PhoneOrigin, PhoneRecord, PushMode,
+    PushSubscription, ServeRecord,
 };
 use tailscale::{Checklist, CliSource, CommandFailure, Ownership, StepState};
 
@@ -98,6 +99,24 @@ enum Exposure {
     },
 }
 
+/// Where a phone's notices go: its Web Push subscription, or Apple through
+/// the relay for the iOS app, whose registration is read again at send.
+#[derive(Clone)]
+enum Route {
+    Web(PushSubscription),
+    App,
+}
+
+impl Route {
+    fn of(phone: &PhoneRecord) -> Option<Self> {
+        match (&phone.push, &phone.apns) {
+            (Some(subscription), _) => Some(Self::Web(subscription.clone())),
+            (None, Some(_)) => Some(Self::App),
+            (None, None) => None,
+        }
+    }
+}
+
 struct Inner {
     settings: MobileSettings,
     phones: Phones,
@@ -105,6 +124,9 @@ struct Inner {
     checklist: Option<Checklist>,
     relay_state: relay::State,
     relay_keys: Option<Arc<relay::Keys>>,
+    /// The running relay socket's push path, while it runs; the only way an
+    /// iOS app phone's notice reaches Apple (`docs/RELAY_PROTOCOL.md`).
+    relay_link: Option<relay::Link>,
     relay_cleanup_failure: Option<String>,
     /// Renderer connections with Settings > Mobile open.
     observers: HashSet<u64>,
@@ -320,6 +342,7 @@ impl Mobile {
                 checklist: None,
                 relay_state: relay::State::Off,
                 relay_keys: None,
+                relay_link: None,
                 relay_cleanup_failure: None,
                 observers: HashSet::new(),
                 pending_clear: HashMap::new(),
@@ -616,7 +639,7 @@ impl Mobile {
                     "name": phone.name,
                     "last_seen_ms": phone.last_seen_ms,
                     "connected": live.contains(&phone.id),
-                    "notifications": match (phone.notifications, phone.push.is_some()) {
+                    "notifications": match (phone.notifications, phone.reachable()) {
                         (_, true) => "on",
                         (Notifications::Off, false) => "off",
                         _ => "unasked",
@@ -1191,21 +1214,15 @@ impl Mobile {
     }
 
     fn push_delivery(&self, notice: &HumanNotice) -> Result<(), &'static str> {
-        let (vapid, targets, subject) = {
+        let (targets, subject) = {
             let inner = self.lock();
             let targets = inner
                 .phones
                 .current()
-                .filter_map(|phone| {
-                    phone
-                        .push
-                        .clone()
-                        .map(|subscription| (phone.id.clone(), subscription))
-                })
+                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
                 .take(4)
                 .collect::<Vec<_>>();
-            let vapid = push::notice_route(
-                self.vapid.as_ref(),
+            push::notice_route(
                 inner.settings.push_mode,
                 inner.settings.enabled,
                 self.config.renderers.load(Ordering::SeqCst),
@@ -1217,7 +1234,7 @@ impl Mobile {
                 .as_ref()
                 .map(|serve| format!("https://{}", serve.dns_name))
                 .unwrap_or_else(|| "mailto:hide@localhost".into());
-            (vapid, targets, subject)
+            (targets, subject)
         };
         let payload = self.push_payload(
             &push::Notice {
@@ -1248,10 +1265,25 @@ impl Mobile {
             &BTreeSet::new(),
         )?;
         let (mut delivered, mut failed) = (false, false);
-        for (phone_id, subscription) in targets {
+        for (phone_id, route) in targets {
             if *self.stopping.borrow() {
                 return Err("stopping");
             }
+            let subscription = match route {
+                Route::Web(subscription) => subscription,
+                Route::App => {
+                    match self.push_to_app(&phone_id, &payload) {
+                        Ok(()) => delivered = true,
+                        Err("token_gone") => {}
+                        Err(_) => failed = true,
+                    }
+                    continue;
+                }
+            };
+            let Some(vapid) = self.vapid.as_ref() else {
+                failed = true;
+                continue;
+            };
             match push::send(vapid, &subject, &subscription, &payload, now_ms() / 1000) {
                 push::SendOutcome::Delivered => delivered = true,
                 push::SendOutcome::Gone(_) => {
@@ -1293,7 +1325,7 @@ impl Mobile {
         for phone in &revoked {
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
-                "reason": "inactive_7_days", "had_subscription": phone.push.is_some(),
+                "reason": "inactive_7_days", "had_subscription": phone.reachable(),
             }));
         }
         if !revoked.is_empty() {
@@ -1482,7 +1514,7 @@ impl Mobile {
         if let Some(phone) = removed {
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
-                "reason": reason, "had_subscription": phone.push.is_some(),
+                "reason": reason, "had_subscription": phone.reachable(),
             }));
             for live in self
                 .live()
@@ -1868,6 +1900,63 @@ impl Mobile {
         true
     }
 
+    /// Stores an iOS app phone's APNs registration, given inside its
+    /// encrypted session; `false` when its shape is wrong. Neither the token
+    /// nor the key reaches a log.
+    pub fn set_apns(&self, phone_id: &str, registration: ApnsRegistration) -> bool {
+        if !push::registration_valid(&registration) {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "registration.refused", "phone_id": phone_id,
+            }));
+            return false;
+        }
+        let changed = self.lock().phones.set_apns(phone_id, Some(registration));
+        if changed {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "registration.stored", "phone_id": phone_id,
+            }));
+            self.publish();
+        }
+        true
+    }
+
+    /// Sends one notice to an iOS app phone: encrypted for the key it
+    /// registered, handed to the relay over the running link, and answered by
+    /// the relay with Apple's outcome. Blocking, on a thread where Web Push
+    /// sends run. A token Apple calls gone is dropped (`token_gone`); every
+    /// other `Err` names why nothing was delivered, and none is retried
+    /// (`docs/RELAY_PROTOCOL.md`, Push relay).
+    pub fn push_to_app(&self, phone_id: &str, payload: &Value) -> Result<(), &'static str> {
+        let (registration, link) = {
+            let inner = self.lock();
+            let registration = inner
+                .phones
+                .current()
+                .find(|phone| phone.id == phone_id)
+                .and_then(|phone| phone.apns.clone())
+                .ok_or("no_registration")?;
+            let link = inner.relay_link.clone().ok_or("relay_unavailable")?;
+            (registration, link)
+        };
+        let request = push::app_request(&registration, payload)?;
+        match link.push(request)? {
+            PushOutcome::Delivered => Ok(()),
+            PushOutcome::TokenGone => {
+                let dropped = self.lock().phones.drop_apns(phone_id, &registration.token);
+                if dropped {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "registration.dropped", "phone_id": phone_id,
+                    }));
+                    self.publish();
+                }
+                Err("token_gone")
+            }
+            PushOutcome::RateLimited => Err("rate_limited"),
+            PushOutcome::Unavailable => Err("unavailable"),
+            PushOutcome::Failed => Err("failed"),
+        }
+    }
+
     pub fn set_notifications(&self, phone_id: &str, notifications: Notifications) {
         if self
             .lock()
@@ -2158,10 +2247,10 @@ impl Mobile {
                         .extend(seen.iter().cloned());
                 }
             }
-            let targets: Vec<(String, PushSubscription)> = inner
+            let targets: Vec<(String, Route)> = inner
                 .phones
                 .current()
-                .filter_map(|phone| phone.push.clone().map(|push| (phone.id.clone(), push)))
+                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
                 .collect();
             let subject = inner
                 .settings
@@ -2187,29 +2276,49 @@ impl Mobile {
                 }));
                 continue;
             }
-            for (phone_id, subscription) in &targets {
+            for (phone_id, route) in &targets {
                 let clear = self
                     .lock()
                     .pending_clear
                     .remove(phone_id)
                     .unwrap_or_default();
                 match self.push_payload(&notice, &clear) {
-                    Ok(payload) => jobs.push((phone_id.clone(), subscription.clone(), payload)),
+                    Ok(payload) => jobs.push((phone_id.clone(), route.clone(), payload)),
                     Err(reason) => hide_core::diagnostic!(json!({
                         "component":"mobile_push", "kind":"push.failed", "reason":reason,
                     })),
                 }
             }
         }
-        if jobs.is_empty() || self.vapid.is_none() {
+        if jobs.is_empty() {
             return;
         }
         let mobile = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            let Some(vapid) = mobile.vapid.as_ref() else {
-                return;
-            };
-            for (phone_id, subscription, payload) in jobs {
+            for (phone_id, route, payload) in jobs {
+                let subscription = match route {
+                    Route::Web(subscription) => subscription,
+                    Route::App => {
+                        match mobile.push_to_app(&phone_id, &payload) {
+                            Ok(()) => hide_core::diagnostic!(json!({
+                                "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                                "route": "app", "tag": payload.get("tag"),
+                            })),
+                            Err(reason) => hide_core::diagnostic!(json!({
+                                "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                                "route": "app", "reason": reason,
+                            })),
+                        }
+                        continue;
+                    }
+                };
+                let Some(vapid) = mobile.vapid.as_ref() else {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                        "reason": "no_vapid",
+                    }));
+                    continue;
+                };
                 match push::send(vapid, &subject, &subscription, &payload, now_ms() / 1000) {
                     push::SendOutcome::Delivered => hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,

@@ -1,11 +1,13 @@
 use crate::{
+    apns::Apns,
     event::Event,
     limits::*,
-    state::{End, Outbound, Rejection, State},
+    state::{End, Outbound, PushCap, Rejection, State},
 };
 use futures_util::{SinkExt, StreamExt};
 use hide_relay_protocol::admission::{
-    ADMISSION_TIMEOUT_MS, ClientMessage, PendingAdmission, Refusal, ServerMessage,
+    ADMISSION_TIMEOUT_MS, ClientMessage, PendingAdmission, PushAttempt, PushOutcome, PushRequest,
+    PushResult, Refusal, ServerMessage, decode_push,
 };
 use http_body_util::Full;
 use hyper::{
@@ -48,6 +50,12 @@ struct Shared {
     clock: Clock,
     events: EventSink,
     idle_timeout: Duration,
+    /// `None` until the relay is given Apple's key; every push request then
+    /// answers `unavailable` (`docs/RELAY_PROTOCOL.md`, Push relay).
+    apns: Option<Arc<Apns>>,
+    /// Set when `serve` ends, on every way out: each push send in flight
+    /// stops at once rather than outliving the relay.
+    stopping: tokio::sync::watch::Sender<bool>,
 }
 impl Shared {
     fn emit(&self, events: Vec<Event>) {
@@ -57,13 +65,12 @@ impl Shared {
     }
     fn rejected(&self, id: Option<u64>, error: Rejection) {
         let state = self.state.lock().unwrap();
-        // Owner removal already logged the refusal with the room identity.
+        // Owner removal already logged the refusal.
         if id.is_some_and(|id| state.role(id).is_err()) {
             return;
         }
-        let room = id.and_then(|id| state.room(id));
         drop(state);
-        (self.events)(Event::new(error.event, room, error.cap));
+        (self.events)(Event::new(error.event, error.cap));
     }
 }
 struct Registration {
@@ -113,22 +120,51 @@ impl Relay {
         events: impl Fn(Event) + Send + Sync + 'static,
         clock: impl Fn() -> Duration + Send + Sync + 'static,
     ) -> io::Result<Self> {
-        if !limits.valid() {
+        Self::with_push(limits, trusted_proxy, events, clock, None)
+    }
+    /// A relay that forwards push requests to Apple through `apns`. Without
+    /// one it answers `registered {push: false}` and every push request
+    /// `unavailable`, which is the state of a relay without the key.
+    pub fn with_push(
+        limits: Limits,
+        trusted_proxy: Option<IpAddr>,
+        events: impl Fn(Event) + Send + Sync + 'static,
+        clock: impl Fn() -> Duration + Send + Sync + 'static,
+        apns: Option<Apns>,
+    ) -> io::Result<Self> {
+        let push_limits = PushLimits::default();
+        if !limits.valid() || !push_limits.valid() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid_limits",
             ));
         }
+        let clock: Clock = Arc::new(clock);
         Ok(Self {
             shared: Arc::new(Shared {
-                state: Mutex::new(State::new(limits)),
-                clock: Arc::new(clock),
+                state: Mutex::new(State::new(limits, push_limits, apns.is_some())),
+                clock: clock.clone(),
                 events: Arc::new(events),
                 idle_timeout: limits.idle_timeout,
+                apns: apns.map(Arc::new),
+                stopping: tokio::sync::watch::Sender::new(false),
             }),
             limits,
             trusted_proxy,
         })
+    }
+    /// Lower push budgets for a test; they may only be lowered.
+    pub fn with_push_limits(mut self, push: PushLimits) -> io::Result<Self> {
+        if !push.valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid_limits",
+            ));
+        }
+        let shared = Arc::get_mut(&mut self.shared)
+            .ok_or_else(|| io::Error::other("relay already serving"))?;
+        shared.state.get_mut().unwrap().set_push_limits(push);
+        Ok(self)
     }
 
     /// The caller owns the listener and shutdown signal. Dropping this future
@@ -139,6 +175,9 @@ impl Relay {
         shutdown: impl Future<Output = ()>,
     ) -> io::Result<()> {
         let mut tasks = JoinSet::new();
+        // Push sends run beside the socket tasks; this ends them when `serve`
+        // returns or is dropped.
+        let _pushes = StopPushes(Arc::clone(&self.shared));
         tokio::pin!(shutdown);
         let result = loop {
             tokio::select! {
@@ -164,7 +203,7 @@ impl Relay {
         drop(listener);
         let events = self.shared.state.lock().unwrap().restart();
         self.shared.emit(events);
-        (self.shared.events)(Event::new("server_stopping", None, None));
+        (self.shared.events)(Event::new("server_stopping", None));
         let drained = timeout(SHUTDOWN_TIMEOUT, async {
             while let Some(result) = tasks.join_next().await {
                 result.map_err(|_| io::Error::other("connection_task_failed"))?;
@@ -175,10 +214,17 @@ impl Relay {
         if !matches!(drained, Ok(Ok(()))) {
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
-            (self.shared.events)(Event::new("shutdown_timeout", None, None));
+            (self.shared.events)(Event::new("shutdown_timeout", None));
             return Err(io::Error::other("shutdown_incomplete"));
         }
         result
+    }
+}
+
+struct StopPushes(Arc<Shared>);
+impl Drop for StopPushes {
+    fn drop(&mut self) {
+        self.0.stopping.send_replace(true);
     }
 }
 
@@ -238,13 +284,13 @@ async fn connection(stream: TcpStream, remote: IpAddr, proxy: Option<IpAddr>, sh
         .serve_connection(TokioIo::new(stream), service)
         .with_upgrades();
     if !matches!(timeout(HTTP_TIMEOUT, http).await, Ok(Ok(()))) {
-        (shared.events)(Event::new("http_failed", None, None));
+        (shared.events)(Event::new("http_failed", None));
         return;
     }
     let next = upgrade.lock().unwrap().take();
     let Some(next) = next else { return };
     let Ok(Ok(io)) = timeout(HTTP_TIMEOUT, next.on_upgrade).await else {
-        (shared.events)(Event::new("upgrade_failed", None, None));
+        (shared.events)(Event::new("upgrade_failed", None));
         return;
     };
     let config = WebSocketConfig::default()
@@ -353,12 +399,37 @@ async fn session(mut socket: Socket, mut admission: Admission) {
 }
 
 fn control(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     id: u64,
     text: &str,
     pending: &mut Option<PendingAdmission>,
     admitted: &mut bool,
 ) -> Result<(), Rejection> {
+    // A push message is read before the rest: one whose fields are wrong is
+    // still answered under its own id, and the room stays connected
+    // (`docs/RELAY_PROTOCOL.md`, Push relay).
+    match decode_push(text) {
+        PushAttempt::Push {
+            id: push_id,
+            request,
+        } if *admitted => {
+            return push(shared, id, text.len() as u64, push_id, request);
+        }
+        PushAttempt::Push { .. } => {
+            return Err(Rejection::new(
+                Refusal::InvalidMessage,
+                "invalid_transition",
+            ));
+        }
+        PushAttempt::Unaddressable(error) => {
+            return Err(if error == hide_relay_protocol::Error::SizeLimit {
+                Rejection::cap(Refusal::FrameLimit, "control_size")
+            } else {
+                crate::protocol_error(error)
+            });
+        }
+        PushAttempt::NotPush => {}
+    }
     let message = ClientMessage::decode(text).map_err(|error| {
         if error == hide_relay_protocol::Error::SizeLimit {
             Rejection::cap(Refusal::FrameLimit, "control_size")
@@ -409,6 +480,96 @@ fn control(
         }
     }
     Ok(())
+}
+
+/// One push request from an admitted device socket: charged and counted,
+/// checked, then sent beside the socket loop so the room keeps reading. Every
+/// answer is a `push_result` under the request's id; only the room's byte
+/// budget, as for any frame, closes the socket.
+fn push(
+    shared: &Arc<Shared>,
+    id: u64,
+    size: u64,
+    push_id: u32,
+    request: Result<PushRequest, hide_relay_protocol::admission::PushField>,
+) -> Result<(), Rejection> {
+    let now = (shared.clock)();
+    // Only a room's device socket asks for a push; a phone socket keeps the
+    // existing closed refusal. Every request is counted, a malformed one
+    // included.
+    let cap = shared.state.lock().unwrap().push_cap(id, size, now)?;
+    if let PushCap::Over { cap, log } = cap {
+        return answer_push_result(shared, id, push_id, rate_limited(shared, cap, log));
+    }
+    let request = match request {
+        Ok(request) => request,
+        Err(field) => {
+            (shared.events)(Event::new(field_event(field), None));
+            return answer_push_result(shared, id, push_id, PushOutcome::Failed);
+        }
+    };
+    let Some(apns) = shared.apns.clone() else {
+        return answer_push_result(shared, id, push_id, PushOutcome::Unavailable);
+    };
+    let Some(slot) = apns.slot() else {
+        let log = shared.state.lock().unwrap().log_concurrent_cap(now);
+        return answer_push_result(
+            shared,
+            id,
+            push_id,
+            rate_limited(shared, "concurrent_pushes", log),
+        );
+    };
+    // Beside the socket loop: waiting out Apple must not stop the room from
+    // reading its next frame. The send ends with the relay.
+    let shared = Arc::clone(shared);
+    let mut stopping = shared.stopping.subscribe();
+    tokio::spawn(async move {
+        tokio::select! {
+            sent = apns.send(&request, slot) => {
+                (shared.events)(Event::new(sent.reason, None));
+                let _ = answer_push_result(&shared, id, push_id, sent.outcome);
+            }
+            _ = stopping.wait_for(|stopping| *stopping) => {}
+        }
+    });
+    Ok(())
+}
+
+/// A refusal past a cap: logged once per window, answered every time.
+fn rate_limited(shared: &Shared, cap: &'static str, log: bool) -> PushOutcome {
+    if log {
+        (shared.events)(Event::new("cap_exceeded", Some(cap)));
+    }
+    PushOutcome::RateLimited
+}
+
+/// The fixed event each malformed field is recorded under, and never a value.
+fn field_event(field: hide_relay_protocol::admission::PushField) -> &'static str {
+    use hide_relay_protocol::admission::PushField;
+    match field {
+        PushField::Token => "push_token_invalid",
+        PushField::Environment => "push_environment_invalid",
+        PushField::Payload | PushField::Collapse => "push_payload_invalid",
+        PushField::Shape => "push_invalid",
+    }
+}
+
+/// Queues one result under its request id, on the same bounded control path
+/// as every other answer. A full queue ends the socket as it does elsewhere.
+fn answer_push_result(
+    shared: &Shared,
+    id: u64,
+    push_id: u32,
+    result: PushOutcome,
+) -> Result<(), Rejection> {
+    shared.state.lock().unwrap().control(
+        id,
+        ServerMessage::PushResult(PushResult {
+            id: push_id,
+            result,
+        }),
+    )
 }
 
 async fn finish(socket: &mut Socket, end: End) {
