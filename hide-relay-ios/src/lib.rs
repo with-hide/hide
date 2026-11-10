@@ -329,7 +329,7 @@ pub unsafe extern "C" fn hide_relay_frame_connection(
 /// A digest of the sources this library was built from, set by `scripts/build-relay-ios.sh` (`docs/BUILD.md`), so a
 /// release check can compare the library inside a signed app with the checkout it claims to come from.
 /// Without it the library says `unrecorded`, which the release check refuses.
-static SOURCE: &str = match option_env!("HIDE_RELAY_IOS_SOURCE") {
+static SOURCE: &str = match option_env!("HIDE_BUILD_RELAY_IOS_SOURCE") {
     Some(digest) => digest,
     None => "unrecorded",
 };

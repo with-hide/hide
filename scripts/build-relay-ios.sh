@@ -50,7 +50,7 @@ for triple in aarch64-apple-ios aarch64-apple-ios-sim; do
     upper=$(printf '%s' "$triple" | tr 'a-z-' 'A-Z_')
     env "CARGO_TARGET_${upper}_LINKER=$work/no-link" \
         CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_STRIP=none \
-        HIDE_RELAY_IOS_SOURCE="$source_digest" IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+        HIDE_BUILD_RELAY_IOS_SOURCE="$source_digest" IPHONEOS_DEPLOYMENT_TARGET=15.0 \
         bash scripts/verify-cargo.sh build -p hide-relay-ios --release --target "$triple"
     mkdir -p "$out/$triple"
     cp "target/$triple/release/libhide_relay_ios.a" "$out/$triple/"
