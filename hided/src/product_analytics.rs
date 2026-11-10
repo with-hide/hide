@@ -288,7 +288,7 @@ mod tests {
         let (received, bodies) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let peer = std::thread::spawn(move || {
-            for _ in 0..9 {
+            for _ in 0..10 {
                 let (mut stream, _) = server.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(10)))
@@ -382,6 +382,11 @@ mod tests {
         });
         release.send(()).unwrap();
         let phone = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(Event::Active {
+            surface: hide_core::product_analytics::ActiveSurface::Phone,
+        });
+        release.send(()).unwrap();
+        let active = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(sixth["event"], "hide_device_connected");
         assert_eq!(fourth["event"], "hide_device_connected");
         assert_eq!(fifth["event"], "hide_device_connected");
@@ -389,6 +394,7 @@ mod tests {
         assert_eq!(ended["event"], "hide_mission_ended");
         assert_eq!(practice["event"], "hide_practice");
         assert_eq!(phone["event"], "hide_phone_paired");
+        assert_eq!(active["event"], "hide_active");
         assert_eq!(second["event"], "hide_connected");
         assert_eq!(third["event"], "hide_agent_started");
         assert_ne!(first["uuid"], second["uuid"]);
@@ -416,6 +422,9 @@ mod tests {
         let mut paired = common.clone();
         paired["route"] = "relay".into();
         assert_eq!(phone["properties"], paired);
+        let mut used = common.clone();
+        used["surface"] = "phone".into();
+        assert_eq!(active["properties"], used);
         let mut device_ready = common.clone();
         device_ready["outcome"] = "ready".into();
         device_ready["platform"] = "linux-aarch64".into();
@@ -431,7 +440,7 @@ mod tests {
         device_failed["platform"] = "macos-aarch64".into();
         assert_eq!(fifth["properties"], device_failed);
         for body in [
-            first, second, third, fourth, fifth, sixth, ended, practice, phone,
+            first, second, third, fourth, fifth, sixth, ended, practice, phone, active,
         ] {
             assert_eq!(body["api_key"], "phc_fixture_public_token");
             let mut keys: Vec<_> = body

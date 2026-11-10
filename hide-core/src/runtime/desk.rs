@@ -339,7 +339,11 @@ impl Runtime {
         // with the View, not in Desk's store.
         let stored = !matches!(event, DeskEvent::OutputSeen(_));
         let changed = match event {
-            DeskEvent::Send(payload) => self.desk_send(payload),
+            DeskEvent::Send(payload) => {
+                // Only the Desk composer sends it.
+                self.note_operator_active(crate::product_analytics::ActiveSurface::Desktop);
+                self.desk_send(payload)
+            }
             DeskEvent::Stop => self.desk_stop(),
             DeskEvent::Approval(payload) => self.desk_answer(payload),
             DeskEvent::NewConversation => self.desk_new_conversation(),

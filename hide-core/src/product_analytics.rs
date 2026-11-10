@@ -32,6 +32,52 @@ pub enum Event {
     PhonePaired {
         route: PhoneRoute,
     },
+    /// The operator acted from `surface` for the first time in a UTC day
+    /// ([`ActiveDays`]).
+    Active {
+        surface: ActiveSurface,
+    },
+}
+
+/// Where the operator acted from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActiveSurface {
+    /// A window of this core: a key typed into a pane, a Desk message.
+    Desktop,
+    /// A paired phone's action: a reply, a key, an answer, a merge, a start.
+    Phone,
+}
+
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// The UTC day, in days since the Unix epoch, on which each surface last
+/// sent [`Event::Active`]. Kept in the core state so a restart, a reload or
+/// a reconnect the same day sends nothing; never on the snapshot wire.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ActiveDays {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    desktop: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phone: Option<u64>,
+}
+
+impl ActiveDays {
+    /// Records that `surface` acted at `unix_ms`; true only for the first
+    /// action of its UTC day. Any other day than the one recorded is a new
+    /// one, so a clock set back does not silence the surface until it
+    /// catches up.
+    pub(crate) fn first_of_day(&mut self, surface: ActiveSurface, unix_ms: u64) -> bool {
+        let day = unix_ms / DAY_MS;
+        let recorded = match surface {
+            ActiveSurface::Desktop => &mut self.desktop,
+            ActiveSurface::Phone => &mut self.phone,
+        };
+        if *recorded == Some(day) {
+            return false;
+        }
+        *recorded = Some(day);
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +226,7 @@ impl Event {
             Self::MissionEnded { .. } => "hide_mission_ended",
             Self::Practice { .. } => "hide_practice",
             Self::PhonePaired { .. } => "hide_phone_paired",
+            Self::Active { .. } => "hide_active",
         }
     }
 
@@ -273,6 +320,13 @@ impl Event {
                     PhoneRoute::Tailnet => "tailnet",
                 },
             )],
+            Self::Active { surface } => vec![(
+                "surface",
+                match surface {
+                    ActiveSurface::Desktop => "desktop",
+                    ActiveSurface::Phone => "phone",
+                },
+            )],
         }
     }
 }
@@ -333,6 +387,22 @@ pub trait Sink: Send + Sync + std::fmt::Debug {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each surface counts once per UTC day: the day turns at midnight UTC,
+    /// not after 24 hours, and the other surface keeps its own day.
+    #[test]
+    fn each_surface_counts_its_first_action_of_a_utc_day() {
+        let midnight = 20_402 * DAY_MS;
+        let mut days = ActiveDays::default();
+        assert!(days.first_of_day(ActiveSurface::Desktop, midnight - 1));
+        assert!(!days.first_of_day(ActiveSurface::Desktop, midnight - DAY_MS + 5));
+        assert!(days.first_of_day(ActiveSurface::Desktop, midnight));
+        assert!(!days.first_of_day(ActiveSurface::Desktop, midnight + DAY_MS - 1));
+        assert!(days.first_of_day(ActiveSurface::Phone, midnight + 1));
+        assert!(!days.first_of_day(ActiveSurface::Phone, midnight + 2));
+        // A clock set back to an earlier day counts that day again.
+        assert!(days.first_of_day(ActiveSurface::Desktop, midnight - 1));
+    }
 
     #[test]
     fn a_device_failure_names_its_class_and_never_its_text() {

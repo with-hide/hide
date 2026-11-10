@@ -43,6 +43,9 @@ enum Command {
     /// A usage event the daemon observed outside the core (a phone's
     /// pairing); the owner thread hands it to the statistics worker it owns.
     ProductEvent(hide_core::product_analytics::Event),
+    /// The operator acted from a surface outside the core (a phone); the
+    /// core counts the first action of each UTC day.
+    OperatorActive(hide_core::product_analytics::ActiveSurface),
     DeliveryHuman {
         reply: Sender<Result<hide_core::delivery::worker::PreparedHuman, String>>,
     },
@@ -343,6 +346,12 @@ impl CoreHandle {
     /// statistics worker drops it while usage statistics are off.
     pub fn capture_product_event(&self, event: hide_core::product_analytics::Event) {
         let _ = self.commands.send(Command::ProductEvent(event));
+    }
+
+    /// Tells the core the operator acted from `surface`; the core sends
+    /// `hide_active` for the first such action of a UTC day.
+    pub fn note_operator_active(&self, surface: hide_core::product_analytics::ActiveSurface) {
+        let _ = self.commands.send(Command::OperatorActive(surface));
     }
 
     /// The core's state folder.
@@ -1531,6 +1540,7 @@ fn owner_loop(
                     hide_core::product_analytics::Sink::capture(&*worker.client, event);
                 }
             }
+            Command::OperatorActive(surface) => core.note_operator_active(surface),
             Command::MemoryPrepare {
                 device_id,
                 pane_id,
