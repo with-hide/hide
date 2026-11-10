@@ -11,7 +11,6 @@ import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
 import { endPaneHolders } from "./pane-holders.mjs";
 import { connectControl } from "./hided-control.mjs";
-import type { SnapshotRest } from "../src/snapshot";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 
 /**
@@ -278,7 +277,13 @@ async function launch(engine: DaemonEngine, label: string, dir: string, home: st
               const control = await connectControl(restarted);
               try {
                 await control.until((rest) => {
-                  const snapshot = rest as SnapshotRest;
+                  // This fixture is also compiled by the desktop host's
+                  // non-JSX project; read just the wire fields needed here.
+                  const snapshot = rest as {
+                    status?: { herdr?: { state: string } };
+                    ui_state?: { focused_checkout_id?: string | null };
+                    workspace_view?: unknown;
+                  };
                   return snapshot.status?.herdr?.state === "connected"
                     && (!snapshot.ui_state?.focused_checkout_id || Boolean(snapshot.workspace_view));
                 }, "the restarted core's engine and saved Workspace");
