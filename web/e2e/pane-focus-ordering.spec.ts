@@ -1,3 +1,4 @@
+// Throwaway change: shows the repeat lane running this spec.
 import { expect, test, type CDPSession, type Page } from "@playwright/test";
 import fs from "node:fs";
 import { corePaneFocus, withControl } from "./daemon-actions";
