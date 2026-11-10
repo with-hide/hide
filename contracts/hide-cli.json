@@ -5584,7 +5584,9 @@
                 "mission_steps_invalid",
                 "mission_checkers_invalid",
                 "mission_external_invalid",
-                "mission_machine_node_refused"
+                "mission_machine_node_refused",
+                "mission_profile_unknown",
+                "mission_candidate_refused"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6551,7 +6553,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:38dad52e8bcf39a31459db6b86045b8408899a69ae0dc3e76748d230f795fb08",
+    "digest": "sha256:8a0371cf481e2fd740f3556a7c349b3cd347bbc23c9af1aa41dfff2a7ad5cb56",
     "envelopes": {
         "agent": {
             "answer": "value",

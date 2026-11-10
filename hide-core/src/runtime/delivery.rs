@@ -1484,6 +1484,11 @@ impl Runtime {
             if let Some(admission) = plan {
                 *intent = crate::coordination::plan_intent(&admission.link);
             }
+            // A node's worker named by no `--profile` starts as its plan
+            // shows it (PRD agent-profiles-phase2 D-02).
+            if profile.is_none() {
+                *profile = self.planned_profile(&actor, machine.as_deref(), kind, intent)?;
+            }
             let ledger = self.delivery_state()?;
             let worker = crate::runtime::missions::SpawnWorker {
                 machine: machine.as_deref(),

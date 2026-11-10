@@ -847,6 +847,7 @@ mod tests {
     fn worker(agent: &str) -> Worker {
         Worker {
             agent: agent.into(),
+            profile: None,
             model: Some("m".into()),
             effort: None,
             effort_auto: false,

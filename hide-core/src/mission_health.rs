@@ -1147,6 +1147,7 @@ mod tests {
         review.checkers.push(crate::mission_criteria::Checker {
             worker: crate::missions::Worker {
                 agent: "codex".into(),
+                profile: None,
                 model: None,
                 effort: None,
                 effort_auto: false,

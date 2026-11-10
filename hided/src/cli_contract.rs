@@ -1052,6 +1052,8 @@ pub const COMMANDS: &[Spec] = &[
             "mission_checkers_invalid",
             "mission_external_invalid",
             "mission_machine_node_refused",
+            "mission_profile_unknown",
+            "mission_candidate_refused",
         ],
     },
     Spec {

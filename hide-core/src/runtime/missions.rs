@@ -1544,7 +1544,7 @@ impl Runtime {
                     true,
                 ))
             }
-            MissionCommand::Plan { mission, plan } => {
+            MissionCommand::Plan { mission, mut plan } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
                 let current = self
                     .missions
@@ -1552,10 +1552,12 @@ impl Runtime {
                     .get(&id)
                     .cloned()
                     .ok_or("mission_unknown")?;
+                self.plan_profiles(&current, &mut plan)?;
                 // A plan opens nothing in the lane: the map opens only from
                 // the operator's press, and the shell shows a first plan on
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let mut next = crate::missions::apply_plan(&current, &plan, now)?;
+                self.plan_candidates(&current, &plan)?;
                 // A replan does not make a node an agent on another machine
                 // works or checks one only the project's machine runs.
                 for node in next.nodes.iter().filter(|node| !node.runs_elsewhere()) {
@@ -1921,13 +1923,24 @@ impl Runtime {
                 let sleeping = self.sleeping_registrations(agents.values().copied());
                 let view = self.view_mission(mission, &agents, &sleeping, ledger.as_deref());
                 let Some(key) = node else {
-                    return Ok((json!({"mission": view}), false));
+                    let mut shown = json!(view);
+                    for (node, view) in shown["nodes"]
+                        .as_array_mut()
+                        .into_iter()
+                        .flatten()
+                        .zip(&view.nodes)
+                    {
+                        self.name_worker_items(mission, view, node);
+                    }
+                    return Ok((json!({"mission": shown}), false));
                 };
-                let shown = view
+                let view = view
                     .nodes
                     .into_iter()
                     .find(|node| node.key == key)
                     .ok_or("mission_node_unknown")?;
+                let mut shown = json!(view);
+                self.name_worker_items(mission, &view, &mut shown);
                 let node = mission.node(&key).ok_or("mission_node_unknown")?;
                 Ok((
                     json!({
@@ -2386,10 +2399,7 @@ impl Runtime {
         if mission.status == MissionStatus::Planning {
             return Err("mission_not_started".into());
         }
-        let node = intent
-            .strip_prefix(&mission.id)
-            .and_then(|rest| rest.strip_prefix(':'))
-            .and_then(|key| mission.node(key));
+        let node = mission.intent_node(intent);
         // A node's worker starts on its brief, or stands at an empty prompt
         // until a person types: a letter cannot wake a session that has not
         // run its first turn (delivery.md, session_unread).
@@ -2498,16 +2508,201 @@ impl Runtime {
         {
             return Ok(None);
         }
-        let choice = [&worker.launch.model, &worker.launch.effort]
-            .into_iter()
-            .flatten()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        Ok(Some(if choice.is_empty() {
-            request.shown()
-        } else {
-            format!("{} ({})", request.shown(), choice.join(", "))
-        }))
+        Ok(Some(item_words(request.shown(), worker.launch)))
+    }
+
+    /// The plan `plan` for `mission` with each worker's and checker's
+    /// profile, which a plan names by the name `--profile` takes, as its id
+    /// on the mission's machine, none for the built-in default (PRD
+    /// agent-profiles-phase2 D-08); a name that machine does not list for
+    /// that agent is refused with the node and the name
+    /// (`mission_profile_unknown`). An agent Hide does not start keeps what
+    /// it names, for the plan's own check to refuse the agent.
+    pub(super) fn plan_profiles(
+        &self,
+        mission: &Mission,
+        plan: &mut crate::missions::PlanInput,
+    ) -> Result<(), String> {
+        let profiles = self.machine_profiles(&mission.device_id);
+        for node in &mut plan.nodes {
+            let workers = node
+                .worker
+                .iter_mut()
+                .chain(node.checks.iter_mut().flat_map(|check| check.by.iter_mut()));
+            for worker in workers {
+                let Some(name) = worker.profile.take() else {
+                    continue;
+                };
+                if hide_agent_adapter::adapter(&worker.agent)
+                    .and_then(|adapter| adapter.start)
+                    .is_none()
+                {
+                    worker.profile = Some(name);
+                    continue;
+                }
+                let (id, _) =
+                    crate::launch::chosen(&worker.agent, &name.0, profiles).map_err(|_| {
+                        crate::coordination::refusal(
+                            "mission_profile_unknown",
+                            &format!(
+                                "{}: {}",
+                                node.key,
+                                crate::launch::shown(&worker.agent, &name.0)
+                            ),
+                        )
+                    })?;
+                worker.profile = Some(id).filter(|id| !id.is_default());
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses a plan whose work still to start none of `mission`'s
+    /// candidates admits (`mission_candidate_refused`, naming the node and
+    /// the item, as a spawn's refusal does): the worker and the checkers of
+    /// each node not yet started, each judged as a start of it would be
+    /// (`Worker::admitted_by`, PRD agent-profiles-phase2 D-08). A node that
+    /// started had its workers judged when they were spawned, and a mission
+    /// with no candidates holds none to them.
+    pub(super) fn plan_candidates(
+        &self,
+        mission: &Mission,
+        plan: &crate::missions::PlanInput,
+    ) -> Result<(), String> {
+        if mission.candidates.is_empty() {
+            return Ok(());
+        }
+        let profiles = self.machine_profiles(&mission.device_id);
+        for node in &plan.nodes {
+            if mission.node(&node.key).is_some_and(MissionNode::started) {
+                continue;
+            }
+            let workers = node
+                .worker
+                .iter()
+                .chain(node.checks.iter().flat_map(|check| &check.by));
+            for worker in workers {
+                if mission
+                    .candidates
+                    .iter()
+                    .any(|candidate| worker.admitted_by(candidate))
+                {
+                    continue;
+                }
+                let target = worker.target();
+                let request = crate::launch::Request::new(
+                    &worker.agent,
+                    crate::launch::listed(&worker.agent, &target.profile, profiles),
+                );
+                let launch = hide_agent_adapter::LaunchChoice {
+                    model: worker.model.clone(),
+                    effort: worker.effort.clone(),
+                };
+                return Err(crate::coordination::refusal(
+                    "mission_candidate_refused",
+                    &format!("{}: {}", node.key, item_words(request.shown(), &launch)),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Names a node's worker items in its view as `hide mission show` reads
+    /// it (`shown`, the JSON of `view`): its launched worker and its planned
+    /// one each get `item`, the agent with its profile's name now (the name
+    /// then for a launch whose profile is gone, `profile_gone` for a planned
+    /// one), and `model_label`, the name the agent shows for its model in
+    /// that item's list as Hide last read it, where it differs. The screen
+    /// names them from the snapshot's own lists, so the published view
+    /// carries neither and is never made again for a list's read.
+    fn name_worker_items(&self, mission: &Mission, view: &NodeView, shown: &mut Value) {
+        let machine = view.machine.as_deref().unwrap_or(&mission.device_id);
+        if let Some(launched) = &view.launched {
+            let profile = launched.profile.as_ref().map(|profile| {
+                crate::launch::listed(&launched.agent, &profile.id, self.machine_profiles(machine))
+                    .unwrap_or_else(|| (profile.id.clone(), profile.name.clone()))
+            });
+            let id = profile
+                .as_ref()
+                .map_or_else(hide_agent_adapter::ProfileId::default_profile, |(id, _)| {
+                    id.clone()
+                });
+            let row = &mut shown["launched"];
+            row["item"] = crate::launch::Request::new(&launched.agent, profile)
+                .shown()
+                .into();
+            if let Some(label) = launched
+                .model
+                .as_deref()
+                .and_then(|model| self.model_label(machine, &launched.agent, &id, model))
+            {
+                row["model_label"] = label.into();
+            }
+        }
+        if let Some(worker) = &view.worker {
+            let profiles = self.machine_profiles(&mission.device_id);
+            let target = worker.target();
+            let listed = crate::launch::listed(&worker.agent, &target.profile, profiles);
+            let row = &mut shown["worker"];
+            if listed.is_none() && !target.profile.is_default() {
+                row["profile_gone"] = true.into();
+            }
+            row["item"] = crate::launch::Request::new(&worker.agent, listed)
+                .shown()
+                .into();
+            if let Some(label) = worker.model.as_deref().and_then(|model| {
+                self.model_label(&mission.device_id, &worker.agent, &target.profile, model)
+            }) {
+                row["model_label"] = label.into();
+            }
+        }
+    }
+
+    /// The `--profile` a spawn of a node's worker takes when it names none
+    /// (PRD agent-profiles-phase2 D-02): the item the plan names for that
+    /// node's worker, the built-in default for none, when the spawn starts
+    /// that agent on the mission's machine, whose profiles the plan names;
+    /// otherwise none, and the start picks as any spawn does. A profile the
+    /// machine no longer lists is refused by name (`profile_gone`), so the
+    /// worker never starts in another account than the plan shows.
+    pub(crate) fn planned_profile(
+        &self,
+        actor: &Actor,
+        machine: Option<&str>,
+        kind: &str,
+        intent: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(mission) = self.missions.book.conducted_open(actor) else {
+            return Ok(None);
+        };
+        let Some(worker) = mission
+            .intent_node(intent)
+            .and_then(|node| node.worker.as_ref())
+        else {
+            return Ok(None);
+        };
+        if hide_agent_adapter::canonical_kind(&worker.agent)
+            != hide_agent_adapter::canonical_kind(kind)
+            || machine.unwrap_or(&actor.device_id) != mission.device_id
+        {
+            return Ok(None);
+        }
+        let target = worker.target();
+        if target.profile.is_default() {
+            return Ok(Some(target.profile.0));
+        }
+        crate::launch::listed(
+            kind,
+            &target.profile,
+            self.machine_profiles(&mission.device_id),
+        )
+        .map(|(_, name)| Some(name))
+        .ok_or_else(|| {
+            format!(
+                "{}: the plan starts this worker with a profile this machine no longer lists; replan the node with a profile hide agent catalog lists",
+                crate::launch::PROFILE_GONE
+            )
+        })
     }
 
     /// Whether a worker or checker of `mission` may start on `machine`,
@@ -3792,5 +3987,20 @@ fn node_stage(node: &MissionNode, pr_state: Option<PrState>) -> Option<u8> {
         (Some(Delivery::Direct), NodeStatus::Done) => Some(4),
         (Some(Delivery::Direct), _) if node.branch.is_some() => Some(2),
         _ => Some(1),
+    }
+}
+
+/// An item as a refusal names it, with the model and effort a start of it
+/// names (`Claude · work (opus, high)`).
+fn item_words(shown: String, launch: &hide_agent_adapter::LaunchChoice) -> String {
+    let choice = [&launch.model, &launch.effort]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if choice.is_empty() {
+        shown
+    } else {
+        format!("{shown} ({})", choice.join(", "))
     }
 }

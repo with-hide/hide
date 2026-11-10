@@ -1,5 +1,5 @@
 import { CogIcon, GitBranchIcon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
-import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
@@ -96,6 +96,10 @@ function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: 
   const wide = useWide(root);
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const log = useShellStore((s) => missionEventsOf(s.rest, mission.id));
+  // The map names each item's model as the start panel's list does (PRD agent-profiles-phase2 B12): those lists are read while a screen
+  // reads them, so the map observes them while it is drawn, again after a reconnect drops hided's side of it.
+  const live = useShellStore((s) => s.connection === "live");
+  useEffect(() => (live ? actions.observeCatalog() : undefined), [actions, live]);
   // Settings › Mission keeps which way every mission's map runs.
   const flow = useShellStore((s) => s.rest?.ui_state?.conductor_settings?.map_flow) ?? "down";
   const open = missionOpen(mission);
@@ -363,7 +367,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const escalationOf = useWorkerEscalation();
   const human = node.status === "working" ? escalationOf(node)?.human ?? null : null;
   const humanLine = human ? humanTurnText(t, human) : null;
-  const worker = useNodeRun(node);
+  const worker = useNodeRun(mission, node);
   const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
   const took = useNodeTimes(mission, node, events, end)?.took ?? null;
@@ -444,7 +448,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
         <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", device && "flex-wrap")} data-node-run={run?.from ?? "none"}>
           {run || device ? (
             <span className="flex min-w-0 max-w-full items-center gap-xxs">
-              {worker?.agent ? <AgentMark kind={worker.agent} profile={worker.profile} /> : null}
+              {worker?.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}
               {run ? <RunText run={run} /> : null}
               {device ? <>{run ? <span aria-hidden="true">·</span> : null}<MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /></> : null}
             </span>

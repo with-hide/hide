@@ -256,17 +256,21 @@ fn worker_words(node: &Value) -> Option<String> {
     let worker = [&node["launched"], &node["worker"]]
         .into_iter()
         .find(|worker| worker.is_object())?;
-    let mut words = text(worker, "agent").to_owned();
-    // The profile the launch started with, by its name then (PRD
-    // agent-profiles-phase2 B12); a plan names none, and the built-in
-    // default reads as it always did.
-    if let Some(profile) = worker["profile"]["name"].as_str() {
-        let _ = write!(words, "·{profile}");
-    }
-    for part in [&worker["model"], &worker["effort"]] {
-        if let Some(part) = part.as_str() {
-            let _ = write!(words, " {part}");
+    // The item as the core names it (`Claude · work`, PRD agent-profiles-phase2
+    // B12): the agent with its profile's name now, none for the built-in
+    // default; a planned profile the machine no longer lists says so.
+    let mut words = match worker["item"].as_str() {
+        Some(item) if worker["profile_gone"] == true => {
+            format!("{} · 없는 프로필", item)
         }
+        Some(item) => item.to_owned(),
+        None => text(worker, "agent").to_owned(),
+    };
+    // The model by the name its item's list shows for it (a gateway's
+    // `deepseek/…` for `opus`), else as the start passes it.
+    let model = worker["model_label"].as_str().or(worker["model"].as_str());
+    for part in [model, worker["effort"].as_str()].into_iter().flatten() {
+        let _ = write!(words, " {part}");
     }
     if let Some(agent) = node["agent_id"].as_str() {
         let _ = write!(words, " · {agent}");
@@ -661,15 +665,48 @@ mod tests {
             .find(|line| line.starts_with("작업자 "))
             .map(str::to_owned)
         };
-        node["launched"] = json!({"agent_id": "agent-2", "agent": "claude", "model": "opus"});
+        node["launched"] =
+            json!({"agent_id": "agent-2", "agent": "claude", "item": "Claude", "model": "opus"});
         assert_eq!(
             worker(&node).as_deref(),
-            Some("작업자 claude opus · agent-2 · 깨어 있음")
+            Some("작업자 Claude opus · agent-2 · 깨어 있음")
         );
         node["launched"]["profile"] = json!({"id": "p-work", "name": "work"});
+        node["launched"]["item"] = json!("Claude · work");
+        node["launched"]["model_label"] = json!("deepseek/deepseek-v4.1-flash");
         assert_eq!(
             worker(&node).as_deref(),
-            Some("작업자 claude·work opus · agent-2 · 깨어 있음")
+            Some("작업자 Claude · work deepseek/deepseek-v4.1-flash · agent-2 · 깨어 있음")
+        );
+    }
+
+    /// A planned worker reads as its item, a profile the machine no longer
+    /// lists saying so, before any worker launched.
+    #[test]
+    fn a_planned_workers_line_names_its_item() {
+        let mut node = mission()["mission"]["nodes"][0].clone();
+        node["launched"] = Value::Null;
+        node["agent_id"] = Value::Null;
+        node["agent_runtime"] = Value::Null;
+        node["worker"] = json!({"agent": "claude", "profile": "p-gw", "item": "Claude · gw", "model": "opus", "model_label": "glm-5", "effort": "high"});
+        let line = |node: &Value| {
+            draw(
+                &json!({"mission_id": "mission-33", "node": node, "letters": []}),
+                NOW,
+            )
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with("작업자 "))
+            .map(str::to_owned)
+        };
+        assert_eq!(
+            line(&node).as_deref(),
+            Some("작업자 Claude · gw glm-5 high")
+        );
+        node["worker"] = json!({"agent": "claude", "profile": "p-gone", "item": "Claude", "profile_gone": true, "model": "opus"});
+        assert_eq!(
+            line(&node).as_deref(),
+            Some("작업자 Claude · 없는 프로필 opus")
         );
     }
 

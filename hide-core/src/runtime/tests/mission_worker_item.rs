@@ -259,3 +259,245 @@ fn a_finished_spawn_asked_again_after_the_projects_choice_moved_answers_its_work
     assert_eq!(again["id"], worker["id"]);
     assert_eq!(spawner.count("start_agent"), 1, "nothing started again");
 }
+
+/// The started mission's id and the Conductor's context.
+fn mission_id(spawner: &Spawner) -> String {
+    let runtime = spawner.runtime.lock().unwrap();
+    runtime.missions.book.missions[0].id.clone()
+}
+
+/// The Conductor replans the mission's one node with `worker`.
+fn plan_worker(spawner: &Spawner, worker: Value) -> Result<Value, String> {
+    let mut runtime = spawner.runtime.lock().unwrap();
+    let context = authority(&spawner.actor).context;
+    let op: MissionCommand = serde_json::from_value(json!({"op": "plan", "plan": {"nodes": [
+        {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr", "worker": worker},
+    ]}}))
+    .unwrap();
+    runtime
+        .mission_command(crate::node::TEST_NODE, "sender", &context, op)
+        .map(|(answer, _)| answer)
+}
+
+/// The node's planned worker as the book keeps it.
+fn kept_worker(spawner: &Spawner) -> Value {
+    let runtime = spawner.runtime.lock().unwrap();
+    json!(runtime.missions.book.missions[0].nodes[0].worker)
+}
+
+/// The model a plan names for an agent whose candidate keeps the CLI's
+/// default, as `hide agent catalog` offers it.
+fn codex_default_model() -> &'static str {
+    crate::missions::cli_default_model("codex").expect("codex takes a model")
+}
+
+/// A plan names its worker's profile by the name `--profile` takes, and the
+/// book keeps that profile's id. A name the machine does not list is refused
+/// with the node and the item, and so is an item none of the candidates
+/// admits (PRD agent-profiles-phase2 D-08).
+#[test]
+fn a_plan_names_its_workers_profile_and_is_held_to_the_candidates() {
+    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let model = codex_default_model();
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "profile": "work", "model": model}),
+    )
+    .expect("the work candidate is planned");
+    assert_eq!(
+        kept_worker(&spawner),
+        json!({"agent": "codex", "profile": "p-work", "model": model, "effort": null, "effort_auto": false})
+    );
+    assert_eq!(
+        plan_worker(
+            &spawner,
+            json!({"agent": "codex", "profile": "nope", "model": model}),
+        ),
+        Err("mission_profile_unknown\u{1f}fix: Codex · nope".to_owned())
+    );
+    assert_eq!(
+        plan_worker(&spawner, json!({"agent": "codex", "model": model})),
+        Err(format!(
+            "mission_candidate_refused\u{1f}fix: Codex ({model})"
+        ))
+    );
+    assert_eq!(
+        plan_worker(
+            &spawner,
+            json!({"agent": "codex", "profile": "work", "model": "gpt-other"}),
+        ),
+        Err("mission_candidate_refused\u{1f}fix: Codex · work (gpt-other)".to_owned())
+    );
+}
+
+/// A plan of the built-in default keeps no profile, so its book is the
+/// bytes a build before plan profiles wrote and reads.
+#[test]
+fn a_plan_of_the_built_in_default_keeps_the_bytes_it_kept_before_profiles() {
+    let model = codex_default_model();
+    let spawner = conducting(vec![codex(None)]);
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "profile": "default", "model": model}),
+    )
+    .expect("the default candidate is planned");
+    assert_eq!(
+        serde_json::to_string(&kept_worker(&spawner)).unwrap(),
+        format!(r#"{{"agent":"codex","model":"{model}","effort":null,"effort_auto":false}}"#),
+        "a plan of the built-in default keeps the bytes it kept before profiles"
+    );
+}
+
+/// The node's worker, started with the node's intent and its brief, with
+/// `--profile <profile>` or none.
+fn node_worker(mission: &str, profile: Option<&str>) -> Command {
+    let mut command = reviewer(profile);
+    if let Command::Agents {
+        command: crate::coordination::Command::Spawn { intent, brief, .. },
+    } = &mut command
+    {
+        *intent = format!("{mission}:fix");
+        *brief = Some("Fix it.".into());
+    }
+    command
+}
+
+/// The profile the node's worker started with, as its spawn record keeps it.
+fn node_started_profile(spawner: &Spawner, mission: &str) -> Option<String> {
+    let ledger = spawner.ledger();
+    let record = ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.intent == format!("{mission}:fix"))
+        .expect("the worker's spawn");
+    assert!(record.completed, "the worker started");
+    record
+        .started_profile
+        .as_ref()
+        .map(|profile| profile.name.clone())
+}
+
+/// A node's worker started with no `--profile` runs as its plan names it,
+/// whatever the project chose (PRD agent-profiles-phase2 D-02).
+#[test]
+fn a_nodes_worker_named_by_no_profile_starts_as_its_plan_names_it() {
+    let spawner = conducting(vec![codex(Some("p-work"))]);
+    let mission = mission_id(&spawner);
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "profile": "work", "model": codex_default_model()}),
+    )
+    .unwrap();
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        project_picks(&mut runtime, "default");
+    }
+    spawner
+        .spawn_mission(node_worker(&mission, None), |_| {})
+        .expect("the planned item starts");
+    assert_eq!(
+        node_started_profile(&spawner, &mission).as_deref(),
+        Some("work")
+    );
+}
+
+/// A `--profile` that differs from the plan is the spawn's own choice, held
+/// to the candidates as any spawn's is.
+#[test]
+fn a_nodes_worker_named_by_another_profile_starts_with_it_when_a_candidate_admits_it() {
+    let spawner = conducting(vec![codex(Some("p-work")), codex(None)]);
+    let mission = mission_id(&spawner);
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "profile": "work", "model": codex_default_model()}),
+    )
+    .unwrap();
+    spawner
+        .spawn_mission(node_worker(&mission, Some("default")), |_| {})
+        .expect("the named default starts");
+    assert_eq!(node_started_profile(&spawner, &mission), None);
+}
+
+/// `hide mission show` names a planned worker as its item, and a profile
+/// the machine no longer lists as gone, so the Conductor reads which
+/// account a node runs before it starts.
+#[test]
+fn mission_show_names_a_planned_workers_item() {
+    let spawner = conducting(vec![codex(Some("p-work"))]);
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "profile": "work", "model": codex_default_model()}),
+    )
+    .unwrap();
+    let show = |spawner: &Spawner| {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        let context = authority(&spawner.actor).context;
+        let op: MissionCommand =
+            serde_json::from_value(json!({"op": "show", "node": "fix"})).unwrap();
+        runtime
+            .mission_command(crate::node::TEST_NODE, "sender", &context, op)
+            .unwrap()
+            .0
+    };
+    let shown = show(&spawner);
+    assert_eq!(shown["node"]["worker"]["item"], "Codex · work");
+    assert!(shown["node"]["worker"]["profile_gone"].is_null());
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        let node = runtime.node.to_string();
+        let mut kit = runtime.kit_state(&node);
+        kit.profiles.as_mut().unwrap().profiles.clear();
+        runtime.kit_states.insert(node, kit);
+    }
+    let shown = show(&spawner);
+    assert_eq!(shown["node"]["worker"]["item"], "Codex");
+    assert_eq!(shown["node"]["worker"]["profile_gone"], true);
+}
+
+/// A Conductor running `Codex · work` whose plan names its Codex worker with
+/// no profile starts that worker on the built-in default, as the plan shows
+/// it, rather than handing it its own profile as a spawn outside a plan
+/// does (PRD agent-profiles-phase2 D-02).
+#[test]
+fn a_nodes_worker_planned_on_the_default_does_not_take_its_conductors_profile() {
+    let spawner = conducting(vec![codex(Some("p-work")), codex(None)]);
+    let mission = mission_id(&spawner);
+    plan_worker(
+        &spawner,
+        json!({"agent": "codex", "model": codex_default_model()}),
+    )
+    .unwrap();
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        let actor = spawner.actor.clone();
+        runtime.snapshot.ui_state.pane_launches.insert(
+            actor.pane_id.clone(),
+            crate::model::PaneLaunch {
+                pending: false,
+                start: 0,
+                kind: "codex".into(),
+                name: actor.name.clone(),
+                choice: Default::default(),
+                session: None,
+                profile: Some(crate::launch::LaunchProfile {
+                    id: hide_agent_adapter::ProfileId("p-work".into()),
+                    name: "work".into(),
+                    account: hide_agent_adapter::AccountKey::Folder("/accounts/p-work".into()),
+                }),
+            },
+        );
+        assert_eq!(
+            runtime.caller_launch_profile(&actor, "codex"),
+            crate::launch::Parent::Profile(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p-work".into()),
+                name: "work".into(),
+                account: hide_agent_adapter::AccountKey::Folder("/accounts/p-work".into()),
+            }),
+            "the Conductor runs work, which a spawn outside a plan would hand down"
+        );
+    }
+    spawner
+        .spawn_mission(node_worker(&mission, None), |_| {})
+        .expect("the planned default starts");
+    assert_eq!(node_started_profile(&spawner, &mission), None);
+}

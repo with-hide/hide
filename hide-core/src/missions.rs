@@ -470,11 +470,22 @@ impl OperatorAction {
     }
 }
 
-/// The agent the plan assigns to a node (D-08, D-34).
+/// The agent item the plan assigns to a node or to one of its checkers
+/// (D-08, D-34): the agent, its profile, its model and its effort.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Worker {
     pub agent: String,
+    /// The profile, by its id on the mission's machine, as a candidate names
+    /// one (`Candidate::profile`); `None` for the agent's built-in default,
+    /// which is left out of what is kept, so a plan of built-in defaults
+    /// only is the bytes a build before it wrote and reads. A plan names it
+    /// by the name `--profile` takes, which the core turns into its id
+    /// (`Runtime::plan_profiles`) before the plan is applied. A build before
+    /// it refuses a book that names one (`deny_unknown_fields`):
+    /// `docs/INSTALL.md`, What each system supports, says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<hide_agent_adapter::ProfileId>,
     #[serde(default)]
     pub model: Option<String>,
     /// None leaves the effort to the agent's default; `effort_auto` says
@@ -997,6 +1008,16 @@ impl MissionNode {
         self.prs.last().copied()
     }
 
+    /// Whether the node was started: past planned, or a planned node that
+    /// already names its worker, pull request or branch, whatever its status
+    /// still says.
+    pub(crate) fn started(&self) -> bool {
+        self.status != NodeStatus::Planned
+            || self.agent_id.is_some()
+            || !self.prs.is_empty()
+            || self.branch.is_some()
+    }
+
     /// The registrations the Conductor bound as checkers to the node's lines
     /// (a reviewer or a verifier), once each.
     pub(crate) fn checker_agents(&self) -> impl Iterator<Item = &str> {
@@ -1370,6 +1391,16 @@ impl Mission {
         self.nodes.iter().find(|node| node.key == key)
     }
 
+    /// The node a spawn's intent names as its worker's,
+    /// `<mission id>:<node key>` (`hide mission help`); none for another
+    /// intent, such as a checker's.
+    pub(crate) fn intent_node(&self, intent: &str) -> Option<&MissionNode> {
+        intent
+            .strip_prefix(&self.id)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .and_then(|key| self.node(key))
+    }
+
     /// Why each node cannot start, from a dropped node anywhere upstream of
     /// it.
     pub(crate) fn blocked(&self) -> BTreeMap<String, Blocked> {
@@ -1540,9 +1571,7 @@ impl Candidate {
 
     /// The profile the candidate names, the built-in default for none.
     pub(crate) fn profile_id(&self) -> hide_agent_adapter::ProfileId {
-        self.profile
-            .clone()
-            .unwrap_or_else(hide_agent_adapter::ProfileId::default_profile)
+        item_profile(self.profile.as_ref())
     }
 
     /// The row as it is kept: the built-in default named by its id is the
@@ -1550,6 +1579,39 @@ impl Candidate {
     fn kept(mut self) -> Self {
         self.profile = self.profile.filter(|id| !id.is_default());
         self
+    }
+}
+
+/// The profile an item names, the built-in default for none.
+fn item_profile(profile: Option<&hide_agent_adapter::ProfileId>) -> hide_agent_adapter::ProfileId {
+    profile
+        .cloned()
+        .unwrap_or_else(hide_agent_adapter::ProfileId::default_profile)
+}
+
+impl Worker {
+    /// The item the plan names, as a start of it is asked for: its agent and
+    /// its profile, the built-in default for none.
+    pub(crate) fn target(&self) -> hide_agent_adapter::LaunchTarget {
+        hide_agent_adapter::LaunchTarget {
+            kind: self.agent.clone(),
+            profile: item_profile(self.profile.as_ref()),
+        }
+    }
+
+    /// Whether `candidate` admits this planned worker, by the test a start is
+    /// judged by (`Candidate::admits`) with the plan's item, model and effort
+    /// as the start's. A plan names the model of every worker that takes
+    /// one (`mission_model_missing`), so a model it names as the agent's
+    /// `cli_default_model` is the CLI's default to a candidate that keeps it.
+    pub(crate) fn admitted_by(&self, candidate: &Candidate) -> bool {
+        let cli_default =
+            candidate.model.is_none() && self.model.as_deref() == cli_default_model(&self.agent);
+        let launch = hide_agent_adapter::LaunchChoice {
+            model: self.model.clone().filter(|_| !cli_default),
+            effort: self.effort.clone(),
+        };
+        candidate.admits(&self.target(), &launch)
     }
 }
 
@@ -1623,6 +1685,19 @@ pub(crate) fn takes_model(agent: &str) -> bool {
     hide_agent_adapter::adapter(agent)
         .and_then(|row| row.start)
         .is_some_and(|dialect| !dialect.options().model.is_empty())
+}
+
+/// The model `agent` runs with when a start names none, as Hide AI measured
+/// it, which `hide agent catalog` offers as `cli_default_model` so a plan
+/// can name one while the list is unread; none for an agent that takes no
+/// model or whose own CLI keeps that default.
+pub(crate) fn cli_default_model(agent: &str) -> Option<&'static str> {
+    let adapter = hide_agent_adapter::adapter(agent)?;
+    takes_model(agent)
+        .then(|| hide_ai::ProviderId::for_agent(adapter.id))
+        .flatten()
+        .map(hide_ai::ProviderId::default_model)
+        .filter(|model| !model.is_empty())
 }
 
 /// Whether `agent` is an agent Hide starts, and `model` and `effort` are
@@ -2287,14 +2362,8 @@ pub(crate) fn apply_plan(
     }
     // A node that ran keeps its record; one that is gone from the plan must
     // be dropped first, so a replan cannot hide work that was done (B28).
-    // A planned node that already names its worker, pull request or branch
-    // was started too, whatever its status still says.
     for node in &mission.nodes {
-        let started = node.status != NodeStatus::Planned
-            || node.agent_id.is_some()
-            || !node.prs.is_empty()
-            || node.branch.is_some();
-        if started && !keys.contains(node.key.as_str()) {
+        if node.started() && !keys.contains(node.key.as_str()) {
             return Err("mission_node_in_progress".into());
         }
     }
@@ -2845,7 +2914,10 @@ pub fn next_action(code: &str) -> &'static str {
             "The node holds 16 defects; ask the operator how to go on with it"
         }
         "mission_candidate_refused" => {
-            "Start the worker as one of the operator's candidates: run hide mission settings for the agent items (each with its --profile value), models and efforts it allows"
+            "Plan and start each worker as one of the operator's candidates: run hide mission settings for the agent items (each with its --profile value, which a plan's worker names as profile), models and efforts it allows"
+        }
+        "mission_profile_unknown" => {
+            "Name the worker's profile as hide agent catalog lists it for that agent (its profile value), or leave profile out for the agent's built-in default"
         }
         "mission_cap_reached" => {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"
@@ -3493,6 +3565,7 @@ pub(crate) mod tests {
         let mut planned = node("a", NodeKind::Change, &[]);
         planned.worker = Some(Worker {
             agent: "claude".into(),
+            profile: None,
             model: Some("opus".into()),
             effort: None,
             effort_auto: false,
@@ -3678,6 +3751,7 @@ pub(crate) mod tests {
             rule: crate::mission_criteria::Rule::All,
             by: vec![Worker {
                 agent: "codex".into(),
+                profile: None,
                 model: Some("gpt-6-astra".into()),
                 effort: None,
                 effort_auto: false,

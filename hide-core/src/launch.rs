@@ -733,9 +733,9 @@ pub(crate) fn chosen_id(
 }
 
 /// The profile `id` of `kind` as `profiles` lists it, with its name, in
-/// whatever state: what a parent's profile is named by before its machine
-/// is asked for it.
-fn listed(
+/// whatever state: what a parent's profile, or a planned worker's, is named
+/// by before its machine is asked for it.
+pub(crate) fn listed(
     kind: &str,
     id: &ProfileId,
     profiles: Option<&ProfilesSnapshot>,

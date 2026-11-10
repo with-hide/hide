@@ -419,7 +419,7 @@ The agents' own availability and model lists it is already asking, for this mach
 ### A profile's model list
 
 An agent's profiles (PRD agent-profiles-phase2 D-09) each have a model list of their own, read the way a start of the profile runs, because a profile's account, variables or wrapper can point the agent at another provider: a gateway wrapper around Claude Code names the gateway's models.
-The core asks for it beside its agent's list, while a screen reads model lists, for every profile of the machine a start may take (`AiRequest::items`, `Runtime::ai_items`).
+The core asks for it beside its agent's list, while a screen reads model lists (Settings, a start surface, or a drawn mission map, which names each worker's model by its item's list), for every profile of the machine a start may take (`AiRequest::items`, `Runtime::ai_items`).
 Each profile is read on a backend of its own (`NodeBackend` with the profile's id in `BackendSpec::profile`), kept per machine and profile while the screen reads and built again when the profile's version moves, at most 16 a machine; past that a list is answered `model_reads_full`, never with another backend.
 The node resolves the profile from its own profile file as a start would (`hide_host::profiles::ai_run`): the account's variables, then the profile's own, and its wrapper, found on the account's search; the core never names an account's folder.
 A profile the node cannot run is refused before it takes a backend's place.
